@@ -1,0 +1,21 @@
+import assert from 'node:assert/strict';
+import XLSX from 'xlsx';
+import { performance } from 'node:perf_hooks';
+import { parseSalesFileRuntime } from '../lib/sales-parser-node.ts';
+
+const columns=['Data','SiteCode','ItemCode','ItemName','Cantitate','Brand','Pret','Valoare','Locatie','Firma','ASM','Regional','Nr','Categorie','SubCategorie','Agent'];
+const rows=Array.from({length:9000},(_,index)=>['16.09.2026','A001','P1','Produs test',1,'Brand',10,10,index%3===0?'TR TEST':'Magazin normal','MobiUp','ASM','Regional','1','Accesorii','Test','AGENT']);
+const book=XLSX.utils.book_new();
+XLSX.utils.book_append_sheet(book,XLSX.utils.aoa_to_sheet([columns,...rows]),'Raport');
+const bytes=new Uint8Array(XLSX.write(book,{type:'buffer',bookType:'xlsx'}));
+let ticks=0;
+const timer=setInterval(()=>ticks++,10);
+const started=performance.now();
+const parsed=await parseSalesFileRuntime(bytes,'worker.xlsx');
+const elapsed=performance.now()-started;
+clearInterval(timer);
+assert.equal(parsed.length,3000,'Worker returns all matching TR rows');
+assert.ok(ticks>=3,`Main event loop must stay responsive while parser works; ticks=${ticks}`);
+assert.ok(elapsed>0,'Worker parse elapsed time is measured');
+await assert.rejects(()=>parseSalesFileRuntime(new Uint8Array([1,2,3]),'bad.xlsx'),/registru Excel/);
+console.log(`PASS: sales parser worker kept main event loop responsive (${ticks} ticks, ${elapsed.toFixed(0)} ms).`);

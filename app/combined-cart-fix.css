@@ -1,0 +1,4 @@
+/* L4: keep combined-order cart controls reachable on tablet widths. */
+.cart-section .cart-line { grid-template-columns: minmax(0, 1fr) auto; }
+.cart-section .cart-line > .quantity-control { grid-column: 1 / -1; justify-items: start; }
+.cart-section .cart-line > b { grid-column: 1 / -1; justify-self: start; }

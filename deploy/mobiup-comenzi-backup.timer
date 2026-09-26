@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily backup for Mobiup comenzi distributie
+
+[Timer]
+OnCalendar=*-*-* 01:40:00 Europe/Bucharest
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

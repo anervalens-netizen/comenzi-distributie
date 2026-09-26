@@ -1,0 +1,31 @@
+[Unit]
+Description=Mobiup comenzi distributie
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=operator
+WorkingDirectory=/opt/Mobiup/comenzi-distributie/runtime/current
+Environment=NODE_ENV=production
+Environment=MOBIUP_DATA_DIR=/storage/comenzi-distributie
+Environment=HOST=127.0.0.1
+Environment=PORT=39120
+Environment=VINEXT_TRUST_PROXY=1
+Environment=VINEXT_TRUSTED_HOSTS=app.example.invalid
+ExecStart=/usr/bin/node --max-old-space-size=384 /opt/Mobiup/comenzi-distributie/runtime/current/server.js
+Restart=on-failure
+RestartSec=3
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/storage/comenzi-distributie
+ProtectKernelTunables=true
+ProtectControlGroups=true
+MemoryHigh=384M
+MemoryMax=768M
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,52 @@
+import assert from 'node:assert/strict';
+import {DatabaseSync} from 'node:sqlite';
+import {createHash,randomUUID} from 'node:crypto';
+const db=new DatabaseSync('work/qa/mobiup.sqlite');
+const root='http://127.0.0.1:3000/api/partner/portfolio';
+let checks=0;
+const hash=s=>createHash('sha256').update(s).digest('hex');
+const sessions={};
+for(const id of ['qa-agent1','qa-agent2','qa-regional','qa-manager']){const token=randomUUID();db.prepare('UPDATE users SET active=1,must_change_password=0 WHERE id=?').run(id);db.prepare('INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,?,?)').run(hash(token),id,Date.now()+3600000);sessions[id]=`mobiup_session=${token}`;}
+db.prepare("INSERT OR IGNORE INTO manager_agents(manager_id,agent_id) VALUES('qa-regional','qa-agent1')").run();
+const insert=db.prepare('INSERT OR REPLACE INTO customers(id,warehouse_id,data,active) VALUES(?,?,?,1)');
+for(const [id,warehouses] of [['ph-one',['g-5']],['ph-shared',['g-5','g-3']],['ph-other',['g-3']]])insert.run(id,warehouses[0],JSON.stringify({id,warehouseId:warehouses[0],warehouseIds:warehouses,name:id,cui:'RO123456',address:'Strada Test 1',city:'București',county:'București',route:'qa'}));
+async function call(user,path='',method='GET',body,status=200){const r=await fetch(root+path,{method,headers:{Cookie:sessions[user],...(body?{'Content-Type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{})});const data=await r.json();assert.ok((Array.isArray(status)?status:[status]).includes(r.status),`${method} ${path}: ${JSON.stringify(data)}`);checks++;return data;}
+try{
+  db.prepare("INSERT INTO partner_requests(id,agent_id,warehouse_id,cui_key,status,payload,created_at,updated_at,confirmed_at,customer_id,revision) VALUES(?,'qa-agent1','g-5','123456','confirmed',?,'2026-09-24','2026-09-24','2026-09-24','ph-one',1)").run(randomUUID(),JSON.stringify({contact:'Confirmed contact',phone:'0701234567',email:'qa@example.invalid'}));
+  const inherited=(await call('qa-agent1','/ph-one')).partner;assert.equal(inherited.contact,'Confirmed contact');assert.equal(inherited.phone,'0701234567');
+  const cleared=await call('qa-agent1','/ph-one','PATCH',{...inherited,contact:'',phone:'',email:''});assert.equal(cleared.partner.contact,'','explicit clear overrides request fallback');
+  const one=await call('qa-agent1');assert(one.partners.some(p=>p.id==='ph-one'));assert(one.partners.some(p=>p.id==='ph-shared'));assert(!one.partners.some(p=>p.id==='ph-other'));
+  const regional=await call('qa-regional');assert(regional.partners.some(p=>p.id==='ph-shared'));assert(!regional.partners.some(p=>p.id==='ph-other'));
+  const global=await call('qa-manager');assert.equal(global.partners.filter(p=>p.id.startsWith('ph-')).length,3,'same CUI points remain distinct');
+  await call('qa-agent1','/ph-other','GET',null,404);
+  await call('qa-agent1','/ph-other','PATCH',{},404);
+  await call('qa-agent1','/ph-other/visits','POST',{id:randomUUID()},404);
+  let {partner:p}=await call('qa-agent1','/ph-shared');assert.equal(p.latitude,null);assert.equal(p.revision,0);
+  const payload={...p,latitude:44.43,longitude:26.1,positionSource:'manual',positionAccuracy:null,contact:'Contact QA'};
+  const saved=await call('qa-agent1','/ph-shared','PATCH',payload);assert.equal(saved.partner.revision,1);
+  await call('qa-agent2','/ph-shared','PATCH',payload,409);
+  p=(await call('qa-agent2','/ph-shared')).partner;assert.equal(p.contact,'Contact QA');
+  for(const bad of [{latitude:91},{longitude:181},{positionSource:null},{latitude:null},{email:'bad'},{positionSource:'geocoding'}])await call('qa-agent1','/ph-shared','PATCH',{...p,...bad},400);
+  const race=await Promise.all([call('qa-agent1','/ph-shared','PATCH',{...p,contact:'Race A'},[200,409]),call('qa-agent2','/ph-shared','PATCH',{...p,contact:'Race B'},[200,409])]);
+  assert.equal(race.filter(x=>x.partner).length,1,'one CAS writer succeeds');
+  p=(await call('qa-agent1','/ph-shared')).partner;
+  db.prepare("UPDATE customers SET data=json_set(data,'$.address','Strada Test 2') WHERE id='ph-shared'").run();
+  await call('qa-agent1','/ph-shared','PATCH',p,409);
+  const changed=await call('qa-agent1','/ph-shared');assert.equal(changed.partner.latitude,null);assert.equal(changed.partner.positionSource,null);
+  const visit={id:randomUUID(),notes:'Vizită explicită'};
+  const first=await call('qa-agent1','/ph-shared/visits','POST',visit);assert.equal(first.visitCount,1);
+  const retry=await call('qa-agent1','/ph-shared/visits','POST',visit);assert.equal(retry.visitCount,1);assert.equal(retry.visits[0].agentId,'qa-agent1');
+  await call('qa-agent2','/ph-shared/visits','POST',visit,409);
+  await call('qa-agent1','/ph-shared/visits','POST',{...visit,notes:'Changed'},409);
+  const visited=(await call('qa-agent2')).partners.find(p=>p.id==='ph-shared');assert(visited.lastVisitedAt);
+  const add=db.prepare('INSERT INTO partner_visits(id,customer_id,agent_id,agent_name,visited_at,notes,created_at) VALUES(?,?,?,?,?,?,?)');
+  for(let i=0;i<55;i++)add.run(randomUUID(),'ph-shared','qa-agent1','QA','2026-09-01T00:00:00.000Z','','2026-09-01T00:00:00.000Z');
+  const page1=await call('qa-agent1','/ph-shared');assert.equal(page1.visits.length,50);assert(page1.nextCursor);
+  const page2=await call('qa-agent1','/ph-shared?cursor='+encodeURIComponent(page1.nextCursor));assert.equal(page2.visits.length,6);assert.equal(new Set([...page1.visits,...page2.visits].map(v=>v.id)).size,56);
+  const profile=(await call('qa-agent1','/ph-shared')).partner;
+  db.prepare("UPDATE partner_profiles SET latitude=44.4,longitude=26.1,position_source='geocoding',position_provider='geoapify',position_metadata='{}',address_fingerprint=? WHERE customer_id='ph-shared'").run(profile.addressFingerprint);
+  const geo=(await call('qa-agent1','/ph-shared')).partner;assert.equal(geo.positionProvider,'geoapify');
+  const edited=await call('qa-agent1','/ph-shared','PATCH',{...geo,phone:'0700000000'});assert.equal(edited.partner.positionSource,'geocoding');
+  const manual=await call('qa-agent1','/ph-shared','PATCH',{...edited.partner,positionSource:'manual'});assert.equal(manual.partner.positionProvider,null);
+  console.log(`PASS: Partner Hub ${checks} HTTP checks, scope/shared portfolios/CAS/address invalidation/visits/pagination/geocoder provenance.`);
+}finally{for(const id of Object.keys(sessions))db.prepare('DELETE FROM sessions WHERE token_hash=?').run(hash(sessions[id].split('=')[1]));db.close();}

@@ -1,0 +1,48 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1788857680087,
+      "tag": "0000_rare_hardball",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1788862643401,
+      "tag": "0001_happy_vertigo",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1789127855419,
+      "tag": "0002_sloppy_tony_stark",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1789512934815,
+      "tag": "0003_complex_kang",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1789589144340,
+      "tag": "0004_grey_lionheart",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1789732571880,
+      "tag": "0005_fancy_susan_delgado",
+      "breakpoints": true
+    }
+  ]
+}

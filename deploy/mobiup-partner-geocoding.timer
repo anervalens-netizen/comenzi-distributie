@@ -1,0 +1,13 @@
+[Unit]
+Description=Resume Mobiup partner geocoding within free credits
+
+[Timer]
+OnBootSec=5min
+OnCalendar=hourly
+RandomizedDelaySec=2min
+Persistent=true
+Unit=mobiup-partner-geocoding.service
+
+[Install]
+WantedBy=timers.target
+

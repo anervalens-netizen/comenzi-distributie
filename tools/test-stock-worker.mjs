@@ -1,0 +1,22 @@
+import assert from 'node:assert/strict';
+import XLSX from 'xlsx';
+import { performance } from 'node:perf_hooks';
+import { parseStockFileRuntime } from '../lib/stock-parser-node.ts';
+
+const columns=['Gestiune','ItemCode','ItemName','Stoc','SiteId','StocDepozit'];
+const rows=Array.from({length:25000},(_,index)=>['GESTIUNE TR TEST',`P${index}`,`Produs ${index}`,index%20,1001,index%7]);
+const book=XLSX.utils.book_new();
+XLSX.utils.book_append_sheet(book,XLSX.utils.aoa_to_sheet([columns,...rows]),'Stoc_TR');
+const bytes=new Uint8Array(XLSX.write(book,{type:'buffer',bookType:'xlsx'}));
+let ticks=0;
+const timer=setInterval(()=>ticks++,10);
+const started=performance.now();
+const parsed=await parseStockFileRuntime(bytes,'stock-worker.xlsx');
+const elapsed=performance.now()-started;
+clearInterval(timer);
+assert.equal(parsed.length,1,'Worker returns the stock group');
+assert.equal(parsed[0].rows.length,25000,'Worker returns every stock row');
+assert.ok(ticks>=3,`Main event loop must stay responsive while stock parser works; ticks=${ticks}`);
+assert.ok(elapsed>0,'Worker parse elapsed time is measured');
+await assert.rejects(()=>parseStockFileRuntime(new Uint8Array([1,2,3]),'bad.xlsx'),/registru Excel/);
+console.log(`PASS: stock parser worker kept main event loop responsive (${ticks} ticks, ${elapsed.toFixed(0)} ms).`);

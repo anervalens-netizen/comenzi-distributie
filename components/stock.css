@@ -1,0 +1,45 @@
+.stock-workspace { display:grid; gap:.75rem; }
+.stock-mode-tabs { display:grid !important; grid-template-columns:repeat(2,minmax(0,1fr)); width:min(420px,100%); height:auto !important; padding:4px !important; border:1px solid #e1e5ea; border-radius:.7rem; background:#f5f6f8; }
+.stock-mode-tabs [data-slot=tabs-trigger] { display:flex; align-items:center; justify-content:center; gap:.45rem; min-height:42px; padding:.55rem .9rem; border-radius:.52rem; color:#66717f; font-weight:650; }
+.stock-mode-tabs [data-slot=tabs-trigger][data-active] { color:#b5222d; background:#fff; box-shadow:0 1px 4px #20243014; }
+.stock-mode-tabs [data-slot=tabs-trigger] svg { flex:0 0 auto; }
+.stock-panel h2 { display:flex; align-items:center; gap:.45rem; }
+.stock-meta { color:var(--muted-foreground); font-size:.82rem; margin:-.35rem 0 .8rem; }
+.stock-list { display:grid; gap:.35rem; margin-top:.75rem; max-height:32rem; overflow:auto; }
+.stock-row { display:flex; align-items:center; justify-content:space-between; gap:1rem; padding:.65rem .75rem; border:1px solid var(--border); border-radius:.65rem; background:var(--card); }
+.stock-row span { display:grid; gap:.12rem; min-width:0; }
+.stock-row strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.stock-row small { color:var(--muted-foreground); }
+.stock-row b { white-space:nowrap; color:var(--primary); }
+.stock-inline { display:block; color:#64748b; font-size:.75rem; margin-top:.25rem; line-height:1.5; }
+.stock-muted { color:var(--muted-foreground); }
+.product-card .add-product { min-height:32px; height:32px; padding:4px 8px; font-size:12px; }
+.product-card .stock-inline { clear:both; color:#2563eb; font-size:12px; font-weight:600; line-height:1.45; margin-top:6px; }
+.stock-panel { padding:1rem; margin-bottom:1.25rem; }
+.stock-editor-meta { font-size:.78rem; color:#64748b; margin:0 0 1rem; }
+.stock-upload { position:relative; display:flex; align-items:center; flex-wrap:wrap; gap:.65rem; padding:.9rem; border:1px dashed #cbd5e1; border-radius:.7rem; cursor:pointer; }
+.stock-upload:focus-within { outline:2px solid #ed1b2f; outline-offset:2px; }
+.stock-upload input { position:absolute; inset:0; width:100%; height:100%; opacity:0; cursor:pointer; }
+.stock-import-summary { display:flex; flex-wrap:wrap; gap:.5rem 1.5rem; margin:1rem 0 .5rem; }
+.stock-filter { width:100%; padding:.7rem; border:1px solid #d8dfe8; border-radius:.6rem; margin:.6rem 0; }
+.stock-groups { max-height:26rem; overflow:auto; }
+.stock-group { display:grid; grid-template-columns:minmax(0,1fr) minmax(230px,1fr); gap:1rem; align-items:center; padding:.65rem .2rem; border-bottom:1px solid #edf0f4; }
+.stock-group small { display:block; color:#64748b; margin-top:.2rem; }
+.stock-group select,.stock-agent-select select { width:100%; min-height:44px; border:1px solid #d8dfe8; border-radius:.5rem; padding:.5rem; background:white; }
+.stock-agent-select { display:grid; gap:.5rem; max-width:640px; margin:0 0 1rem; }
+.stock-import > p { margin:.7rem 0; }
+.stock-summary { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:.55rem; margin:.75rem 0; }
+.stock-summary > div { border:1px solid #e5e7eb; border-radius:.6rem; padding:.55rem .7rem; background:#fff; }
+.stock-summary small,.stock-summary b { display:block; }
+.stock-summary small { color:#64748b; font-size:.72rem; }
+.stock-summary b { color:#2563eb; font-size:1.15rem; margin-top:.15rem; }
+.stock-summary em { font-size:.72rem; font-style:normal; font-weight:500; }
+.stock-filters { display:grid; grid-template-columns:minmax(0,1fr) minmax(180px,240px); gap:.6rem; align-items:center; }
+.stock-filters select { min-height:40px; border:1px solid #d8dfe8; border-radius:.55rem; padding:.45rem .6rem; background:#fff; }
+.stock-result-count { color:#64748b; font-size:.78rem; margin:.65rem 0 0; }
+.stock-category { margin-top:.8rem; }
+.stock-category h3 { display:flex; justify-content:space-between; align-items:baseline; gap:.75rem; color:#334155; font-size:.9rem; margin:0 0 .35rem; }
+.stock-category h3 small { color:#64748b; font-size:.72rem; font-weight:500; white-space:nowrap; }
+.stock-category .stock-row { margin-bottom:.35rem; }
+@media(max-width:650px) { .stock-group { grid-template-columns:1fr; gap:.5rem; } .stock-row strong { white-space:normal; } }
+@media(max-width:560px) { .stock-mode-tabs { width:100%; } .stock-mode-tabs [data-slot=tabs-trigger] { min-height:46px; font-size:.9rem; } .stock-summary { grid-template-columns:1fr; } .stock-filters { grid-template-columns:1fr; } }

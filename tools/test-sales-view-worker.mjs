@@ -1,0 +1,26 @@
+import assert from 'node:assert/strict';
+import { DatabaseSync } from 'node:sqlite';
+import { mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { performance } from 'node:perf_hooks';
+
+const data=resolve('work/sales-view-worker-qa');
+rmSync(data,{recursive:true,force:true});mkdirSync(data,{recursive:true});
+process.env.MOBIUP_DATA_DIR=data;
+const db=new DatabaseSync(resolve(data,'sales.sqlite'));
+db.exec(`PRAGMA journal_mode=WAL;
+CREATE TABLE sales_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+CREATE TABLE sales_imports(id INTEGER PRIMARY KEY AUTOINCREMENT,month TEXT NOT NULL,file_hash TEXT NOT NULL,filename TEXT NOT NULL,imported_at TEXT NOT NULL,imported_by TEXT NOT NULL,row_count INTEGER NOT NULL,original_path TEXT NOT NULL,revision INTEGER NOT NULL);
+CREATE TABLE sales_months(month TEXT PRIMARY KEY,import_id INTEGER NOT NULL,imported_at TEXT NOT NULL,filename TEXT NOT NULL,file_hash TEXT NOT NULL,revision INTEGER NOT NULL);
+CREATE TABLE sales_rows(import_id INTEGER NOT NULL,row_number INTEGER NOT NULL,date TEXT NOT NULL,month TEXT NOT NULL,site_code TEXT NOT NULL,item_code TEXT NOT NULL,item_name TEXT NOT NULL,quantity REAL NOT NULL,brand TEXT NOT NULL,price_cents INTEGER NOT NULL,value_cents INTEGER NOT NULL,location TEXT NOT NULL,company TEXT NOT NULL,asm TEXT NOT NULL,regional TEXT NOT NULL,order_number TEXT NOT NULL,category TEXT NOT NULL,sub_category TEXT NOT NULL,agent TEXT NOT NULL,PRIMARY KEY(import_id,row_number));
+INSERT INTO sales_meta(key,value) VALUES('revision','1');`);
+const importedAt=new Date().toISOString(),info=db.prepare('INSERT INTO sales_imports(month,file_hash,filename,imported_at,imported_by,row_count,original_path,revision) VALUES(?,?,?,?,?,?,?,?)').run('2026-09','worker-hash','worker.xlsx',importedAt,'qa',30000,'synthetic',1),importId=Number(info.lastInsertRowid);
+db.prepare('INSERT INTO sales_months(month,import_id,imported_at,filename,file_hash,revision) VALUES(?,?,?,?,?,?)').run('2026-09',importId,importedAt,'worker.xlsx','worker-hash',1);
+const add=db.prepare('INSERT INTO sales_rows(import_id,row_number,date,month,site_code,item_code,item_name,quantity,brand,price_cents,value_cents,location,company,asm,regional,order_number,category,sub_category,agent) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
+db.exec('BEGIN');for(let i=0;i<30000;i++)add.run(importId,i,`2026-09-${String(i%28+1).padStart(2,'0')}`,'2026-09',`QA${i%19}`,`P${i%500}`,`Produs ${i%500}`,1,'Brand',1000,1000,'TR QA','MobiUp','','',`BON${i}`,'Accesorii','','QA');db.exec('COMMIT');
+const seed=JSON.parse(readFileSync('resources/seed.json','utf8')).products,catalog=seed.map(product=>({code:product.code,name:product.name,category:product.category,kind:product.kind}));
+const {getSalesViewRuntime}=await import('../lib/sales-view-node.ts');
+let ticks=0;const timer=setInterval(()=>ticks++,5),started=performance.now();
+const view=await getSalesViewRuntime('2026-09',undefined,'2026-09','2026-09',catalog),elapsed=performance.now()-started;clearInterval(timer);db.close();
+assert.equal(view.summary.rows,30000);assert.ok(ticks>=2,`Main event loop stalled during sales aggregation; ticks=${ticks}`);
+console.log(`PASS: sales aggregation worker kept main event loop responsive (${ticks} ticks, ${elapsed.toFixed(0)} ms).`);
