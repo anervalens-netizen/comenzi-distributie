@@ -16,10 +16,22 @@ const initial = () => ({
 try {
   write(statePath, initial());
   let calls = 0;
-  const noBudget = await runPipeline(statePath, { credits: () => 100, batch: async () => { calls++; } });
+  const noBudget = await runPipeline(statePath, { credits: () => 2, batch: async () => { calls++; } });
   assert.equal(noBudget.phase, 'waiting_budget');
   assert.equal(calls, 0, 'no external requests when local budget has no capacity');
   assert.equal(read(statePath).jobs[0].status, 'pending', 'quota pause preserves pending work');
+
+  write(statePath, initial());
+  let adaptiveCalls = 0;
+  const adaptiveTail = await runPipeline(statePath, {
+    credits: () => 100,
+    batch: async (input, out, opts) => {
+      adaptiveCalls++; assert.equal(opts.creditPollBuffer, 2); assert.equal(opts.pollIntervalMs, 300000);
+      throw new Error('Geoapify a răspuns cu HTTP 402.');
+    }
+  });
+  assert.equal(adaptiveCalls, 1, 'small available balances use a small polling reserve instead of waiting');
+  assert.equal(adaptiveTail.phase, 'waiting_budget');
 
   write(statePath, initial());
   const sampledState = initial(); sampledState.jobs[0].creditPollBuffer = 40; write(statePath, sampledState);
@@ -118,7 +130,7 @@ try {
   assert.equal(recovered.lastImportCount, 0, 'idempotent importer preserves previous commit on replay');
   assert.equal(imports, 2);
   write(statePath, initial());
-  const blocked = await runPipeline(statePath, { credits: () => 1000, batch: async () => { throw new Error('Raw query mismatch'); } }).catch(() => read(statePath));
+  const blocked = await runPipeline(statePath, { credits: () => 1000, batch: async (input, out, opts) => { assert.equal(opts.creditPollBuffer, 80); assert.equal(opts.pollIntervalMs, 300000); throw new Error('Raw query mismatch'); } }).catch(() => read(statePath));
   assert.equal(blocked.phase, 'attention_required');
   console.log('PASS: pipeline budget pause, checkpoint resume, reviewed-only import, restart recovery and unresolved-state accounting.');
 } finally { rmSync(dir, { recursive: true, force: true }); }

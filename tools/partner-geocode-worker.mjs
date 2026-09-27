@@ -55,7 +55,7 @@ export async function runPipeline(statePath, deps = {}) {
         continue;
       }
       const balance = credits(state.creditLedger);
-      const pollBuffer = job.creditPollBuffer === undefined ? 100 : job.creditPollBuffer;
+      const pollBuffer = job.creditPollBuffer === undefined ? (balance <= 200 ? 2 : 80) : job.creditPollBuffer;
       if (balance <= pollBuffer + 1 && !inFlight(job.results)) {
         report('waiting_budget', { remainingEstimatedCredits: balance });
         return state;
