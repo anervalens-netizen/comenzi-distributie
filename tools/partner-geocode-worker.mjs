@@ -65,7 +65,7 @@ export async function runPipeline(statePath, deps = {}) {
       const result = await batch(job.input, job.results, {
         execute: true, resume: true, maxAddresses: 3000,
         creditLedger: state.creditLedger, timeoutMs: 60 * 60 * 1000,
-        creditPollBuffer: pollBuffer, pollIntervalMs: 60 * 1000
+        creditPollBuffer: pollBuffer, pollIntervalMs: 5 * 60 * 1000
       });
       delete state.lastError;
       delete state.transientFailure;

@@ -27,7 +27,7 @@ try {
   const sampledRetry = await runPipeline(statePath, {
     credits: () => 96,
     batch: async (input, out, opts) => {
-      sampledCalls++; assert.equal(opts.creditPollBuffer, 40); assert.equal(opts.pollIntervalMs, 60000);
+      sampledCalls++; assert.equal(opts.creditPollBuffer, 40); assert.equal(opts.pollIntervalMs, 300000);
       throw new Error('Geoapify a răspuns cu HTTP 402.');
     }
   });
