@@ -11,7 +11,7 @@ on:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || fromJSON('["self-hosted","Linux","X64","gaming-ci","comenzi-distributie"]') }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
