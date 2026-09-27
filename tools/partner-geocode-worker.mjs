@@ -42,7 +42,7 @@ export async function runPipeline(statePath, deps = {}) {
         state.counts = summary.counts;
         state.latestQueue = paths.queue;
         state.jobs = [];
-        for (const [kind, path, count] of [['retry', paths.retry, summary.retryCount], ['fresh', paths.fresh, summary.freshCount]]) {
+        for (const [kind, path, count] of [['fresh', paths.fresh, summary.freshCount], ['retry', paths.retry, summary.retryCount]]) {
           if (count) state.jobs.push({ id: kind + '-' + generation, kind, input: path, results: path + '.results.json', review: path + '.review.json', status: 'pending' });
         }
         state.currentJob = null;

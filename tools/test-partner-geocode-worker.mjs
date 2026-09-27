@@ -34,6 +34,21 @@ try {
   assert.equal(sampledCalls, 1, 'a deliberately smaller, isolated batch may run below the normal 100-credit reserve');
   assert.equal(sampledRetry.phase, 'waiting_budget', 'sampled batch pauses safely on provider quota response');
 
+  // First attempts get the available daily credits before lower-yield re-queries.
+  write(statePath, { ...initial(), currentJob: null, jobs: [] });
+  const firstAttempts = await runPipeline(statePath, {
+    credits: () => 0,
+    queue: (db, reviews, queuePath, retryPath, freshPath) => {
+      write(queuePath, { counts: { not_processed: 1, retry_street: 1 } });
+      write(retryPath, { records: [{}] });
+      write(freshPath, { records: [{}] });
+      return { counts: { not_processed: 1, retry_street: 1 }, retryCount: 1, freshCount: 1 };
+    }
+  });
+  assert.deepEqual(firstAttempts.jobs.map(job => job.kind), ['fresh', 'retry']);
+  assert.equal(firstAttempts.phase, 'waiting_budget');
+  for (const suffix of ['queue', 'retry', 'fresh']) rmSync(join(dir, `pipeline-1-${suffix}.json`));
+
   write(statePath, initial());
   write(results, { jobs: [{ status: 'submitted' }], results: {} });
   const paused = await runPipeline(statePath, {
