@@ -50,6 +50,7 @@ node tools/test-api.mjs
 node tools/test-audit-regressions.mjs
 node tools/test-partner-portfolio.mjs
 node tools/test-partner-map.mjs
+node tools/test-manager-workspace.mjs
 node tools/test-partner-planning.mjs
 stop_last
 

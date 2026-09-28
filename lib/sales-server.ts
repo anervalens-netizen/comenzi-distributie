@@ -5,6 +5,7 @@ import { salesHash, SALES_FILE_LIMIT } from './sales-file';
 import { parseSalesFileRuntime } from './sales-parser-runtime';
 import { currentSalesImport, importSalesRows, latestSalesImport, latestSalesMonth, salesCoverage, salesRevision, saveSalesOriginal } from './sales-store';
 import { getSalesViewRuntime } from './sales-view-runtime';
+import { managerFilter } from './manager-scope';
 import type { SalesView } from './sales-types';
 import type { SalesAgentMapping } from './sales-types';
 
@@ -99,6 +100,17 @@ export async function salesView(req: Request, user: User) {
     const siteCodes=[...new Map(assigned.results.map(row=>row.siteCode?.trim()).filter(Boolean).map(site=>[mappingKey(site),site])).values()];
     if(requestedSite&&!siteCodes.some(site=>mappingKey(site)===mappingKey(requestedSite)))fail(404,'Gestiunea nu a fost găsită.');
     siteScope=requestedSite||siteCodes;
+  }
+  const selected = await managerFilter(user, query);
+  if (selected) {
+    const allowed = siteScope === undefined ? null : new Set((Array.isArray(siteScope) ? siteScope : [siteScope]).map(mappingKey));
+    const narrowed = selected.siteCodes.filter(site => !allowed || allowed.has(mappingKey(site)));
+    if (requestedSite && !narrowed.some(site => mappingKey(site) === mappingKey(requestedSite))) fail(404, 'Gestiunea nu a fost găsită în selecție.');
+    for (const site of narrowed) {
+      const matches = snapshot.grouped.get(mappingKey(site)) || [];
+      if (matches.length !== 1 || !selected.agentIds.includes(matches[0].id)) fail(409, 'Un SiteCode din selecție nu este asociat unui singur agent activ.');
+    }
+    siteScope = requestedSite || narrowed;
   }
   return response(decoratedView(await getSalesViewRuntime(month, siteScope, fromMonth, toMonth, await salesCatalog()), snapshot));
 }

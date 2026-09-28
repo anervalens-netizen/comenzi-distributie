@@ -1,5 +1,6 @@
 import { db, fail } from './server';
 import { portfolioSummary } from './partner-portfolio';
+import { managerFilter } from './manager-scope';
 import type { User } from './types';
 import type {
   MapBounds,
@@ -66,7 +67,7 @@ function filters(params: URLSearchParams) {
   return (p: PartnerSummary) =>
     (!q ||
       normalize(
-        [p.name, p.cui, p.city, p.county, p.address].join(' '),
+        [p.id, p.name, p.cui, p.city, p.county, p.address].join(' '),
       ).includes(q)) &&
     (!county || p.county === county) &&
     (!city || normalize(p.city).includes(city)) &&
@@ -102,7 +103,8 @@ export async function browsePartners(
   const match = filters(params),
     limit = integer(params, 'limit', 100, 1, 200),
     offset = integer(params, 'offset', 0, 0, 10000000);
-  const all = await portfolioSummary(user),
+  const scope = await managerFilter(user, params);
+  const all = await portfolioSummary(user, undefined, scope?.warehouseIds),
     selected = all.filter(match);
   const inCounty = all.filter(
     (p) => !params.get('county') || p.county === params.get('county'),
@@ -136,7 +138,8 @@ export async function mapPartners(
 ): Promise<PartnerMapData> {
   const match = filters(params),
     bbox = parseBounds(params.get('bbox'));
-  const partners = (await portfolioSummary(user, bbox)).filter(
+  const scope = await managerFilter(user, params);
+  const partners = (await portfolioSummary(user, bbox, scope?.warehouseIds)).filter(
     (p) => p.latitude !== null && p.longitude !== null && match(p),
   );
   // Do not silently truncate or mislabel cluster totals. Above this measured tier,

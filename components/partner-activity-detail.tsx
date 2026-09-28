@@ -19,7 +19,7 @@ function locationResolution(item:PartnerRequestRecord):LocationResolution|null {
   return incomplete.length?{candidates:incomplete,allowNew:true}:null;
 }
 
-export function PartnerActivityDetail({view,month,loading,focusRequestId,onBack,onMonthChange,onRefresh,onRequestsChanged}:{view:TeamActivityView;month:string;loading:boolean;focusRequestId?:string;onBack:()=>void;onMonthChange:(value:string)=>void;onRefresh:()=>void;onRequestsChanged:()=>void}) {
+export function PartnerActivityDetail({view,month,loading,focusRequestId,onBack,onMonthChange,onRefresh,onRequestsChanged,workspace=false}:{view:TeamActivityView;month:string;loading:boolean;focusRequestId?:string;onBack:()=>void;onMonthChange:(value:string)=>void;onRefresh:()=>void;onRequestsChanged:()=>void;workspace?:boolean}) {
   const [status,setStatus]=useState<StatusFilter>('all'),[agentId,setAgentId]=useState('all'),[confirming,setConfirming]=useState(''),[error,setError]=useState('');
   const [resolutions,setResolutions]=useState<Record<string,string>>({});
   useEffect(()=>{
@@ -52,10 +52,10 @@ export function PartnerActivityDetail({view,month,loading,focusRequestId,onBack,
   const pending=view.totals.partnerRequests-view.totals.partnerConfirmed;
   return <div className="partner-activity-detail">
     <div className="activity-detail-head">
-      <button className="back-link" onClick={onBack}><ArrowLeft size={17}/> Înapoi la Activitate</button>
+      <button className="back-link" onClick={onBack}><ArrowLeft size={17}/> {workspace?'Înapoi la portofoliu':'Înapoi la Activitate'}</button>
       <div className="activity-toolbar"><label>Luna<input type="month" value={month} onChange={event=>onMonthChange(event.target.value)}/></label><button className="icon-button" aria-label="Actualizează partenerii" onClick={onRefresh}><RefreshCw size={18}/></button></div>
     </div>
-    <div className="page-heading activity-detail-title"><div><span className="eyebrow">ACTIVITATE</span><h1>Parteneri noi</h1><p>Solicitările echipei, grupate pe agent.</p></div></div>
+    <div className="page-heading activity-detail-title"><div><span className="eyebrow">ACTIVITATE</span><h1>{workspace?'Solicitări de partener':'Parteneri noi'}</h1><p>Solicitările echipei, grupate pe agent.</p></div></div>
     {error&&<p className="error-banner" role="alert">{error}</p>}
     <div className="activity-detail-summary">
       <div><span>TOTAL</span><strong>{view.totals.partnerRequests}</strong></div>
@@ -74,7 +74,7 @@ export function PartnerActivityDetail({view,month,loading,focusRequestId,onBack,
           <summary>
             <span className="activity-agent-avatar">{group.agent.agentName.split(' ').slice(0,2).map(part=>part[0]).join('')}</span>
             <span className="partner-agent-name"><strong>{group.agent.agentName}</strong><small>{group.agent.warehouseName}{group.agent.active?'':' · cont dezactivat'}</small></span>
-            <span className="partner-agent-count"><strong>{group.all.length}</strong><small>{group.all.length===1?'partener':'parteneri'} luna aceasta</small></span>
+            <span className="partner-agent-count"><strong>{group.all.length}</strong><small>{group.all.length===1?'partener':'parteneri'} {workspace?'în selecție':'luna aceasta'}</small></span>
             <span className="partner-agent-badges"><small>{group.confirmed} confirmați</small><small>{group.pending} în așteptare</small></span>
             <ChevronDown size={18}/>
           </summary>

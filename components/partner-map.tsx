@@ -22,12 +22,16 @@ export default function PartnerMap({
   styleUrl,
   refreshKey,
   onSelect,
+  selectedId,
+  focusPoint,
 }: {
   filters: string;
   bounds: MapBounds | null | undefined;
   styleUrl: string;
   refreshKey: number;
   onSelect: (id: string) => void;
+  selectedId?: string | null;
+  focusPoint?: {id:string;latitude:number|null;longitude:number|null};
 }) {
   const host = useRef<HTMLDivElement>(null),
     map = useRef<MapLibreMap | null>(null),
@@ -39,6 +43,15 @@ export default function PartnerMap({
     [loading, setLoading] = useState(true),
     [retry, setRetry] = useState(0);
   const boundsKey = JSON.stringify(bounds);
+  useEffect(()=>{
+    const m=map.current;
+    if(ready&&m?.getLayer('partner-selected'))m.setFilter('partner-selected',['==',['get','id'],selectedId||'']);
+  },[ready,selectedId]);
+  const focusId=focusPoint?.id,focusLatitude=focusPoint?.latitude,focusLongitude=focusPoint?.longitude;
+  useEffect(()=>{
+    const m=map.current;
+    if(ready&&m&&focusId&&typeof focusLatitude==='number'&&typeof focusLongitude==='number')m.easeTo({center:[focusLongitude,focusLatitude],zoom:Math.max(m.getZoom(),16),duration:250});
+  },[ready,focusId,focusLatitude,focusLongitude]);
   useEffect(() => {
     select.current = onSelect;
   }, [onSelect]);
@@ -184,6 +197,7 @@ export default function PartnerMap({
               'circle-stroke-width': 2,
             },
           });
+          m.addLayer({id:'partner-selected',type:'circle',source:SOURCE,filter:['==',['get','id'],''],paint:{'circle-radius':12,'circle-color':'transparent','circle-stroke-width':3,'circle-stroke-color':'#173f83'}});
           hover = new L.Popup({ closeButton: false, closeOnClick: false });
           popup = new L.Popup({ closeButton: true, closeOnClick: true });
           m.on('movestart', () => {

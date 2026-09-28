@@ -13,7 +13,7 @@ import { stockImportStatus, stockView, stockUpload } from '@/lib/stock-server';
 import { salesImportStatus, salesView, salesUpload } from '@/lib/sales-server';
 import { inventories } from '@/lib/inventory-server';
 import { partnerMail } from '@/lib/partner-mail';
-import { confirmPartnerRequest, getPartnerRequest, listPartnerRequests, partnerLocations, teamActivity } from '@/lib/partner-requests';
+import { confirmPartnerRequest, getPartnerRequest, listPartnerRequests, partnerLocations, teamActivity, managerActivity } from '@/lib/partner-requests';
 import { managerRequestInbox, pushPublicConfig, removePushSubscription, upsertPushSubscription } from '@/lib/push-notifications';
 import { normalizeCui as normalizePartnerCui, partnerPointKey } from '@/lib/partner-identity';
 import type { User, Order, Line, Client, Kind, Product } from '@/lib/types';
@@ -231,6 +231,7 @@ async function dispatch(req: Request) {
     const body=await jsonBody(req);
     return response({request:await confirmPartnerRequest(user,path[2],body.revision,body.locationResolution)});
   }
+  if(path.join('/')==='manager/activity'&&req.method==='GET') return response(await managerActivity(user,new URL(req.url).searchParams));
   if(path.join('/')==='activity/team'&&req.method==='GET') {
     const month=new URL(req.url).searchParams.get('month');
     return response(await teamActivity(user,month));

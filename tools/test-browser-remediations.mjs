@@ -423,13 +423,13 @@ try {
 
   const managerLogin=await cdp.evaluate(`fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:'stock-manager',password:${JSON.stringify(password)}})}).then(r=>r.ok)`);
   check(managerLogin,'Manager browser login');await cdp.send('Page.reload',{ignoreCache:true});
-  await waitFor(()=>cdp.evaluate("document.querySelector('.manager-activity h1')?.textContent==='Activitate'"),'manager default activity dashboard');
-  check(await cdp.evaluate("(()=>{const tabs=[...document.querySelectorAll('.main-nav [role=tab]')];return tabs[0]?.textContent?.includes('Activitate')&&tabs[0]?.getAttribute('aria-selected')==='true'&&tabs[1]?.textContent?.includes('Echipă');})()"),'Manager defaults to Activitate and Echipă is the second top-level tab');
-  check(await cdp.evaluate("!!document.querySelector('.activity-partners-card')"),'Manager dashboard exposes dominant interactive Parteneri noi card');
+  await waitFor(()=>cdp.evaluate("document.querySelector('.manager-overview h1')?.textContent==='Sinteză'"),'manager default activity dashboard');
+  check(await cdp.evaluate("(()=>{const tabs=[...document.querySelectorAll('.main-nav [role=tab]')];return tabs.length===5&&['Sinteză','Parteneri','Vânzări','Echipă','Operațiuni'].every((label,index)=>tabs[index]?.textContent?.includes(label))&&tabs[0]?.getAttribute('aria-selected')==='true';})()"),'Manager defaults to Sinteză with exactly five approved destinations');
+  check(await cdp.evaluate("document.querySelectorAll('.manager-summary-grid .manager-metric').length===4&&!document.querySelector('.activity-partners-card')"),'Manager overview has four compact metrics instead of dominant partner card');
 
   await cdp.send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
   await cdp.send('Page.reload',{ignoreCache:true});
-  await waitFor(()=>cdp.evaluate("document.querySelector('.manager-activity h1')?.textContent==='Activitate'"),'mobile manager activity dashboard');
+  await waitFor(()=>cdp.evaluate("document.querySelector('.manager-overview h1')?.textContent==='Sinteză'"),'mobile manager activity dashboard');
   await clickTab(cdp,'Vânzări');
   await waitFor(()=>cdp.evaluate("document.querySelectorAll('.sales-subnav [role=tab]').length===2"),'mobile sales sub-tabs');
   const mobileSalesNav=await cdp.evaluate("(()=>{const tabs=[...document.querySelectorAll('.sales-subnav [role=tab]')];const rects=tabs.map(tab=>tab.getBoundingClientRect());return {labels:tabs.map(tab=>tab.textContent?.trim()),inside:rects.every(rect=>rect.left>=-0.5&&rect.right<=innerWidth+0.5),viewportWidth:innerWidth,scrollWidth:document.documentElement.scrollWidth};})()");
@@ -441,15 +441,15 @@ try {
   check(await cdp.evaluate("(()=>{const tabs=[...document.querySelectorAll('.sales-subnav [role=tab]')];return tabs.every(tab=>{const rect=tab.getBoundingClientRect();return rect.left>=-0.5&&rect.right<=innerWidth+0.5;});})()"),'Mobile Sales keeps both sub-tabs visible after switching to Istoric');
   await cdp.send('Emulation.clearDeviceMetricsOverride');
   await cdp.send('Page.reload',{ignoreCache:true});
-  await waitFor(()=>cdp.evaluate("document.querySelector('.manager-activity h1')?.textContent==='Activitate'"),'manager activity after mobile viewport regression');
-  await waitFor(()=>cdp.evaluate("!!document.querySelector('.activity-partners-card:not(:disabled)')"),'activity partner card ready after viewport reset');
+  await waitFor(()=>cdp.evaluate("document.querySelector('.manager-overview h1')?.textContent==='Sinteză'"),'manager activity after mobile viewport regression');
+  await waitFor(()=>cdp.evaluate("document.querySelectorAll('.manager-summary-grid .manager-metric').length===4"),'activity partner card ready after viewport reset');
 
-  await cdp.evaluate("document.querySelector('.activity-partners-card').click();true");
-  await waitFor(()=>cdp.evaluate("document.querySelector('.partner-activity-detail h1')?.textContent==='Parteneri noi'"),'partner activity drill-down');
+  await cdp.evaluate("document.querySelector('.manager-attention .secondary').click();true");
+  await waitFor(()=>cdp.evaluate("document.querySelector('.partner-activity-detail h1')?.textContent==='Solicitări de partener'"),'partner activity drill-down');
   check(await cdp.evaluate("['Toate','În așteptare','Confirmați'].every(label=>[...document.querySelectorAll('.status-filter button')].some(button=>button.textContent===label))"),'Partner drill-down exposes real status filters');
   check(await cdp.evaluate("document.querySelectorAll('.partner-agent-group').length>0"),'Partner drill-down groups requests by agent');
   await cdp.evaluate("document.querySelector('.activity-detail-head .back-link').click();true");
-  await waitFor(()=>cdp.evaluate("!!document.querySelector('.manager-activity')"),'back to activity dashboard');
+  await waitFor(()=>cdp.evaluate("!!document.querySelector('.manager-partner-hub')&&!document.querySelector('.manager-requests')"),'back to manager portfolio');
   const expectedR4Month=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Bucharest',year:'numeric',month:'2-digit'}).format(new Date(previousMonthDate));
   await cdp.evaluate(`history.replaceState(null,'',${JSON.stringify('/?request='+r4Id)});location.reload();true`);
   await waitFor(()=>cdp.evaluate(`!!document.getElementById(${JSON.stringify('partner-request-'+r4Id)})`),'historical partner deep-link');
@@ -458,6 +458,7 @@ try {
   await cdp.evaluate("history.replaceState(null,'','/');true");
   await clickTab(cdp,'Echipă');
   check(!(await cdp.evaluate("[...document.querySelectorAll('.main-content [role=tab]')].some(node=>node.textContent?.trim()==='Activitate')")),'Echipă is a separate administration area without an Activitate subtab');
+  await cdp.evaluate("document.querySelector('.manager-team-admin').open=true;true");
   await waitFor(()=>cdp.evaluate("[...document.querySelectorAll('button')].some(b=>b.textContent==='Dezactivează')"),'agent toggle');
   await cdp.evaluate(`window.originalFetch=window.fetch;window.toggleFailure='conflict';window.fetch=async(...args)=>{if(String(args[0]).endsWith('/admin/users')){if(window.toggleFailure==='network')throw new TypeError('Failed to fetch');return new Response(JSON.stringify({error:'Datele agentului s-au modificat. Actualizează lista.'}),{status:409,headers:{'Content-Type':'application/json'}});}return window.originalFetch(...args);};[...document.querySelectorAll('button')].find(b=>b.textContent==='Dezactivează').click();true`);
   await waitFor(()=>cdp.evaluate("[...document.querySelectorAll('[role=alert]')].some(e=>e.textContent.includes('Actualizează lista'))"),'visible stale toggle error');checks++;
@@ -466,10 +467,42 @@ try {
   await waitFor(()=>cdp.evaluate("[...document.querySelectorAll('[role=alert]')].some(e=>e.textContent.includes('Failed to fetch'))"),'visible network toggle error');checks++;
   await cdp.evaluate('window.fetch=window.originalFetch;true');
 
+  await clickTab(cdp,'Sinteză');
+  for(const width of [320,390,768,1440]){
+    await cdp.send('Emulation.setDeviceMetricsOverride',{width,height:900,deviceScaleFactor:1,mobile:width<1024});
+    await sleep(120);
+    const geometry=await cdp.evaluate("(()=>{const nav=document.querySelector('.manager-shell .main-nav'),rect=nav.getBoundingClientRect();return {width:innerWidth,scroll:document.documentElement.scrollWidth,count:nav.querySelectorAll('[role=tab]').length,left:rect.left,right:rect.right,bottom:rect.bottom};})()");
+    check(geometry.scroll<=geometry.width+1,`Manager summary has no document overflow at ${width}px`);
+    check(geometry.count===5&&geometry.left>=0&&geometry.right<=width+1,`All five manager destinations fit at ${width}px`);
+    if(width<1024)check(geometry.bottom<=900&&geometry.bottom>=830,`Manager navigation stays at viewport bottom at ${width}px`);
+    if(process.env.MANAGER_SCREENSHOT_DIR&&(width===390||width===1440)){const shot=await cdp.send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});writeFileSync(join(process.env.MANAGER_SCREENSHOT_DIR,`manager-summary-${width}.png`),Buffer.from(shot.data,'base64'));}
+  }
+  await cdp.evaluate("(()=>{const choice=[...document.querySelectorAll('.manager-scope-choice')].find(item=>item.querySelector('summary')?.getAttribute('aria-label')==='Agent / TR');choice.open=true;choice.querySelector('button[data-value=\"stock-agent\"]').click();return true;})()");
+  await clickTab(cdp,'Parteneri');
+  await waitFor(()=>cdp.evaluate("document.querySelectorAll('.manager-partner-hub .partner-card').length>0"),'manager scoped partner portfolio');
+  check(await cdp.evaluate("![...document.querySelectorAll('.manager-partner-hub button')].some(button=>button.textContent.includes('Adaugă partener')||button.textContent.includes('Vizite și traseu'))"),'Manager does not expose agent-only request/planner actions');
+  await cdp.evaluate("(()=>{const input=document.querySelector('.manager-partner-hub .partner-filters input');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'browser-ph');input.dispatchEvent(new Event('input',{bubbles:true}));window.managerMapNode=document.querySelector('.manager-partner-hub .partner-map');return true;})()");
+  await waitFor(()=>cdp.evaluate("document.querySelectorAll('.manager-partner-hub .partner-card').length===2"),'manager partner code search');
+  await clickTab(cdp,'Vânzări');
+  await waitFor(()=>cdp.evaluate("!!document.querySelector('.sales-scope')"),'scoped manager sales');
+  check(await cdp.evaluate("JSON.parse(localStorage.getItem('manager-selection-v1:stock-manager')).agentId==='stock-agent'"),'Agent selection persists across manager sections');
+  await clickTab(cdp,'Operațiuni');
+  check(await cdp.evaluate("document.querySelectorAll('.manager-operation-nav button').length===4"),'Operations keeps orders, notices, stock and catalog destinations');
+  await clickTab(cdp,'Parteneri');
+  check(await cdp.evaluate("document.querySelector('.manager-partner-hub .partner-filters input').value==='browser-ph'&&window.managerMapNode===document.querySelector('.manager-partner-hub .partner-map')"),'Partner search and map instance survive navigation');
+  await cdp.send('Page.reload',{ignoreCache:true});
+  await waitFor(()=>cdp.evaluate("document.querySelector('.manager-overview h1')?.textContent==='Sinteză'"),'manager reload restores workspace');
+  await waitFor(()=>cdp.evaluate("document.querySelector('.manager-scope-options button[data-value=\"stock-agent\"]')?.getAttribute('aria-pressed')==='true'"),'saved agent selection restored');
+  check(await cdp.evaluate("document.querySelector('.manager-scope-options button[data-value=\"stock-agent\"]')?.getAttribute('aria-pressed')==='true'"),'Selected agent is restored after reload');
+
   const regionalLogin=await cdp.evaluate(`fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:${JSON.stringify(regionalUsername)},password:${JSON.stringify(password)}})}).then(r=>r.ok)`);
   check(regionalLogin,'Regional manager browser login');await cdp.send('Page.reload',{ignoreCache:true});
-  await waitFor(()=>cdp.evaluate("document.querySelector('.manager-activity h1')?.textContent==='Activitate'"),'regional manager default activity dashboard');
-  await clickTab(cdp,'Setări');
+  await waitFor(()=>cdp.evaluate("document.querySelector('.manager-overview h1')?.textContent==='Sinteză'"),'regional manager default activity dashboard');
+  check(await cdp.evaluate("!document.querySelector('.manager-scope-choice summary[aria-label=\"Regiune\"]')"),'Regional manager cannot select other regions');
+  await clickTab(cdp,'Parteneri');
+  await waitFor(()=>cdp.evaluate("document.querySelectorAll('.manager-partner-hub .partner-card').length>0"),'regional manager partner access');
+  check(await cdp.evaluate("!document.querySelector('.manager-partner-hub .error-banner')"),'Regional manager can load assigned partner map and list');
+  await cdp.evaluate("document.querySelector('button[aria-label=\"Setări\"]').click();true");
   await waitFor(()=>cdp.evaluate("document.querySelector('.settings-form')&&[...document.querySelectorAll('.settings-tabs [role=tab]')].some(tab=>tab.textContent?.includes('Importuri'))"),'regional manager settings imports tab');
   check(await cdp.evaluate("[...document.querySelectorAll('.settings-tabs [role=tab]')].some(tab=>tab.textContent?.includes('Importuri'))"),'Regional manager sees Importuri in Settings');
   await cdp.evaluate("[...document.querySelectorAll('.settings-tabs [role=tab]')].find(tab=>tab.textContent?.includes('Importuri')).click();true");

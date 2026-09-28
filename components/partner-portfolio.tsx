@@ -19,7 +19,9 @@ import type { PartnerSummary, PartnerBrowse } from '@/lib/partner-map-types';
 import './partner-portfolio.css';
 const PartnerMap = lazy(() => import('./partner-map'));
 const date = (s: string) => new Date(s).toLocaleString('ro-RO');
-export function PartnerPortfolio({ userId }: { userId: string }) {
+export function PartnerPortfolio({ userId, manager=false, scopeQuery='' }: { userId: string; manager?: boolean; scopeQuery?: string }) {
+  const [layout,setLayout]=useState<'split'|'list'|'map'>('split');
+  const [highlighted,setHighlighted]=useState<string|null>(null);
   const [planning, setPlanning] = useState(false),
     [planRefresh, setPlanRefresh] = useState(0),
     [adding, setAdding] = useState(false),
@@ -39,9 +41,11 @@ export function PartnerPortfolio({ userId }: { userId: string }) {
     [offset, setOffset] = useState(0),
     [selected, setSelected] = useState<string | null>(null),
     [refreshIndex, setRefreshIndex] = useState(0);
+  const openPartner=(id:string|null)=>{setSelected(id);if(id)setHighlighted(id);};
   const filterKey = useMemo(
     () =>
       new URLSearchParams({
+        ...Object.fromEntries(new URLSearchParams(scopeQuery)),
         q: query,
         county,
         city,
@@ -49,8 +53,9 @@ export function PartnerPortfolio({ userId }: { userId: string }) {
         position,
         days,
       }).toString(),
-    [query, county, city, route, position, days],
+    [query, county, city, route, position, days, scopeQuery],
   );
+  useEffect(()=>{queueMicrotask(()=>{setOffset(0);setSelected(null);setHighlighted(null);setCounty('');setCity('');setRoute('');});},[scopeQuery]);
   const [requestKey, setRequestKey] = useState(filterKey),
     [dataKey, setDataKey] = useState('');
   useEffect(() => {
@@ -185,14 +190,14 @@ export function PartnerPortfolio({ userId }: { userId: string }) {
       </section>
     );
   return (
-    <section className="partner-hub">
+    <section className={'partner-hub'+(manager?' manager-partner-hub':'')} data-layout={layout}>
       <div className="page-heading">
         <div>
-          <span className="eyebrow">PORTOFOLIUL MEU</span>
+          <span className="eyebrow">{manager?'PORTOFOLIUL ECHIPEI':'PORTOFOLIUL MEU'}</span>
           <h1>Parteneri</h1>
           <p>Puncte de lucru, contacte și vizite.</p>
         </div>
-        <button className="primary" onClick={() => setAdding(true)}>
+        {!manager&&<><button className="primary" onClick={() => setAdding(true)}>
           + Adaugă partener
         </button>
         <button
@@ -204,7 +209,8 @@ export function PartnerPortfolio({ userId }: { userId: string }) {
           }}
         >
           Vizite și traseu
-        </button>
+        </button></>}
+        {manager&&<div className="manager-map-modes" aria-label="Afișarea partenerilor">{([['split','Listă + Hartă'],['list','Listă'],['map','Hartă']] as const).map(([value,label])=><button type="button" key={value} aria-pressed={layout===value} onClick={()=>setLayout(value)}>{label}</button>)}</div>}
       </div>
       {error && (
         <div className="error-banner" role="alert">
@@ -313,6 +319,8 @@ export function PartnerPortfolio({ userId }: { userId: string }) {
           ? 'Se încarcă portofoliul…'
           : `${data?.total || 0} puncte de lucru · ${data?.located || 0} pe hartă · ${(data?.total || 0) - (data?.located || 0)} fără poziție`}
       </p>
+      <div className={manager?'manager-partner-grid':undefined}>
+      <div className={manager?'manager-partner-map-pane':undefined}>
       <Suspense fallback={<div className="partner-map">Se încarcă harta…</div>}>
         {data && (
           <PartnerMap
@@ -320,7 +328,9 @@ export function PartnerPortfolio({ userId }: { userId: string }) {
             bounds={current ? data.bounds : undefined}
             styleUrl={data.styleUrl}
             refreshKey={refreshIndex}
-            onSelect={setSelected}
+            onSelect={openPartner}
+            selectedId={manager?highlighted:undefined}
+            focusPoint={manager?filtered.find(partner=>partner.id===highlighted):undefined}
           />
         )}
       </Suspense>
@@ -348,13 +358,15 @@ export function PartnerPortfolio({ userId }: { userId: string }) {
           corectate în fișă.
         </p>
       )}
+      </div>
+      <div className={manager?'manager-partner-list-pane':undefined}>
       <div className="partner-list">
         {filtered.map((p) => (
           <button
             type="button"
-            className="partner-card"
+            className={'partner-card'+(manager&&highlighted===p.id?' partner-card-selected':'')}
             key={p.id}
-            onClick={() => setSelected(p.id)}
+            onClick={() => openPartner(p.id)}
           >
             <strong>{p.name}</strong>
             <span>{p.address || 'Adresă necompletată'}</span>
@@ -390,10 +402,12 @@ export function PartnerPortfolio({ userId }: { userId: string }) {
           Arată încă 100
         </button>
       )}
+      </div></div>
       {selected && (
         <PartnerSheet
           key={selected}
           id={selected}
+          manager={manager}
           onClose={() => setSelected(null)}
           onSaved={() => refresh()}
         />
@@ -405,10 +419,12 @@ function PartnerSheet({
   id,
   onClose,
   onSaved,
+  manager=false,
 }: {
   id: string;
   onClose: () => void;
   onSaved: () => void;
+  manager?: boolean;
 }) {
   const [detail, setDetail] = useState<PartnerDetail | null>(null),
     [form, setForm] = useState<PortfolioPartner | null>(null),
@@ -669,7 +685,7 @@ function PartnerSheet({
           </form>
           <section>
             <h3>Vizite {detail ? `(${detail.visitCount})` : ''}</h3>
-            <label>
+            {!manager&&<><label>
               Notă vizită
               <textarea
                 maxLength={2000}
@@ -689,7 +705,8 @@ function PartnerSheet({
             </button>
             <p className="muted">
               Vizita se înregistrează doar la apăsarea butonului.
-            </p>
+            </p></>}
+            {manager&&<p className="muted">Istoricul vizitelor înregistrate de agenți.</p>}
             {detail?.visits.map((v) => (
               <article className="partner-visit" key={v.id}>
                 <strong>{date(v.visitedAt)}</strong> · {v.agentName}

@@ -266,13 +266,18 @@ export async function recordVisit(
 
 // Lightweight read projection for lists/maps. No contact/request/financial data.
 // Reuse the canonical fingerprint and scope, including shared work locations.
-export async function portfolioSummary(user: User, bbox?: import('./partner-map-types').MapBounds) {
+export async function portfolioSummary(user: User, bbox?: import('./partner-map-types').MapBounds, warehouseIds?: string[]) {
   const scope = partnerScope(user);
   const args: (string | number)[] = [...scope.args];
   let area = '';
+  if (warehouseIds) {
+    if (!warehouseIds.length) return [];
+    area += ` AND EXISTS (${membership} WHERE w.value IN (SELECT value FROM json_each(?)))`;
+    args.push(JSON.stringify(warehouseIds));
+  }
   if (bbox) {
     const [west, south, east, north] = bbox;
-    area = ` AND p.latitude BETWEEN ? AND ? AND ${west <= east ? 'p.longitude BETWEEN ? AND ?' : '(p.longitude>=? OR p.longitude<=?)'}`;
+    area += ` AND p.latitude BETWEEN ? AND ? AND ${west <= east ? 'p.longitude BETWEEN ? AND ?' : '(p.longitude>=? OR p.longitude<=?)'}`;
     args.push(south, north, west, east);
   }
   const rows = await db().prepare(`SELECT c.id,c.warehouse_id,c.data,
