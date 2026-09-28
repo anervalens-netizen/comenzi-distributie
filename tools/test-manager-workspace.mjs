@@ -5,7 +5,7 @@ import {createHash,randomUUID} from 'node:crypto';
 const db=new DatabaseSync('work/qa/mobiup.sqlite');
 const base='http://127.0.0.1:3000/api';
 const ids=['mui-global','mui-region-a','mui-region-b','mui-agent-a','mui-agent-b'];
-const cookies={},requests=[];
+const cookies={},requests=[],orders=[];
 let checks=0;
 const check=(value,label)=>{assert.ok(value,label);checks++;};
 const sha=value=>createHash('sha256').update(value).digest('hex');
@@ -38,6 +38,29 @@ try {
   request('mui-agent-b','confirmed','mui-shared','2025-12-06T10:00:00Z','2026-01-06T10:00:00Z');
   for(const [id,finalizedAt] of [['mui-inventory-jan','2026-01-05T10:00:00Z'],['mui-inventory-feb','2026-02-05T10:00:00Z']])db.prepare('INSERT INTO settings(key,value) VALUES(?,?)').run(`inventory-v1:${id}`,JSON.stringify({id,createdBy:'mui-agent-a',warehouseId:'mui-warehouse-a',scopeLabel:'Synthetic',status:'finalized',createdAt:'2025-12-01T10:00:00Z',finalizedAt,lines:[]}));
 
+  const order=(agent,kind,status,finalizedAt,createdAt='2025-12-01T10:00:00.000Z')=>{
+    const id=randomUUID();orders.push(id);
+    db.prepare('INSERT INTO orders(id,number,user_id,warehouse_id,kind,status,payload,created_at,finalized_at) VALUES(?,?,?,?,?,?,?,?,?)')
+      .run(id,`SYNTHETIC-${id}`,agent,agent.endsWith('-a')?'mui-warehouse-a':'mui-warehouse-b',kind,status,JSON.stringify({items:[],standItems:[],serials:kind==='combined'?['SYNTHETIC']:[]}),createdAt,finalizedAt);
+  };
+  const baseline=await call('manager/activity?month=2026-01');
+  // All five persisted types, regardless of creation month; combined counts once.
+  for(const kind of ['accessories','stands','combined','sim','stand_client'])order('mui-agent-a',kind,'finalized','2026-01-15T10:00:00.000Z');
+  order('mui-agent-b','accessories','finalized','2026-01-16T10:00:00.000Z');
+  order('mui-agent-b','sim','finalized','2026-01-16T10:00:00.000Z');
+  // Drafts/deleted and finalized rows without an event timestamp are never included.
+  for(const kind of ['accessories','sim']){
+    order('mui-agent-a',kind,'draft',null,'2026-01-15T10:00:00.000Z');
+    order('mui-agent-a',kind,'draft','2026-01-15T10:00:00.000Z');
+    order('mui-agent-a',kind,'deleted','2026-01-15T10:00:00.000Z');
+    order('mui-agent-a',kind,'finalized',null);
+  }
+  // Europe/Bucharest: January starts Dec31 22:00Z and ends Jan31 22:00Z.
+  order('mui-agent-a','accessories','finalized','2025-12-31T21:59:59.999Z');
+  order('mui-agent-a','accessories','finalized','2025-12-31T22:00:00.000Z');
+  order('mui-agent-a','sim','finalized','2026-01-31T21:59:59.999Z');
+  order('mui-agent-a','sim','finalized','2026-01-31T22:00:00.000Z');
+  order('mui-agent-a','stands','finalized','2026-02-05T10:00:00.000Z','2026-01-15T10:00:00.000Z');
   const global=await call('partner/browse?q=mui-');
   check(global.total===4,'Global scope counts distinct locations, not CUI or memberships');
   check(global.located===3&&global.partners.some(point=>point.id==='mui-missing'),'Unlocated points remain in list');
@@ -59,13 +82,24 @@ try {
   const empty=await call('partner/browse?q=mui-&county=nonexistent&agentId=mui-agent-a');
   check(empty.total===0,'Combined locality/county and agent filters intersect');
   const globalActivity=await call('manager/activity?month=2026-01');
+  check(globalActivity.finalizedOrders-baseline.finalizedOrders===5&&globalActivity.finalizedNotices-baseline.finalizedNotices===4,'Global document counts include all scoped agents and each document once');
   check(globalActivity.activity.partnerRequests.some(item=>item.id===oldPending),'Pending requests include previous months');
   check(globalActivity.confirmedByAgent['mui-agent-a']===1&&globalActivity.confirmedByAgent['mui-agent-b']===1,'Confirmation event is attributed to actual confirmation month');
   const scopedActivity=await call('manager/activity?month=2026-01&managerId=mui-region-a');
+  check(scopedActivity.finalizedOrders===4&&scopedActivity.finalizedNotices===3,'Region counts finalized orders/notices by completion month, excluding drafts and deleted rows');
   check(scopedActivity.pending===1&&scopedActivity.confirmed===1,'Regional pending all-time and monthly confirmed location KPIs');
   check(scopedActivity.activity.totals.finalizedInventories===1,'Inventory KPI uses finalizedAt, not createdAt');
   check(scopedActivity.activity.agents.length===1&&!scopedActivity.activity.partnerRequests.some(item=>item.id===otherPending),'Summary and requests exclude other regions');
   const onlyA=await call('manager/activity?month=2026-01&agentId=mui-agent-a','mui-region-a');
+  check(onlyA.finalizedOrders===4&&onlyA.finalizedNotices===3,'Authorized regional agent selection preserves finalized document counts');
+  const onlyB=await call('manager/activity?month=2026-01&agentId=mui-agent-b');
+  check(onlyB.finalizedOrders===1&&onlyB.finalizedNotices===1,'Global agent filter excludes other agents from document KPIs');
+  const defaultRegion=await call('manager/activity?month=2026-01','mui-region-a');
+  check(defaultRegion.finalizedOrders===4&&defaultRegion.finalizedNotices===3,'Regional default cannot leak other-region document totals');
+  const emptyMonth=await call('manager/activity?month=2026-03&agentId=mui-agent-a');
+  check(emptyMonth.finalizedOrders===0&&emptyMonth.finalizedNotices===0,'Empty period returns explicit zero finalized documents');
+  const february=await call('manager/activity?month=2026-02&agentId=mui-agent-a');
+  check(february.finalizedOrders===1&&february.finalizedNotices===1,'Upper month boundary is exclusive; completion month wins over creation month');
   check(onlyA.pendingByAgent['mui-agent-a']===1,'Regional agent selection works');
   await call('manager/activity?month=2026-01&agentId=mui-agent-b','mui-region-a',404);
   await call('manager/activity?month=2026-01','mui-agent-a',403);
@@ -76,9 +110,18 @@ try {
   db.prepare("INSERT INTO users(id,username,name,role,manager_scope,password_hash,active,must_change_password) VALUES(?,?,?,'manager','assigned','unused-synthetic-hash',1,0)").run(bothRegion,bothRegion,'Synthetic combined region');ids.push(bothRegion);
   for(const agent of ['mui-agent-a','mui-agent-b'])db.prepare('INSERT INTO manager_agents(manager_id,agent_id) VALUES(?,?)').run(bothRegion,agent);
   const combined=await call('manager/activity?month=2026-01&managerId=mui-both');
+  check(combined.finalizedOrders===5&&combined.finalizedNotices===4,'Overlapping manager assignments do not duplicate finalized documents');
+  // Summer boundary uses UTC+3; no fixed UTC/local-offset assumptions.
+  order('mui-agent-a','combined','finalized','2026-05-31T20:59:59.999Z');
+  order('mui-agent-a','combined','finalized','2026-05-31T21:00:00.000Z');
+  order('mui-agent-a','stand_client','finalized','2026-06-30T20:59:59.999Z');
+  order('mui-agent-a','stand_client','finalized','2026-06-30T21:00:00.000Z');
+  const summer=await call('manager/activity?month=2026-06&agentId=mui-agent-a');
+  check(summer.finalizedOrders===1&&summer.finalizedNotices===1,'Document month boundaries follow daylight saving time');
   check(combined.confirmed===1&&combined.pending===2,'Shared confirmed location is counted once across agents');
   console.log(`PASS: ${checks} manager workspace scope, location and KPI checks.`);
 } finally {
+  for(const id of orders)db.prepare('DELETE FROM orders WHERE id=?').run(id);
   for(const id of requests)db.prepare('DELETE FROM partner_requests WHERE id=?').run(id);
   for(const id of ['mui-only-a','mui-only-b','mui-shared','mui-missing']){db.prepare('DELETE FROM partner_profiles WHERE customer_id=?').run(id);db.prepare('DELETE FROM customers WHERE id=?').run(id);}
   for(const id of ['mui-inventory-jan','mui-inventory-feb'])db.prepare('DELETE FROM settings WHERE key=?').run(`inventory-v1:${id}`);

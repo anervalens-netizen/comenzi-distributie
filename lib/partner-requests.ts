@@ -115,6 +115,14 @@ export async function managerActivity(user: User, params: URLSearchParams) {
   const scopedAgents = original.agents.filter(agent => !selected || selected.agentIds.includes(agent.agentId));
   const ids = new Set(scopedAgents.map(agent => agent.agentId));
   const {start, end} = bucharestMonthUtcRange(month);
+  // Match the existing Comenzi/Avize tabs. A combined order is one order, not several documents.
+  const documents = await db().prepare(`SELECT
+    COALESCE(SUM(CASE WHEN kind IN ('accessories','stands','combined') THEN 1 ELSE 0 END),0) finalizedOrders,
+    COALESCE(SUM(CASE WHEN kind IN ('sim','stand_client') THEN 1 ELSE 0 END),0) finalizedNotices
+    FROM orders WHERE status='finalized' AND finalized_at>=? AND finalized_at<?
+    AND user_id IN (SELECT value FROM json_each(?))`)
+    .bind(start,end,JSON.stringify([...ids]))
+    .first<{finalizedOrders:number;finalizedNotices:number}>();
   const inventoryRows=(await db().prepare("SELECT value FROM settings WHERE key LIKE 'inventory-v1:%'").all<{value:string}>()).results;
   const finalized=new Map<string,number>();
   for(const row of inventoryRows){try{const inventory=JSON.parse(row.value) as InventoryRecord;if(ids.has(inventory.createdBy)&&inventory.status==='finalized'&&inventory.finalizedAt&&bucharestMonthKey(inventory.finalizedAt)===month)finalized.set(inventory.createdBy,(finalized.get(inventory.createdBy)||0)+1);}catch{}}
@@ -130,5 +138,5 @@ export async function managerActivity(user: User, params: URLSearchParams) {
   }
   const sum = (key: 'finalizedInventories' | 'inventoryDelta' | 'inventoryShortage' | 'inventorySurplus' | 'inventoryDiscrepantLines') => agents.reduce((total, agent) => total + agent[key], 0);
   const activity: TeamActivityView = {month, agents: agents.map(agent => ({...agent, partnerRequests: requests.filter(request => request.agentId === agent.agentId).length, partnerConfirmed: requests.filter(request => request.agentId === agent.agentId && request.status === 'confirmed').length})), partnerRequests: requests, totals: {partnerRequests: requests.length, partnerConfirmed: requests.filter(request => request.status === 'confirmed').length, activeAgents: agents.filter(agent => agent.active).length, agentsWithInventory: agents.filter(agent => agent.inventories > 0).length, finalizedInventories: sum('finalizedInventories'), inventoryDelta: sum('inventoryDelta'), inventoryShortage: sum('inventoryShortage'), inventorySurplus: sum('inventorySurplus'), inventoryDiscrepantLines: sum('inventoryDiscrepantLines')}};
-  return {activity, pending: requests.filter(request => request.status === 'requested').length, confirmed: new Set(confirmed.map(request => request.customerId || request.id)).size, pendingByAgent, confirmedByAgent};
+  return {activity, pending: requests.filter(request => request.status === 'requested').length, confirmed: new Set(confirmed.map(request => request.customerId || request.id)).size, pendingByAgent, confirmedByAgent, finalizedOrders:documents?.finalizedOrders??0, finalizedNotices:documents?.finalizedNotices??0};
 }

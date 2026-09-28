@@ -425,7 +425,7 @@ try {
   check(managerLogin,'Manager browser login');await cdp.send('Page.reload',{ignoreCache:true});
   await waitFor(()=>cdp.evaluate("document.querySelector('.manager-overview h1')?.textContent==='Sinteză'"),'manager default activity dashboard');
   check(await cdp.evaluate("(()=>{const tabs=[...document.querySelectorAll('.main-nav [role=tab]')];return tabs.length===5&&['Sinteză','Parteneri','Vânzări','Echipă','Operațiuni'].every((label,index)=>tabs[index]?.textContent?.includes(label))&&tabs[0]?.getAttribute('aria-selected')==='true';})()"),'Manager defaults to Sinteză with exactly five approved destinations');
-  check(await cdp.evaluate("document.querySelectorAll('.manager-summary-grid .manager-metric').length===4&&!document.querySelector('.activity-partners-card')"),'Manager overview has four compact metrics instead of dominant partner card');
+  check(await cdp.evaluate("document.querySelectorAll('.manager-summary-grid .manager-metric').length===6&&!document.querySelector('.activity-partners-card')"),'Manager overview has six compact metrics instead of dominant partner card');
 
   await cdp.send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
   await cdp.send('Page.reload',{ignoreCache:true});
@@ -442,7 +442,7 @@ try {
   await cdp.send('Emulation.clearDeviceMetricsOverride');
   await cdp.send('Page.reload',{ignoreCache:true});
   await waitFor(()=>cdp.evaluate("document.querySelector('.manager-overview h1')?.textContent==='Sinteză'"),'manager activity after mobile viewport regression');
-  await waitFor(()=>cdp.evaluate("document.querySelectorAll('.manager-summary-grid .manager-metric').length===4"),'activity partner card ready after viewport reset');
+  await waitFor(()=>cdp.evaluate("document.querySelectorAll('.manager-summary-grid .manager-metric').length===6"),'activity partner card ready after viewport reset');
 
   await cdp.evaluate("document.querySelector('.manager-attention .secondary').click();true");
   await waitFor(()=>cdp.evaluate("document.querySelector('.partner-activity-detail h1')?.textContent==='Solicitări de partener'"),'partner activity drill-down');
@@ -467,7 +467,12 @@ try {
   await waitFor(()=>cdp.evaluate("[...document.querySelectorAll('[role=alert]')].some(e=>e.textContent.includes('Failed to fetch'))"),'visible network toggle error');checks++;
   await cdp.evaluate('window.fetch=window.originalFetch;true');
 
+  await cdp.evaluate("window.kpiOriginalFetch=window.fetch;window.fetch=async(...args)=>{const response=await window.kpiOriginalFetch(...args);if(String(args[0]).startsWith('/api/sales?')&&response.ok){const data=await response.json();data.filename='synthetic-kpi.xlsx';data.summary.value=1426066.81;return new Response(JSON.stringify(data),{status:200,headers:{'Content-Type':'application/json'}});}return response;};true");
   await clickTab(cdp,'Sinteză');
+  await waitFor(()=>cdp.evaluate("!!document.querySelector('.manager-sales-amount')&&!!document.querySelector('.manager-agent-table')"),'manager summary data and synthetic large sales value');
+  check(await cdp.evaluate("(()=>{const labels=[...document.querySelectorAll('.manager-summary-grid .manager-metric>span')].map(node=>node.textContent);return JSON.stringify(labels)===JSON.stringify(['VÂNZĂRI','CLIENȚI NOI','SOLICITĂRI ÎN AȘTEPTARE','INVENTARE FINALIZATE','COMENZI FINALIZATE','AVIZE FINALIZATE']);})()"),'Manager summary shows approved six KPI labels');
+  check(await cdp.evaluate("(()=>{const headings=[...document.querySelectorAll('.manager-agent-table thead th')].map(node=>node.textContent);return headings.includes('Clienți noi')&&!headings.includes('Confirmați');})()"),'New clients replaces confirmation terminology in agent table');
+  check(await cdp.evaluate("(async()=>{const month=document.querySelector('.activity-toolbar input[type=month]').value;const data=await fetch('/api/manager/activity?month='+month).then(response=>response.json());const cards=document.querySelectorAll('.manager-summary-grid .manager-metric');return cards[4].querySelector('strong').textContent===String(data.finalizedOrders)&&cards[5].querySelector('strong').textContent===String(data.finalizedNotices);})()"),'Finalized document cards display actual scoped API totals');
   for(const width of [320,390,768,1440]){
     await cdp.send('Emulation.setDeviceMetricsOverride',{width,height:900,deviceScaleFactor:1,mobile:width<1024});
     await sleep(120);
@@ -475,8 +480,12 @@ try {
     check(geometry.scroll<=geometry.width+1,`Manager summary has no document overflow at ${width}px`);
     check(geometry.count===5&&geometry.left>=0&&geometry.right<=width+1,`All five manager destinations fit at ${width}px`);
     if(width<1024)check(geometry.bottom<=900&&geometry.bottom>=830,`Manager navigation stays at viewport bottom at ${width}px`);
+    const metrics=await cdp.evaluate("(()=>{const grid=document.querySelector('.manager-summary-grid'),amount=document.querySelector('.manager-sales-amount'),currency=document.querySelector('.manager-sales-currency');return {columns:getComputedStyle(grid).gridTemplateColumns.split(' ').length,count:grid.children.length,amountFits:amount.scrollWidth<=amount.clientWidth+1,currencyFits:currency.scrollWidth<=currency.clientWidth+1,currencyText:currency.textContent,currencyOnNextLine:currency.getBoundingClientRect().top>=amount.getBoundingClientRect().bottom};})()");
+    check(metrics.count===6&&metrics.columns===(width>1100?3:2),`Six manager cards use balanced responsive columns at ${width}px`);
+    check(metrics.amountFits&&metrics.currencyFits&&metrics.currencyText==='RON'&&metrics.currencyOnNextLine,`Large sales amount and RON remain readable without splitting at ${width}px`);
     if(process.env.MANAGER_SCREENSHOT_DIR&&(width===390||width===1440)){const shot=await cdp.send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});writeFileSync(join(process.env.MANAGER_SCREENSHOT_DIR,`manager-summary-${width}.png`),Buffer.from(shot.data,'base64'));}
   }
+  await cdp.evaluate('window.fetch=window.kpiOriginalFetch;true');
   await cdp.evaluate("(()=>{const choice=[...document.querySelectorAll('.manager-scope-choice')].find(item=>item.querySelector('summary')?.getAttribute('aria-label')==='Agent / TR');choice.open=true;choice.querySelector('button[data-value=\"stock-agent\"]').click();return true;})()");
   await clickTab(cdp,'Parteneri');
   await waitFor(()=>cdp.evaluate("document.querySelectorAll('.manager-partner-hub .partner-card').length>0"),'manager scoped partner portfolio');
