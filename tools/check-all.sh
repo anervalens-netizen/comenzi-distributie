@@ -34,6 +34,7 @@ node tools/test-sales-classification.mjs
 node tools/test-sales.mjs
 ./tools/test-activate-release.sh
 python3 -W error::ResourceWarning tools/test-backup.py
+python3 -W error::ResourceWarning tools/test-recovery.py
 node tools/test-password-race.mjs
 node tools/test-session-persistence.mjs
 # API acceptance on isolated SQLite.

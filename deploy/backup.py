@@ -43,6 +43,54 @@ def prune_partials(folder: Path, cutoff: datetime) -> None:
             partial.unlink(missing_ok=True)
 
 
+
+def add_recovery_files(output: tarfile.TarFile, recovery: dict[str, Path], release: Path, expected_release: bytes) -> None:
+    """Include the exact runnable release and private build inputs, never symlinks."""
+    if set(recovery) != {'runtime', 'resources', 'products'}:
+        raise RuntimeError('Full recovery requires runtime, resources and products directories')
+    roots = {name: path.resolve(strict=True) for name, path in recovery.items()}
+    if (roots['runtime'] / 'RELEASE.json').read_bytes() != expected_release:
+        raise RuntimeError('Recovery runtime does not match the active release')
+    for name, required in [('runtime', 'server.js'), ('resources', 'resource-mode.json')]:
+        if not (roots[name] / required).is_file():
+            raise RuntimeError(f'Recovery {name} is missing {required}')
+    mode = json.loads((roots['resources'] / 'resource-mode.json').read_text())
+    if mode.get('mode') != 'private':
+        raise RuntimeError('Recovery resources are not private production inputs')
+    for name, expected in mode.get('sha256', {}).items():
+        source = (roots['resources'] / name).resolve()
+        if not source.is_relative_to(roots['resources']) or digest(source) != expected:
+            raise RuntimeError('Recovery resource integrity mismatch')
+    manifest = {'schema': 1, 'files': {}}
+    for name, root in roots.items():
+        if not root.is_dir():
+            raise RuntimeError(f'Missing recovery directory: {name}')
+        files = sorted(root.rglob('*'))
+        if not any(path.is_file() for path in files):
+            raise RuntimeError(f'Empty recovery directory: {name}')
+        for path in files:
+            if path.is_symlink() or not path.resolve().is_relative_to(root):
+                raise RuntimeError('Recovery tree contains a symlink or escaping path')
+            if path.is_dir():
+                continue
+            if not path.is_file():
+                raise RuntimeError('Recovery tree contains a non-regular file')
+            key = 'recovery/' + name + '/' + path.relative_to(root).as_posix()
+            before = digest(path)
+            output.add(path, arcname=key, recursive=False)
+            if digest(path) != before:
+                raise RuntimeError('Recovery inputs changed during backup; retry the backup')
+            manifest['files'][key] = before
+    if release.read_bytes() != expected_release:
+        raise RuntimeError('Active release changed during backup; retry the backup')
+    import io
+    payload = json.dumps(manifest, sort_keys=True).encode()
+    info = tarfile.TarInfo('recovery/manifest.json')
+    info.size = len(payload)
+    info.mode = 0o600
+    output.addfile(info, io.BytesIO(payload))
+
+
 def run_backup(
     *,
     data: Path = Path('/storage/comenzi-distributie'),
@@ -50,6 +98,7 @@ def run_backup(
     nas: Path = Path('/mnt/nas/backups/server-68/comenzi-distributie'),
     nas_mount: Path = Path('/mnt/nas'),
     release: Path = Path('/opt/Mobiup/comenzi-distributie/runtime/current/RELEASE.json'),
+    recovery: dict[str, Path] | None = None,
 ) -> Path:
     """Publish locally first; an offsite failure still exits unsuccessfully.
 
@@ -92,6 +141,7 @@ def run_backup(
         # Enumerating after the snapshot includes all its sources; extra newer files
         # are harmless and do not change the generation recorded in the snapshot.
         sales_sources = sorted(path for path in (data / 'sales-imports').glob('*') if path.suffix in ('.xlsx', '.xls')) if sales_snapshot.exists() else []
+        captured_release = release.read_bytes()
         try:
             with tarfile.open(local_partial, 'w:gz', compresslevel=2) as output:
                 output.add(snapshot, arcname='mobiup.sqlite')
@@ -107,6 +157,10 @@ def run_backup(
                         raise RuntimeError('Invalid export location')
                     output.add(path, arcname='files/' + key)
                 output.add(release, arcname='RELEASE.json')
+                if recovery is not None:
+                    add_recovery_files(output, recovery, release, captured_release)
+                if release.read_bytes() != captured_release:
+                    raise RuntimeError('Release changed during archive creation')
             local_partial.replace(archive)
         except Exception:
             local_partial.unlink(missing_ok=True)
@@ -142,4 +196,7 @@ def run_backup(
 
 
 if __name__ == '__main__':
-    run_backup()
+    configured = {name: os.environ.get('MOBIUP_RECOVERY_' + name.upper(), '') for name in ('runtime', 'resources', 'products')}
+    if any(configured.values()) and not all(configured.values()):
+        raise RuntimeError('Incomplete recovery configuration')
+    run_backup(recovery={name: Path(value) for name, value in configured.items()} if all(configured.values()) else None)

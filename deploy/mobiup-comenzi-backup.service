@@ -3,6 +3,8 @@ Description=Backup Mobiup comenzi distributie to NAS
 After=network-online.target mobiup-comenzi-distributie.service
 
 [Service]
+# Configures private full-recovery inputs without publishing their locations.
+EnvironmentFile=/etc/mobiup-comenzi-backup-recovery.env
 Type=oneshot
 User=operator
 UMask=0077
