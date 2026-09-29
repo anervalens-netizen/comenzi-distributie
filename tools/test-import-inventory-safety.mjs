@@ -61,6 +61,10 @@ try {
   let expected;if(timing==='after-preview'){mutate();expected=JSON.stringify(rows());}else beforeBatch=()=>{mutate();expected=JSON.stringify(rows());};
   await reject(()=>commit(clients,p,true));check(JSON.stringify(rows())===expected,`${mutation} ${timing}: complete atomic rejection, no new record`);
  }
+ reset();insert('inactive-shared',{...point('Historical','991009'),warehouseIds:['w1','w2']},0);
+ const unrelated=await preview([point('New','991010')]);check(!unrelated.blocked.length,'unrelated inactive shared history permits a new independent portfolio');
+ await commit([point('New','991010')],unrelated);check(rows().find(r=>r.id==='inactive-shared').active===0,'inactive shared history stays untouched');
+ const sharedReactivation=await preview([point('Historical','991009')]);check(sharedReactivation.blocked.length>0,'shared inactive identity reactivation remains protected');
  for(const primary of ['w1','w2']){reset();insert('shared',{...point(),warehouseIds:['w1','w2']},1,primary);const p=await preview([point()]);check(p.blocked.length>0,'shared membership blocked regardless of primary');const before=JSON.stringify(rows());await reject(()=>commit([point()],p,true));check(JSON.stringify(rows())===before,'shared portfolio unchanged');}
  reset();const generated='imp-'+(await import('node:crypto')).createHash('sha256').update('w1|991001|TEST COUNTY|TEST CITY|TEST 1').digest('hex').slice(0,32);insert(generated,point(),1,'w2');const moved=await preview([point()]);await reject(()=>commit([point()],moved));check(rows()[0].warehouse_id==='w2','moved generated ID cannot be reclaimed');
  reset();insert('stable',{...point(),profile:{note:'keep'},pin:{lat:1,lng:2}});

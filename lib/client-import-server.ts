@@ -27,7 +27,7 @@ export async function importClients(warehouseId:string,body:Record<string,unknow
   const byIdentity=new Map<string,Row[]>();
   for(const row of owned){const key=identity(parsed.get(row.id)!);byIdentity.set(key,[...(byIdentity.get(key)||[]),row]);}
   const preview:ClientImportPreview={snapshot:sha256(JSON.stringify([warehouseId,incoming,rows])),removed:[],added:[],unchanged:[],ambiguous:[],blocked:[]};
-  if(rows.some(r=>(parsed.get(r.id)!.warehouseIds||[r.warehouse_id]).length>1))preview.blocked.push('Portofoliul conține puncte comune. Editează atribuirile din Echipă; importul individual nu poate înlocui un portofoliu partajat.');
+  if(rows.some(r=>(parsed.get(r.id)!.warehouseIds||[r.warehouse_id]).length>1&&(r.active===1||seen.has(identity(parsed.get(r.id)!)))))preview.blocked.push('Portofoliul conține puncte comune. Editează atribuirile din Echipă; importul individual nu poate înlocui un portofoliu partajat.');
   const records:Client[]=[];
   for(const client of incoming) {
     const matches=byIdentity.get(identity(client))||[];
