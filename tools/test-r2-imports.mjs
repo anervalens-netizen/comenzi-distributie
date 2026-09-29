@@ -70,7 +70,7 @@ try {
   });
   for (const bookType of ['xlsx', 'xls']) for (const [column, property] of Object.entries(identifiers)) {
     for (const [value, format, expected] of [
-      [12, 'General', '12'], [12, '00000', '00012'], ['00012', 'General', '00012'],
+      [12, 'General', '12'], [12, '@', '12'], [12, '00000', '00012'], ['00012', 'General', '00012'],
       ['00012', '0000000', '00012'], [' 00012 ', 'General', ' 00012 '],
       [0, '00000', '00000'], [-12, '00000', '-00012'], [123456, '00000', '123456'],
       [123456789012345, 'General', '123456789012345'], ['9007199254740993', 'General', '9007199254740993'],
@@ -78,7 +78,7 @@ try {
       assert.equal(parse({ [column]: value }, { bookType, formats: { [column]: format } })[property], expected);
     });
     for (const [value, format] of [
-      [12.25, 'General'], [12.25, '00000'], [Number.MAX_SAFE_INTEGER + 1, 'General'],
+      [12.25, 'General'], [12.25, '@'], [1234567890123456, '@'], [12.25, '00000'], [Number.MAX_SAFE_INTEGER + 1, 'General'],
       [1234567890123456, 'General'], [1e21, 'General'], [12, '0.00'], [12, '0.00E+00'],
       [12, '#,##0'], [12, '0%'], [12, 'yyyy-mm-dd'], [12, '[>10]00000;0'], [true, 'General'],
     ]) await test(`${bookType} ${column} rejects ambiguous/inexact ${value} / ${format}`, () => {

@@ -27,10 +27,11 @@ function identifier(cell: XLSX.CellObject | undefined, label: string, row: numbe
   // must be text even if JavaScript could represent the rounded integer safely.
   // Only a pure zero mask proves padding; w can be rounded/scientific in General.
   if (cell.t !== 'n' || typeof value !== 'number' || !Number.isSafeInteger(value) || Math.abs(value) >= 1e15
-    || typeof format !== 'string' || (format !== 'General' && !/^0{1,500}$/.test(format))) {
+    || typeof format !== 'string' || (format !== 'General' && format !== '@' && !/^0{1,500}$/.test(format))) {
     throw new Error(`Rândul ${row}: ${label} este invalid sau ambiguu. Folosește o celulă text pentru identificatorul exact.`);
   }
-  if (format === 'General') return String(value);
+  // Applying Excel Text style to an existing numeric cell does not change its value.
+  if (format === 'General' || format === '@') return String(value);
   return (value < 0 ? '-' : '') + String(Math.abs(value)).padStart(format.length, '0');
 }
 
