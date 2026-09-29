@@ -208,7 +208,7 @@ try {
     await apply(clients, p, true);
     assert.equal(rows().find(row => row.id === 'omitted-active').active, 0);
   });
-  for (const activity of [[0, 0], [0, 1], [1, 1]]) await test(`duplicate exact identities fail closed (${activity})`, async () => {
+  for (const activity of [[0, 0], [0, 1], [1, 1]]) await test(`duplicate exact identities fail closed (${activity.join(",")})`, async () => {
     reset(); activity.forEach((active, index) => insert(`duplicate-${index}`, point('Synthetic duplicate'), active));
     const input = [point('Synthetic duplicate')], p = await preview(input), before = snapshot();
     assert.equal(p.ambiguous.length, 1);
