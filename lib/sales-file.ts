@@ -17,6 +17,23 @@ function text(value: unknown) {
   return '';
 }
 
+function identifier(cell: XLSX.CellObject | undefined, label: string, row: number) {
+  if (!cell || cell.t === 'z' || cell.v === undefined || cell.v === null) return '';
+  // Text identifiers are authoritative, including any literal leading zeroes.
+  if (cell.t === 's' && typeof cell.v === 'string') return cell.v;
+  const value = cell.v;
+  const format = cell.z ?? 'General';
+  // Excel numbers have at most 15 decimal digits of precision. Larger codes
+  // must be text even if JavaScript could represent the rounded integer safely.
+  // Only a pure zero mask proves padding; w can be rounded/scientific in General.
+  if (cell.t !== 'n' || typeof value !== 'number' || !Number.isSafeInteger(value) || Math.abs(value) >= 1e15
+    || typeof format !== 'string' || (format !== 'General' && !/^0{1,500}$/.test(format))) {
+    throw new Error(`Rândul ${row}: ${label} este invalid sau ambiguu. Folosește o celulă text pentru identificatorul exact.`);
+  }
+  if (format === 'General') return String(value);
+  return (value < 0 ? '-' : '') + String(Math.abs(value)).padStart(format.length, '0');
+}
+
 function numberValue(value: unknown, label: string, row: number) {
   if (typeof value === 'number' && Number.isFinite(value) && Math.abs(value) <= 1_000_000_000) return value;
   const raw = text(value).replace(/\s/g, '');
@@ -38,12 +55,12 @@ function cents(value: unknown, label: string, row: number) {
   return result;
 }
 
-function dateValue(value: unknown, row: number) {
+function dateValue(value: unknown, row: number, date1904: boolean) {
   let year = 0, month = 0, day = 0;
   if (value instanceof Date && !Number.isNaN(value.getTime())) {
-    year = value.getFullYear(); month = value.getMonth() + 1; day = value.getDate();
+    year = value.getUTCFullYear(); month = value.getUTCMonth() + 1; day = value.getUTCDate();
   } else if (typeof value === 'number' && Number.isFinite(value)) {
-    const parsed = XLSX.SSF.parse_date_code(value);
+    const parsed = XLSX.SSF.parse_date_code(value, { date1904 });
     if (parsed) { year = parsed.y; month = parsed.m; day = parsed.d; }
   } else {
     const raw = text(value);
@@ -66,7 +83,10 @@ export function parseSalesFile(bytes: Uint8Array, filename: string): SalesRow[] 
     let total = 0;
     unzipSync(bytes, { filter: file => { total += file.originalSize; if (total > 120_000_000 || file.originalSize > 100_000_000) throw new Error('Fișierul Excel este prea mare după decomprimare.'); return false; } });
   }
-  const book = XLSX.read(bytes, { type: 'array', cellFormula: false, cellHTML: false, cellStyles: false, cellDates: true, sheetRows: SALES_SOURCE_ROW_LIMIT + 2 });
+  // Retain number formats for identifiers. Keep dates as serials so styled and
+  // General numeric dates use the same workbook epoch without local-time shifts.
+  const book = XLSX.read(bytes, { type: 'array', cellFormula: false, cellHTML: false, cellStyles: false, cellNF: true, cellDates: false, sheetRows: SALES_SOURCE_ROW_LIMIT + 2 });
+  const date1904 = book.Workbook?.WBProps?.date1904 === true;
   if (!book.SheetNames.length) throw new Error('Fișierul Excel nu conține foi.');
   const matchingSheets = book.SheetNames.filter(name => {
     const sheet = book.Sheets[name];
@@ -93,20 +113,24 @@ export function parseSalesFile(bytes: Uint8Array, filename: string): SalesRow[] 
   for (let index = headerIndex + 1; index < rows.length; index++) {
     const row = rows[index];
     if (!row || row.every(cell => cell === '' || cell === null || cell === undefined)) continue;
-    const [dateRaw, siteRaw, codeRaw, nameRaw, quantityRaw, brandRaw, priceRaw, valueRaw, locationRaw, companyRaw, asmRaw, regionalRaw, numberRaw, categoryRaw, subCategoryRaw, agentRaw] = cols.map(col => row[col]);
+    const [, , , nameRaw, quantityRaw, brandRaw, priceRaw, valueRaw, locationRaw, companyRaw, asmRaw, regionalRaw, , categoryRaw, subCategoryRaw, agentRaw] = cols.map(col => row[col]);
     const location = text(locationRaw);
     if (!trToken.test(salesName(location))) continue;
     const sourceRow = index + 1;
-    const date = dateValue(dateRaw, sourceRow);
-    const siteCode = text(siteRaw);
-    const itemCode = text(codeRaw);
+    // sheet_to_json converts date-formatted numbers even with raw:true and
+    // ignores date1904 in that conversion. Read the original serial directly.
+    const dateCell = sheet[XLSX.utils.encode_cell({ r: index, c: cols[0] })] as XLSX.CellObject | undefined;
+    const date = dateValue(dateCell && ['n', 's', 'd'].includes(dateCell.t) ? dateCell.v : undefined, sourceRow, date1904);
+    const siteCode = identifier(sheet[XLSX.utils.encode_cell({ r: index, c: cols[1] })], 'SiteCode', sourceRow);
+    const itemCode = identifier(sheet[XLSX.utils.encode_cell({ r: index, c: cols[2] })], 'ItemCode', sourceRow);
+    const orderNumber = identifier(sheet[XLSX.utils.encode_cell({ r: index, c: cols[12] })], 'Nr', sourceRow);
     const itemName = text(nameRaw);
-    if (!siteCode || !itemCode || !itemName) throw new Error(`Rândul ${sourceRow}: SiteCode, ItemCode și ItemName sunt obligatorii.`);
+    if (!siteCode.trim() || !itemCode.trim() || !itemName) throw new Error(`Rândul ${sourceRow}: SiteCode, ItemCode și ItemName sunt obligatorii.`);
     if ([siteCode, itemCode, itemName, location].some(value => value.length > 500)) throw new Error(`Rândul ${sourceRow}: un câmp text depășește limita permisă.`);
     const quantity = numberValue(quantityRaw, 'Cantitate', sourceRow);
     const month = date.slice(0, 7);
     months.add(month);
-    result.push({ rowNumber: sourceRow, date, month, siteCode, itemCode, itemName, quantity, brand: text(brandRaw), priceCents: cents(priceRaw, 'Pret', sourceRow), valueCents: cents(valueRaw, 'Valoare', sourceRow), location, company: text(companyRaw), asm: text(asmRaw), regional: text(regionalRaw), orderNumber: text(numberRaw), category: text(categoryRaw), subCategory: text(subCategoryRaw), agent: text(agentRaw) });
+    result.push({ rowNumber: sourceRow, date, month, siteCode, itemCode, itemName, quantity, brand: text(brandRaw), priceCents: cents(priceRaw, 'Pret', sourceRow), valueCents: cents(valueRaw, 'Valoare', sourceRow), location, company: text(companyRaw), asm: text(asmRaw), regional: text(regionalRaw), orderNumber, category: text(categoryRaw), subCategory: text(subCategoryRaw), agent: text(agentRaw) });
     if (result.length > SALES_ROW_LIMIT) throw new Error('Importul acceptă maximum 50.000 de rânduri.');
   }
   if (!result.length) throw new Error('Fișierul nu conține rânduri cu Locatie TR.');

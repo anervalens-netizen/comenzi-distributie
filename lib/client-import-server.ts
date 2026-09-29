@@ -43,7 +43,9 @@ export async function importClients(warehouseId:string,body:Record<string,unknow
       records.push(record);preview.unchanged.push(record);
     }else {
       const firm=owned.filter(r=>normalizeCui(parsed.get(r.id)!.cui)===normalizeCui(client.cui));
-      if(firm.some(r=>!seen.has(identity(parsed.get(r.id)!)))||firm.length>0&&!client.address){preview.ambiguous.push(client);continue;}
+      // Inactive history still participates in exact matching, ownership and CAS,
+      // but only omitted active points can signal a changed existing address.
+      if(firm.some(r=>r.active===1&&!seen.has(identity(parsed.get(r.id)!)))||firm.length>0&&!client.address){preview.ambiguous.push(client);continue;}
       if(rows.some(r=>r.id===client.id))preview.blocked.push('Un client din import a fost mutat sau partajat. Verifică atribuirile din Echipă.');
       records.push(client);preview.added.push(client);
     }
