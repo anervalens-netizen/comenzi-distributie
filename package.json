@@ -74,5 +74,8 @@
     "wrangler": "4.131.2"
   },
   "type": "module",
-  "packageManager": "npm@12.0.2"
+  "packageManager": "npm@12.0.2",
+  "overrides": {
+    "undici": "7.29.1"
+  }
 }
