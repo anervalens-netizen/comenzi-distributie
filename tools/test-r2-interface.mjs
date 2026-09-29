@@ -228,6 +228,17 @@ try {
     equal(confirm[1].includes('disabled'),who==='regional','delete confirmation also fails closed outside write scope');
   }
   delete globalThis.__r2Selection;
+  // National request consultation must not expose an outside-scope confirmation.
+  const {PartnerActivityDetail}=await load('components/partner-activity-detail.tsx',[uiPlugin]);
+  const request={id:'synthetic-request',company:'Synthetic request',location:'Synthetic city',county:'Synthetic county',address:'Synthetic address',cui:'991234',agentId:'b',createdAt:'2026-09-01T00:00:00Z',status:'requested',existingLocations:[],revision:1};
+  const requestView={month:'2026-09',agents:[{agentId:'b',agentName:'Synthetic B',warehouseName:'Synthetic',active:true}],partnerRequests:[request],totals:{partnerRequests:1,partnerConfirmed:0}};
+  const requestProps={view:requestView,month:'2026-09',loading:false,onBack:noOp,onMonthChange:noOp,onRefresh:noOp,onRequestsChanged:noOp};
+  for(const account of [user('regional'),user('global'),user('region-b')]){
+    const writes=writePermissions(account,users);
+    const html=render(PartnerActivityDetail,{...requestProps,canConfirm:item=>writes.agent(item.agentId)});
+    equal(button(html,'Confirmă').disabled,!writes.agent('b'),'confirmation action follows original assigned identity');
+  }
+  equal(button(render(PartnerActivityDetail,requestProps),'Confirmă').disabled,true,'unknown confirmation capability is fail-closed');
   console.log(`PASS: ${checks} focused R2 interface API, KPI, scope and rendered UI assertions.`);
 } finally {
   sqlite.close();rmSync(dir,{recursive:true,force:true});delete globalThis.__r2Db;delete globalThis.__r2States;delete globalThis.__r2Selection;

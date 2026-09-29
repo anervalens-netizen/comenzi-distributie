@@ -70,7 +70,7 @@ export function ManagerOverview({scope,users,month,onMonth,onRequests,onAgent}: 
   </div>;
 }
 
-export function ManagerRequests({scopeQuery,month,onMonth,focusRequestId,onBack,onChanged}: {scopeQuery:string;month:string;onMonth:(value:string)=>void;focusRequestId?:string;onBack:()=>void;onChanged:()=>void}) {
+export function ManagerRequests({scopeQuery,month,onMonth,focusRequestId,onBack,onChanged,canConfirm}: {scopeQuery:string;month:string;onMonth:(value:string)=>void;focusRequestId?:string;onBack:()=>void;onChanged:()=>void;canConfirm?:(item:PartnerRequestRecord)=>boolean}) {
   const [reload,setReload]=useState(0);
   const {data,error}=useActivity(scopeQuery,month,reload);
   useEffect(()=>{
@@ -85,7 +85,7 @@ export function ManagerRequests({scopeQuery,month,onMonth,focusRequestId,onBack,
   return <div className="manager-requests">
     <p className="manager-data-note">Cererile în așteptare sunt afișate indiferent de lună. Luna selectată include solicitările create sau confirmate atunci.</p>
     {error&&<p className="error-banner" role="alert">{error} <button className="secondary" onClick={refresh}>Reîncearcă</button></p>}
-    {data?<PartnerActivityDetail key={`${scopeQuery}:${focusRequestId||''}`} workspace view={data.activity} month={month} loading={false} focusRequestId={focusRequestId} onBack={onBack} onMonthChange={onMonth} onRefresh={refresh} onRequestsChanged={()=>{refresh();onChanged();}}/>:!error&&<p className="portfolio-message">Se încarcă solicitările…</p>}
+    {data?<PartnerActivityDetail canConfirm={canConfirm} key={`${scopeQuery}:${focusRequestId||''}`} workspace view={data.activity} month={month} loading={false} focusRequestId={focusRequestId} onBack={onBack} onMonthChange={onMonth} onRefresh={refresh} onRequestsChanged={()=>{refresh();onChanged();}}/>:!error&&<p className="portfolio-message">Se încarcă solicitările…</p>}
   </div>;
 }
 

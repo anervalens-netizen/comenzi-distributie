@@ -19,7 +19,7 @@ function locationResolution(item:PartnerRequestRecord):LocationResolution|null {
   return incomplete.length?{candidates:incomplete,allowNew:true}:null;
 }
 
-export function PartnerActivityDetail({view,month,loading,focusRequestId,onBack,onMonthChange,onRefresh,onRequestsChanged,workspace=false}:{view:TeamActivityView;month:string;loading:boolean;focusRequestId?:string;onBack:()=>void;onMonthChange:(value:string)=>void;onRefresh:()=>void;onRequestsChanged:()=>void;workspace?:boolean}) {
+export function PartnerActivityDetail({view,month,loading,focusRequestId,onBack,onMonthChange,onRefresh,onRequestsChanged,workspace=false,canConfirm}:{view:TeamActivityView;month:string;loading:boolean;focusRequestId?:string;onBack:()=>void;onMonthChange:(value:string)=>void;onRefresh:()=>void;onRequestsChanged:()=>void;workspace?:boolean;canConfirm?:(item:PartnerRequestRecord)=>boolean}) {
   const [status,setStatus]=useState<StatusFilter>('all'),[agentId,setAgentId]=useState('all'),[confirming,setConfirming]=useState(''),[error,setError]=useState('');
   const [resolutions,setResolutions]=useState<Record<string,string>>({});
   useEffect(()=>{
@@ -36,7 +36,7 @@ export function PartnerActivityDetail({view,month,loading,focusRequestId,onBack,
   }).filter(group=>status==='all'||group.items.length>0||Boolean(focusRequestId&&group.all.some(item=>item.id===focusRequestId))),[view.agents,view.partnerRequests,filtered,agentId,status,focusRequestId]);
 
   async function confirm(item:PartnerRequestRecord){
-    if(confirming)return;
+    if(confirming||canConfirm?.(item)!==true)return;
     const required=locationResolution(item),selected=resolutions[item.id]||'';
     if(required&&!selected){setError('Alege explicit punctul de lucru existent sau crearea unui punct nou.');return;}
     setConfirming(item.id);setError('');
@@ -88,9 +88,9 @@ export function PartnerActivityDetail({view,month,loading,focusRequestId,onBack,
                   <span>{item.address}</span>
                   <small>CUI {item.cui} · {dateLabel(item.createdAt)}</small>
                   {item.existingLocations.length>0&&<small className="existing-company">Firmă existentă · {item.existingLocations.length} punct{item.existingLocations.length===1?'':'e'} de lucru în bază</small>}
-                  {item.status==='requested'&&resolution&&<label className="partner-location-resolution">Rezolvă punctul de lucru<select aria-label={`Rezolvă punctul de lucru pentru ${item.company}`} value={selected} onChange={event=>setResolutions(current=>({...current,[item.id]:event.target.value}))}><option value="">Alege explicit…</option>{resolution.candidates.map(location=><option key={location.id} value={location.id}>{location.city} · {location.county||'județ lipsă'} · {location.address}</option>)}{resolution.allowNew&&<option value="new">Creează punct nou · {item.county}</option>}</select></label>}
+                  {item.status==='requested'&&resolution&&<label className="partner-location-resolution">Rezolvă punctul de lucru<select disabled={canConfirm?.(item)!==true} aria-label={`Rezolvă punctul de lucru pentru ${item.company}`} value={selected} onChange={event=>setResolutions(current=>({...current,[item.id]:event.target.value}))}><option value="">Alege explicit…</option>{resolution.candidates.map(location=><option key={location.id} value={location.id}>{location.city} · {location.county||'județ lipsă'} · {location.address}</option>)}{resolution.allowNew&&<option value="new">Creează punct nou · {item.county}</option>}</select></label>}
                 </div>
-                <div className="partner-request-action"><span className={'badge '+(item.status==='confirmed'?'finalized':'draft')}>{item.status==='confirmed'?'Confirmat':'Solicitat'}</span>{item.status==='requested'&&<button className="primary" disabled={!!confirming||Boolean(resolution&&!selected)} onClick={()=>void confirm(item)}>{confirming===item.id?<LoaderCircle className="spin" size={16}/>:<Check size={16}/>} Confirmă</button>}</div>
+                <div className="partner-request-action"><span className={'badge '+(item.status==='confirmed'?'finalized':'draft')}>{item.status==='confirmed'?'Confirmat':'Solicitat'}</span>{item.status==='requested'&&<button className="primary" disabled={canConfirm?.(item)!==true||!!confirming||Boolean(resolution&&!selected)} onClick={()=>void confirm(item)}>{confirming===item.id?<LoaderCircle className="spin" size={16}/>:<Check size={16}/>} Confirmă</button>}</div>
               </div>;
             }):<p className="portfolio-message">Nicio solicitare pentru filtrul selectat.</p>}
           </div>

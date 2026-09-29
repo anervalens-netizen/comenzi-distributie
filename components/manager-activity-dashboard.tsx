@@ -8,7 +8,7 @@ import { PartnerActivityDetail } from './partner-activity-detail';
 const monthFormatter=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Bucharest',year:'numeric',month:'2-digit'});
 const currentMonth=()=>monthFormatter.format(new Date());
 
-export function ManagerActivityDashboard({focusRequestId,onRequestsChanged}:{focusRequestId?:string;onRequestsChanged?:()=>void}) {
+export function ManagerActivityDashboard({focusRequestId,onRequestsChanged,canConfirm}:{focusRequestId?:string;onRequestsChanged?:()=>void;canConfirm?:(item:PartnerRequestRecord)=>boolean}) {
   const [month,setMonth]=useState(currentMonth),[view,setView]=useState<TeamActivityView|null>(null),[loading,setLoading]=useState(true),[error,setError]=useState(''),[reload,setReload]=useState(0),[detail,setDetail]=useState(false);
   useEffect(()=>{
     let cancelled=false;
@@ -32,7 +32,7 @@ export function ManagerActivityDashboard({focusRequestId,onRequestsChanged}:{foc
   const refresh=()=>{setLoading(true);setReload(value=>value+1);};
   const requestChanged=()=>{refresh();onRequestsChanged?.();};
 
-  if(detail&&displayed) return <PartnerActivityDetail view={displayed} month={month} loading={loading} focusRequestId={focusRequestId} onBack={()=>setDetail(false)} onMonthChange={value=>{setLoading(true);setMonth(value);}} onRefresh={refresh} onRequestsChanged={requestChanged}/>;
+  if(detail&&displayed) return <PartnerActivityDetail canConfirm={canConfirm} view={displayed} month={month} loading={loading} focusRequestId={focusRequestId} onBack={()=>setDetail(false)} onMonthChange={value=>{setLoading(true);setMonth(value);}} onRefresh={refresh} onRequestsChanged={requestChanged}/>;
 
   return <div className="manager-activity">
     <div className="activity-dashboard-head">
