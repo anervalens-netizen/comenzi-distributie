@@ -23,7 +23,7 @@ export function managerRegions(users: User[]): RegionOption[] {
 type Selection = {userId: string; managerId: string; agentId: string};
 export function useManagerScope(user: User | null, users: User[]) {
   const [stored, setStored] = useState<Selection>({userId: '', managerId: '', agentId: ''});
-  const global = user?.role === 'manager' && user.managerScope === 'global';
+  const global = user?.role === 'manager';
   const regions = useMemo(() => managerRegions(users), [users]);
   const agents = useMemo(() => users.filter(item => item.role === 'agent').sort((a,b) => a.name.localeCompare(b.name,'ro')), [users]);
   const own = stored.userId === user?.id ? stored : {managerId: '', agentId: ''};

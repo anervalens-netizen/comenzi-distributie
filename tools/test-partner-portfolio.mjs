@@ -16,7 +16,7 @@ try{
   const inherited=(await call('qa-agent1','/ph-one')).partner;assert.equal(inherited.contact,'Confirmed contact');assert.equal(inherited.phone,'0701234567');
   const cleared=await call('qa-agent1','/ph-one','PATCH',{...inherited,contact:'',phone:'',email:''});assert.equal(cleared.partner.contact,'','explicit clear overrides request fallback');
   const one=await call('qa-agent1');assert(one.partners.some(p=>p.id==='ph-one'));assert(one.partners.some(p=>p.id==='ph-shared'));assert(!one.partners.some(p=>p.id==='ph-other'));
-  const regional=await call('qa-regional');assert(regional.partners.some(p=>p.id==='ph-shared'));assert(!regional.partners.some(p=>p.id==='ph-other'));
+  const regional=await call('qa-regional');assert(regional.partners.some(p=>p.id==='ph-shared'));assert(regional.partners.some(p=>p.id==='ph-other'));
   const global=await call('qa-manager');assert.equal(global.partners.filter(p=>p.id.startsWith('ph-')).length,3,'same CUI points remain distinct');
   await call('qa-agent1','/ph-other','GET',null,404);
   await call('qa-agent1','/ph-other','PATCH',{},404);

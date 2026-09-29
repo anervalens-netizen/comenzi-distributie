@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
-import {createHash,randomUUID} from 'node:crypto';
+import {createHash,randomUUID,scryptSync,randomBytes} from 'node:crypto';
 
 const db=new DatabaseSync('work/qa/mobiup.sqlite');
 const base='http://127.0.0.1:3000/api';
@@ -71,12 +71,12 @@ try {
   const exact=await call('partner/browse?q=mui-only-a&agentId=mui-agent-a');
   check(exact.total===1&&exact.partners[0].id==='mui-only-a','Search matches point-of-sale code');
   const scoped=await call('partner/browse?q=mui-','mui-region-a');
-  check(scoped.total===3,'Regional default remains authoritative');
-  await call('partner/browse?agentId=mui-agent-b','mui-region-a',404);
-  await call('partner/map?managerId=mui-region-b','mui-region-a',404);
+  check(scoped.total===4,'Regional default includes all national locations');
+  await call('partner/browse?agentId=mui-agent-b','mui-region-a');
+  await call('partner/map?managerId=mui-region-b','mui-region-a');
   await call('partner/map?managerId=mui-region-a&agentId=mui-agent-b','mui-global',404);
   await call('partner/browse?agentId=mui-agent-a','mui-agent-a',403);
-  await call('partner/portfolio/mui-only-b','mui-region-a',404);
+  await call('partner/portfolio/mui-only-b','mui-region-a');
   const map=await call('partner/map?q=mui-&agentId=mui-agent-a&bbox=20,40,30,50');
   check(map.features.length===2&&!map.features.some(point=>point.id==='mui-only-b'),'Map and list use same scoped distinct locations');
   const empty=await call('partner/browse?q=mui-&county=nonexistent&agentId=mui-agent-a');
@@ -85,7 +85,7 @@ try {
   check(globalActivity.finalizedOrders-baseline.finalizedOrders===5&&globalActivity.finalizedNotices-baseline.finalizedNotices===4,'Global document counts include all scoped agents and each document once');
   check(globalActivity.activity.partnerRequests.some(item=>item.id===oldPending),'Pending requests include previous months');
   check(globalActivity.confirmedByAgent['mui-agent-a']===1&&globalActivity.confirmedByAgent['mui-agent-b']===1,'Confirmation event is attributed to actual confirmation month');
-  const scopedActivity=await call('manager/activity?month=2026-01&managerId=mui-region-a');
+  const scopedActivity=await call('manager/activity?month=2026-01&managerId=mui-region-a','mui-region-b');
   check(scopedActivity.finalizedOrders===4&&scopedActivity.finalizedNotices===3,'Region counts finalized orders/notices by completion month, excluding drafts and deleted rows');
   check(scopedActivity.pending===1&&scopedActivity.confirmed===1,'Regional pending all-time and monthly confirmed location KPIs');
   check(scopedActivity.activity.totals.finalizedInventories===1,'Inventory KPI uses finalizedAt, not createdAt');
@@ -95,17 +95,17 @@ try {
   const onlyB=await call('manager/activity?month=2026-01&agentId=mui-agent-b');
   check(onlyB.finalizedOrders===1&&onlyB.finalizedNotices===1,'Global agent filter excludes other agents from document KPIs');
   const defaultRegion=await call('manager/activity?month=2026-01','mui-region-a');
-  check(defaultRegion.finalizedOrders===4&&defaultRegion.finalizedNotices===3,'Regional default cannot leak other-region document totals');
+  check(defaultRegion.finalizedOrders===globalActivity.finalizedOrders&&defaultRegion.finalizedNotices===globalActivity.finalizedNotices,'Regional default matches national document totals');
   const emptyMonth=await call('manager/activity?month=2026-03&agentId=mui-agent-a');
   check(emptyMonth.finalizedOrders===0&&emptyMonth.finalizedNotices===0,'Empty period returns explicit zero finalized documents');
   const february=await call('manager/activity?month=2026-02&agentId=mui-agent-a');
   check(february.finalizedOrders===1&&february.finalizedNotices===1,'Upper month boundary is exclusive; completion month wins over creation month');
   check(onlyA.pendingByAgent['mui-agent-a']===1,'Regional agent selection works');
-  await call('manager/activity?month=2026-01&agentId=mui-agent-b','mui-region-a',404);
+  await call('manager/activity?month=2026-01&agentId=mui-agent-b','mui-region-a');
   await call('manager/activity?month=2026-01','mui-agent-a',403);
   await call('manager/activity?month=2026-99','mui-global',400);
   await call('manager/activity?month=2026-01','anonymous',401);
-  await call('sales?month=2026-01&agentId=mui-agent-b','mui-region-a',404);
+  await call('sales?month=2026-01&agentId=mui-agent-b','mui-region-a');
   const bothRegion='mui-both';
   db.prepare("INSERT INTO users(id,username,name,role,manager_scope,password_hash,active,must_change_password) VALUES(?,?,?,'manager','assigned','unused-synthetic-hash',1,0)").run(bothRegion,bothRegion,'Synthetic combined region');ids.push(bothRegion);
   for(const agent of ['mui-agent-a','mui-agent-b'])db.prepare('INSERT INTO manager_agents(manager_id,agent_id) VALUES(?,?)').run(bothRegion,agent);
@@ -119,6 +119,26 @@ try {
   const summer=await call('manager/activity?month=2026-06&agentId=mui-agent-a');
   check(summer.finalizedOrders===1&&summer.finalizedNotices===1,'Document month boundaries follow daylight saving time');
   check(combined.confirmed===1&&combined.pending===2,'Shared confirmed location is counted once across agents');
+  // National visibility must never grant account or operational mutation privileges.
+  const password=randomUUID()+'Aa!',nextPassword=randomUUID()+'Bb!';
+  const salt=randomBytes(16).toString('hex');
+  const hash='scrypt:'+salt+':'+scryptSync(password,salt,32,{N:32768,r:8,p:3,maxmem:40*1024*1024}).toString('hex');
+  db.prepare('UPDATE users SET password_hash=? WHERE id=?').run(hash,'mui-region-a');
+  async function mutate(path,body,expected=200){
+    const result=await fetch(base+'/'+path,{method:'POST',headers:{Cookie:cookies['mui-region-a'],'Content-Type':'application/json'},body:JSON.stringify(body)});
+    assert.equal(result.status,expected,path+': '+await result.text());checks++;
+  }
+  await mutate('auth/password',{currentPassword:password,password:nextPassword});
+  check(db.prepare('SELECT password_hash FROM users WHERE id=?').get('mui-region-a').password_hash!==hash,'Regional manager can change own password');
+  const version=id=>String(db.prepare('SELECT profile_revision FROM users WHERE id=?').get(id).profile_revision);
+  await mutate('admin/users',{action:'reset',id:'mui-agent-b',version:version('mui-agent-b'),password},404);
+  await mutate('admin/users',{action:'reset',id:'mui-region-b',version:version('mui-region-b'),password},404);
+  await mutate('orders',{id:randomUUID(),kind:'accessories',agentId:'mui-agent-b'},404);
+  await mutate('partner/requests/'+otherPending+'/confirm',{revision:1},404);
+  await mutate('admin/users',{action:'reset',id:'mui-agent-a',version:version('mui-agent-a'),password});
+  check(db.prepare('SELECT COUNT(*) n FROM sessions WHERE user_id=?').get('mui-agent-a').n===0,'Assigned-agent password reset invalidates old sessions');
+  const login=await fetch(base+'/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:'mui-agent-a',password})});
+  check(login.ok,'Assigned agent can log in with manager-set password');
   console.log(`PASS: ${checks} manager workspace scope, location and KPI checks.`);
 } finally {
   for(const id of orders)db.prepare('DELETE FROM orders WHERE id=?').run(id);

@@ -33,7 +33,7 @@ try {
   await importClients(regional,'g-5',[point]);
   const original=(await clients(manager,'g-5'))[0];
   const moved=(await call(`admin/clients/${original.id}`,'PUT',{...original,agentIds:['reg-b']},manager)).data.client;
-  await call('clients?warehouseId=g-3','GET',null,regional,404);
+  await call('clients?warehouseId=g-3','GET',null,regional);
   const beforeA=JSON.stringify(await clients(a,'g-5')),beforeB=JSON.stringify(await clients(b,'g-3'));
   await importClients(regional,'g-5',[{...point,cui:'9900172027'},point],409);
   check(JSON.stringify(await clients(a,'g-5'))===beforeA,'Rejected reimport leaves entire source portfolio unchanged');

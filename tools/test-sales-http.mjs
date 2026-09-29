@@ -62,8 +62,8 @@ try {
   let all = (await call('sales?month=2026-09', { cookie: manager })).data;
   ok(all.summary.quantity === 15 && all.summary.value === 150, 'Manager summary excludes non-TR and retains unassigned TR');
   const regionalAll=(await call('sales?month=2026-09', {cookie:regional})).data;
-  ok(regionalAll.summary.quantity===3&&regionalAll.sites.every(site=>site.siteCode==='DAVIDD'),'Regional manager sees aggregate only for assigned agents');
-  await call('sales?month=2026-09&siteCode=TR01PH',{cookie:regional},404);
+  ok(regionalAll.summary.quantity===15&&regionalAll.sites.some(site=>site.siteCode==='TR01PH'),'Regional manager sees national sales aggregate');
+  await call('sales?month=2026-09&siteCode=TR01PH',{cookie:regional});
   const own = (await call('sales?month=2026-09&siteCode=TR01PH', { cookie: agent })).data;
   ok(own.summary.quantity === 3 && own.sites.every(s => s.siteCode === 'DAVIDD'), 'Agent cannot select another site');
   await call('sales?month=2026-09', { cookie: pending }, 409);

@@ -21,9 +21,13 @@ import type { User, Order, Line, Client, Kind, Product } from '@/lib/types';
 export const dynamic = 'force-dynamic';
 const excelMime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 function cookie(req: Request,token: string,age=SESSION_TTL_SECONDS) { return `mobiup_session=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${age}${new URL(req.url).protocol==='https:'?'; Secure':''}`; }
+// Used only by read handlers. The authenticated identity remains authoritative for writes.
+function nationalReadScope(user:User):User {
+  return user.role==='manager'?{...user,managerScope:'global'}:user;
+}
 async function getUsers(viewer:User) {
   const select="SELECT u.*, (SELECT COUNT(*) FROM customers c WHERE EXISTS (SELECT 1 FROM json_each(COALESCE(json_extract(c.data,'$.warehouseIds'),json_array(c.warehouse_id))) WHERE value=u.warehouse_id) AND c.active=1) AS client_count FROM users u";
-  const query=isGlobalManager(viewer)?db().prepare(select+" ORDER BY role DESC,name"):db().prepare(select+" WHERE u.id=? OR EXISTS (SELECT 1 FROM manager_agents ma WHERE ma.manager_id=? AND ma.agent_id=u.id) ORDER BY role DESC,name").bind(viewer.id,viewer.id);
+  const query=viewer.role==='manager'?db().prepare(select+" ORDER BY role DESC,name"):db().prepare(select+" WHERE u.id=? OR EXISTS (SELECT 1 FROM manager_agents ma WHERE ma.manager_id=? AND ma.agent_id=u.id) ORDER BY role DESC,name").bind(viewer.id,viewer.id);
   const [result,assignments]=await Promise.all([query.all<Record<string,unknown>>(),db().prepare('SELECT manager_id,agent_id FROM manager_agents ORDER BY manager_id,agent_id').all<{manager_id:string;agent_id:string}>()]);
   return result.results.map(row=>{
     const base={...userView(row),clientCount:Number(row.client_count)};
@@ -34,14 +38,14 @@ async function getUsers(viewer:User) {
 }
 async function visibleWarehouses(user:User) {
   if(user.role==='agent')return warehouses.filter(g=>g.id===user.warehouseId);
-  if(isGlobalManager(user))return warehouses;
+  if(user.role==='manager')return warehouses;
   const rows=await db().prepare('SELECT DISTINCT a.warehouse_id id FROM manager_agents ma JOIN users a ON a.id=ma.agent_id WHERE ma.manager_id=? AND a.warehouse_id IS NOT NULL').bind(user.id).all<{id:string}>();
   const ids=new Set(rows.results.map(row=>row.id));
   return warehouses.filter(g=>ids.has(g.id));
 }
 async function listOrders(user: User) {
   const select="SELECT id,number,user_id,warehouse_id,kind,status,created_at,finalized_at,source_order_id,revision,json_set(json_remove(payload,'$.items','$.standItems','$.serials','$.exportKey'),'$.itemCount',COALESCE(json_array_length(payload,'$.items'),0)+COALESCE(json_array_length(payload,'$.standItems'),0)) AS payload FROM orders";
-  const q=user.role==='agent'?db().prepare(select+" WHERE status!='deleted' AND user_id=? ORDER BY created_at DESC").bind(user.id):isGlobalManager(user)?db().prepare(select+" WHERE status!='deleted' ORDER BY created_at DESC"):db().prepare(select+" WHERE status!='deleted' AND EXISTS (SELECT 1 FROM manager_agents ma WHERE ma.manager_id=? AND ma.agent_id=orders.user_id) ORDER BY created_at DESC").bind(user.id);
+  const q=user.role==='agent'?db().prepare(select+" WHERE status!='deleted' AND user_id=? ORDER BY created_at DESC").bind(user.id):user.role==='manager'?db().prepare(select+" WHERE status!='deleted' ORDER BY created_at DESC"):db().prepare(select+" WHERE status!='deleted' AND EXISTS (SELECT 1 FROM manager_agents ma WHERE ma.manager_id=? AND ma.agent_id=orders.user_id) ORDER BY created_at DESC").bind(user.id);
   return (await q.all<Record<string,unknown>>()).results.map(orderView);
 }
 async function targetAgent(user: User,id: unknown) {
@@ -202,18 +206,19 @@ async function dispatch(req: Request) {
     return response({user,products:(await readCatalog()).products,warehouses:await visibleWarehouses(user),orders:await listOrders(user),users:user.role==='manager'?await getUsers(user):[],settings:cfg,managerMailSettings:user.role==='manager'?await managerMailSettings(user.id):undefined,regionalSettings:regional?.settings,regionalSettingsMixed:regional?.mixed,weekKey:weekKey(),importWarnings:isGlobalManager(user)?seed.importWarnings:[]},200,sessionHeaders);
   }
   const user=await requireUser(req,path[0]==='auth'||(path[0]==='admin'&&path[1]==='templates'));
+  const readUser=nationalReadScope(user);
   if(path.join('/')==='notifications/inbox'&&req.method==='GET')return response(await managerRequestInbox(user));
   if(path.join('/')==='notifications/push'&&req.method==='GET')return response(await pushPublicConfig(user));
   if(path.join('/')==='notifications/push'&&req.method==='POST')return response(await upsertPushSubscription(user,await jsonBody(req)));
   if(path.join('/')==='notifications/push'&&req.method==='DELETE')return response(await removePushSubscription(user,await jsonBody(req)));
   if(path.join('/')==='partner/planning'&&req.method==='GET')return response(await visitWeek(user,new URL(req.url).searchParams.get('week')||''));
   if(path.join('/')==='partner/planning'&&req.method==='PUT')return response(await saveDayPlan(user,await jsonBody(req)));
-  if(path.join('/')==='partner/browse'&&req.method==='GET')return response(await browsePartners(user,new URL(req.url).searchParams));
-  if(path.join('/')==='partner/map'&&req.method==='GET')return response(await mapPartners(user,new URL(req.url).searchParams));
-  if(path.join('/')==='partner/summary'&&req.method==='GET')return response({partners:await portfolioSummary(user)});
+  if(path.join('/')==='partner/browse'&&req.method==='GET')return response(await browsePartners(readUser,new URL(req.url).searchParams));
+  if(path.join('/')==='partner/map'&&req.method==='GET')return response(await mapPartners(readUser,new URL(req.url).searchParams));
+  if(path.join('/')==='partner/summary'&&req.method==='GET')return response({partners:await portfolioSummary(readUser)});
   if(path[0]==='partner'&&path[1]==='portfolio') {
-    if(!path[2]&&req.method==='GET')return response(await portfolio(user));
-    if(path[2]&&!path[3]&&req.method==='GET')return response(await partnerDetail(user,path[2],new URL(req.url).searchParams.get('cursor')));
+    if(!path[2]&&req.method==='GET')return response(await portfolio(readUser));
+    if(path[2]&&!path[3]&&req.method==='GET')return response(await partnerDetail(readUser,path[2],new URL(req.url).searchParams.get('cursor')));
     if(path[2]&&!path[3]&&req.method==='PATCH')return response(await updatePartner(user,path[2],await jsonBody(req)));
     if(path[2]&&path[3]==='visits'&&!path[4]&&req.method==='POST')return response(await recordVisit(user,path[2],await jsonBody(req)));
   }
@@ -224,23 +229,23 @@ async function dispatch(req: Request) {
   }
   if(path.join('/')==='partner/requests'&&req.method==='GET') {
     const month=new URL(req.url).searchParams.get('month');
-    return response(await listPartnerRequests(user,month));
+    return response(await listPartnerRequests(readUser,month));
   }
-  if(path[0]==='partner'&&path[1]==='requests'&&path[2]&&!path[3]&&req.method==='GET') return response({request:await getPartnerRequest(user,path[2])});
+  if(path[0]==='partner'&&path[1]==='requests'&&path[2]&&!path[3]&&req.method==='GET') return response({request:await getPartnerRequest(readUser,path[2])});
   if(path[0]==='partner'&&path[1]==='requests'&&path[2]&&path[3]==='confirm'&&req.method==='POST') {
     const body=await jsonBody(req);
     return response({request:await confirmPartnerRequest(user,path[2],body.revision,body.locationResolution)});
   }
-  if(path.join('/')==='manager/activity'&&req.method==='GET') return response(await managerActivity(user,new URL(req.url).searchParams));
+  if(path.join('/')==='manager/activity'&&req.method==='GET') return response(await managerActivity(readUser,new URL(req.url).searchParams));
   if(path.join('/')==='activity/team'&&req.method==='GET') {
     const month=new URL(req.url).searchParams.get('month');
-    return response(await teamActivity(user,month));
+    return response(await teamActivity(readUser,month));
   }
-  if(path.join('/')==='sales'&&req.method==='GET')return salesView(req,user);
+  if(path.join('/')==='sales'&&req.method==='GET')return salesView(req,readUser);
   if(path.join('/')==='sales/preview'&&req.method==='POST')return salesUpload(req,user,false);
   if(path.join('/')==='sales/import'&&req.method==='POST')return salesUpload(req,user,true);
-  if(path.join('/')==='stock'&&req.method==='GET')return stockView(req,user);
-  if(path[0]==='inventory'&&path.length<=2)return inventories(req,user,path[1]);
+  if(path.join('/')==='stock'&&req.method==='GET')return stockView(req,readUser);
+  if(path[0]==='inventory'&&path.length<=2)return inventories(req,req.method==='GET'?readUser:user,path[1]);
   if(path.join('/')==='admin/stock/preview'&&req.method==='POST')return stockUpload(req,user,false);
   if(path.join('/')==='admin/stock/import'&&req.method==='POST')return stockUpload(req,user,true);
   if(path.join('/')==='auth/logout' && req.method==='POST') {
@@ -265,7 +270,7 @@ async function dispatch(req: Request) {
   if(path[0]==='clients' && req.method==='GET') {
     const warehouseId=user.role==='agent'?user.warehouseId:new URL(req.url).searchParams.get('warehouseId');
     if(!warehouseId) fail(400,'Selectează gestiunea.');
-    await requireWarehouseAccess(user,warehouseId);
+    await requireWarehouseAccess(readUser,warehouseId);
     const rows=await db().prepare("SELECT data FROM customers WHERE EXISTS (SELECT 1 FROM json_each(COALESCE(json_extract(data,'$.warehouseIds'),json_array(warehouse_id))) WHERE value=?) AND active=1 ORDER BY id").bind(warehouseId).all<{data:string}>();
     return response({clients:rows.results.map(r=>({...JSON.parse(r.data),warehouseId,...(user.role==='manager'?{version:sha256(r.data)}:{})}))});
   }
@@ -290,7 +295,7 @@ async function dispatch(req: Request) {
       await db().prepare('INSERT OR IGNORE INTO orders (id,number,user_id,warehouse_id,kind,status,payload,created_at,source_order_id) VALUES (?,?,?,?,?,?,?,?,?)').bind(uuid,number,agent.id,agent.warehouseId,kind,'draft',JSON.stringify(order),order.createdAt,order.sourceOrderId).run();
       return response({order:await getOrder(uuid,user)},201);
     }
-    if(id && !path[2] && req.method==='GET') return response({order:await getOrder(id,user)});
+    if(id && !path[2] && req.method==='GET') return response({order:await getOrder(id,readUser)});
     if(id && !path[2] && req.method==='DELETE') {
       const order=await getOrder(id,user);
       if(user.role!=='manager' && order.status!=='draft') fail(403,'Poți șterge doar ciornele create de tine.');
@@ -305,9 +310,9 @@ async function dispatch(req: Request) {
     }
     if(id && !path[2] && req.method==='PUT') return saveOrder(req,id,user);
     if(path[2]==='finalize' && req.method==='POST') return finalize(id,user,req);
-    if(path[2]==='mail' && req.method==='GET') { const order=await getOrder(id,user); if(order.status!=='finalized') fail(400,'Finalizează comanda întâi.'); return response({mail:mailFor(order,await settingsForOrder(order))}); }
+    if(path[2]==='mail' && req.method==='GET') { const order=await getOrder(id,readUser); if(order.status!=='finalized') fail(400,'Finalizează comanda întâi.'); return response({mail:mailFor(order,await settingsForOrder(order))}); }
     if((path[2]==='excel'||path[2]==='eml') && req.method==='GET') {
-      const order=await getOrder(id,user);
+      const order=await getOrder(id,readUser);
       if(order.status!=='finalized') fail(400,'Finalizează comanda pentru export.');
       if(order.kind==='stand_client') {
         if(path[2]==='excel') fail(400,'Avizul pentru standuri este disponibil în corpul e-mailului, fără Excel.');

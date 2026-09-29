@@ -507,7 +507,12 @@ try {
   const regionalLogin=await cdp.evaluate(`fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:${JSON.stringify(regionalUsername)},password:${JSON.stringify(password)}})}).then(r=>r.ok)`);
   check(regionalLogin,'Regional manager browser login');await cdp.send('Page.reload',{ignoreCache:true});
   await waitFor(()=>cdp.evaluate("document.querySelector('.manager-overview h1')?.textContent==='Sinteză'"),'regional manager default activity dashboard');
-  check(await cdp.evaluate("!document.querySelector('.manager-scope-choice summary[aria-label=\"Regiune\"]')"),'Regional manager cannot select other regions');
+  check(await cdp.evaluate("!!document.querySelector('.manager-scope-choice summary[aria-label=\"Regiune\"]')"),'Regional manager can select all regions');
+
+  await clickTab(cdp,'Echipă');
+  await waitFor(()=>cdp.evaluate("!!document.querySelector('.manager-team-admin')"),'regional team administration');
+  check(await cdp.evaluate("[...document.querySelectorAll('button')].some(b=>b.textContent.includes('Schimbă parola mea'))"),'Regional manager has explicit own-password entry point');
+  check(await cdp.evaluate("document.querySelectorAll('.team-table button[aria-label^=\"Resetează parola\"]').length===1"),'Only assigned agent has a password-reset control');
   await clickTab(cdp,'Parteneri');
   await waitFor(()=>cdp.evaluate("document.querySelectorAll('.manager-partner-hub .partner-card').length>0"),'regional manager partner access');
   check(await cdp.evaluate("!document.querySelector('.manager-partner-hub .error-banner')"),'Regional manager can load assigned partner map and list');
