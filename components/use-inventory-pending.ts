@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { api, ApiError, errorMessage } from '@/lib/client-api';
 import { currentLocalWorkUserId, readLocalWork, removeLocalWork, writeLocalWork } from '@/lib/local-work';
 import type { Inventory } from '@/lib/inventory-types';
-import { mergeInventoryDraftsForStorage, partitionInventoryDrafts, readClosedInventoryRecovery, type ClosedInventoryRecovery, type InventoryDraftValue as DraftValue, type InventoryScanOperation as ScanOperation, type StoredInventoryWork } from '@/lib/inventory-recovery';
+import { inventoryRetryBlocked, mergeInventoryDraftsForStorage, partitionInventoryDrafts, readClosedInventoryRecovery, type ClosedInventoryRecovery, type InventoryDraftValue as DraftValue, type InventoryScanOperation as ScanOperation, type StoredInventoryWork } from '@/lib/inventory-recovery';
 
 type PendingCallbacks={
   onActive:(inventory:Inventory)=>void;
@@ -71,9 +71,10 @@ export function useInventoryPending({active,onActive,onError,onMessage,onRefresh
     try {
       while(queueRef.current.length) {
         const operation=queueRef.current[0];
+        if(operation.blockedReason){callbacksRef.current.onError(operation.blockedReason);setQueuePaused(true);return;}
         let inventory:Inventory|null=activeRef.current;
         if(!inventory||inventory.id!==operation.inventoryId||inventory.status!=='draft'||!inventory.canEdit) {
-          callbacksRef.current.onError('Scanările neconfirmate nu pot fi reluate deoarece inventarul nu mai este editabil.');setQueuePaused(true);return;
+          callbacksRef.current.onError('Scanările neconfirmate nu pot fi reluate deoarece inventarul nu mai este editabil. Datele locale sunt păstrate pentru reconciliere.');setQueuePaused(true);return;
         }
         let completed=false;
         for(let attempt=0;attempt<3&&!completed;attempt++) {
@@ -84,6 +85,10 @@ export function useInventoryPending({active,onActive,onError,onMessage,onRefresh
             setQueue(queueRef.current.slice(1));
             completed=true;
           } catch(error) {
+            if(error instanceof ApiError&&inventoryRetryBlocked(error.data)) {
+              setQueue([{...operation,blockedReason:error.message},...queueRef.current.slice(1)]);
+              callbacksRef.current.onError(error.message);setQueuePaused(true);return;
+            }
             if(error instanceof ApiError&&(error.status===400||error.status===422)) {
               setQueue(queueRef.current.slice(1));callbacksRef.current.onError(error.message);completed=true;continue;
             }
@@ -92,7 +97,7 @@ export function useInventoryPending({active,onActive,onError,onMessage,onRefresh
                 const result:{inventory:Inventory}=await api<{inventory:Inventory}>(`inventory/${operation.inventoryId}`);
                 inventory=result.inventory;activeRef.current=inventory;callbacksRef.current.onActive(inventory);
                 if(inventory.status!=='draft'||!inventory.canEdit) {
-                  callbacksRef.current.onError('Inventarul a fost închis în altă sesiune. Scanările rămase nu au fost aplicate.');setQueuePaused(true);return;
+                  callbacksRef.current.onError('Inventarul nu mai este editabil. Scanările neconfirmate sunt păstrate local pentru reconciliere.');setQueuePaused(true);return;
                 }
                 continue;
               } catch(refreshError) {callbacksRef.current.onError(errorMessage(refreshError));setQueuePaused(true);return;}
@@ -143,7 +148,7 @@ export function useInventoryPending({active,onActive,onError,onMessage,onRefresh
       if(!owner||activeStatus!=='draft'||!activeCanEdit) {
         const recovery=owner?readClosedInventoryRecovery(inventory,owner):null;
         resetInMemoryState();setClosedRecovery(recovery);
-        if(recovery)callbacksRef.current.onError('Inventarul a fost închis în altă sesiune. Cantitățile și scanările locale neconfirmate sunt păstrate pentru recuperare.');
+        if(recovery)callbacksRef.current.onError('Inventarul nu mai este editabil. Cantitățile și scanările locale neconfirmate sunt păstrate pentru recuperare.');
         return;
       }
       if(!changed)return;

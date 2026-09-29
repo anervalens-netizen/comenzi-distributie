@@ -6,9 +6,16 @@ import {stockCode} from './stock-types';
 import type {User} from './types';
 import type {Inventory,InventorySummary,InventoryScope} from './inventory-types';
 
-type RecordData=Omit<Inventory,'canEdit'|'canDelete'>&{operations:{id:string;hash:string}[]};
+type RecordData=Omit<Inventory,'canEdit'|'canDelete'>&{operations?:{id:string;hash:string}[];operationHistoryVersion?:number};
 const prefix='inventory-v1:';
 const uuid=(value:unknown):value is string=>typeof value==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+function completeHistory(record:RecordData) {
+  // Every successful PATCH advances revision exactly once, starting at 1.
+  // This also proves completeness for legacy records before the old eviction
+  // boundary. Missing/truncated receipts cannot be reconstructed from counts.
+  const operations=record.operations;
+  return (record.operationHistoryVersion===undefined||record.operationHistoryVersion===1)&&Number.isSafeInteger(record.revision)&&record.revision>=1&&Array.isArray(operations)&&operations.length===record.revision-1&&operations.every(op=>op&&uuid(op.id)&&typeof op.hash==='string'&&/^[a-f0-9]{64}$/.test(op.hash))&&new Set(operations.map(op=>op.id)).size===operations.length;
+}
 async function warehouse(user:User,requested:unknown,nationalRead=false) {
   const id=textField(requested,100)||user.warehouseId;
   if(!id)fail(400,'Selectează gestiunea pentru inventar.');
@@ -21,9 +28,9 @@ function visible(record:RecordData,user:User) {
   if(user.role!=='manager'&&(record.createdBy!==user.id||record.warehouseId!==user.warehouseId))fail(404,'Inventarul nu a fost găsit.');
 }
 async function view(record:RecordData,user:User):Promise<Inventory> {
-  const {operations:_,...publicRecord}=record;
+  const {operations:_,operationHistoryVersion:__,...publicRecord}=record;
   const canDelete=await canAccessWarehouse(user,record.warehouseId)&&(user.role==='manager'||record.createdBy===user.id&&record.warehouseId===user.warehouseId);
-  return {...publicRecord,canDelete,canEdit:record.status==='draft'&&canDelete};
+  return {...publicRecord,canDelete,canEdit:record.status==='draft'&&canDelete&&completeHistory(record)};
 }
 async function get(id:string,user:User,nationalRead=false) {
   if(!uuid(id))fail(400,'Identificator de inventar invalid.');
@@ -70,7 +77,7 @@ export async function inventories(req:Request,user:User,id?:string) {
     const lines=stock.rows.filter(r=>scope==='all'||(scope==='product'?r.code===stockCode(selection):(r.category||'Necategorizate')===selection)).map(r=>({code:r.code,name:r.name,category:r.category||'Necategorizate',ean:eans.get(stockCode(r.code))||'',expected:r.quantity,counted:null}));
     if(!lines.length)fail(400,'Selecția nu conține produse din stocul importat.');
     const now=new Date().toISOString();
-    const record:RecordData={id:body.id,warehouseId,createdBy:user.id,createdByName:user.name,scope,scopeLabel:scope==='all'?'Inventar total':scope==='product'?stockCode(selection):selection,status:'draft',createdAt:now,updatedAt:now,finalizedAt:null,stockImportedAt:stock.importedAt,stockFilename:stock.filename||'',revision:1,lines,operations:[]};
+    const record:RecordData={id:body.id,warehouseId,createdBy:user.id,createdByName:user.name,scope,scopeLabel:scope==='all'?'Inventar total':scope==='product'?stockCode(selection):selection,status:'draft',createdAt:now,updatedAt:now,finalizedAt:null,stockImportedAt:stock.importedAt,stockFilename:stock.filename||'',revision:1,lines,operations:[],operationHistoryVersion:1};
     const result=await db().prepare('INSERT OR IGNORE INTO settings (key,value) VALUES (?,?)').bind(prefix+record.id,JSON.stringify(record)).run();
     if(!result.meta.changes)fail(409,'Inventarul a fost creat între timp. Actualizează lista.');
     return response({inventory:await view(record,user)});
@@ -81,8 +88,9 @@ export async function inventories(req:Request,user:User,id?:string) {
     if(!uuid(body.operationId))fail(400,'Identificator de salvare invalid.');
     const action=textField(body.action),ean=textField(body.ean,80),code=stockCode(textField(body.code,100)),quantity=body.quantity;
     const hash=sha256(JSON.stringify([action,ean,code,quantity??null]));
-    const previous=record.operations.find(op=>op.id===body.operationId);
-    if(previous){if(previous.hash!==hash)fail(409,'Identificatorul salvării a fost reutilizat cu alte date.');return response({inventory:await view(record,user)});}
+    const previous=Array.isArray(record.operations)?record.operations.filter(op=>op?.id===body.operationId):[];
+    if(previous.length){if(previous.some(op=>op.hash!==hash))return response({error:'Identificatorul salvării a fost reutilizat cu alte date. Scanarea rămâne local pentru verificare.',code:'INVENTORY_OPERATION_CONFLICT',retryable:false},409);return response({inventory:await view(record,user)});}
+    if(!completeHistory(record))return response({error:'Istoricul confirmărilor acestui inventar este incomplet. Operațiunea nu poate fi aplicată sau confirmată în siguranță. Păstrează datele locale pentru reconciliere; nu retrimite scanarea cu un identificator nou.',code:'INVENTORY_HISTORY_INCOMPLETE',retryable:false},409);
     if(record.status!=='draft')fail(409,'Inventarul este închis și nu mai poate fi modificat.');
     if(body.revision!==record.revision)fail(409,'Inventarul a fost modificat în altă sesiune. Reîncarcă datele înainte de a continua.');
     if(action==='scan'||action==='set') {
@@ -109,7 +117,8 @@ export async function inventories(req:Request,user:User,id?:string) {
     }else if(action==='cancel')record.status='cancelled';
     else fail(400,'Acțiune de inventar necunoscută.');
     record.updatedAt=new Date().toISOString();record.revision++;
-    record.operations=[...record.operations,{id:body.operationId,hash}].slice(-2000);
+    record.operations=[...record.operations!,{id:body.operationId,hash}];
+    record.operationHistoryVersion=1;
     const result=await db().prepare('UPDATE settings SET value=? WHERE key=? AND value=?').bind(JSON.stringify(record),prefix+id,raw).run();
     if(!result.meta.changes)fail(409,'Numărătoarea s-a modificat între timp. Reîncarcă inventarul.');
     return response({inventory:await view(record,user)});

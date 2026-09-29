@@ -18,7 +18,7 @@ export async function readCatalog() {
     const product={...p,ean:eans[0]||'',eans};
     return {...product,version:sha256(JSON.stringify(product))};
   });
-  return {raw:row?.value??null,state,products,mappings};
+  return {raw:row?.value??null,mappingsRaw:imported?.value??null,state,products,mappings};
 }
 export async function changeProduct(method:string,id:string|undefined,body:Record<string,unknown>) {
   const current=await readCatalog();
@@ -29,6 +29,7 @@ export async function changeProduct(method:string,id:string|undefined,body:Recor
   if(method==='DELETE')current.state.overrides[productId]=null;
   else {
     const code=textField(body.code,80),name=textField(body.name,300),brand=textField(body.brand,100),category=textField(body.category,100);
+    if(existing&&stockCode(code)!==stockCode(existing.code)&&(existing.eans.length||validEan(stockCode(existing.code))||Object.values(current.mappings).some(mapped=>stockCode(mapped)===stockCode(existing.code))))fail(409,'Codul produsului are asocieri EAN și nu poate fi schimbat. Păstrează codul; poți modifica denumirea și celelalte detalii.');
     const kind=existing?.kind||body.kind;
     const ean=body.ean===undefined?existing?.ean||'':textField(body.ean,80);
     if(ean&&!validEan(ean))fail(400,'EAN invalid: verifică lungimea și cifra de control.');
@@ -37,10 +38,13 @@ export async function changeProduct(method:string,id:string|undefined,body:Recor
     if(!code||!name||!category||!['accessories','stands'].includes(String(kind)))fail(400,'Completează codul, denumirea, categoria și tipul produsului.');
     for(const key of ['price','netPrice'] as const)if(body[key]!==null&&(typeof body[key]!=='number'||!Number.isFinite(body[key])||Number(body[key])<0||Number(body[key])>1000000))fail(400,'Prețurile trebuie să fie pozitive sau necompletate.');
     if(kind==='accessories'&&(body.price===null||body.netPrice===null))fail(400,'Completează ambele prețuri pentru accesorii.');
-    current.state.overrides[productId]={id:productId,code,name,brand,category,kind:String(kind),price:body.price as number|null,netPrice:body.netPrice as number|null,sourceRow:existing?.sourceRow||0,image:existing?.image||null,...(ean===existing?.ean&&current.state.overrides[productId]?.ean===undefined?{}:{ean})};
+    const storedProduct=current.state.overrides[productId]||(seed.products as Product[]).find(p=>p.id===productId);
+    current.state.overrides[productId]={id:productId,code,name,brand,category,kind:String(kind),price:body.price as number|null,netPrice:body.netPrice as number|null,sourceRow:existing?.sourceRow||0,image:existing?.image||null,...(ean===existing?.ean&&storedProduct?.ean===undefined?{}:{ean})};
   }
   const value=JSON.stringify(current.state);
-  const result=current.raw===null?await db().prepare("INSERT OR IGNORE INTO settings (key,value) VALUES ('catalog',?)").bind(value).run():await db().prepare("UPDATE settings SET value=? WHERE key='catalog' AND value=?").bind(value,current.raw).run();
+  // Compare the mapping snapshot in the same statement: an import racing a
+  // previously unassociated code change must not leave a newly orphaned EAN.
+  const result=current.raw===null?await db().prepare("INSERT OR IGNORE INTO settings (key,value) SELECT 'catalog',? WHERE (SELECT value FROM settings WHERE key='inventory-ean-v1') IS ?").bind(value,current.mappingsRaw).run():await db().prepare("UPDATE settings SET value=? WHERE key='catalog' AND value=? AND (SELECT value FROM settings WHERE key='inventory-ean-v1') IS ?").bind(value,current.raw,current.mappingsRaw).run();
   if(!result.meta.changes)fail(409,'Catalogul a fost modificat între timp. Actualizează lista și încearcă din nou.');
   return {products:(await readCatalog()).products};
 }

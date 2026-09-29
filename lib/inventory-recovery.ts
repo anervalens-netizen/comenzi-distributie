@@ -1,10 +1,14 @@
 import { readLocalWork, type StorageLike } from './local-work.ts';
 import type { Inventory } from './inventory-types.ts';
 
-export type InventoryScanOperation={operationId:string;inventoryId:string;ean:string;quantity:number};
+export type InventoryScanOperation={operationId:string;inventoryId:string;ean:string;quantity:number;blockedReason?:string};
 export type InventoryDraftValue={value:string;baseCounted:number|null};
 export type StoredInventoryWork={warehouseId:string;scanQueue:InventoryScanOperation[];drafts:Record<string,InventoryDraftValue>};
 export type ClosedInventoryRecovery={drafts:Record<string,InventoryDraftValue>;scanQueue:InventoryScanOperation[]};
+
+export function inventoryRetryBlocked(data:unknown) {
+  return !!data&&typeof data==='object'&&'retryable' in data&&data.retryable===false;
+}
 
 export function readClosedInventoryRecovery(inventory:Inventory,userId:string,storage?:StorageLike|null):ClosedInventoryRecovery|null {
   if(!userId||(inventory.status==='draft'&&inventory.canEdit))return null;
