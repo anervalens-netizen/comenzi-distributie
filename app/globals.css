@@ -435,3 +435,8 @@ html { scroll-padding-top:calc(var(--app-header-height) + var(--editor-toolbar-h
 .request-focused{outline:2px solid #e52430;outline-offset:-2px;background:#fff7f8;box-shadow:0 0 0 4px #e5243012}
 .settings-stack{display:grid;gap:18px}.push-settings{max-width:880px;padding:22px;display:grid;gap:14px}.push-settings .section-heading{margin:0}.push-settings-status{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.push-settings-status small{font-size:12px;color:#687382;line-height:1.5}.push-settings>button{justify-self:start}
 @media(max-width:640px){.request-callout{margin-top:10px;align-items:flex-start;flex-wrap:wrap}.request-callout>span{min-width:calc(100% - 36px)}.request-callout .secondary{width:100%}.request-inbox-item{align-items:flex-start;flex-direction:column}.request-inbox-item .secondary{width:100%}.request-count{top:-3px;right:-4px}.push-settings{padding:18px}}
+
+.manager-own-password{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:20px;margin:16px 0 24px}
+.manager-own-password h2{margin:0 0 4px}
+.manager-own-password p{margin:0;color:var(--muted-foreground)}
+@media(max-width:600px){.manager-own-password{align-items:flex-start;flex-direction:column}.manager-team-tabs>.settings-tabs{width:100%}}

@@ -458,7 +458,7 @@ try {
   await cdp.evaluate("history.replaceState(null,'','/');true");
   await clickTab(cdp,'Echipă');
   check(!(await cdp.evaluate("[...document.querySelectorAll('.main-content [role=tab]')].some(node=>node.textContent?.trim()==='Activitate')")),'Echipă is a separate administration area without an Activitate subtab');
-  await cdp.evaluate("document.querySelector('.manager-team-admin').open=true;true");
+  await waitFor(()=>cdp.evaluate("document.querySelector('.manager-team-tabs [role=tab][aria-selected=true]')?.textContent.includes('Parole și conturi')"),'Passwords and accounts opens by default at the top of Team');
   await waitFor(()=>cdp.evaluate("[...document.querySelectorAll('button')].some(b=>b.textContent==='Dezactivează')"),'agent toggle');
   await cdp.evaluate(`window.originalFetch=window.fetch;window.toggleFailure='conflict';window.fetch=async(...args)=>{if(String(args[0]).endsWith('/admin/users')){if(window.toggleFailure==='network')throw new TypeError('Failed to fetch');return new Response(JSON.stringify({error:'Datele agentului s-au modificat. Actualizează lista.'}),{status:409,headers:{'Content-Type':'application/json'}});}return window.originalFetch(...args);};[...document.querySelectorAll('button')].find(b=>b.textContent==='Dezactivează').click();true`);
   await waitFor(()=>cdp.evaluate("[...document.querySelectorAll('[role=alert]')].some(e=>e.textContent.includes('Actualizează lista'))"),'visible stale toggle error');checks++;
