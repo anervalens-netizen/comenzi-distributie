@@ -48,8 +48,16 @@ try{
   const geo=(await call('qa-agent1','/ph-shared')).partner;assert.equal(geo.positionProvider,'geoapify');
   const edited=await call('qa-agent1','/ph-shared','PATCH',{...geo,phone:'0700000000'});assert.equal(edited.partner.positionSource,'geocoding');
   const manual=await call('qa-agent1','/ph-shared','PATCH',{...edited.partner,positionSource:'manual'});assert.equal(manual.partner.positionProvider,null);
+  db.prepare("UPDATE partner_profiles SET position_accuracy='locality_approximate',position_metadata=? WHERE customer_id='ph-shared'").run(JSON.stringify({positionQuality:'locality_approximate'}));
+  const approximateManual=(await call('qa-agent1','/ph-shared')).partner;assert.equal(approximateManual.positionQuality,'locality_approximate','manual approximate metadata remains explicit');assert.equal(approximateManual.positionAccuracy,null,'legacy quality text is not numeric GPS accuracy');
+  const contactOnly=(await call('qa-agent1','/ph-shared','PATCH',{...approximateManual,contact:'Updated contact'})).partner;
+  assert.equal(contactOnly.positionQuality,'locality_approximate','contact-only edit preserves approximate pin');
+  assert.equal(contactOnly.latitude,approximateManual.latitude);
+  assert.equal(JSON.parse(db.prepare("SELECT position_metadata FROM partner_profiles WHERE customer_id='ph-shared'").get().position_metadata).positionQuality,'locality_approximate');
+  const moved=(await call('qa-agent1','/ph-shared','PATCH',{...contactOnly,latitude:44.41})).partner;
+  assert.equal(moved.positionQuality,null,'moving manual pin clears old approximate provenance');
   db.prepare("UPDATE partner_profiles SET position_metadata=? WHERE customer_id='ph-shared'").run(JSON.stringify({positionQuality:'locality_approximate'}));
-  const approximateManual=(await call('qa-agent1','/ph-shared')).partner;assert.equal(approximateManual.positionQuality,'locality_approximate','manual approximate metadata remains explicit');
-  const corrected=(await call('qa-agent1','/ph-shared','PATCH',{...approximateManual,positionSource:'gps',positionAccuracy:8})).partner;assert.equal(corrected.positionSource,'gps');assert.equal(corrected.positionAccuracy,8);assert.equal(corrected.positionQuality,null,'confirmed GPS correction clears approximate metadata');
+  const beforeGps=(await call('qa-agent1','/ph-shared')).partner;
+  const corrected=(await call('qa-agent1','/ph-shared','PATCH',{...beforeGps,positionSource:'gps',positionAccuracy:8})).partner;assert.equal(corrected.positionSource,'gps');assert.equal(corrected.positionAccuracy,8);assert.equal(corrected.positionQuality,null,'confirmed GPS correction clears approximate metadata');
   console.log(`PASS: Partner Hub ${checks} HTTP checks, scope/shared portfolios/CAS/address invalidation/visits/pagination/geocoder provenance.`);
 }finally{for(const id of Object.keys(sessions))db.prepare('DELETE FROM sessions WHERE token_hash=?').run(hash(sessions[id].split('=')[1]));db.close();}

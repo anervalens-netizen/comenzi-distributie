@@ -44,7 +44,10 @@ function view(row: Row): PortfolioPartner {
     fp = fingerprint(c),
     valid = row.address_fingerprint === fp;
   let quality: PortfolioPartner['positionQuality'] = null;
-  if (valid && (row.position_source === 'manual' || row.position_source === 'geocoding')) {
+  if (
+    valid &&
+    (row.position_source === 'manual' || row.position_source === 'geocoding')
+  ) {
     try {
       const metadata = JSON.parse(row.position_metadata || '{}');
       const recordedQuality = [
@@ -75,7 +78,13 @@ function view(row: Row): PortfolioPartner {
     latitude: valid ? row.latitude : null,
     longitude: valid ? row.longitude : null,
     positionSource: valid ? row.position_source : null,
-    positionAccuracy: valid ? row.position_accuracy : null,
+    positionAccuracy:
+      valid &&
+      typeof row.position_accuracy === 'number' &&
+      Number.isFinite(row.position_accuracy) &&
+      row.position_accuracy >= 0
+        ? row.position_accuracy
+        : null,
     positionProvider: valid ? row.position_provider : null,
     addressFingerprint: fp,
     revision: row.revision || 0,
@@ -206,7 +215,7 @@ export async function updatePartner(
     now = new Date().toISOString();
   const result = await db()
     .prepare(
-      `INSERT INTO partner_profiles(customer_id,contact,phone,email,latitude,longitude,position_source,position_accuracy,position_provider,position_metadata,address_fingerprint,revision,updated_at,updated_by) SELECT c.id,?,?,?,?,?,?,?,(SELECT position_provider FROM partner_profiles WHERE customer_id=c.id),(SELECT position_metadata FROM partner_profiles WHERE customer_id=c.id),?,1,?,? FROM customers c WHERE c.id=? AND c.active=1 AND ${s.sql} AND COALESCE(json_extract(c.data,'$.address'),'')=? AND COALESCE(json_extract(c.data,'$.city'),'')=? AND COALESCE(json_extract(c.data,'$.county'),'')=? AND (?=0 OR EXISTS(SELECT 1 FROM partner_profiles WHERE customer_id=c.id AND revision=?)) ON CONFLICT(customer_id) DO UPDATE SET contact=excluded.contact,phone=excluded.phone,email=excluded.email,latitude=excluded.latitude,longitude=excluded.longitude,position_source=excluded.position_source,position_accuracy=excluded.position_accuracy,position_provider=CASE WHEN excluded.position_source='geocoding' THEN partner_profiles.position_provider ELSE NULL END,position_metadata=CASE WHEN excluded.position_source='geocoding' THEN partner_profiles.position_metadata ELSE NULL END,address_fingerprint=excluded.address_fingerprint,revision=partner_profiles.revision+1,updated_at=excluded.updated_at,updated_by=excluded.updated_by WHERE partner_profiles.revision=?`,
+      `INSERT INTO partner_profiles(customer_id,contact,phone,email,latitude,longitude,position_source,position_accuracy,position_provider,position_metadata,address_fingerprint,revision,updated_at,updated_by) SELECT c.id,?,?,?,?,?,?,?,(SELECT position_provider FROM partner_profiles WHERE customer_id=c.id),(SELECT position_metadata FROM partner_profiles WHERE customer_id=c.id),?,1,?,? FROM customers c WHERE c.id=? AND c.active=1 AND ${s.sql} AND COALESCE(json_extract(c.data,'$.address'),'')=? AND COALESCE(json_extract(c.data,'$.city'),'')=? AND COALESCE(json_extract(c.data,'$.county'),'')=? AND (?=0 OR EXISTS(SELECT 1 FROM partner_profiles WHERE customer_id=c.id AND revision=?)) ON CONFLICT(customer_id) DO UPDATE SET contact=excluded.contact,phone=excluded.phone,email=excluded.email,latitude=excluded.latitude,longitude=excluded.longitude,position_source=excluded.position_source,position_accuracy=excluded.position_accuracy,position_provider=CASE WHEN excluded.position_source IN ('manual','geocoding') AND excluded.position_source IS partner_profiles.position_source AND excluded.latitude IS partner_profiles.latitude AND excluded.longitude IS partner_profiles.longitude AND excluded.address_fingerprint IS partner_profiles.address_fingerprint THEN partner_profiles.position_provider ELSE NULL END,position_metadata=CASE WHEN excluded.position_source IN ('manual','geocoding') AND excluded.position_source IS partner_profiles.position_source AND excluded.latitude IS partner_profiles.latitude AND excluded.longitude IS partner_profiles.longitude AND excluded.address_fingerprint IS partner_profiles.address_fingerprint THEN partner_profiles.position_metadata ELSE NULL END,address_fingerprint=excluded.address_fingerprint,revision=partner_profiles.revision+1,updated_at=excluded.updated_at,updated_by=excluded.updated_by WHERE partner_profiles.revision=?`,
     )
     .bind(
       contact,
@@ -272,7 +281,11 @@ export async function recordVisit(
 
 // Lightweight read projection for lists/maps. No contact/request/financial data.
 // Reuse the canonical fingerprint and scope, including shared work locations.
-export async function portfolioSummary(user: User, bbox?: import('./partner-map-types').MapBounds, warehouseIds?: string[]) {
+export async function portfolioSummary(
+  user: User,
+  bbox?: import('./partner-map-types').MapBounds,
+  warehouseIds?: string[],
+) {
   const scope = partnerScope(user);
   const args: (string | number)[] = [...scope.args];
   let area = '';
@@ -286,26 +299,40 @@ export async function portfolioSummary(user: User, bbox?: import('./partner-map-
     area += ` AND p.latitude BETWEEN ? AND ? AND ${west <= east ? 'p.longitude BETWEEN ? AND ?' : '(p.longitude>=? OR p.longitude<=?)'}`;
     args.push(south, north, west, east);
   }
-  const rows = await db().prepare(`SELECT c.id,c.warehouse_id,c.data,
+  const rows = await db()
+    .prepare(`SELECT c.id,c.warehouse_id,c.data,
     '' contact,'' phone,'' email,p.latitude,p.longitude,p.position_source,
     p.position_accuracy,p.position_provider,p.position_metadata,p.address_fingerprint,
     p.revision,p.updated_at,
     (SELECT MAX(v.visited_at) FROM partner_visits v WHERE v.customer_id=c.id) last_visited_at
     FROM customers c LEFT JOIN partner_profiles p ON p.customer_id=c.id
     WHERE c.active=1 AND ${scope.sql}${area}
-    ORDER BY json_extract(c.data,'$.name'),c.id`).bind(...args).all<Row>();
-  return rows.results.map(row => {
+    ORDER BY json_extract(c.data,'$.name'),c.id`)
+    .bind(...args)
+    .all<Row>();
+  return rows.results.map((row) => {
     const p = view(row);
     // Finite range checks also protect against malformed legacy/imported coordinates.
-    const located = typeof p.latitude === 'number' && Number.isFinite(p.latitude) &&
-      Math.abs(p.latitude) <= 90 && typeof p.longitude === 'number' &&
-      Number.isFinite(p.longitude) && Math.abs(p.longitude) <= 180;
+    const located =
+      typeof p.latitude === 'number' &&
+      Number.isFinite(p.latitude) &&
+      Math.abs(p.latitude) <= 90 &&
+      typeof p.longitude === 'number' &&
+      Number.isFinite(p.longitude) &&
+      Math.abs(p.longitude) <= 180;
     return {
-      id: p.id, name: p.name, cui: p.cui, address: p.address, city: p.city,
-      county: p.county, route: p.route, latitude: located ? p.latitude : null,
+      id: p.id,
+      name: p.name,
+      cui: p.cui,
+      address: p.address,
+      city: p.city,
+      county: p.county,
+      route: p.route,
+      latitude: located ? p.latitude : null,
       longitude: located ? p.longitude : null,
       positionSource: located ? p.positionSource : null,
-      positionQuality: located ? p.positionQuality : null, lastVisitedAt: p.lastVisitedAt,
+      positionQuality: located ? p.positionQuality : null,
+      lastVisitedAt: p.lastVisitedAt,
     } satisfies import('./partner-map-types').PartnerSummary;
   });
 }
