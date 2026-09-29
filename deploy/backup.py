@@ -55,12 +55,18 @@ def add_recovery_files(output: tarfile.TarFile, recovery: dict[str, Path], relea
         if not (roots[name] / required).is_file():
             raise RuntimeError(f'Recovery {name} is missing {required}')
     mode = json.loads((roots['resources'] / 'resource-mode.json').read_text())
-    if mode.get('mode') != 'private':
-        raise RuntimeError('Recovery resources are not private production inputs')
-    for name, expected in mode.get('sha256', {}).items():
+    names = ['seed.json', 'initial-users.json', 'accesorii.xlsx', 'standuri.xlsx', 'templates.json', 'template-hashes.json', 'mail-defaults.json']
+    if mode.get('mode') != 'private' or mode.get('schema') != 1 or any(name not in mode.get('sha256', {}) for name in names):
+        raise RuntimeError('Recovery resources are not complete private production inputs')
+    hashes = {}
+    for name in names:
         source = (roots['resources'] / name).resolve()
-        if not source.is_relative_to(roots['resources']) or digest(source) != expected:
+        if not source.is_relative_to(roots['resources']) or digest(source) != mode['sha256'][name]:
             raise RuntimeError('Recovery resource integrity mismatch')
+        hashes[name] = mode['sha256'][name]
+    resource_digest = hashlib.sha256(json.dumps(hashes, separators=(',', ':')).encode()).hexdigest()
+    if json.loads(expected_release).get('resourceDigest') != resource_digest:
+        raise RuntimeError('Recovery private inputs do not match the compiled release')
     manifest = {'schema': 1, 'files': {}}
     for name, root in roots.items():
         if not root.is_dir():

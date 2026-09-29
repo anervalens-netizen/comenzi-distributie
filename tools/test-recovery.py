@@ -27,10 +27,14 @@ class RecoveryTests(unittest.TestCase):
             db.execute('CREATE TABLE orders(kind TEXT,status TEXT,payload TEXT)');db.commit()
         self.runtime=self.root/'runtime';self.runtime.mkdir()
         (self.runtime/'server.js').write_text('// synthetic runtime')
-        self.release=self.runtime/'RELEASE.json';self.release.write_text(json.dumps({'sha':'a'*40,'resourceMode':'private'}))
+        self.release=self.runtime/'RELEASE.json'
         self.resources=self.root/'resources';self.resources.mkdir()
-        (self.resources/'seed.json').write_text('{"synthetic":true}')
-        (self.resources/'resource-mode.json').write_text(json.dumps({'mode':'private','sha256':{'seed.json':backup.digest(self.resources/'seed.json')}}))
+        names=['seed.json','initial-users.json','accesorii.xlsx','standuri.xlsx','templates.json','template-hashes.json','mail-defaults.json']
+        for name in names:(self.resources/name).write_text('{"synthetic":true}')
+        hashes={name:backup.digest(self.resources/name) for name in names}
+        (self.resources/'resource-mode.json').write_text(json.dumps({'mode':'private','schema':1,'sha256':hashes}))
+        resource_digest=hashlib.sha256(json.dumps(hashes,separators=(',',':')).encode()).hexdigest()
+        self.release.write_text(json.dumps({'sha':'a'*40,'resourceMode':'private','resourceDigest':resource_digest}))
         self.products=self.root/'products';self.products.mkdir();(self.products/'image.png').write_bytes(b'synthetic image')
         self.kwargs=dict(data=self.data,local=self.root/'local',nas=self.root/'nas',nas_mount=self.root/'nas',release=self.release,recovery={'runtime':self.runtime,'resources':self.resources,'products':self.products})
     def make_backup(self):
@@ -66,6 +70,9 @@ class RecoveryTests(unittest.TestCase):
             return original(output,parts,release,captured)
         with patch.object(backup,'add_recovery_files',side_effect=change):
             with self.assertRaisesRegex(RuntimeError,'release'):self.make_backup()
+    def test_resource_set_mismatches_compiled_runtime(self):
+        release=json.loads(self.release.read_text());release['resourceDigest']='0'*64;self.release.write_text(json.dumps(release))
+        with self.assertRaisesRegex(RuntimeError,'compiled release'):self.make_backup()
     def test_tar_path_traversal_rejected(self):
         path=self.root/'evil.tar.gz'
         with tarfile.open(path,'w:gz') as out:
