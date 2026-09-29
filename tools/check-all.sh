@@ -34,6 +34,9 @@ node tools/test-sales-classification.mjs
 node tools/test-sales.mjs
 node tools/test-sales-audit-fixes.mjs
 node tools/test-import-inventory-safety.mjs
+node tools/test-r2-imports.mjs
+node tools/test-r2-inventory.mjs
+node tools/test-r2-interface.mjs
 ./tools/test-activate-release.sh
 python3 -W error::ResourceWarning tools/test-backup.py
 python3 -W error::ResourceWarning tools/test-recovery.py
