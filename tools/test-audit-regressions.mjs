@@ -20,7 +20,12 @@ async function call(path,method='GET',body,cookie,expected=200){
 }
 const login=async username=>(await call('auth/login','POST',{username,password})).cookie;
 const clients=async(cookie,warehouseId)=>(await call(`clients?warehouseId=${warehouseId}`,'GET',null,cookie)).data.clients;
-const importClients=(cookie,warehouseId,rows,expected=200)=>call('admin/import-clients','POST',{warehouseId,clients:rows},cookie,expected);
+const importClients=async(cookie,warehouseId,rows,expected=200)=>{
+  const body={warehouseId,clients:rows};
+  const {data:{preview}}=await call('admin/import-clients','POST',{...body,preview:true},cookie);
+  if(expected===200)assert.equal(preview.blocked.length,0,'Expected an unambiguous synthetic import preview');
+  return call('admin/import-clients','POST',{...body,snapshot:preview.snapshot,confirmRemovals:preview.removed.length?preview.snapshot:undefined},cookie,expected);
+};
 try {
   for(const [id,role,scope,warehouse] of [['reg-global','manager','global',null],['reg-manager','manager','assigned',null],['reg-a','agent','assigned','g-5'],['reg-b','agent','assigned','g-3'],['reg-race','agent','assigned','g-5']]){
     db.prepare('INSERT INTO users(id,username,name,role,manager_scope,warehouse_id,password_hash,must_change_password,active) VALUES(?,?,?,?,?,?,?,0,1)').run(id,id,id,role,scope,warehouse,hash);

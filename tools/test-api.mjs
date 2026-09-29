@@ -25,6 +25,11 @@ async function call(path,method='GET',body,cookie,expected=200) {
   assert.ok((Array.isArray(expected)?expected:[expected]).includes(r.status),`${method} ${path}: ${r.status} ${JSON.stringify(json).slice(0,700)}`);checks++;
   return {data:json,cookie:r.headers.get('set-cookie')?.split(';')[0],response:r};
 }
+async function commitClients(body,cookie) {
+  const preview=(await call('admin/import-clients','POST',{...body,preview:true},cookie)).data.preview;
+  assert.equal(preview.blocked.length,0,'Expected an unambiguous synthetic import preview');
+  return call('admin/import-clients','POST',{...body,snapshot:preview.snapshot,confirmRemovals:preview.removed.length?preview.snapshot:undefined},cookie);
+}
 async function create(kind,cookie,agentId='qa-agent1',extra={}) {const id=randomUUID();created.push(id);const r=await call('orders','POST',{id,kind,agentId,...extra},cookie,201);return r.data.order;}
 async function save(o,cookie,overrides={}) {return (await call(`orders/${o.id}`,'PUT',{revision:o.revision,items:o.items.map(l=>({id:l.id,quantity:l.quantity})),serials:o.serials,clientId:o.client?.id||null,notes:o.notes,...overrides},cookie)).data.order;}
 try {
@@ -317,11 +322,11 @@ ok(acc.status==='finalized'&&!!acc.finalizedAt,'Finalization persisted');
   const twoCreates=await Promise.all([call('orders','POST',{id:concurrentId,kind:'stands'},agent,[200,201]),call('orders','POST',{id:concurrentId,kind:'stands'},agent,[200,201])]);
   ok(twoCreates[0].data.order.id===twoCreates[1].data.order.id,'Concurrent creates share one idempotent draft');
   const importPayload={warehouseId:'g-3',clients:[{name:'CLIENT QA',cui:'RO001234',city:'TEST',county:'TEST',address:'TEST',route:'1'}]};
-  const importResult=(await call('admin/import-clients','POST',importPayload,manager)).data;
+  const importResult=(await commitClients(importPayload,manager)).data;
   ok(importResult.count===1,'Portfolio import committed');
   const importedClient=(await call('clients','GET',null,agent2)).data.clients[0];
   ok(importedClient.cui==='RO001234','Imported CUI preserved as text');
-  await call('admin/import-clients','POST',importPayload,manager);
+  await commitClients(importPayload,manager);
   ok((await call('clients','GET',null,agent2)).data.clients[0].id===importedClient.id,'Reimport of the same county-aware location preserves the customer id');
   const eml=await fetch(root+`orders/${sim.id}/eml`,{headers:{Cookie:agent}});const emlText=await eml.text();ok(emlText.includes('X-Unsent: 1')&&emlText.includes('Content-Disposition: attachment'),'MIME draft contains attachment');
   const cross=await fetch(root+'orders',{method:'POST',headers:{Cookie:agent,'Content-Type':'application/json',Origin:'https://other.invalid'},body:'{}'});ok(cross.status===403,'Cross-origin write rejected');
