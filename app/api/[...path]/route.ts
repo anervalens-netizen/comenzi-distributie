@@ -15,7 +15,7 @@ import { inventories } from '@/lib/inventory-server';
 import { partnerMail } from '@/lib/partner-mail';
 import { confirmPartnerRequest, getPartnerRequest, listPartnerRequests, partnerLocations, teamActivity, managerActivity } from '@/lib/partner-requests';
 import { managerRequestInbox, pushPublicConfig, removePushSubscription, upsertPushSubscription } from '@/lib/push-notifications';
-import { normalizeCui as normalizePartnerCui, partnerPointKey } from '@/lib/partner-identity';
+import { importClients } from '@/lib/client-import-server';
 import type { User, Order, Line, Client, Kind, Product } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -245,7 +245,7 @@ async function dispatch(req: Request) {
   if(path.join('/')==='sales/preview'&&req.method==='POST')return salesUpload(req,user,false);
   if(path.join('/')==='sales/import'&&req.method==='POST')return salesUpload(req,user,true);
   if(path.join('/')==='stock'&&req.method==='GET')return stockView(req,readUser);
-  if(path[0]==='inventory'&&path.length<=2)return inventories(req,req.method==='GET'?readUser:user,path[1]);
+  if(path[0]==='inventory'&&path.length<=2)return inventories(req,user,path[1]);
   if(path.join('/')==='admin/stock/preview'&&req.method==='POST')return stockUpload(req,user,false);
   if(path.join('/')==='admin/stock/import'&&req.method==='POST')return stockUpload(req,user,true);
   if(path.join('/')==='auth/logout' && req.method==='POST') {
@@ -563,33 +563,8 @@ async function dispatch(req: Request) {
       const body=await jsonBody(req),warehouseId=textField(body.warehouseId);
       if(!warehouses.some(g=>g.id===warehouseId)) fail(400,'Gestiune invalidă.');
       await requireWarehouseAccess(user,warehouseId);
-      if(!Array.isArray(body.clients)||!body.clients.length||body.clients.length>3000) fail(400,'Importul acceptă între 1 și 3.000 de clienți.');
-      const activeRows=(await db().prepare('SELECT id,data FROM customers WHERE active=1 AND warehouse_id=?').bind(warehouseId).all<{id:string;data:string}>()).results;
-      const existingByIdentity=new Map<string,string>();
-      for(const row of activeRows){try{const client=JSON.parse(row.data) as Client;const identity=`${normalizePartnerCui(client.cui)}|${partnerPointKey(client.city,client.county,client.address)}`;if(!existingByIdentity.has(identity))existingByIdentity.set(identity,row.id);else existingByIdentity.set(identity,'');}catch{}}
-      const records:Client[]=[]; const seen=new Set<string>();
-      for(const raw of body.clients) {
-        if(!raw||typeof raw!=='object') fail(400,'Client invalid.');
-        const name=textField(raw.name,200),cui=textField(raw.cui,40),city=textField(raw.city,100),county=textField(raw.county,100),address=textField(raw.address,500),route=textField(raw.route,30);
-        if(!name||!cui||!city) fail(400,'Fiecare client trebuie să aibă denumire, CUI și localitate.');
-        const identity=`${normalizePartnerCui(cui)}|${partnerPointKey(city,county,address)}`;
-        const id=existingByIdentity.get(identity)||'imp-'+sha256(`${warehouseId}|${identity}`).slice(0,32);
-        if(seen.has(id)) continue; seen.add(id); records.push({id,warehouseId,name,cui,city,county,address,route});
-      }
-      // Atomic replacement: the active portfolio is never partially imported.
-      const shared=await db().prepare("SELECT id FROM customers WHERE active=1 AND json_array_length(data,'$.warehouseIds')>1 AND EXISTS (SELECT 1 FROM json_each(data,'$.warehouseIds') WHERE value=?) LIMIT 1").bind(warehouseId).first();
-      if(shared)fail(409,'Portofoliul conține puncte de lucru comune. Editează-le din Echipă; înlocuirea prin acest import individual ar afecta partajarea.');
-      const collision=await db().prepare("SELECT id FROM customers WHERE id IN (SELECT value FROM json_each(?)) AND (warehouse_id<>? OR COALESCE(json_array_length(data,'$.warehouseIds'),1)>1) LIMIT 1").bind(JSON.stringify(records.map(c=>c.id)),warehouseId).first();
-      if(collision)fail(409,'Un client din import a fost mutat sau partajat. Actualizează portofoliul și atribuirile din Echipă; importul nu a fost aplicat.');
-      try {
-        // NOT NULL aborts the entire batch if ownership changes after the check.
-        // This protects other portfolios without making CUI or work locations unique globally.
-        await db().batch([db().prepare("UPDATE customers SET active=CASE WHEN active=1 AND COALESCE(json_array_length(data,'$.warehouseIds'),1)>1 THEN NULL ELSE 0 END WHERE warehouse_id=?").bind(warehouseId),...records.map(c=>db().prepare("INSERT INTO customers (id,warehouse_id,data,active) VALUES (?,?,?,1) ON CONFLICT(id) DO UPDATE SET data=CASE WHEN customers.warehouse_id=excluded.warehouse_id AND COALESCE(json_array_length(customers.data,'$.warehouseIds'),1)<=1 THEN excluded.data ELSE NULL END,active=1").bind(c.id,warehouseId,JSON.stringify(c)))]);
-      } catch(error) {
-        if(error instanceof Error&&/NOT NULL constraint failed: customers\.(data|active)/.test(error.message))fail(409,'Portofoliul s-a modificat între timp. Reîncarcă datele; importul nu a fost aplicat.');
-        throw error;
-      }
-      return response({count:records.length,users:await getUsers(user)});
+      const result=await importClients(warehouseId,body);
+      return response('preview' in result?result:{...result,users:await getUsers(user)});
     }
     if(path[1]==='templates' && req.method==='POST') {
       requireGlobalManager(user);

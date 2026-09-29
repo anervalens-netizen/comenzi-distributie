@@ -457,13 +457,13 @@ export function InventoryPanel({
                     disabled={locked}
                     onClick={() => void open(i.id)}
                   >
-                    {i.status === 'draft' ? (
+                    {i.canEdit ? (
                       <Pencil size={16} />
                     ) : (
                       <ArrowLeft size={16} />
                     )}
                   </button>
-                  <button
+                  {i.canDelete && <button
                     className="icon-button delete-order"
                     title="Șterge inventarul"
                     aria-label={`Șterge inventarul ${i.scopeLabel}`}
@@ -471,7 +471,7 @@ export function InventoryPanel({
                     onClick={() => void remove(i.id, i.revision)}
                   >
                     <Trash2 size={16} />
-                  </button>
+                  </button>}
                 </div>
               </div>
             ))}
