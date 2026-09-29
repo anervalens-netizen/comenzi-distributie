@@ -11,12 +11,18 @@ import { stockCode } from '@/lib/stock-types';
 import type { Order, Product } from '@/lib/types';
 import { StockQuantity, StockMetadata, useAgentStock } from '@/components/stock-panel';
 import { useOrderDraftSave } from '@/components/use-order-draft-save';
+import { OrderResult } from './order-result';
 import { OrderSaveConflictDialog } from '@/components/order-save-conflict-dialog';
 
 type Group='accessories'|'stands';
 const groupLabels:Record<Group,string>={accessories:'Accesorii',stands:'Cartele, telefoane & standuri'};
 const quantityKey=(product:Product)=>(product.kind==='stands'?'stands':'accessories')+':'+product.id;
-export function CombinedOrderEditor({initial,products,onClose,onSaved,onFinalized,onRecovered}:{initial:Order;products:Product[];onClose:()=>void;onSaved:(o:Order)=>void;onFinalized:(o:Order)=>void;onRecovered:(o:Order)=>void}) {
+type CombinedOrderEditorProps = {initial:Order;products:Product[];onClose:()=>void;onSaved:(o:Order)=>void;onFinalized:(o:Order)=>void;onRecovered:(o:Order)=>void};
+export function CombinedOrderEditor(props: CombinedOrderEditorProps & {canEdit?:boolean}) {
+  if(props.canEdit!==true)return <OrderResult order={props.initial} onClose={props.onClose} onCopy={()=>{}}/>;
+  return <EditableCombinedOrderEditor {...props}/>;
+}
+function EditableCombinedOrderEditor({initial,products,onClose,onSaved,onFinalized,onRecovered}:{initial:Order;products:Product[];onClose:()=>void;onSaved:(o:Order)=>void;onFinalized:(o:Order)=>void;onRecovered:(o:Order)=>void}) {
   const [group,setGroup]=useState<Group>('accessories'),[query,setQuery]=useState(''),[category,setCategory]=useState('Toate'),[selectedOnly,setSelectedOnly]=useState(false),[page,setPage]=useState(1),[quantityDrafts,setQuantityDrafts]=useState<Record<string,string>>({});
   const [actionError,setActionError]=useState(''),[busy,setBusy]=useState(false),[review,setReview]=useState(false);
   const {order,update:updateDraft,save,saveState,saveError,conflict,remoteFinalized,remoteDeleted,resolveConflict,recoverToNewDraft,discardRemoteRecovery,getCurrent,getRevision}=useOrderDraftSave({initial,onSaved});

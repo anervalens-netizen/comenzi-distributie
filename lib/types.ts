@@ -19,3 +19,20 @@ export type TeamActivityAgent = { agentId: string; agentName: string; warehouseN
 export type TeamActivityView = { month: string; agents: TeamActivityAgent[]; totals: { partnerRequests: number; partnerConfirmed: number; activeAgents: number; agentsWithInventory: number; finalizedInventories: number; inventoryDelta: number; inventoryShortage: number; inventorySurplus: number; inventoryDiscrepantLines: number }; partnerRequests: PartnerRequestRecord[] };
 export type ManagerRequestInboxItem = { id:string; type:'partner'; title:string; agentId:string; agentName:string; createdAt:string; location:string; county:string };
 export type ManagerRequestInbox = { count:number; items:ManagerRequestInboxItem[] };
+
+/** Operational writes use the authenticated identity, never national read filters. */
+export function writePermissions(user: User | null | undefined, users: User[] = []) {
+  const global = user?.role === 'manager' && user.managerScope === 'global';
+  const assigned = new Set(user?.role === 'manager' && user.managerScope === 'assigned'
+    ? users.find(row => row.id === user.id)?.managedAgentIds ?? [] : []);
+  const agent = (id: string | null | undefined) => !!id && !!user &&
+    (user.role === 'agent' ? user.id === id : global || assigned.has(id));
+  // Match canAccessWarehouse: inactive assignments still authorize warehouse writes.
+  const warehouse = (id: string | null | undefined) => !!id && !!user &&
+    (user.role === 'agent' ? user.warehouseId === id : global || users.some(row => assigned.has(row.id) && row.warehouseId === id));
+  const createOrder = (id: string | null | undefined) => agent(id) &&
+    (user?.role === 'agent' || users.some(row => row.id === id && row.role === 'agent' && row.active === 1));
+  const startInventory = (id: string | null | undefined) => warehouse(id) &&
+    (user?.role === 'agent' || users.some(row => row.warehouseId === id && row.role === 'agent' && row.active === 1));
+  return { agent, warehouse, createOrder, startInventory };
+}

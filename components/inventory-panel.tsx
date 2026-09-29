@@ -54,8 +54,10 @@ function inventoryHistoryPath(
 
 export function InventoryPanel({
   warehouseId,
+  canStart=false,
 }: {
   warehouseId?: string | null;
+  canStart?: boolean;
 }) {
   const { view } = useAgentStock(warehouseId);
   const [history, setHistory] = useState<InventorySummary[]>([]),
@@ -205,6 +207,7 @@ export function InventoryPanel({
   }
 
   async function run(p: Pending) {
+    if(p.method==='POST'&&!canStart)return;
     if (working.current) return;
     working.current = true;
     setBusy(true);
@@ -367,7 +370,7 @@ export function InventoryPanel({
             <label>
               Ce inventariezi?
               <select
-                disabled={locked}
+                disabled={locked||!canStart}
                 value={scope}
                 onChange={(e) => {
                   setScope(e.target.value as InventoryScope);
@@ -383,7 +386,7 @@ export function InventoryPanel({
               <label>
                 {scope === 'category' ? 'Categorie' : 'Produs'}
                 <select
-                  disabled={locked}
+                  disabled={locked||!canStart}
                   value={selection}
                   onChange={(e) => setSelection(e.target.value)}
                 >
@@ -401,7 +404,7 @@ export function InventoryPanel({
             <button
               className="primary"
               disabled={
-                locked || !view?.importedAt || (scope !== 'all' && !selection)
+                !canStart || locked || !view?.importedAt || (scope !== 'all' && !selection)
               }
               onClick={() =>
                 void run({

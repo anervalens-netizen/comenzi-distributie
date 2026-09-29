@@ -6,6 +6,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Table, TableHeader, TableHead, TableBody, TableRow, TableCell } from '@/components/ui/table';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Choice } from './choice';
+import { writePermissions } from '@/lib/types';
 import { AgentPortfolio } from './agent-portfolio';
 import { ManagerAccess } from './manager-access';
 import { StockImport } from './stock-import';
@@ -31,7 +32,7 @@ function ManagerImports() {
   return <div className="settings-imports"><Suspense fallback={<div className="sales-loading">Se încarcă importul de vânzări…</div>}><SalesImport lastImportText={importStatusText('Ultimul import vânzări',status.sales,ready,unavailable)}/></Suspense><StockImport lastImportText={importStatusText('Ultimul import stoc',status.stock,ready,unavailable)}/></div>;
 }
 
-export function Team({users,warehouses,onUsers,warnings,canCreateAgents}:{users:User[];warehouses:Warehouse[];onUsers:(u:User[])=>void;warnings:{row:number;name:string;reason:string}[];canCreateAgents:boolean}) {
+export function Team({user,users,warehouses,onUsers,warnings,canCreateAgents}:{user?:User;users:User[];warehouses:Warehouse[];onUsers:(u:User[])=>void;warnings:{row:number;name:string;reason:string}[];canCreateAgents:boolean}) {
   const [portfolioAgent,setPortfolioAgent]=useState<User|null>(null);
   const [dialog,setDialog]=useState<'new'|'import'|'reset'|null>(null),[target,setTarget]=useState<User|null>(null),[warehouse,setWarehouse]=useState('g-5'),[busy,setBusy]=useState(false),[error,setError]=useState(''),[query,setQuery]=useState('');
   const [preview,setPreview]=useState<{clients:ImportClient[];warnings:string[];sheet:string}|null>(null),[filename,setFilename]=useState('');
@@ -42,7 +43,7 @@ export function Team({users,warehouses,onUsers,warnings,canCreateAgents}:{users:
   async function importFile(file?:File) {if(!file)return;resetImpact();setBusy(true);setError('');setPreview(null);setFilename(file.name);try{setPreview(await readClients(file));}catch(e){setError(errorMessage(e));}finally{setBusy(false);}}
   async function commitImport() {if(!preview||!impact||impactBusy||impact.blocked.length||impact.removed.length&&!confirmed||preview.warnings.length&&!warningsAccepted)return;setBusy(true);setError('');try{const r=await api<{count:number;users:User[]}>('admin/import-clients','POST',{warehouseId:warehouse,clients:preview.clients,snapshot:impact.snapshot,confirmRemovals:confirmed?impact.snapshot:undefined});onUsers(r.users);setDialog(null);setPreview(null);toast.success(`${r.count} clienți importați.`);}catch(e){setError(errorMessage(e));}finally{setBusy(false);}}
   const filtered=users.filter(u=>u.role==='agent'&&normalize(u.name+' '+u.username+' '+u.warehouseName+' '+u.siteCode).includes(normalize(query)));
-  if(portfolioAgent) return <AgentPortfolio key={portfolioAgent.id} agent={users.find(u=>u.id===portfolioAgent.id)||portfolioAgent} users={users} onUsers={onUsers} onBack={()=>setPortfolioAgent(null)} canEditSiteCode={canCreateAgents}/>;
+  if(portfolioAgent) return <AgentPortfolio canStartInventory={writePermissions(user,users).startInventory((users.find(u=>u.id===portfolioAgent.id)||portfolioAgent).warehouseId)} key={portfolioAgent.id} agent={users.find(u=>u.id===portfolioAgent.id)||portfolioAgent} users={users} onUsers={onUsers} onBack={()=>setPortfolioAgent(null)} canEditSiteCode={canCreateAgents}/>;
   return <><div className="page-heading"><div><span className="eyebrow">ADMINISTRARE</span><h1>Parolele agenților</h1><p>Schimbă parola unui agent din butonul cu cheie de pe rândul său.</p></div>{canCreateAgents&&<button className="primary" onClick={()=>{setDialog('new');setError('');}}><Plus size={19}/> Agent nou</button>}</div>
     {!dialog&&error&&<p className="error-banner" role="alert">{error}</p>}
     <div className="team-admin-stack">{canCreateAgents&&<ManagerAccess users={users} onUsers={onUsers}/>}<section className="panel"><div className="panel-toolbar"><div className="search-box"><Users size={18}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Caută agent sau gestiune…" aria-label="Caută agent"/></div><button className="secondary" onClick={()=>{setDialog('import');setError('');setPreview(null);}}><Upload size={17}/> Importă portofoliu Excel</button></div>

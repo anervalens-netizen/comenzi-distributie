@@ -218,7 +218,7 @@ async function dispatch(req: Request) {
   if(path.join('/')==='partner/summary'&&req.method==='GET')return response({partners:await portfolioSummary(readUser)});
   if(path[0]==='partner'&&path[1]==='portfolio') {
     if(!path[2]&&req.method==='GET')return response(await portfolio(readUser));
-    if(path[2]&&!path[3]&&req.method==='GET')return response(await partnerDetail(readUser,path[2],new URL(req.url).searchParams.get('cursor')));
+    if(path[2]&&!path[3]&&req.method==='GET')return response(await partnerDetail(readUser,path[2],new URL(req.url).searchParams.get('cursor'),user));
     if(path[2]&&!path[3]&&req.method==='PATCH')return response(await updatePartner(user,path[2],await jsonBody(req)));
     if(path[2]&&path[3]==='visits'&&!path[4]&&req.method==='POST')return response(await recordVisit(user,path[2],await jsonBody(req)));
   }

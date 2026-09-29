@@ -113,14 +113,17 @@ async function get(user: User, id: string) {
     .bind(id, ...s.args)
     .first<Row>();
   if (!row) fail(404, 'Partenerul nu a fost găsit.');
-  return view(row);
+  return { ...view(row), canEdit: true };
 }
 export async function partnerDetail(
   user: User,
   id: string,
   cursor: string | null,
+  writeUser: User = user,
 ) {
   const partner = await get(user, id);
+  const scope = partnerScope(writeUser);
+  partner.canEdit = !!await db().prepare(`SELECT 1 FROM customers c WHERE c.id=? AND c.active=1 AND ${scope.sql}`).bind(id, ...scope.args).first();
   let before = '';
   let args: string[] = [id];
   if (cursor) {

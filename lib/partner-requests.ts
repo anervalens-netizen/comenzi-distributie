@@ -1,13 +1,13 @@
 import { db, fail, isGlobalManager, requireAgentAccess, requireManager, textField } from './server';
 import { bucharestMonthKey, bucharestMonthUtcRange } from './bucharest-month';
-import { managerFilter } from './manager-scope';
+import { managerFilter, type ManagerFilter } from './manager-scope';
 import { hasPartnerCounty, normalizeCui, partnerLegacyPointKey, partnerPointKey } from './partner-identity';
 import { sendPartnerRequestPush } from './push-notifications';
 import type { Client, PartnerLocation, PartnerRequest, PartnerRequestRecord, TeamActivityAgent, TeamActivityView, User } from './types';
 
 type RequestRow={id:string;agent_id:string;warehouse_id:string;cui_key:string;status:string;payload:string;created_at:string;updated_at:string;confirmed_at:string|null;confirmed_by:string|null;customer_id:string|null;revision:number;agent_name?:string;warehouse_name?:string|null};
 type CustomerRow={id:string;warehouse_id:string;data:string};
-type InventoryRecord={id:string;createdBy:string;createdByName:string;scopeLabel:string;status:'draft'|'finalized'|'cancelled';createdAt:string;finalizedAt?:string|null;lines:{expected:number;counted:number|null}[]};
+type InventoryRecord={id:string;warehouseId:string;createdBy:string;createdByName:string;scopeLabel:string;status:'draft'|'finalized'|'cancelled';createdAt:string;finalizedAt?:string|null;lines:{expected:number;counted:number|null}[]};
 type InventoryDifference={delta:number;shortage:number;surplus:number;discrepantLines:number};
 
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -86,24 +86,33 @@ export async function confirmPartnerRequest(user:User,id:string,revision:unknown
   const full=await db().prepare("SELECT pr.*,u.name agent_name,COALESCE(u.warehouse_name,'') warehouse_name FROM partner_requests pr JOIN users u ON u.id=pr.agent_id WHERE pr.id=?").bind(id).first<RequestRow>();return (await decorate([full!]))[0];
 }
 
-export async function teamActivity(user:User,monthInput:string|null):Promise<TeamActivityView>{
+export async function teamActivity(user:User,monthInput:string|null,selected:ManagerFilter|null=null):Promise<TeamActivityView>{
   requireManager(user);
-  const month=monthValue(monthInput),agentSelect="SELECT u.id,u.name,u.active,COALESCE(u.warehouse_name,'') warehouse_name,(SELECT COUNT(*) FROM customers c WHERE c.active=1 AND EXISTS (SELECT 1 FROM json_each(COALESCE(json_extract(c.data,'$.warehouseIds'),json_array(c.warehouse_id))) WHERE value=u.warehouse_id)) client_count FROM users u WHERE u.role='agent'";
-  const agentRows=isGlobalManager(user)?(await db().prepare(agentSelect+' ORDER BY u.name').all<{id:string;name:string;active:number;warehouse_name:string;client_count:number}>()).results:(await db().prepare(agentSelect+' AND EXISTS (SELECT 1 FROM manager_agents ma WHERE ma.manager_id=? AND ma.agent_id=u.id) ORDER BY u.name').bind(user.id).all<{id:string;name:string;active:number;warehouse_name:string;client_count:number}>()).results;
-  const agentIds=new Set(agentRows.map(agent=>agent.id));
+  const month=monthValue(monthInput),agentSelect="SELECT u.id,u.name,u.active,u.warehouse_id,COALESCE(u.warehouse_name,'') warehouse_name,(SELECT COUNT(*) FROM customers c WHERE c.active=1 AND EXISTS (SELECT 1 FROM json_each(COALESCE(json_extract(c.data,'$.warehouseIds'),json_array(c.warehouse_id))) WHERE value=u.warehouse_id)) client_count FROM users u WHERE u.role='agent'";
+  const visibleAgents=isGlobalManager(user)?(await db().prepare(agentSelect+' ORDER BY u.name').all<{id:string;name:string;active:number;warehouse_id:string|null;warehouse_name:string;client_count:number}>()).results:(await db().prepare(agentSelect+' AND EXISTS (SELECT 1 FROM manager_agents ma WHERE ma.manager_id=? AND ma.agent_id=u.id) ORDER BY u.name').bind(user.id).all<{id:string;name:string;active:number;warehouse_id:string|null;warehouse_name:string;client_count:number}>()).results;
+  const agentRows=visibleAgents.filter(agent=>!selected||selected.agentIds.includes(agent.id));
+  const warehouseIds=new Set(agentRows.map(agent=>agent.warehouse_id).filter(Boolean));
   const partnerView=await listPartnerRequests(user,month);
+  partnerView.requests=partnerView.requests.filter(request=>!selected||selected.agentIds.includes(request.agentId));
   const inventoryRows=(await db().prepare("SELECT value FROM settings WHERE key LIKE 'inventory-v1:%'").all<{value:string}>()).results;
   const inventories:InventoryRecord[]=[];
-  for(const item of inventoryRows){try{const record=JSON.parse(item.value) as InventoryRecord;if(agentIds.has(record.createdBy)&&bucharestMonthKey(record.createdAt)===month&&record.status!=='cancelled')inventories.push(record);}catch{}}
+  for(const item of inventoryRows){try{const record=JSON.parse(item.value) as InventoryRecord;const eventAt=record.status==='finalized'?record.finalizedAt:record.status==='draft'?record.createdAt:null;
+    // Warehouse determines scope, including manager and former-agent authors.
+    // National totals also retain warehouses with no current agent assignment.
+    if((!selected&&isGlobalManager(user)||warehouseIds.has(record.warehouseId))&&eventAt&&bucharestMonthKey(eventAt)===month)inventories.push(record);}catch{}}
   const agents:TeamActivityAgent[]=agentRows.map(agent=>{
     const requests=partnerView.requests.filter(item=>item.agentId===agent.id);
-    const own=inventories.filter(item=>item.createdBy===agent.id).sort((a,b)=>b.createdAt.localeCompare(a.createdAt));
+    const own=inventories.filter(item=>item.createdBy===agent.id).sort((a,b)=>(b.finalizedAt||b.createdAt).localeCompare(a.finalizedAt||a.createdAt));
     const finalized=own.filter(item=>item.status==='finalized');
     const summary=finalized.reduce((total,item)=>{const current=summarizeInventory(item);total.shortage+=current.shortage;total.surplus+=current.surplus;total.discrepantLines+=current.discrepantLines;total.delta+=current.delta;return total;},{delta:0,shortage:0,surplus:0,discrepantLines:0});
     const latest=own[0],latestSummary=latest?.status==='finalized'?summarizeInventory(latest):null;
     return {agentId:agent.id,agentName:agent.name,warehouseName:agent.warehouse_name,active:Boolean(agent.active),clientCount:Number(agent.client_count),partnerRequests:requests.length,partnerConfirmed:requests.filter(item=>item.status==='confirmed').length,inventories:own.length,finalizedInventories:finalized.length,inventoryDelta:summary.delta,inventoryShortage:summary.shortage,inventorySurplus:summary.surplus,inventoryDiscrepantLines:summary.discrepantLines,latestInventory:latest?{id:latest.id,createdAt:latest.createdAt,status:latest.status==='finalized'?'finalized':'draft',scopeLabel:latest.scopeLabel,delta:latestSummary?.delta??null,shortage:latestSummary?.shortage??null,surplus:latestSummary?.surplus??null,discrepantLines:latestSummary?.discrepantLines??null}:null};
   });
-  return {month,agents,totals:{partnerRequests:partnerView.requests.length,partnerConfirmed:partnerView.requests.filter(item=>item.status==='confirmed').length,activeAgents:agents.filter(item=>item.active).length,agentsWithInventory:agents.filter(item=>item.inventories>0).length,finalizedInventories:agents.reduce((sum,item)=>sum+item.finalizedInventories,0),inventoryDelta:agents.reduce((sum,item)=>sum+item.inventoryDelta,0),inventoryShortage:agents.reduce((sum,item)=>sum+item.inventoryShortage,0),inventorySurplus:agents.reduce((sum,item)=>sum+item.inventorySurplus,0),inventoryDiscrepantLines:agents.reduce((sum,item)=>sum+item.inventoryDiscrepantLines,0)},partnerRequests:partnerView.requests};
+  // Per-agent rows describe actual authorship. Manager-created inventories belong
+  // only to warehouse totals, never to every agent sharing that warehouse.
+  const finalized=inventories.filter(item=>item.status==='finalized');
+  const difference=finalized.reduce((total,item)=>{const value=summarizeInventory(item);for(const key of ['delta','shortage','surplus','discrepantLines'] as const)total[key]+=value[key];return total;},{delta:0,shortage:0,surplus:0,discrepantLines:0});
+  return {month,agents,totals:{partnerRequests:partnerView.requests.length,partnerConfirmed:partnerView.requests.filter(item=>item.status==='confirmed').length,activeAgents:agents.filter(item=>item.active).length,agentsWithInventory:agents.filter(item=>item.inventories>0).length,finalizedInventories:finalized.length,inventoryDelta:difference.delta,inventoryShortage:difference.shortage,inventorySurplus:difference.surplus,inventoryDiscrepantLines:difference.discrepantLines},partnerRequests:partnerView.requests};
 }
 
 /** Manager workspace: all outstanding requests, with confirmation KPIs by event month. */
@@ -111,7 +120,7 @@ export async function managerActivity(user: User, params: URLSearchParams) {
   requireManager(user);
   const month = monthValue(params.get('month'));
   const selected = await managerFilter(user, params);
-  const original = await teamActivity(user, month);
+  const original = await teamActivity(user, month, selected);
   const scopedAgents = original.agents.filter(agent => !selected || selected.agentIds.includes(agent.agentId));
   const ids = new Set(scopedAgents.map(agent => agent.agentId));
   const {start, end} = bucharestMonthUtcRange(month);
@@ -123,10 +132,7 @@ export async function managerActivity(user: User, params: URLSearchParams) {
     AND user_id IN (SELECT value FROM json_each(?))`)
     .bind(start,end,JSON.stringify([...ids]))
     .first<{finalizedOrders:number;finalizedNotices:number}>();
-  const inventoryRows=(await db().prepare("SELECT value FROM settings WHERE key LIKE 'inventory-v1:%'").all<{value:string}>()).results;
-  const finalized=new Map<string,number>();
-  for(const row of inventoryRows){try{const inventory=JSON.parse(row.value) as InventoryRecord;if(ids.has(inventory.createdBy)&&inventory.status==='finalized'&&inventory.finalizedAt&&bucharestMonthKey(inventory.finalizedAt)===month)finalized.set(inventory.createdBy,(finalized.get(inventory.createdBy)||0)+1);}catch{}}
-  const agents=scopedAgents.map(agent=>({...agent,finalizedInventories:finalized.get(agent.agentId)||0}));
+  const agents=scopedAgents;
   const rows = (await db().prepare("SELECT pr.*,u.name agent_name,COALESCE(u.warehouse_name,'') warehouse_name FROM partner_requests pr JOIN users u ON u.id=pr.agent_id WHERE (pr.status='requested' OR (pr.created_at>=? AND pr.created_at<?) OR (pr.confirmed_at>=? AND pr.confirmed_at<?)) AND (EXISTS (SELECT 1 FROM manager_agents ma WHERE ma.manager_id=? AND ma.agent_id=pr.agent_id) OR ?=1) ORDER BY pr.created_at DESC,pr.id DESC").bind(start,end,start,end,user.id,isGlobalManager(user)?1:0).all<RequestRow>()).results.filter(row => ids.has(row.agent_id));
   const requests = await decorate(rows);
   const confirmed = requests.filter(request => request.status === 'confirmed' && request.confirmedAt && bucharestMonthKey(request.confirmedAt) === month);
@@ -136,7 +142,6 @@ export async function managerActivity(user: User, params: URLSearchParams) {
     pendingByAgent[agent.agentId] = own.filter(request => request.status === 'requested').length;
     confirmedByAgent[agent.agentId] = new Set(confirmed.filter(request => request.agentId === agent.agentId).map(request => request.customerId || request.id)).size;
   }
-  const sum = (key: 'finalizedInventories' | 'inventoryDelta' | 'inventoryShortage' | 'inventorySurplus' | 'inventoryDiscrepantLines') => agents.reduce((total, agent) => total + agent[key], 0);
-  const activity: TeamActivityView = {month, agents: agents.map(agent => ({...agent, partnerRequests: requests.filter(request => request.agentId === agent.agentId).length, partnerConfirmed: requests.filter(request => request.agentId === agent.agentId && request.status === 'confirmed').length})), partnerRequests: requests, totals: {partnerRequests: requests.length, partnerConfirmed: requests.filter(request => request.status === 'confirmed').length, activeAgents: agents.filter(agent => agent.active).length, agentsWithInventory: agents.filter(agent => agent.inventories > 0).length, finalizedInventories: sum('finalizedInventories'), inventoryDelta: sum('inventoryDelta'), inventoryShortage: sum('inventoryShortage'), inventorySurplus: sum('inventorySurplus'), inventoryDiscrepantLines: sum('inventoryDiscrepantLines')}};
+  const activity: TeamActivityView = {month, agents: agents.map(agent => ({...agent, partnerRequests: requests.filter(request => request.agentId === agent.agentId).length, partnerConfirmed: requests.filter(request => request.agentId === agent.agentId && request.status === 'confirmed').length})), partnerRequests: requests, totals: {partnerRequests: requests.length, partnerConfirmed: requests.filter(request => request.status === 'confirmed').length, activeAgents: agents.filter(agent => agent.active).length, agentsWithInventory: agents.filter(agent => agent.inventories > 0).length, finalizedInventories: original.totals.finalizedInventories, inventoryDelta: original.totals.inventoryDelta, inventoryShortage: original.totals.inventoryShortage, inventorySurplus: original.totals.inventorySurplus, inventoryDiscrepantLines: original.totals.inventoryDiscrepantLines}};
   return {activity, pending: requests.filter(request => request.status === 'requested').length, confirmed: new Set(confirmed.map(request => request.customerId || request.id)).size, pendingByAgent, confirmedByAgent, finalizedOrders:documents?.finalizedOrders??0, finalizedNotices:documents?.finalizedNotices??0};
 }

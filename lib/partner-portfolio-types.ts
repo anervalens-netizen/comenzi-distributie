@@ -1,6 +1,7 @@
 import type { Client } from './types';
 
 export type PortfolioPartner = Client & {
+  canEdit?: boolean;
   contact: string;
   phone: string;
   email: string;

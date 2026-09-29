@@ -415,7 +415,7 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='' }: { use
     </section>
   );
 }
-function PartnerSheet({
+export function PartnerSheet({
   id,
   onClose,
   onSaved,
@@ -454,7 +454,7 @@ function PartnerSheet({
     };
   }, [id]);
   async function save() {
-    if (!form) return;
+    if (form?.canEdit!==true) return;
     setBusy(true);
     setError('');
     setNotice('');
@@ -475,6 +475,7 @@ function PartnerSheet({
     }
   }
   function gps() {
+    if(form?.canEdit!==true)return;
     if (!navigator.geolocation) {
       setError('Localizarea nu este disponibilă în acest browser.');
       return;
@@ -507,6 +508,7 @@ function PartnerSheet({
     );
   }
   async function visit() {
+    if(manager||form?.canEdit!==true)return;
     setBusy(true);
     setError('');
     setNotice('');
@@ -619,7 +621,7 @@ function PartnerSheet({
             }}
             className="form-stack"
           >
-            <fieldset disabled={busy}>
+            <fieldset disabled={busy||form.canEdit!==true}>
               <legend>Contact și poziție</legend>
               {(['contact', 'phone', 'email'] as const).map((field, i) => (
                 <label key={field}>
@@ -694,14 +696,14 @@ function PartnerSheet({
               Notă vizită
               <textarea
                 maxLength={2000}
-                disabled={busy || !!pending}
+                disabled={busy || !!pending || form.canEdit!==true}
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
               />
             </label>
             <button
               className="primary"
-              disabled={busy}
+              disabled={busy||form.canEdit!==true}
               onClick={() => void visit()}
             >
               {pending

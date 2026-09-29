@@ -13,9 +13,15 @@ import { stockCode } from '@/lib/stock-types';
 import type { Order, Product, Client } from '@/lib/types';
 import { StockQuantity, StockMetadata, useAgentStock } from '@/components/stock-panel';
 import { useOrderDraftSave } from '@/components/use-order-draft-save';
+import { OrderResult } from './order-result';
 import { OrderSaveConflictDialog } from '@/components/order-save-conflict-dialog';
 
-export function OrderEditor({initial,products,onClose,onSaved,onFinalized,onRecovered,partnerUserId}:{partnerUserId?:string;initial:Order;products:Product[];onClose:()=>void;onSaved:(o:Order)=>void;onFinalized:(o:Order)=>void;onRecovered:(o:Order)=>void}) {
+type OrderEditorProps = {partnerUserId?:string;initial:Order;products:Product[];onClose:()=>void;onSaved:(o:Order)=>void;onFinalized:(o:Order)=>void;onRecovered:(o:Order)=>void};
+export function OrderEditor(props: OrderEditorProps & {canEdit?:boolean}) {
+  if(props.canEdit!==true)return <OrderResult order={props.initial} onClose={props.onClose} onCopy={()=>{}}/>;
+  return <EditableOrderEditor {...props}/>;
+}
+function EditableOrderEditor({initial,products,onClose,onSaved,onFinalized,onRecovered,partnerUserId}:{partnerUserId?:string;initial:Order;products:Product[];onClose:()=>void;onSaved:(o:Order)=>void;onFinalized:(o:Order)=>void;onRecovered:(o:Order)=>void}) {
   const [partnerOpen,setPartnerOpen]=useState(false),[clientRefresh,setClientRefresh]=useState(0);
   const [query,setQuery]=useState(''),[category,setCategory]=useState('Toate'),[selectedOnly,setSelectedOnly]=useState(false),[page,setPage]=useState(1),[quantityDrafts,setQuantityDrafts]=useState<Record<string,string>>({});
   const [clients,setClients]=useState<Client[]>([]),[clientsError,setClientsError]=useState(''),[scanner,setScanner]=useState(''),[scanError,setScanError]=useState(''),[lastScan,setLastScan]=useState('');

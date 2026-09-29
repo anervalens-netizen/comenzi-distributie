@@ -65,7 +65,7 @@ export function ManagerOverview({scope,users,month,onMonth,onRequests,onAgent}: 
         const site=sameSite.length===1?currentSales?.sites.find(site=>site.siteCode.toUpperCase()===user?.siteCode.toUpperCase()):undefined;
         return <tr key={agent.agentId}><th><button className="manager-agent-name" onClick={()=>onAgent(agent.agentId,'sales')}>{agent.agentName}</button><small>{user?.siteCode||agent.warehouseName}{!agent.active?' · inactiv':''}</small></th><td>{salesAvailable&&site?money(site.value):'—'}</td><td>{data.confirmedByAgent[agent.agentId]||0}</td><td>{data.pendingByAgent[agent.agentId]||0}</td><td>{agent.finalizedInventories}</td><td><button className="quiet" aria-label={`Partenerii agentului ${agent.agentName}`} onClick={()=>onAgent(agent.agentId,'partner')}>{agent.clientCount} puncte <ArrowRight size={14}/></button></td></tr>;
       })}</tbody></table></div>}
-      <p className="manager-data-note">Punctele comune pot apărea la mai mulți agenți; totalul de clienți noi le numără o singură dată. „—” înseamnă date indisponibile, nu vânzări zero.</p>
+      <p className="manager-data-note">Inventarele pe agent sunt atribuite autorului; totalul include și inventarele create de manager, fiecare numărat o singură dată. Punctele comune pot apărea la mai mulți agenți; totalul de clienți noi le numără o singură dată. „—” înseamnă date indisponibile, nu vânzări zero.</p>
     </section>
   </div>;
 }
