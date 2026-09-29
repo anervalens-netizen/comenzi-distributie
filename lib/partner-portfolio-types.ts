@@ -13,6 +13,7 @@ export type PortfolioPartner = Client & {
     | 'address'
     | 'address_approximate'
     | 'street_approximate'
+    | 'locality_approximate'
     | null;
   addressFingerprint: string;
   revision: number;

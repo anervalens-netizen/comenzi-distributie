@@ -44,18 +44,24 @@ function view(row: Row): PortfolioPartner {
     fp = fingerprint(c),
     valid = row.address_fingerprint === fp;
   let quality: PortfolioPartner['positionQuality'] = null;
-  if (valid && row.position_source === 'geocoding') {
+  if (valid && (row.position_source === 'manual' || row.position_source === 'geocoding')) {
     try {
       const metadata = JSON.parse(row.position_metadata || '{}');
-      quality = [
+      const recordedQuality = [
         'address',
         'address_approximate',
         'street_approximate',
+        'locality_approximate',
       ].includes(metadata.positionQuality)
         ? metadata.positionQuality
-        : 'address';
+        : null;
+      if (recordedQuality?.endsWith('_approximate')) {
+        quality = recordedQuality;
+      } else if (row.position_source === 'geocoding') {
+        quality = 'address';
+      }
     } catch {
-      quality = 'address_approximate';
+      if (row.position_source === 'geocoding') quality = 'address_approximate';
     }
   }
   return {

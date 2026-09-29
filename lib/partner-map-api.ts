@@ -159,7 +159,6 @@ export async function mapPartners(
         id: p.id,
         name: p.name,
         approximate:
-          p.positionSource === 'geocoding' &&
           !!p.positionQuality?.endsWith('_approximate'),
       },
     })),

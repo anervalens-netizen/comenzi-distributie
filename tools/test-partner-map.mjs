@@ -30,6 +30,9 @@ try {
     coords.push([lon,lat]);profile.run(id,lat,lon,hash(JSON.stringify([address,city,county])));
   }
   db.prepare("UPDATE partner_profiles SET position_source='geocoding',position_provider='geoapify',position_metadata=? WHERE customer_id='map-scale-00000'").run(JSON.stringify({positionQuality:'street_approximate'}));
+  db.prepare("UPDATE partner_profiles SET position_source='manual',position_metadata=? WHERE customer_id='map-scale-00001'").run(JSON.stringify({positionQuality:'street_approximate'}));
+  db.prepare("UPDATE partner_profiles SET position_source='manual',position_metadata=? WHERE customer_id='map-scale-00002'").run(JSON.stringify({positionQuality:'locality_approximate'}));
+  db.prepare("UPDATE partner_profiles SET position_source='gps',position_metadata=? WHERE customer_id='map-scale-00003'").run(JSON.stringify({positionQuality:'locality_approximate'}));
   db.exec('COMMIT');
   const coordinatePlan=db.prepare('EXPLAIN QUERY PLAN SELECT c.id FROM customers c LEFT JOIN partner_profiles p ON p.customer_id=c.id WHERE c.active=1 AND p.latitude BETWEEN 44.2 AND 44.4 AND p.longitude BETWEEN 21.5 AND 21.7').all().map(p=>p.detail);
   assert(coordinatePlan.some(s=>s.includes('idx_partner_profiles_coordinates')),'bbox query uses coordinate index');
@@ -38,6 +41,9 @@ try {
   assert.equal(whole.data.features.length,25000,'all 25k distinct work locations, never 100-marker truncation');
   assert.equal(new Set(whole.data.features.map(p=>p.id)).size,25000);
   assert.equal(whole.data.features[0].properties.approximate,true);
+  assert.equal(whole.data.features[1].properties.approximate,true,'manual approximate metadata renders yellow');
+  assert.equal(whole.data.features[2].properties.approximate,true,'locality centre renders yellow');
+  assert.equal(whole.data.features[3].properties.approximate,false,'GPS remains green even if stale metadata exists');
   assert.deepEqual(Object.keys(whole.data.features[0].properties).sort(),['approximate','id','name']);
   assert.deepEqual(whole.data.features[0].geometry.coordinates,coords[0],'GeoJSON uses longitude then latitude');
   const page1=await call('/browse?q=Map+scale&city=brasov');

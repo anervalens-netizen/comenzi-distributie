@@ -598,11 +598,10 @@ function PartnerSheet({
                   Waze
                 </a>
               </div>
-              {detail.partner.positionSource === 'geocoding' &&
-                detail.partner.positionQuality?.endsWith('_approximate') && (
+              {detail.partner.positionQuality?.endsWith('_approximate') && (
                   <p className="muted">
-                    Navigarea duce la un pin aproximativ. Verifică adresa și
-                    numărul magazinului la sosire.
+                    Navigarea duce la un pin aproximativ. Confirmă poziția
+                    magazinului la sosire.
                   </p>
                 )}
               {detail.partner.latitude === null && (
@@ -661,6 +660,12 @@ function PartnerSheet({
                     ajustare la magazin.
                   </p>
                 )}
+              {form.positionQuality === 'locality_approximate' && (
+                <p className="muted">
+                  Reper aproximativ în localitate. Verifică poziția
+                  magazinului înainte de navigare.
+                </p>
+              )}
               <details className="partner-position-correction">
                 <summary>Corectează poziția magazinului</summary>
                 <p className="muted">
@@ -740,10 +745,12 @@ function PartnerSheet({
 function positionLabel(p: PartnerSummary) {
   if (p.latitude === null) return 'Fără poziție';
   if (p.positionSource === 'gps') return 'Poziție GPS';
+  if (p.positionQuality === 'locality_approximate')
+    return 'Reper aproximativ în localitate';
+  if (p.positionQuality?.endsWith('_approximate'))
+    return p.positionQuality === 'street_approximate'
+      ? 'Aproximativ · pe stradă'
+      : 'Aproximativ · adresă potrivită';
   if (p.positionSource !== 'geocoding') return 'Poziție salvată';
-  if (p.positionQuality === 'street_approximate')
-    return 'Aproximativ · pe stradă';
-  if (p.positionQuality === 'address_approximate')
-    return 'Aproximativ · adresă potrivită';
   return 'Poziție din adresă';
 }
