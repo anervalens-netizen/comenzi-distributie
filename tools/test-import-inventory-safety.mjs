@@ -12,7 +12,9 @@ const sqlite=new DatabaseSync(':memory:');
 sqlite.exec(`CREATE TABLE customers(id TEXT PRIMARY KEY,warehouse_id TEXT NOT NULL,data TEXT NOT NULL,active INTEGER NOT NULL DEFAULT 1);
 CREATE TABLE settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
 CREATE TABLE users(id TEXT PRIMARY KEY,role TEXT,warehouse_id TEXT,active INTEGER);
-CREATE TABLE manager_agents(manager_id TEXT,agent_id TEXT);`);
+CREATE TABLE manager_agents(manager_id TEXT,agent_id TEXT);
+CREATE TABLE partner_requests(id TEXT PRIMARY KEY,customer_id TEXT,payload TEXT,status TEXT,confirmed_at TEXT);`);
+sqlite.exec(readFileSync('drizzle/0006_partner_portfolio.sql','utf8'));
 let beforeBatch;
 const adapter={prepare(sql){return {args:[],bind(...args){this.args=args;return this;},async all(){return {results:sqlite.prepare(sql).all(...this.args)};},async first(){return sqlite.prepare(sql).get(...this.args)||null;},async run(){return this.execute();},execute(){return {meta:sqlite.prepare(sql).run(...this.args)};}};},async batch(statements){beforeBatch?.();beforeBatch=undefined;sqlite.exec('BEGIN');try{const results=statements.map(s=>s.execute());sqlite.exec('COMMIT');return results;}catch(e){sqlite.exec('ROLLBACK');throw e;}}};
 globalThis.__safetyDb=adapter;
@@ -34,7 +36,7 @@ const reject=async(fn,status=409)=>{await assert.rejects(fn,e=>e.status===status
 const point=(address='Test 1',cui='991001')=>({name:'Synthetic Shop',cui,city:'Test City',county:'Test County',address,route:'1'});
 const insert=(id,c,active=1,w='w1')=>sqlite.prepare('INSERT INTO customers VALUES(?,?,?,?)').run(id,w,JSON.stringify({id,warehouseId:w,...c}),active);
 const rows=()=>sqlite.prepare('SELECT * FROM customers ORDER BY id').all();
-const reset=()=>sqlite.exec('DELETE FROM customers');
+const reset=()=>sqlite.exec('DELETE FROM partner_visits; DELETE FROM partner_profiles; DELETE FROM customers');
 try {
  const {importClients}=await load('client-import-server');
  const preview=async clients=>(await importClients('w1',{clients,preview:true})).preview;
@@ -45,6 +47,21 @@ try {
  check(p.unchanged[0].id==='stable'&&!p.removed.length,'normalized exact identity retained');
  await commit([{...point(),cui:'RO 991001',city:' TEST CITY ',route:''}],p);
  const retained=JSON.parse(rows()[0].data);check(retained.custom==='keep'&&retained.profile.note==='Synthetic profile'&&retained.pin.lat===1&&retained.route==='9','all extra fields and empty optional fields preserved');
+ // Exercise the real profile table, address-change trigger and public projection,
+ // not just inline fields carried in the customer JSON.
+ reset();insert('stable',point());
+ const {createHash}=await import('node:crypto');
+ const fp=createHash('sha256').update(JSON.stringify([point().address,point().city,point().county])).digest('hex');
+ sqlite.prepare('INSERT INTO partner_profiles(customer_id,contact,latitude,longitude,position_source,position_metadata,address_fingerprint,updated_at) VALUES(?,?,?,?,?,?,?,?)').run('stable','Actual profile',44.4,26.1,'manual',JSON.stringify({positionQuality:'locality_approximate'}),fp,new Date().toISOString());
+ const {partnerDetail}=await load('partner-portfolio');
+ const caller={id:'reader',role:'manager',managerScope:'global'};
+ const profileBefore=(await partnerDetail(caller,'stable',null)).partner;
+ const spelling=[{...point(),address:'  TEST  1 ',city:'TEST CITY',county:'TEST COUNTY'}];
+ await commit(spelling,await preview(spelling));
+ const profileAfter=(await partnerDetail(caller,'stable',null)).partner;
+ check(profileAfter.id===profileBefore.id&&profileAfter.latitude===44.4&&profileAfter.longitude===26.1,'normalized reimport preserves actual public pin');
+ check(profileAfter.positionQuality==='locality_approximate'&&profileAfter.contact==='Actual profile'&&profileAfter.addressFingerprint===fp,'normalized reimport preserves actual metadata, contact and fingerprint');
+ check(profileAfter.address===point().address&&profileAfter.city===point().city&&profileAfter.county===point().county,'raw address identity remains unchanged on exact normalized match');
  const changed=await preview([point('Test 2')]);check(changed.ambiguous.length===1&&changed.blocked.some(s=>s.includes('editează mai întâi')),'address change fails closed with edit instruction');
  const before=JSON.stringify(rows());await reject(()=>commit([point('Test 2')],changed,true));check(JSON.stringify(rows())===before,'profile/pin and original remain untouched');
  const incomplete=await preview([{...point(),address:'',county:''}]);check(incomplete.ambiguous.length===1,'missing point fields never replace known identity');

@@ -35,7 +35,10 @@ export async function importClients(warehouseId:string,body:Record<string,unknow
     if(matches.length===1) {
       const row=matches[0],original=parsed.get(row.id)!;
       // Empty optional spreadsheet values must not clear preserved metadata.
-      const values=Object.fromEntries(Object.entries(client).filter(([key,value])=>key!=='id'&&key!=='warehouseId'&&value!==''));
+      // The address identity is normalized, but saved pins use raw address strings.
+      // Preserve the original address spelling on exact matches so imports do not
+      // trigger address invalidation for case/whitespace/diacritic-only changes.
+      const values=Object.fromEntries(Object.entries(client).filter(([key,value])=>!['id','warehouseId','address','city','county'].includes(key)&&value!==''));
       const record={...original,...values,id:row.id} as Client;
       records.push(record);preview.unchanged.push(record);
     }else {

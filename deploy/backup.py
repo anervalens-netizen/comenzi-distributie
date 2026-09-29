@@ -83,7 +83,14 @@ def add_recovery_files(output: tarfile.TarFile, recovery: dict[str, Path], relea
                 raise RuntimeError('Recovery tree contains a non-regular file')
             key = 'recovery/' + name + '/' + path.relative_to(root).as_posix()
             before = digest(path)
-            output.add(path, arcname=key, recursive=False)
+            # Serialize bytes, not inode aliases: hardlinked source files must
+            # remain independent regular archive members accepted by restore.
+            with path.open('rb') as stream:
+                info = output.gettarinfo(fileobj=stream, arcname=key)
+                info.type = tarfile.REGTYPE
+                info.linkname = ''
+                info.size = os.fstat(stream.fileno()).st_size
+                output.addfile(info, stream)
             if digest(path) != before:
                 raise RuntimeError('Recovery inputs changed during backup; retry the backup')
             manifest['files'][key] = before

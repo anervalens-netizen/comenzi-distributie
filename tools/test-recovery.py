@@ -45,6 +45,14 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(result['databases'],{'mobiup.sqlite':'ok'})
         self.assertEqual((self.root/'restored/recovery/products/image.png').read_bytes(),b'synthetic image')
         self.assertTrue((self.root/'restored/recovery/runtime/server.js').exists())
+    def test_hardlinked_products_restore_as_regular_files(self):
+        (self.products/'second.png').hardlink_to(self.products/'image.png')
+        archive=self.make_backup()
+        with tarfile.open(archive) as saved:
+            self.assertTrue(saved.getmember('recovery/products/image.png').isfile())
+            self.assertTrue(saved.getmember('recovery/products/second.png').isfile())
+        recovery.restore(archive,self.root/'restored-hardlinks')
+        self.assertEqual((self.root/'restored-hardlinks/recovery/products/second.png').read_bytes(),b'synthetic image')
     def test_existing_target_never_overwritten(self):
         archive=self.make_backup(); target=self.root/'existing';target.mkdir();(target/'keep').write_text('keep')
         with self.assertRaisesRegex(RuntimeError,'must not exist'):recovery.restore(archive,target)
