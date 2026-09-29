@@ -3,7 +3,7 @@ import { mkdirSync, existsSync, unlinkSync, renameSync, writeFileSync } from 'no
 import { mkdir } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
-import type { SalesAggregate, SalesCardsSim, SalesDaily, SalesMonthly, SalesProduct, SalesRow, SalesSegment, SalesSegments, SalesSite, SalesView } from './sales-types';
+import type { SalesAggregate, SalesCardsSim, SalesDaily, SalesMonthly, SalesProduct, SalesRow, SalesSegment, SalesSegments, SalesSite, SalesView, SalesCoverageChange } from './sales-types';
 import { createSalesProductClassifier, type SalesCatalogEntry } from './sales-classification';
 import seed from '../resources/seed.json';
 
@@ -39,6 +39,8 @@ function database() {
     );
     CREATE INDEX IF NOT EXISTS idx_sales_rows_month ON sales_rows(month);
     CREATE INDEX IF NOT EXISTS idx_sales_rows_month_site ON sales_rows(month, site_code);
+    CREATE INDEX IF NOT EXISTS idx_sales_rows_import_site_normalized ON sales_rows(import_id, UPPER(TRIM(site_code)), date);
+    CREATE INDEX IF NOT EXISTS idx_sales_rows_site_month_normalized ON sales_rows(UPPER(TRIM(site_code)), month, import_id);
     INSERT OR IGNORE INTO sales_meta(key,value) VALUES ('revision','0');
   `);
   return connection;
@@ -97,6 +99,51 @@ export function salesCoverage(month: string) {
   const summary=database().prepare('SELECT COUNT(*) rowCount, MIN(date) firstDate, MAX(date) lastDate FROM sales_rows WHERE month=?').get(month) as Record<string,unknown>;
   const siteCodes=(database().prepare("SELECT DISTINCT UPPER(TRIM(site_code)) siteCode FROM sales_rows WHERE month=? AND TRIM(site_code)<>'' ORDER BY siteCode").all(month) as Record<string,unknown>[]).map(row=>String(row.siteCode));
   return {rowCount:Number(summary.rowCount||0),firstDate:safeText(summary.firstDate)||null,lastDate:safeText(summary.lastDate)||null,siteCodes};
+}
+
+/** Compare multisets, never source positions or deduplicated business data.
+ * Value/quantity corrections are allowed through the existing explicit acknowledgement.
+ */
+export function salesCoverageChange(month: string, incoming: readonly SalesRow[]): SalesCoverageChange {
+  const previous = salesCoverage(month);
+  const normalize = (value: string) => value.trim().toUpperCase();
+  type Line = Pick<SalesRow, 'siteCode'|'company'|'date'|'orderNumber'|'itemCode'|'itemName'|'brand'|'quantity'|'priceCents'|'valueCents'>;
+  const oldRows = database().prepare(`SELECT site_code siteCode, company, date, order_number orderNumber,
+    item_code itemCode, item_name itemName, brand, quantity, price_cents priceCents, value_cents valueCents
+    FROM sales_rows WHERE month=?`).all(month) as Line[];
+  const documentKey = (row: Line) => JSON.stringify([normalize(row.siteCode), normalize(row.company), row.date, normalize(row.orderNumber)]);
+  const lineKey = (row: Line) => JSON.stringify([normalize(row.itemCode), normalize(row.itemName), normalize(row.brand), row.quantity, row.priceCents, row.valueCents]);
+  function group(rows: readonly Line[]) {
+    const sites = new Map<string, number>();
+    const documents = new Map<string, { row: Line; count: number; lines: Map<string, number> }>();
+    for (const row of rows) {
+      const site = normalize(row.siteCode);
+      sites.set(site, (sites.get(site) || 0) + 1);
+      const key = documentKey(row), line = lineKey(row);
+      const doc = documents.get(key) || { row, count: 0, lines: new Map<string, number>() };
+      doc.count++; doc.lines.set(line, (doc.lines.get(line) || 0) + 1); documents.set(key, doc);
+    }
+    return { sites, documents };
+  }
+  const before = group(oldRows), after = group(incoming);
+  const reducedSites = [...before.sites].filter(([site, count]) => (after.sites.get(site) || 0) < count)
+    .map(([siteCode, previousRows]) => ({ siteCode, previousRows, incomingRows: after.sites.get(siteCode) || 0 }));
+  const reducedDocuments: SalesCoverageChange['reducedDocuments'] = [];
+  let affectedDocumentCount = 0, removedLineCount = 0;
+  for (const [key, doc] of before.documents) {
+    const next = after.documents.get(key);
+    let removed = 0;
+    for (const [line, count] of doc.lines) removed += Math.max(0, count - (next?.lines.get(line) || 0));
+    if (!removed) continue;
+    affectedDocumentCount++; removedLineCount += removed;
+    // Bound preview payload while retaining exact totals and concrete examples.
+    if (reducedDocuments.length < 50) reducedDocuments.push({ siteCode: normalize(doc.row.siteCode), company: doc.row.company,
+      date: doc.row.date, orderNumber: doc.row.orderNumber, previousRows: doc.count, incomingRows: next?.count || 0, removedLines: removed });
+  }
+  return { previousRowCount: previous.rowCount, rowDelta: incoming.length - previous.rowCount,
+    previousFirstDate: previous.firstDate, previousLastDate: previous.lastDate,
+    missingSiteCodes: [...before.sites.keys()].filter(site => site && !after.sites.has(site)).sort(), reducedSites,
+    reducedDocuments, affectedDocumentCount, removedLineCount, requiresRegressionAcknowledgement: removedLineCount > 0 };
 }
 
 export function getSalesView(month: string, siteCode?: string | string[], fromMonth = month, toMonth = month, catalog: readonly SalesCatalogEntry[] = seedSalesCatalog): SalesView {
@@ -181,12 +228,7 @@ export function importSalesRows(args: { rows: SalesRow[]; month: string; fileHas
     if (args.expectedMappingHash !== args.currentMappingHash) throw new Error('STALE_MAPPING');
     const historical = latestSalesMonth();
     if (historical && args.month < historical && !args.historicalAcknowledged) throw new Error('HISTORICAL_ACK');
-    const existingCoverage=salesCoverage(args.month);
-    const incomingFirstDate=args.rows.reduce((earliest,row)=>row.date<earliest?row.date:earliest,args.rows[0].date);
-    const incomingLastDate=args.rows.reduce((latest,row)=>row.date>latest?row.date:latest,args.rows[0].date);
-    const incomingSites=new Set(args.rows.map(row=>row.siteCode.trim().toUpperCase()).filter(Boolean));
-    const coverageReduced=existingCoverage.rowCount>0&&(args.rows.length<existingCoverage.rowCount||!!existingCoverage.firstDate&&incomingFirstDate>existingCoverage.firstDate||!!existingCoverage.lastDate&&incomingLastDate<existingCoverage.lastDate||existingCoverage.siteCodes.some(site=>!incomingSites.has(site)));
-    if(coverageReduced&&!args.regressionAcknowledged)throw new Error('REGRESSION_ACK');
+    if (salesCoverageChange(args.month, args.rows).requiresRegressionAcknowledgement && !args.regressionAcknowledged) throw new Error('REGRESSION_ACK');
     const nextRevision = revision + 1;
     const importedAt = new Date().toISOString();
     const insert = db.prepare('INSERT INTO sales_imports(month,file_hash,filename,imported_at,imported_by,row_count,original_path,revision) VALUES(?,?,?,?,?,?,?,?)');

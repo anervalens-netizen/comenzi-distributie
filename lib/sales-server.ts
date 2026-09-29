@@ -3,7 +3,7 @@ import type { User } from './types';
 import { readCatalog } from './catalog';
 import { salesHash, SALES_FILE_LIMIT } from './sales-file';
 import { parseSalesFileRuntime } from './sales-parser-runtime';
-import { currentSalesImport, importSalesRows, latestSalesImport, latestSalesMonth, salesCoverage, salesRevision, saveSalesOriginal } from './sales-store';
+import { currentSalesImport, importSalesRows, latestSalesImport, latestSalesMonth, salesCoverageChange, salesRevision, saveSalesOriginal } from './sales-store';
 import { getSalesViewRuntime } from './sales-view-runtime';
 import { managerFilter } from './manager-scope';
 import type { SalesView } from './sales-types';
@@ -138,12 +138,8 @@ export async function salesUpload(req: Request, user: User, apply: boolean) {
   const historical = !!latestSalesMonth() && month < String(latestSalesMonth());
   const firstDate = rows.reduce((earliest, row) => row.date < earliest ? row.date : earliest, rows[0].date);
   const lastDate = rows.reduce((latest, row) => row.date > latest ? row.date : latest, rows[0].date);
-  const currentCoverage=salesCoverage(month);
-  const incomingSiteCodes=new Set(rows.map(row=>mappingKey(row.siteCode)).filter(Boolean));
-  const missingSiteCodes=currentCoverage.siteCodes.filter(siteCode=>!incomingSiteCodes.has(siteCode));
-  const rowDelta=rows.length-currentCoverage.rowCount;
-  const requiresRegressionAcknowledgement=currentCoverage.rowCount>0&&(rowDelta<0||!!currentCoverage.firstDate&&firstDate>currentCoverage.firstDate||!!currentCoverage.lastDate&&lastDate<currentCoverage.lastDate||missingSiteCodes.length>0);
-  const coverageChange={previousRowCount:currentCoverage.rowCount,rowDelta,previousFirstDate:currentCoverage.firstDate,previousLastDate:currentCoverage.lastDate,missingSiteCodes};
+  const coverageChange = salesCoverageChange(month, rows);
+  const { requiresRegressionAcknowledgement } = coverageChange;
   const currentRevision = salesRevision();
   if (!apply) {
     const sitesInCents = rows.reduce((result, row) => {

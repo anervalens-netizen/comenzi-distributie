@@ -87,6 +87,14 @@ export type SalesView = {
   monthly: SalesMonthly[];
 };
 
+export type SalesCoverageChange = {
+  previousRowCount: number; rowDelta: number; previousFirstDate: string | null; previousLastDate: string | null; missingSiteCodes: string[];
+  requiresRegressionAcknowledgement: boolean;
+  reducedSites: { siteCode: string; previousRows: number; incomingRows: number }[];
+  reducedDocuments: { siteCode: string; company: string; date: string; orderNumber: string; previousRows: number; incomingRows: number; removedLines: number }[];
+  affectedDocumentCount: number; removedLineCount: number;
+};
+
 export type SalesPreview = {
   month: string;
   firstDate: string;
@@ -102,5 +110,5 @@ export type SalesPreview = {
   historical: boolean;
   requiresHistoricalAcknowledgement: boolean;
   requiresRegressionAcknowledgement: boolean;
-  coverageChange: { previousRowCount: number; rowDelta: number; previousFirstDate: string | null; previousLastDate: string | null; missingSiteCodes: string[] };
+  coverageChange: SalesCoverageChange;
 };
