@@ -583,7 +583,7 @@ export function PartnerSheet({
           <p>
             {form.address}
             <br />
-            {form.city}, {form.county}
+            {[form.city,form.county].filter(Boolean).join(', ')}
           </p>
           <p className="muted">
             CUI {form.cui}{form.route&&<> · Ruta {form.route}</>}

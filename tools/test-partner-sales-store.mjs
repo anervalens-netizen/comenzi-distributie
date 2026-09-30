@@ -43,7 +43,14 @@ try{
  assert.equal(result.activity.lastBilling,'2026-07-06');assert.equal(result.activity.billingDays,6);
  assert.equal(result.sellers[0].seller,'Original seller');assert.equal(result.coverageComplete,true);
  assert.equal(readPartnerSales('p2','123',new URLSearchParams(),root).totals.valueCents,60000,'shared portfolio sees the same facts once');
- assert.equal(readPartnerSales('missing','123',new URLSearchParams(),root).state,'unlinked');
+ const company=readPartnerSales('missing','123',new URLSearchParams(),root);
+ assert.equal(company.state,'ready');assert.equal(company.scope,'company');assert.equal(company.totals.valueCents,60000);
+ assert.equal(company.pointHistoryAvailable,false);assert.equal(company.companyHistoryAvailable,true);
+ assert.equal(readPartnerSales('missing','unmatched',new URLSearchParams(),root).state,'unlinked');
+ assert.equal(readPartnerSales('missing','123',new URLSearchParams({scope:'point'}),root).state,'unlinked');
+ assert.equal(readPartnerSales('p1','123',new URLSearchParams(),root).scope,'point');
+ assert.equal(readPartnerSales('p1','123',new URLSearchParams({scope:'company'}),root).scope,'company');
+ assert.throws(()=>readPartnerSales('p1','123',new URLSearchParams({scope:'bad'}),root),PartnerSalesInputError);
  const month=readPartnerSales('p1','123',new URLSearchParams({from:'2026-07-01',to:'2026-07-31'}),root);
  assert.equal(month.totals.valueCents,10000);assert.equal(month.documents.count,1);assert.equal(month.latestDocuments.length,1);
  const empty=readPartnerSales('p1','123',new URLSearchParams({from:'2025-01-01',to:'2025-12-31'}),root);
@@ -73,5 +80,15 @@ try{
  aliases.close();
  const aliasIncomplete=readPartnerSales('p1','123',new URLSearchParams(),root);
  assert.equal(aliasIncomplete.coverageComplete,false,'unlinked direct codes and CRM aliases suppress false inactivity');
+ const companyData=new DatabaseSync(path);
+ companyData.exec("INSERT INTO history_identities VALUES(4,'company-alias'),(5,'shared-alias'),(6,'CLIENTGEN'); INSERT INTO history_allocations VALUES(4,'ref','reconcile','[]','[]'),(5,'ref','reconcile','[]','[]'),(6,'ref','consumer','[]','[]'); INSERT INTO history_rows VALUES(1,4,30,'2026-09-29','site','company-bill',8000,1000000,'company-item','Company product','Former seller'),(1,5,31,'2026-09-29','site','ambiguous',900000,1000000,'foreign','Ambiguous product','Other seller'),(1,6,32,'2026-09-29','site','consumer',500,1000000,'generic','Consumer product','Other seller');");
+ companyData.prepare('UPDATE history_references SET master_json=?').run(JSON.stringify([{CIF:'123',PartnerCode:'company-alias'},{CIF:'123',PartnerCode:'shared-alias'},{CIF:'999',PartnerCode:'shared-alias'}]));
+ companyData.close();
+ const firm=readPartnerSales('new-company-card','123',new URLSearchParams(),root);
+ assert.equal(firm.scope,'company');assert.equal(firm.coverageComplete,false,'ambiguous excluded aliases cannot appear as complete company coverage');assert.equal(firm.totals.valueCents,79000,'company history includes unresolved point sales but excludes ambiguous aliases and other firms');
+ assert(firm.sellers.some(s=>s.seller==='Former seller'),'historical seller never restricts visible current portfolio history');
+ assert.equal(firm.latestDocuments[0].document,'company-bill');
+ assert.equal(readPartnerSales('consumer','CLIENTGEN',new URLSearchParams(),root).state,'unlinked');
+ assert.equal(readPartnerSales('ambiguous','shared-alias',new URLSearchParams(),root).state,'unlinked');
  console.log('PASS: read-only store, exact partner scope, shared facts, cancellation, zero values, date filters and unresolved-history alerts.');
 }finally{rmSync(root,{recursive:true,force:true});}

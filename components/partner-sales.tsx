@@ -12,20 +12,20 @@ function Products({items}:{items:Product[]}){
   return <div className="partner-sales-scroll"><table><thead><tr><th>Produs</th><th className="numeric">Cant.</th><th className="numeric">Valoare</th></tr></thead><tbody>{items.map(p=><tr key={p.code}><td>{p.name}<small>{p.code}</small></td><td className="numeric">{quantity(p.quantityMicros)}</td><td className="numeric">{amount(p.valueCents)}</td></tr>)}</tbody></table></div>;
 }
 export function PartnerSales({id}:{id:string}) {
-  const [open,setOpen]=useState(true),[from,setFrom]=useState(''),[to,setTo]=useState(''),[page,setPage]=useState(0),[retry,setRetry]=useState(0);
+  const [open,setOpen]=useState(true),[scope,setScope]=useState('auto'),[from,setFrom]=useState(''),[to,setTo]=useState(''),[page,setPage]=useState(0),[retry,setRetry]=useState(0);
   const [data,setData]=useState<{key:string;value:PartnerSalesResult}|null>(null),[failure,setFailure]=useState<{key:string;text:string}|null>(null),[transactionsOpen,setTransactionsOpen]=useState(false);
-  const key=JSON.stringify([id,from,to,page,retry]);
+  const key=JSON.stringify([id,scope,from,to,page,retry]);
   const result=data?.key===key?data.value:null,error=failure?.key===key?failure.text:'',loading=open&&!result&&!error;
   useEffect(()=>{
     if(!open)return;
     const controller=new AbortController();
-    const query=new URLSearchParams({page:String(page)});
+    const query=new URLSearchParams({page:String(page),scope});
     if(from)query.set('from',from);if(to)query.set('to',to);
     api<PartnerSalesResult>(`partner/portfolio/${encodeURIComponent(id)}/sales?${query}`,'GET',undefined,controller.signal)
       .then(value=>{if(!controller.signal.aborted){setData({key,value});setFailure(null);}})
       .catch(err=>{if(!controller.signal.aborted)setFailure({key,text:errorMessage(err)});});
     return()=>controller.abort();
-  },[id,open,from,to,page,key]);
+  },[id,open,scope,from,to,page,key]);
   const ready=result?.state==='ready'?result:null;
   return <details className="partner-sales partner-sales-overview" open={open} onToggle={event=>setOpen(event.currentTarget.open)}>
     <summary>Vânzări</summary>
@@ -41,15 +41,18 @@ export function PartnerSales({id}:{id:string}) {
         </div>
       </details>
       {ready&&<>
+        {ready.pointHistoryAvailable&&ready.companyHistoryAvailable&&<label className="partner-sales-scope">Istoric afișat<select value={ready.scope} onChange={e=>{setScope(e.target.value);setPage(0);}}><option value="point">Acest punct de lucru</option><option value="company">Firma · toate punctele de lucru</option></select></label>}
+        {ready.scope==='company'&&<p className="partner-sales-company"><strong>Istoricul firmei</strong><br/>{ready.pointHistoryAvailable?'Include toate punctele de lucru ale firmei.':'Vânzările firmei sunt disponibile. Repartizarea pe acest punct de lucru nu este încă confirmată.'}</p>}
         <div className="partner-sales-kpis">
           <div><small>Ultima facturare</small><strong>{date(ready.documents.lastBilling)}</strong></div>
-          <div><small>{ready.coverageComplete?'Vânzări totale cu TVA':'Vânzări asociate · parțial'}</small><strong>{ready.totals.rows?amount(ready.totals.valueCents):money(0)}</strong></div>
+          <div><small>{ready.coverageComplete?(ready.scope==='company'?'Vânzări firmă cu TVA':'Vânzări punct cu TVA'):'Vânzări asociate · parțial'}</small><strong>{ready.totals.rows?amount(ready.totals.valueCents):money(0)}</strong></div>
           <div><small>Facturi în perioadă*</small><strong>{ready.documents.count.toLocaleString('ro-RO')}</strong></div>
         </div>
         <p className="partner-sales-source">{date(ready.from)} – {date(ready.to)} · Import până la {date(ready.through)}. Retururile sunt incluse în vânzări.</p>
         {!ready.coverageComplete&&<p className="partner-sales-caution">Istoric parțial: sunt incluse doar vânzările asociate sigur acestei fișe.</p>}
         {!!ready.totals.missingValues&&<p className="partner-sales-caution">{ready.totals.missingValues} linii au valoarea lipsă și nu sunt incluse în suma cunoscută.</p>}
 
+        {ready.documents.count===0&&ready.totals.rows>0&&<p>Există mișcări în istoric, fără facturi cu valoare netă pozitivă. Ultima înregistrare: <strong>{date(ready.totals.lastMovement)}</strong>. Detaliile sunt disponibile la produse și tranzacții.</p>}
         <h4>Ultimele 5 facturi</h4>
         {ready.latestDocuments.length?<div className="partner-invoices">
           {ready.latestDocuments.map(d=><details className="partner-invoice" key={JSON.stringify([d.date,d.site,d.document])}>

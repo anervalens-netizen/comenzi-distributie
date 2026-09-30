@@ -179,3 +179,18 @@ Missing history stays unavailable/unlinked rather than zero. Partial coverage
 is called out next to the total. These are source billing documents, not verified
 application order IDs. No allocations, contacts, coordinates or visits are changed
 by viewing the sheet.
+
+## Current portfolio access and company history
+
+Sales access is authorized by the existing portfolio route before historical data
+is read. Original sellers do not filter accessible history. A confirmed point
+keeps its exact history by default; a visible card without a point association
+falls back to company history identified by its normalized CUI and unambiguous
+CRM aliases. The response labels this scope as company, never as confirmed point
+sales. Where both scopes exist the user can select point or whole company.
+
+Company matching includes rows pending point reconciliation without changing
+their allocation. Ambiguous aliases, generic consumers and name-only matches
+are excluded. No source facts or point assignments are rewritten. Map/activity
+point metrics continue to use confirmed point allocations; company history in
+the detail sheet is explicitly separate until point reconciliation is completed.

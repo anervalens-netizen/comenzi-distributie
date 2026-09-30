@@ -70,6 +70,18 @@ try{
  assert.equal(ranked.partners.at(-1).partner.id,'activity-unlinked','unknown sales stay last in either direction');
  const oldYear=await call('qa-agent1','salesPeriod=year:2023');assert.equal(oldYear.partners[0].metrics.valueCents,15000);assert.equal(oldYear.partners[0].metrics.documents,1);
  await call('qa-agent1','salesPeriod=bad',400);
+ // A currently assigned company card can read historical sellers without a point allocation.
+ const moreHistory=new DatabaseSync(join(historyDir,'client-sales-history.sqlite'));
+ moreHistory.exec("ALTER TABLE history_rows ADD COLUMN item_code TEXT DEFAULT 'demo'; ALTER TABLE history_rows ADD COLUMN item_name TEXT DEFAULT 'Demo product'; ALTER TABLE history_rows ADD COLUMN tr TEXT DEFAULT 'Former seller'; ALTER TABLE history_rows ADD COLUMN source_row INTEGER DEFAULT 1; INSERT INTO history_identities VALUES(5,'789'); INSERT INTO history_allocations VALUES(5,'ref','reconcile','[]','[]'); INSERT INTO history_rows(import_id,identity_id,date,site_id,document_number,value_cents,quantity_micros) VALUES(1,5,'2026-09-20','site','old-seller-bill',12300,1000000);");
+ moreHistory.close();
+ insert.run('activity-company','g-5',JSON.stringify({id:'activity-company',warehouseId:'g-5',warehouseIds:['g-5'],name:'Company history',cui:'789',county:'Test',city:'',address:'',route:'',historyCatalog:{kind:'company'}}));
+ async function companySales(user,status){
+   const r=await fetch('http://127.0.0.1:3000/api/partner/portfolio/activity-company/sales?scope=company',{headers:{Cookie:sessions[user]}});
+   const data=await r.json();assert.equal(r.status,status,JSON.stringify(data));return data;
+ }
+ const own=await companySales('qa-agent1',200);assert.equal(own.state,'ready');assert.equal(own.scope,'company');assert.equal(own.totals.valueCents,12300);assert.equal(own.sellers[0].seller,'Former seller');
+ await companySales('qa-agent2',404);
+ const managed=await companySales('qa-manager',200);assert.deepEqual(managed.documents,own.documents);
  console.log('PASS: activity HTTP enforces current agent scope, shared records, national scope, manager filters and validated paging.');
 }finally{
  app.exec("DELETE FROM partner_profiles WHERE customer_id LIKE 'activity-%'");
