@@ -36,6 +36,9 @@ const stubs = {
   './sales-file': `import {createHash} from 'node:crypto';export const SALES_FILE_LIMIT=8*1024*1024;export const salesHash=value=>createHash('sha256').update(value).digest('hex');`,
 };
 try {
+  const { salesLocationKey } = await import('../lib/sales-location.ts');
+  assert.equal(salesLocationKey('TR Oras-Sud 01'), salesLocationKey(' tr ORAȘ sud  01 '));
+  assert.notEqual(salesLocationKey('TR AB'), salesLocationKey('TR A-B'), 'Normalization must not merge distinct alphanumeric tokens');
   for (const name of ['sales-server', 'sales-store', 'sales-view-worker']) await build({ entryPoints: [resolve(root, `lib/${name}.ts`)], outfile: resolve(directory, `${name}.mjs`), bundle: true, platform: 'node', format: 'esm', packages: 'external', plugins: [{ name: 'synthetic', setup(plugin) {
     plugin.onResolve({ filter: /.*/ }, args => {
       if (args.path in stubs) return { path: args.path, namespace: 'synthetic' };
