@@ -33,6 +33,7 @@ node tools/test-order-draft.mjs
 node tools/test-sales-classification.mjs
 node tools/test-sales.mjs
 node tools/test-sales-audit-fixes.mjs
+node tools/test-sales-location.mjs
 node tools/test-import-inventory-safety.mjs
 node tools/test-r2-imports.mjs
 node tools/test-r2-inventory.mjs
