@@ -14,7 +14,7 @@ for(const id of ['qa-agent1','qa-agent2','qa-manager']){
  app.prepare('INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,?,?)').run(createHash('sha256').update(token).digest('hex'),id,Date.now()+3600000);
 }
 const insert=app.prepare('INSERT INTO customers(id,warehouse_id,data,active) VALUES(?,?,?,1)');
-for(const [id,warehouseIds] of [['activity-one',['g-5']],['activity-shared',['g-5','g-3']],['activity-other',['g-3']]])insert.run(id,warehouseIds[0],JSON.stringify({id,warehouseId:warehouseIds[0],warehouseIds,name:id,cui:'123',county:'Test',city:'Test',address:'Synthetic address',route:''}));
+for(const [id,warehouseIds] of [['activity-one',['g-5']],['activity-shared',['g-5','g-3']],['activity-other',['g-3']]])insert.run(id,warehouseIds[0],JSON.stringify({id,warehouseId:warehouseIds[0],warehouseIds,name:id,cui:({'activity-one':'123','activity-shared':'234','activity-other':'345'})[id],county:'Test',city:'Test',address:'Synthetic address',route:''}));
 try{
  mkdirSync(historyDir);
  const c=new DatabaseSync(join(historyDir,'client-sales-history.sqlite'));
@@ -23,7 +23,7 @@ try{
  CREATE TABLE history_imports(id INTEGER,sha256 TEXT,state TEXT,period_start TEXT,period_end TEXT,row_count INTEGER);
  INSERT INTO history_imports VALUES(1,'hash','active','2026-01-01','2026-09-30',3);
  CREATE TABLE history_references(id TEXT,master_json TEXT); INSERT INTO history_references VALUES('ref','[]');
- CREATE TABLE history_identities(id INTEGER,client_code TEXT); INSERT INTO history_identities VALUES(1,'123'),(2,'123'),(3,'123');
+ CREATE TABLE history_identities(id INTEGER,client_code TEXT); INSERT INTO history_identities VALUES(1,'123'),(2,'234'),(3,'345');
  CREATE TABLE history_allocations(identity_id INTEGER,reference_id TEXT,status TEXT,partner_ids_json TEXT,candidates_json TEXT);
  INSERT INTO history_allocations VALUES(1,'ref','direct_code','["activity-one"]','[]'),(2,'ref','direct_code','["activity-shared"]','[]'),(3,'ref','direct_code','["activity-other"]','[]');
  CREATE TABLE history_rows(import_id INTEGER,identity_id INTEGER,date TEXT,site_id TEXT,document_number TEXT,value_cents INTEGER,quantity_micros INTEGER);
@@ -49,10 +49,10 @@ try{
  assert.equal((await call('qa-agent1','page=1')).partners.length,0);
 
  // Period selection must use exactly the same IDs for list, map and activity.
- insert.run('activity-old','g-5',JSON.stringify({id:'activity-old',warehouseId:'g-5',warehouseIds:['g-5'],name:'activity-old',cui:'123',county:'Test',city:'Test',address:'Synthetic address',route:''}));
- insert.run('activity-unlinked','g-5',JSON.stringify({id:'activity-unlinked',warehouseId:'g-5',warehouseIds:['g-5'],name:'activity-unlinked',cui:'456',county:'Test',city:'Test',address:'Synthetic address',route:''}));
+ insert.run('activity-old','g-5',JSON.stringify({id:'activity-old',warehouseId:'g-5',warehouseIds:['g-5'],name:'activity-old',cui:'456',county:'Test',city:'Test',address:'Synthetic address',route:''}));
+ insert.run('activity-unlinked','g-5',JSON.stringify({id:'activity-unlinked',warehouseId:'g-5',warehouseIds:['g-5'],name:'activity-unlinked',cui:'654',county:'Test',city:'Test',address:'Synthetic address',route:''}));
  const edit=new DatabaseSync(join(historyDir,'client-sales-history.sqlite'));
- edit.exec("INSERT INTO history_identities VALUES(4,'123'); INSERT INTO history_allocations VALUES(4,'ref','direct_code','[\"activity-old\"]','[]'); INSERT INTO history_rows VALUES(1,4,'2023-09-15','test','old',15000,1000000); UPDATE history_imports SET period_start='2023-01-01',row_count=4;");
+ edit.exec("INSERT INTO history_identities VALUES(4,'456'); INSERT INTO history_allocations VALUES(4,'ref','direct_code','[\"activity-old\"]','[]'); INSERT INTO history_rows VALUES(1,4,'2023-09-15','test','old',15000,1000000); UPDATE history_imports SET period_start='2023-01-01',row_count=4;");
  edit.close();buildActivitySnapshot(root);
  const fingerprint=createHash('sha256').update(JSON.stringify(['Synthetic address','Test','Test'])).digest('hex');
  for(const id of ['activity-one','activity-shared','activity-other','activity-old','activity-unlinked'])app.prepare("INSERT INTO partner_profiles(customer_id,latitude,longitude,position_source,address_fingerprint,revision,updated_at) VALUES(?,44.4,26.1,'manual',?,1,'2026-09-30T00:00:00Z')").run(id,fingerprint);
@@ -74,7 +74,7 @@ try{
  const moreHistory=new DatabaseSync(join(historyDir,'client-sales-history.sqlite'));
  moreHistory.exec("ALTER TABLE history_rows ADD COLUMN item_code TEXT DEFAULT 'demo'; ALTER TABLE history_rows ADD COLUMN item_name TEXT DEFAULT 'Demo product'; ALTER TABLE history_rows ADD COLUMN tr TEXT DEFAULT 'Former seller'; ALTER TABLE history_rows ADD COLUMN source_row INTEGER DEFAULT 1; INSERT INTO history_identities VALUES(5,'789'); INSERT INTO history_allocations VALUES(5,'ref','reconcile','[]','[]'); INSERT INTO history_rows(import_id,identity_id,date,site_id,document_number,value_cents,quantity_micros) VALUES(1,5,'2026-09-20','site','old-seller-bill',12300,1000000);");
  moreHistory.close();
- insert.run('activity-company','g-5',JSON.stringify({id:'activity-company',warehouseId:'g-5',warehouseIds:['g-5'],name:'Company history',cui:'789',county:'Test',city:'',address:'',route:'',historyCatalog:{kind:'company'}}));
+ insert.run('activity-company','g-5',JSON.stringify({id:'activity-company',warehouseId:'g-5',warehouseIds:['g-5'],name:'activity-company',cui:'789',county:'Test',city:'',address:'',route:'',historyCatalog:{kind:'company'}}));
  async function companySales(user,status){
    const r=await fetch('http://127.0.0.1:3000/api/partner/portfolio/activity-company/sales',{headers:{Cookie:sessions[user]}});
    const data=await r.json();assert.equal(r.status,status,JSON.stringify(data));return data;
@@ -84,10 +84,25 @@ try{
  const defaultRequest=await fetch('http://127.0.0.1:3000/api/partner/portfolio/activity-one/sales',{headers:{Cookie:sessions['qa-agent1']}});
  assert.equal(defaultRequest.status,200);
  const allClient=await defaultRequest.json();
- assert.equal(allClient.scope,'company');assert.equal(allClient.totals.valueCents,135000,'current agent sees all company points and older sellers by default');
- assert.equal(allClient.documents.count,4);
+ assert.equal(allClient.scope,'company');assert.equal(allClient.totals.valueCents,10000,'current agent sees all company points and older sellers by default');
+ assert.equal(allClient.documents.count,1);
  const pointRequest=await fetch('http://127.0.0.1:3000/api/partner/portfolio/activity-one/sales?scope=point',{headers:{Cookie:sessions['qa-agent1']}});
  assert.equal(pointRequest.status,200);assert.equal((await pointRequest.json()).totals.valueCents,10000);
+
+ // One row per company even when it has multiple catalog cards; all sales join
+ // regardless of point allocation, historical seller, or another point's owner.
+ insert.run('activity-sibling','g-5',JSON.stringify({id:'activity-sibling',warehouseId:'g-5',warehouseIds:['g-5'],name:'activity-sibling',cui:'RO123',county:'Test',city:'Test',address:'Other address',route:''}));
+ const extra=new DatabaseSync(join(historyDir,'client-sales-history.sqlite'));
+ extra.exec("INSERT INTO history_identities VALUES(6,'123'),(7,'123'); INSERT INTO history_allocations VALUES(6,'ref','direct_code','[\"activity-sibling\"]','[]'),(7,'ref','reconcile','[]','[]'); INSERT INTO history_rows(import_id,identity_id,date,site_id,document_number,value_cents,quantity_micros) VALUES(1,6,'2026-09-21','site','sibling-bill',7000,1000000),(1,7,'2026-09-22','site','no-point',6000,1000000);");
+ extra.close();buildActivitySnapshot(root);
+ const grouped=await call('qa-agent1','salesPeriod=year:2026');
+ assert.equal(grouped.total,3,'two companies plus newly assigned company card; sibling is not counted twice');
+ const client=grouped.partners.find(r=>r.partner.cui==='123'||r.partner.cui==='RO123');
+ assert.equal(client.metrics.valueCents,23000);assert.equal(client.metrics.documents,3);assert.equal(client.pointCount,2);assert.equal(client.scope,'company');assert.equal(client.sales.coverageComplete,true);
+ const managerGrouped=await call('qa-manager','agentId=qa-agent1&salesPeriod=year:2026');
+ assert.deepEqual(managerGrouped.partners.map(r=>[r.partner.id,r.metrics]),grouped.partners.map(r=>[r.partner.id,r.metrics]));
+ const companyBrowse=await idsFor('browse','year:2026');
+ assert(companyBrowse.includes('activity-one')&&companyBrowse.includes('activity-sibling'));
  const managed=await companySales('qa-manager',200);assert.deepEqual(managed.documents,own.documents);
  console.log('PASS: activity HTTP enforces current agent scope, shared records, national scope, manager filters and validated paging.');
 }finally{

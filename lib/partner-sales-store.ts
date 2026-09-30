@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { partnerActivity } from './partner-sales-health';
+import {normalizedCui as cuiKey,companyIdentityIndex,type CompanyAlias} from './partner-company-identity';
 export class PartnerSalesInputError extends Error {}
 export type PartnerSalesResult = ReturnType<typeof readPartnerSales>;
 function isoDate(value: string) {
@@ -10,7 +11,6 @@ function isoDate(value: string) {
   if(!Number.isFinite(time)||new Date(time).toISOString().slice(0,10)!==value)throw new PartnerSalesInputError('Perioada este invalidă.');
   return value;
 }
-const cuiKey=(value: string)=>value.toUpperCase().replace(/[^A-Z0-9]/g,'').replace(/^RO/,'');
 export function readPartnerSales(partnerId: string, cui: string, params: URLSearchParams, directory=process.env.MOBIUP_DATA_DIR||'./work/server-data') {
   const path=resolve(directory,'client-history','client-sales-history.sqlite');
   if(!existsSync(path))return {state:'unavailable' as const,message:'Istoricul pe parteneri nu este încă disponibil.'};
@@ -29,21 +29,11 @@ export function readPartnerSales(partnerId: string, cui: string, params: URLSear
     }
     const identityRows=c.prepare("SELECT a.identity_id FROM history_allocations a WHERE reference_id=? AND status IN ('direct_code','single_partner') AND EXISTS(SELECT 1 FROM json_each(a.partner_ids_json) p WHERE p.value=?)").all(String(reference),partnerId);
     const companyKey=cuiKey(cui);
-    const companyCodes=new Set<string>();
     const referenceRow=c.prepare('SELECT master_json FROM history_references WHERE id=?').get(String(reference));
-    const master=JSON.parse(String(referenceRow?.master_json||'[]')) as {CIF?:string;PartnerCode?:string}[];
-    // A company alias must identify exactly one legal entity. Never join by name,
-    // old seller, county, or an ambiguous CRM code.
-    const owners=new Map<string,Set<string>>();
-    for(const row of master){
-      const code=cuiKey(String(row.PartnerCode||'')),owner=cuiKey(String(row.CIF||''));
-      if(!code||!owner)continue;
-      const values=owners.get(code)||new Set<string>();values.add(owner);owners.set(code,values);
-    }
-    if(companyKey&&companyKey!=='CLIENTGEN'&&(!owners.has(companyKey)||(owners.get(companyKey)!.size===1&&owners.get(companyKey)!.has(companyKey))))companyCodes.add(companyKey);
-    for(const [code,values] of owners)if(values.size===1&&values.has(companyKey))companyCodes.add(code);
-    companyCodes.delete('CLIENTGEN');
-    const companyIdentityComplete=![...owners.values()].some(values=>values.size>1&&values.has(companyKey));
+    const master=JSON.parse(String(referenceRow?.master_json||'[]')) as CompanyAlias[];
+    const index=companyIdentityIndex(master,[companyKey]);
+    const companyCodes=index.codesByCompany.get(companyKey)||new Set<string>();
+    const companyIdentityComplete=!index.ambiguousCompanies.has(companyKey);
     const companyRows=c.prepare("SELECT DISTINCT i.id identity_id FROM history_identities i JOIN history_allocations a ON a.identity_id=i.id WHERE a.reference_id=? AND a.status<>'consumer' AND history_cui_key(i.client_code) IN (SELECT value FROM json_each(?))").all(String(reference),JSON.stringify([...companyCodes]));
     const requestedScope=params.get('scope')||'auto';
     if(!['auto','point','company'].includes(requestedScope))throw new PartnerSalesInputError('Nivelul istoricului este invalid.');

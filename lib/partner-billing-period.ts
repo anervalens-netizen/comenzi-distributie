@@ -7,8 +7,8 @@ export function billingPeriodMatches(row:ActivitySnapshotRow|undefined,period:st
   if(!period)return true;
   if(period==='unknown')return !row||!row.coverageComplete;
   if(!row)return false;
-  if(period.startsWith('year:'))return row.billingYears.includes(period.slice(5));
-  const last=row.activity.lastBilling;
+  if(period.startsWith('year:'))return (row.movementYears||row.billingYears).includes(period.slice(5));
+  const last=period==='older365'?row.activity.lastBilling:row.lastMovement||row.activity.lastBilling;
   if(!last)return false;
   const age=Math.floor((Date.parse(asOf)-Date.parse(last))/86400000);
   if(period==='older365')return row.coverageComplete&&age>=365;

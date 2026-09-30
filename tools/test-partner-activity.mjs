@@ -57,6 +57,22 @@ try{
  buildActivitySnapshot(root,'2026-09-30');
  const incomplete=readActivitySnapshot([{id:'a',cui:'123'}],root,'2026-09-30').rows.get('a');
  assert.equal(incomplete.coverageComplete,false);assert.equal(incomplete.activity.status,'insufficient_history');assert.equal(incomplete.activity.alertEligible,false);
+
+ const extra=new DatabaseSync(history);
+ extra.exec("INSERT INTO history_identities VALUES(4,'123'); INSERT INTO history_allocations VALUES(4,'ref','reconcile','[]','[]'); INSERT INTO history_rows VALUES(1,3,'2026-09-29','site','alias',2000,1000000),(1,4,'2026-09-30','site','missing-point',3000,1000000);");
+ extra.close();buildActivitySnapshot(root,'2026-09-30');
+ const client=readActivitySnapshot([{id:'a',cui:'123'},{id:'b',cui:'123'}],root,'2026-09-30',{period:'year:2026',scope:'company'});
+ assert.equal(client.rows.get('a').scope,'company');assert.equal(client.rows.get('a').coverageComplete,true,'unallocated store facts do not make company coverage partial');
+ assert.deepEqual(client.metrics.get('a'),{valueCents:65000,documents:8,lastBilling:'2026-09-30',missingValues:0});
+ assert.deepEqual(client.metrics.get('a'),client.metrics.get('b'),'same firm scope from every authorized card');
+ assert.equal(client.rows.has('hidden'),false);
+ assert.deepEqual(client.rows.get('a').movementYears,['2026']);
+ const ambiguous=new DatabaseSync(history);
+ ambiguous.prepare('UPDATE history_references SET master_json=?').run(JSON.stringify([{CIF:'123',PartnerCode:'legacy'},{CIF:'999',PartnerCode:'legacy'}]));
+ ambiguous.close();buildActivitySnapshot(root,'2026-09-30');
+ const limited=readActivitySnapshot([{id:'a',cui:'123'}],root,'2026-09-30',{period:'',scope:'company'});
+ assert.equal(limited.metrics.get('a').valueCents,63000,'ambiguous alias excluded instead of merging another company');
+ assert.equal(limited.rows.get('a').coverageComplete,false);
  const revision=new DatabaseSync(history);revision.exec("UPDATE history_meta SET value='other-ref'");revision.close();
  assert.equal(readActivitySnapshot([{id:'a',cui:'123'}],root,'2026-09-30').state,'unavailable','stale allocation snapshot must not be served');
  console.log('PASS: snapshot batch build, read-only sources, access IDs, shared deduplication, cancellation/free movements, incomplete aliases and freshness fences.');

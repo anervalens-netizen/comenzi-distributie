@@ -145,16 +145,18 @@ search and optional activity filters sit above it. The existing manager region
 and agent controls scope the same table. Current shared owners are displayed;
 unassigned counties remain visible to managers without an agent filter.
 
-Snapshot version 3 adds a derived daily table. Selected-period sales include
+Snapshot version 4 retains point daily data and adds separate company activity
+and daily tables. The client table groups authorized cards once per company and
+uses complete company totals, including unresolved point rows. Selected-period sales include
 returns and preserve missing amounts. Positive document groups are counted once
-per partner/date/site/number, excluding blank numbers, net cancellations and free
+per company/date/site/number, excluding blank numbers, net cancellations and free
 movements. This is labeled “Facturări”, not a verified count of application orders.
 The latest positive billing date is scoped to the selected period too. Unlinked
 records display a dash, never a false zero; partial associations are marked.
 All sorting occurs before pagination, with unknown values last in both directions.
 No national total is calculated by summing potentially shared/legacy aliases.
 
-After deployment, rebuild the derived snapshot using the version 3 builder;
+After deployment, rebuild the derived snapshot using the version 4 builder;
 source history, original seller attribution and existing TR reports stay intact.
 
 ## Sales-first partner sheet
@@ -192,9 +194,11 @@ sales. Where both scopes exist the user can select point or whole company.
 
 Company matching includes rows pending point reconciliation without changing
 their allocation. Ambiguous aliases, generic consumers and name-only matches
-are excluded. No source facts or point assignments are rewritten. Map/activity
-point metrics continue to use confirmed point allocations; company history in
-the detail sheet is explicitly separate until point reconciliation is completed.
+are excluded. No source facts or point assignments are rewritten. The client table and its detail sheet now use the same company identity resolver.
+The map and browse period filters include all authorized points of a company with
+transactions in the selected period. This does not claim that every point sold;
+exact point allocations remain separate. Year/recent filters include zero-value
+movements; positive facturări counts retain their existing definition.
 
 The partner header exposes a full-width position-update action for editable
 partners. It opens the contact and position controls, scrolls directly to GPS

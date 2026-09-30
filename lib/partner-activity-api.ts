@@ -2,7 +2,7 @@ import {validBillingPeriod,selectBillingPeriod} from './partner-billing-period';
 import {portfolioSummary} from './partner-portfolio';
 import {managerFilter} from './manager-scope';
 import {db,fail} from './server';
-import {readActivitySnapshot} from './partner-activity-snapshot';
+import {readActivitySnapshot,normalizedCui} from './partner-activity-snapshot';
 import type {User} from './types';
 export const activityFilters=['all','attention','regular','overdue','inactive','reactivated','new','occasional','incomplete'] as const;
 export const activitySorts=['value','documents','lastBilling','name','county','agent'] as const;
@@ -22,10 +22,22 @@ export async function partnerActivityOverview(user:User,params:URLSearchParams){
   const counties=[...new Set(partners.map(p=>p.county).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ro'));
   const q=normalize(params.get('q')||''),county=params.get('county')||'';
   const selected=partners.filter(p=>(!county||p.county===county)&&(!q||normalize([p.name,p.cui,p.address,p.city].join(' ')).includes(q)));
-  const snapshot=readActivitySnapshot(selected,undefined,undefined,{period});
+  const snapshot=readActivitySnapshot(selected,undefined,undefined,{period,scope:'company'});
   if(snapshot.state!=='ready')return snapshot;
   const agents=(await db().prepare("SELECT id,name,warehouse_id FROM users WHERE role='agent' AND active=1 ORDER BY name,id").all<{id:string;name:string;warehouse_id:string}>()).results;
-  const all=selectBillingPeriod(selected,snapshot,period).map(partner=>({partner,sales:snapshot.rows.get(partner.id)||null,metrics:snapshot.metrics.get(partner.id)||null,agents:agents.filter(a=>partner.warehouseIds?.includes(a.warehouse_id)).map(a=>({id:a.id,name:a.name}))}));
+  const groups=new Map<string,typeof selected>();
+  for(const partner of selectBillingPeriod(selected,snapshot,period)){
+    const key=normalizedCui(partner.cui),groupKey=snapshot.rows.get(partner.id)?.scope==='company'?'company:'+key:'point:'+partner.id;
+    const members=groups.get(groupKey)||[];members.push(partner);groups.set(groupKey,members);
+  }
+  const all=[...groups.values()].map(members=>{
+    // Choose a visible card with company history; never expose an out-of-portfolio card.
+    members.sort((a,b)=>(Number(snapshot.rows.get(b.id)?.scope==='company')-Number(snapshot.rows.get(a.id)?.scope==='company'))||a.id.localeCompare(b.id));
+    const partner=members[0],sales=snapshot.rows.get(partner.id)||null;
+    const warehouseIds=new Set(members.flatMap(p=>p.warehouseIds||[]));
+    const counties=[...new Set(members.map(p=>p.county).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ro'));
+    return {partner,sales,metrics:snapshot.metrics.get(partner.id)||null,pointCount:members.length,counties,scope:sales?.scope||'point' as const,agents:agents.filter(a=>warehouseIds.has(a.warehouse_id)).map(a=>({id:a.id,name:a.name}))};
+  });
   const matches=(r:typeof all[number],kind:string)=>{
     const a=r.sales?.activity;
     if(kind==='all')return true;
@@ -38,7 +50,7 @@ export async function partnerActivityOverview(user:User,params:URLSearchParams){
   };
   const counts=Object.fromEntries(activityFilters.map(kind=>[kind,all.filter(r=>matches(r,kind)).length])) as Record<ActivityFilter,number>;
   const filtered=all.filter(r=>matches(r,filter)).sort((a,b)=>{
-    const value=(r:typeof a):number|string|null=>sort==='value'?r.metrics?.valueCents??null:sort==='documents'?r.metrics?.documents??null:sort==='lastBilling'?r.metrics?.lastBilling??null:sort==='name'?r.partner.name:sort==='county'?r.partner.county||null:r.agents.map(a=>a.name).join(', ')||null;
+    const value=(r:typeof a):number|string|null=>sort==='value'?r.metrics?.valueCents??null:sort==='documents'?r.metrics?.documents??null:sort==='lastBilling'?r.metrics?.lastBilling??null:sort==='name'?r.partner.name:sort==='county'?r.counties.join(', ')||null:r.agents.map(a=>a.name).join(', ')||null;
     const aa=value(a),bb=value(b);
     if(aa===null&&bb!==null)return 1;if(bb===null&&aa!==null)return -1;
     const comparison=aa===null||bb===null?0:typeof aa==='number'&&typeof bb==='number'?aa-bb:String(aa).localeCompare(String(bb),'ro');

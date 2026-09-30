@@ -102,7 +102,7 @@ function billingSelection(partners:PartnerSummary[],params:URLSearchParams) {
   const period=params.get('salesPeriod')||'';
   if(!validBillingPeriod(period))fail(400,'Perioada de facturare este invalidă.');
   if(!period)return partners;
-  const snapshot=readActivitySnapshot(partners);
+  const snapshot=readActivitySnapshot(partners,undefined,undefined,{period,scope:'company'});
   if(snapshot.state!=='ready')fail(409,snapshot.message);
   return selectBillingPeriod(partners,snapshot,period);
 }
