@@ -183,10 +183,11 @@ by viewing the sheet.
 ## Current portfolio access and company history
 
 Sales access is authorized by the existing portfolio route before historical data
-is read. Original sellers do not filter accessible history. A confirmed point
-keeps its exact history by default; a visible card without a point association
-falls back to company history identified by its normalized CUI and unambiguous
-CRM aliases. The response labels this scope as company, never as confirmed point
+is read. Original sellers do not filter accessible history. Every visible card
+opens the full company history by default, identified by its normalized CUI and
+unambiguous CRM aliases. This includes other work points and sales without a
+point assignment. Exact point history remains an explicit optional filter; it is
+the automatic fallback only when no company history can be identified. The response labels this scope as company, never as confirmed point
 sales. Where both scopes exist the user can select point or whole company.
 
 Company matching includes rows pending point reconciliation without changing

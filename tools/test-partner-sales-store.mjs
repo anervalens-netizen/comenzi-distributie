@@ -48,7 +48,8 @@ try{
  assert.equal(company.pointHistoryAvailable,false);assert.equal(company.companyHistoryAvailable,true);
  assert.equal(readPartnerSales('missing','unmatched',new URLSearchParams(),root).state,'unlinked');
  assert.equal(readPartnerSales('missing','123',new URLSearchParams({scope:'point'}),root).state,'unlinked');
- assert.equal(readPartnerSales('p1','123',new URLSearchParams(),root).scope,'point');
+ assert.equal(readPartnerSales('p1','123',new URLSearchParams(),root).scope,'company');
+ assert.equal(readPartnerSales('p1','123',new URLSearchParams({scope:'point'}),root).scope,'point');
  assert.equal(readPartnerSales('p1','123',new URLSearchParams({scope:'company'}),root).scope,'company');
  assert.throws(()=>readPartnerSales('p1','123',new URLSearchParams({scope:'bad'}),root),PartnerSalesInputError);
  const month=readPartnerSales('p1','123',new URLSearchParams({from:'2026-07-01',to:'2026-07-31'}),root);
@@ -71,21 +72,36 @@ try{
  const d=new DatabaseSync(path);
  d.exec("INSERT INTO history_identities VALUES(3,'123'); INSERT INTO history_allocations VALUES(3,'ref','reconcile','[]','[]')");
  d.close();
- const incomplete=readPartnerSales('p1','123',new URLSearchParams(),root);
+ const incomplete=readPartnerSales('p1','123',new URLSearchParams({scope:'point'}),root);
+ assert.equal(readPartnerSales('p1','123',new URLSearchParams(),root).coverageComplete,true,'pending point allocation does not make company history partial');
  assert.equal(incomplete.coverageComplete,false);assert.equal(incomplete.activity.alertEligible,false);
  const aliases=new DatabaseSync(path);
  aliases.exec("DELETE FROM history_identities WHERE id=3; INSERT INTO history_identities VALUES(3,'legacy-code');");
  aliases.prepare('UPDATE history_references SET master_json=?').run(JSON.stringify([{CIF:'123',PartnerCode:'legacy-code'}]));
  aliases.exec("UPDATE history_allocations SET status='direct_code' WHERE identity_id=3");
  aliases.close();
- const aliasIncomplete=readPartnerSales('p1','123',new URLSearchParams(),root);
+ const aliasIncomplete=readPartnerSales('p1','123',new URLSearchParams({scope:'point'}),root);
  assert.equal(aliasIncomplete.coverageComplete,false,'unlinked direct codes and CRM aliases suppress false inactivity');
+
+ // Default client history includes another work point plus the no-point CRM alias,
+ // including old sellers. Source rows must appear once, not once per catalog card.
+ const multiPoint=new DatabaseSync(path);
+ multiPoint.exec(`INSERT INTO history_identities VALUES(7,'123'); INSERT INTO history_allocations VALUES(7,'ref','direct_code','["p-other-store"]','[]'); INSERT INTO history_rows VALUES(1,7,24,'2026-09-29','another-site','second-store',5000,1000000,'another','Another store product','Departed seller'),(1,3,25,'2026-09-30','site','no-point',2000,1000000,'alias','No point product','Legacy seller');`);
+ multiPoint.close();
+ const allClient=readPartnerSales('p1','123',new URLSearchParams(),root);
+ assert.equal(allClient.scope,'company');assert.equal(allClient.coverageComplete,true);
+ assert.equal(allClient.totals.valueCents,78000);assert.equal(allClient.documents.count,10);
+ assert.equal(allClient.documents.lastBilling,'2026-09-30');
+ assert.deepEqual(allClient.transactions.map(t=>t.document).filter(d=>d==='no-point'||d==='second-store').sort(),['no-point','second-store']);
+ assert.equal(readPartnerSales('p1','123',new URLSearchParams({scope:'point'}),root).totals.valueCents,71000,'explicit point filter retains exact store sales');
+ assert.equal(readPartnerSales('p-other-store','123',new URLSearchParams(),root).totals.valueCents,78000,'same client total from either store');
+ assert.equal(readPartnerSales('p1','unmatched',new URLSearchParams(),root).scope,'point','known point still works without a company key');
  const companyData=new DatabaseSync(path);
- companyData.exec("INSERT INTO history_identities VALUES(4,'company-alias'),(5,'shared-alias'),(6,'CLIENTGEN'); INSERT INTO history_allocations VALUES(4,'ref','reconcile','[]','[]'),(5,'ref','reconcile','[]','[]'),(6,'ref','consumer','[]','[]'); INSERT INTO history_rows VALUES(1,4,30,'2026-09-29','site','company-bill',8000,1000000,'company-item','Company product','Former seller'),(1,5,31,'2026-09-29','site','ambiguous',900000,1000000,'foreign','Ambiguous product','Other seller'),(1,6,32,'2026-09-29','site','consumer',500,1000000,'generic','Consumer product','Other seller');");
+ companyData.exec("INSERT INTO history_identities VALUES(4,'company-alias'),(5,'shared-alias'),(6,'CLIENTGEN'); INSERT INTO history_allocations VALUES(4,'ref','reconcile','[]','[]'),(5,'ref','reconcile','[]','[]'),(6,'ref','consumer','[]','[]'); INSERT INTO history_rows VALUES(1,4,30,'2026-09-30','site','company-bill',8000,1000000,'company-item','Company product','Former seller'),(1,5,31,'2026-09-29','site','ambiguous',900000,1000000,'foreign','Ambiguous product','Other seller'),(1,6,32,'2026-09-29','site','consumer',500,1000000,'generic','Consumer product','Other seller');");
  companyData.prepare('UPDATE history_references SET master_json=?').run(JSON.stringify([{CIF:'123',PartnerCode:'company-alias'},{CIF:'123',PartnerCode:'shared-alias'},{CIF:'999',PartnerCode:'shared-alias'}]));
  companyData.close();
  const firm=readPartnerSales('new-company-card','123',new URLSearchParams(),root);
- assert.equal(firm.scope,'company');assert.equal(firm.coverageComplete,false,'ambiguous excluded aliases cannot appear as complete company coverage');assert.equal(firm.totals.valueCents,79000,'company history includes unresolved point sales but excludes ambiguous aliases and other firms');
+ assert.equal(firm.scope,'company');assert.equal(firm.coverageComplete,false,'ambiguous excluded aliases cannot appear as complete company coverage');assert.equal(firm.totals.valueCents,84000,'company history includes unresolved point sales but excludes ambiguous aliases and other firms');
  assert(firm.sellers.some(s=>s.seller==='Former seller'),'historical seller never restricts visible current portfolio history');
  assert.equal(firm.latestDocuments[0].document,'company-bill');
  assert.equal(readPartnerSales('consumer','CLIENTGEN',new URLSearchParams(),root).state,'unlinked');

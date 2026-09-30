@@ -76,11 +76,18 @@ try{
  moreHistory.close();
  insert.run('activity-company','g-5',JSON.stringify({id:'activity-company',warehouseId:'g-5',warehouseIds:['g-5'],name:'Company history',cui:'789',county:'Test',city:'',address:'',route:'',historyCatalog:{kind:'company'}}));
  async function companySales(user,status){
-   const r=await fetch('http://127.0.0.1:3000/api/partner/portfolio/activity-company/sales?scope=company',{headers:{Cookie:sessions[user]}});
+   const r=await fetch('http://127.0.0.1:3000/api/partner/portfolio/activity-company/sales',{headers:{Cookie:sessions[user]}});
    const data=await r.json();assert.equal(r.status,status,JSON.stringify(data));return data;
  }
  const own=await companySales('qa-agent1',200);assert.equal(own.state,'ready');assert.equal(own.scope,'company');assert.equal(own.totals.valueCents,12300);assert.equal(own.sellers[0].seller,'Former seller');
  await companySales('qa-agent2',404);
+ const defaultRequest=await fetch('http://127.0.0.1:3000/api/partner/portfolio/activity-one/sales',{headers:{Cookie:sessions['qa-agent1']}});
+ assert.equal(defaultRequest.status,200);
+ const allClient=await defaultRequest.json();
+ assert.equal(allClient.scope,'company');assert.equal(allClient.totals.valueCents,135000,'current agent sees all company points and older sellers by default');
+ assert.equal(allClient.documents.count,4);
+ const pointRequest=await fetch('http://127.0.0.1:3000/api/partner/portfolio/activity-one/sales?scope=point',{headers:{Cookie:sessions['qa-agent1']}});
+ assert.equal(pointRequest.status,200);assert.equal((await pointRequest.json()).totals.valueCents,10000);
  const managed=await companySales('qa-manager',200);assert.deepEqual(managed.documents,own.documents);
  console.log('PASS: activity HTTP enforces current agent scope, shared records, national scope, manager filters and validated paging.');
 }finally{

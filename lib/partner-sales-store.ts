@@ -47,7 +47,7 @@ export function readPartnerSales(partnerId: string, cui: string, params: URLSear
     const companyRows=c.prepare("SELECT DISTINCT i.id identity_id FROM history_identities i JOIN history_allocations a ON a.identity_id=i.id WHERE a.reference_id=? AND a.status<>'consumer' AND history_cui_key(i.client_code) IN (SELECT value FROM json_each(?))").all(String(reference),JSON.stringify([...companyCodes]));
     const requestedScope=params.get('scope')||'auto';
     if(!['auto','point','company'].includes(requestedScope))throw new PartnerSalesInputError('Nivelul istoricului este invalid.');
-    const scope=requestedScope==='company'||(requestedScope==='auto'&&!identityRows.length&&companyRows.length)?'company' as const:'point' as const;
+    const scope=requestedScope==='company'||(requestedScope==='auto'&&companyRows.length)?'company' as const:'point' as const;
     const selectedIdentities=scope==='company'?companyRows:identityRows;
     const identities=JSON.stringify(selectedIdentities.map(r=>r.identity_id));
     const unresolved=c.prepare("SELECT COUNT(*) n FROM history_allocations a JOIN history_identities i ON i.id=a.identity_id WHERE a.reference_id=? AND (a.status='reconcile' OR (a.status IN ('direct_code','single_partner') AND json_array_length(a.partner_ids_json)=0)) AND (history_cui_key(i.client_code) IN (SELECT value FROM json_each(?)) OR EXISTS(SELECT 1 FROM json_each(a.candidates_json) p WHERE p.value=?))").get(String(reference),JSON.stringify([...companyCodes]),partnerId) as {n:number};
