@@ -379,7 +379,9 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='' }: { use
             onClick={() => openPartner(p.id)}
           >
             <strong>{p.name}</strong>
-            <span>{p.address || 'Adresă necompletată'}</span>
+            <span>{p.address || 'Adresă de identificat'}</span>
+            {p.historyCatalog?.kind==='company'&&<small>Firmă din istoric · punct de lucru de identificat</small>}
+            {p.historyCatalog?.franchiseCode&&<small>Cod punct: {p.historyCatalog.franchiseCode}</small>}
             <span>
               {p.city} · {p.county}
             </span>
@@ -586,7 +588,10 @@ export function PartnerSheet({
           <p className="muted">
             CUI {form.cui} · Punct {form.id} · Ruta {form.route || '—'}
           </p>
-          {detail && (
+          {form.historyCatalog?.kind==='company'&&<p className="muted">Firmă identificată în istoricul de vânzări. Punctul de lucru și adresa necesită confirmare.</p>}
+          {form.historyCatalog?.franchiseCode&&<p className="muted">Cod punct de lucru: {form.historyCatalog.franchiseCode}</p>}
+          {form.historyCatalog?.countySource==='historical_seller_inferred'&&<p className="muted">Județ dedus din teritoriile agenților care au facturat. Adresa fizică trebuie confirmată.</p>}
+          {detail && ((detail.partner.latitude !== null && detail.partner.longitude !== null) || (form.address && form.city)) && (
             <details>
               <summary>Navighează către magazin</summary>
               <div className="partner-actions">

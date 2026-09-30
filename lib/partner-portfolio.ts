@@ -324,6 +324,7 @@ export async function portfolioSummary(
       Number.isFinite(p.longitude) &&
       Math.abs(p.longitude) <= 180;
     return {
+      historyCatalog: p.historyCatalog ? {kind:p.historyCatalog.kind,franchiseCode:p.historyCatalog.franchiseCode,countySource:p.historyCatalog.countySource}:undefined,
       id: p.id,
       name: p.name,
       cui: p.cui,

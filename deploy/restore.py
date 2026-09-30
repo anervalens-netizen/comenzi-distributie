@@ -66,7 +66,7 @@ def restore(archive: Path, destination: Path, checksum: Path | None = None) -> d
         if json.loads((runtime / 'RELEASE.json').read_text()) != release or not (runtime / 'server.js').is_file():
             raise RuntimeError('Release/runtime recovery mismatch')
         databases = {}
-        for name in ('mobiup.sqlite', 'sales.sqlite'):
+        for name in ('mobiup.sqlite', 'sales.sqlite', 'client-history/client-sales-history.sqlite'):
             path = temporary / name
             if not path.exists():
                 if name == 'mobiup.sqlite':
@@ -76,6 +76,11 @@ def restore(archive: Path, destination: Path, checksum: Path | None = None) -> d
                 integrity = db.execute('PRAGMA integrity_check').fetchall()
                 if integrity != [('ok',)] or db.execute('PRAGMA foreign_key_check').fetchone():
                     raise RuntimeError('Restored database is inconsistent')
+                if name == 'client-history/client-sales-history.sqlite':
+                    for source_hash, relative in db.execute('SELECT sha256,original_path FROM history_imports'):
+                        original = temporary / 'client-history' / relative
+                        if not original.resolve().is_relative_to((temporary / 'client-history').resolve()) or not original.is_file() or digest(original) != source_hash:
+                            raise RuntimeError('Restored customer history original is inconsistent')
                 databases[name] = 'ok'
         # Prevent a race from replacing a directory created by someone else.
         destination.mkdir(mode=0o700)

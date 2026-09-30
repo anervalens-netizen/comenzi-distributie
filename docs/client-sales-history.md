@@ -127,3 +127,7 @@ unchanged transaction hashes/totals, rebuild the derived activity snapshot, and
 release the matching period filters so historical-only clients remain manageable.
 The two database updates are separate operations: retain recovery receipts for
 each and do not advertise complete integration before both are verified.
+
+The scheduled application backup includes the dedicated historical database and
+checksum-verified originals. Restore validates both. The derived activity cache
+is rebuilt after restore; it is not an authoritative source or a backup input.

@@ -45,6 +45,15 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(result['databases'],{'mobiup.sqlite':'ok'})
         self.assertEqual((self.root/'restored/recovery/products/image.png').read_bytes(),b'synthetic image')
         self.assertTrue((self.root/'restored/recovery/runtime/server.js').exists())
+    def test_customer_history_roundtrip(self):
+        root=self.data/'client-history';(root/'client-sales-originals').mkdir(parents=True)
+        original=root/'client-sales-originals/example.xlsx';original.write_bytes(b'synthetic historical source')
+        with sqlite3.connect(root/'client-sales-history.sqlite') as db:
+            db.execute('CREATE TABLE history_imports(sha256 TEXT,original_path TEXT)')
+            db.execute('INSERT INTO history_imports VALUES(?,?)',(backup.digest(original),'client-sales-originals/example.xlsx'))
+        result=recovery.restore(self.make_backup(),self.root/'history-restored')
+        self.assertEqual(result['databases']['client-history/client-sales-history.sqlite'],'ok')
+        self.assertEqual((self.root/'history-restored/client-history/client-sales-originals/example.xlsx').read_bytes(),original.read_bytes())
     def test_hardlinked_products_restore_as_regular_files(self):
         (self.products/'second.png').hardlink_to(self.products/'image.png')
         archive=self.make_backup()

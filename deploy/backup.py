@@ -154,12 +154,34 @@ def run_backup(
         # Enumerating after the snapshot includes all its sources; extra newer files
         # are harmless and do not change the generation recorded in the snapshot.
         sales_sources = sorted(path for path in (data / 'sales-imports').glob('*') if path.suffix in ('.xlsx', '.xls')) if sales_snapshot.exists() else []
+        history_snapshot = Path(temporary) / 'client-sales-history.sqlite'
+        history_root = data / 'client-history'
+        history_db = history_root / 'client-sales-history.sqlite'
+        history_sources = []
+        if history_db.exists():
+            if history_root.is_symlink() or history_db.is_symlink():
+                raise RuntimeError('Invalid customer history location')
+            with closing(sqlite3.connect(f'file:{history_db}?mode=ro', uri=True)) as source, closing(sqlite3.connect(history_snapshot)) as copy:
+                source.backup(copy)
+                if copy.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
+                    raise RuntimeError('Customer history snapshot integrity check failed')
+                for expected, relative in copy.execute('SELECT sha256,original_path FROM history_imports'):
+                    path = history_root / relative
+                    if path.is_symlink() or not path.resolve().is_relative_to(history_root.resolve()) or not path.is_file() or digest(path) != expected:
+                        raise RuntimeError('Customer history original missing or checksum mismatch')
+                    history_sources.append((path, relative, expected))
         captured_release = release.read_bytes()
         try:
             with tarfile.open(local_partial, 'w:gz', compresslevel=2) as output:
                 output.add(snapshot, arcname='mobiup.sqlite')
                 if sales_snapshot.exists():
                     output.add(sales_snapshot, arcname='sales.sqlite')
+                if history_snapshot.exists():
+                    output.add(history_snapshot, arcname='client-history/client-sales-history.sqlite')
+                for path, relative, expected in history_sources:
+                    output.add(path, arcname='client-history/' + relative)
+                    if digest(path) != expected:
+                        raise RuntimeError('Customer history source changed during backup')
                 for path in sales_sources:
                     if path.is_symlink() or not path.is_file() or not path.resolve().is_relative_to((data / 'sales-imports').resolve()):
                         raise RuntimeError('Invalid sales source location')

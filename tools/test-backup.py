@@ -66,6 +66,30 @@ class BackupTests(unittest.TestCase):
             check.assert_called_once_with(self.mount)
             return result
 
+    def history_fixture(self):
+        root = self.data / 'client-history'
+        (root / 'client-sales-originals').mkdir(parents=True)
+        original = root / 'client-sales-originals/example.xlsx'
+        original.write_bytes(b'synthetic customer source')
+        with sqlite3.connect(root / 'client-sales-history.sqlite') as c:
+            c.execute('CREATE TABLE history_imports(sha256 TEXT,original_path TEXT)')
+            c.execute('INSERT INTO history_imports VALUES(?,?)',(backup.digest(original),'client-sales-originals/example.xlsx'))
+        return original
+
+    def test_customer_history_and_originals_included(self):
+        original = self.history_fixture()
+        archive = self.run_backup()
+        with tarfile.open(archive) as saved:
+            self.assertIn('client-history/client-sales-history.sqlite',saved.getnames())
+            self.assertEqual(saved.extractfile('client-history/client-sales-originals/example.xlsx').read(),original.read_bytes())
+            self.assertNotIn('client-history/partner-activity.sqlite',saved.getnames())
+
+    def test_customer_history_missing_original_prevents_publication(self):
+        self.history_fixture().unlink()
+        with self.assertRaisesRegex(RuntimeError,'original missing'):
+            self.run_backup()
+        self.assertEqual(list(self.local.glob('*.tar.gz')),[])
+
     def assert_local_snapshot(self, sales=True):
         archives = sorted(self.local.glob('mobiup-comenzi-????????T??????Z.tar.gz'))
         self.assertTrue(archives, 'A verified local generation must survive NAS failure')
