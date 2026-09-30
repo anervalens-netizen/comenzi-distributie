@@ -19,6 +19,8 @@ try{
   const regional=await call('qa-regional');assert(regional.partners.some(p=>p.id==='ph-shared'));assert(regional.partners.some(p=>p.id==='ph-other'));
   const global=await call('qa-manager');assert.equal(global.partners.filter(p=>p.id.startsWith('ph-')).length,3,'same CUI points remain distinct');
   await call('qa-agent1','/ph-other','GET',null,404);
+  await call('qa-agent1','/ph-other/sales','GET',null,404);
+  assert.equal((await call('qa-agent1','/ph-one/sales')).state,'unavailable','authorized partner history missing is explicit');
   await call('qa-agent1','/ph-other','PATCH',{},404);
   await call('qa-agent1','/ph-other/visits','POST',{id:randomUUID()},404);
   let {partner:p}=await call('qa-agent1','/ph-shared');assert.equal(p.latitude,null);assert.equal(p.revision,0);

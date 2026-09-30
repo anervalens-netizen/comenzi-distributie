@@ -10,6 +10,11 @@ start_server(){ local data="$1" port="$2" log="$3"; MOBIUP_DATA_DIR="$data" HOST
 stop_last(){ local i=$((${#pids[@]}-1)); kill "${pids[$i]}" 2>/dev/null || true; wait "${pids[$i]}" 2>/dev/null || true; unset 'pids[$i]'; pids=("${pids[@]}"); }
 
 python3 tools/test_client_sales_history.py
+python3 tools/test_client_catalog_plan.py
+python3 tools/test_client_catalog_geography.py
+node tools/test-partner-sales-health.mjs
+node tools/test-partner-sales-store.mjs
+node tools/test-partner-activity.mjs
 python3 tools/test-partner-portfolio-schema.py
 node tools/test-partner-geocode.mjs
 node tools/test-partner-geocode-worker.mjs
@@ -57,6 +62,7 @@ PY
 node tools/test-api.mjs
 node tools/test-audit-regressions.mjs
 node tools/test-partner-portfolio.mjs
+node tools/test-partner-activity-http.mjs
 node tools/test-partner-map.mjs
 node tools/test-manager-workspace.mjs
 node tools/test-partner-planning.mjs

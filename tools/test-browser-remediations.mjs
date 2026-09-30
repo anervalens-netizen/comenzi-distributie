@@ -206,10 +206,37 @@ try {
   await cdp.send('Emulation.setDeviceMetricsOverride',{width:390,height:900,deviceScaleFactor:1,mobile:true});await sleep(100);
   check(await cdp.evaluate("(()=>{const d=document.querySelector('dialog');return d.scrollWidth<=d.clientWidth+1&&d.getBoundingClientRect().right<=innerWidth;})()"),'Partner detail fits mobile width');
   const sheetShot=await cdp.send('Page.captureScreenshot',{format:'png'});writeFileSync('work/partner-sheet-390.png',Buffer.from(sheetShot.data,'base64'));
-  check(await cdp.evaluate("document.querySelector('dialog').innerText.includes('Date indisponibile momentan')"),'Unknown CRM data is labelled without invented sales');
+
+  await cdp.evaluate("document.querySelector('.partner-sales').open=true");
+  await waitFor(()=>cdp.evaluate("document.querySelector('.partner-sales')?.textContent.includes('Istoricul pe parteneri nu este încă disponibil')"),'missing history is explicit');
+  check(await cdp.evaluate("!document.querySelector('.partner-sales-kpis')"),'missing history is never shown as zero sales');
+  await cdp.evaluate("document.querySelector('.partner-sales').open=false");
+  await cdp.evaluate(`(()=>{window.__salesOriginalFetch=window.fetch;const fixture=${JSON.stringify({"state":"ready","through":"2026-09-30","from":"2025-09-30","to":"2026-09-30","activity":{"status":"overdue","asOf":"2026-09-30","sourceLagDays":0,"stale":false,"alertEligible":true,"firstBilling":"2026-04-01","lastBilling":"2026-08-30","daysSinceBilling":31,"billingDays":12,"cadenceDays":7,"cadenceMadDays":0,"previouslyRegular":true,"isNew":false,"reactivated":false,"seasonalPossible":false,"overdueAfterDays":14,"inactiveAfterDays":60,"sampleCount":12,"reason":"Ultima facturare acum 31 zile; ritmul obișnuit este de aproximativ 7 zile."},"coverageComplete":true,"unresolvedCompanyIdentities":0,"totals":{"rows":2,"valueCents":12000,"quantityMicros":3000000,"missingValues":0,"returnsCents":0},"monthly":[{"month":"2026-08","rows":2,"valueCents":12000,"quantityMicros":3000000,"missingValues":0}],"products":[{"code":"EX-1","name":"Produs demonstrativ pentru verificarea afișării","quantityMicros":3000000,"valueCents":12000}],"sellers":[{"seller":"Agent istoric demonstrativ","valueCents":12000,"rows":2}],"transactions":[{"date":"2026-08-30","document":"EX-100","site":"QA","itemCode":"EX-1","itemName":"Produs demonstrativ","quantityMicros":3000000,"valueCents":12000,"seller":"Agent istoric demonstrativ"}],"page":0,"hasMore":false})};window.fetch=async function(input,options){if(String(input).includes('/sales?')&&String(input).includes('/partner/portfolio/'))return new Response(JSON.stringify(fixture),{status:200,headers:{'Content-Type':'application/json'}});return window.__salesOriginalFetch.call(this,input,options);};})()`);
+  await cdp.evaluate("document.querySelector('.partner-sales').open=true");
+  await waitFor(()=>cdp.evaluate("document.querySelector('.partner-sales-kpis')?.textContent.includes('120')"),'partner sales totals render');
+  check(await cdp.evaluate("document.querySelector('.partner-sales-health').textContent.includes('7 zile')"),'cadence reason is visible');
+  await cdp.evaluate("document.querySelector('.partner-sales').scrollIntoView({block:'start'})");
+  check(await cdp.evaluate("(()=>{const d=document.querySelector('dialog');return d.scrollWidth<=d.clientWidth+1;})()"),'sales section fits mobile sheet');
+  const salesShot=await cdp.send('Page.captureScreenshot',{format:'png'});writeFileSync('work/partner-sales-390.png',Buffer.from(salesShot.data,'base64'));
+  await cdp.evaluate("window.fetch=window.__salesOriginalFetch;document.querySelector('.partner-sales').open=false");
+
   await cdp.evaluate("[...document.querySelectorAll('dialog button')].find(b=>b.textContent.includes('Înregistrează vizita acum')).click()");
   await waitFor(()=>cdp.evaluate("document.querySelector('dialog output')?.textContent.includes('Vizita a fost înregistrată')"),'explicit visit saved from browser');checks++;
   await cdp.evaluate("document.querySelector('dialog [aria-label=\"Închide fișa\"]').click()");
+
+
+  await cdp.evaluate("[...document.querySelectorAll('button')].find(b=>b.textContent==='Activitate și vânzări').click()");
+  await waitFor(()=>cdp.evaluate("document.querySelector('.partner-activity')?.textContent.includes('Centralizarea activității nu este încă pregătită')"),'activity missing snapshot is explicit');
+  await cdp.evaluate("[...document.querySelectorAll('.partner-activity button')].find(b=>b.textContent.includes('Înapoi la Parteneri')).click()");
+  const activityFixture={state:'ready',through:'2026-09-30',asOf:'2026-09-30',recentStart:'2026-09-01',previousStart:'2026-08-02',stale:false,counties:['Județ demonstrativ'],counts:{all:1,attention:1,regular:0,overdue:1,inactive:0,reactivated:0,new:0,occasional:0,incomplete:0},total:1,page:0,hasMore:false,partners:[{partner:{id:'browser-ph-located',name:'Partener demonstrativ',cui:'123',county:'Județ demonstrativ',city:'Localitate',address:'Adresă demonstrativă',lastVisitedAt:null},sales:{coverageComplete:true,recentCents:12000,previousCents:18000,activity:{status:'overdue',reason:'Ultima facturare acum 31 zile; ritmul obișnuit este de aproximativ 7 zile.',lastBilling:'2026-08-30',cadenceDays:7,reactivated:false,isNew:false,seasonalPossible:false}}}]};
+  await cdp.evaluate(`window.__activityFetch=window.fetch;window.fetch=async(...args)=>String(args[0]).startsWith('/api/partner/activity?')?new Response(JSON.stringify(${JSON.stringify(activityFixture)}),{status:200,headers:{'Content-Type':'application/json'}}):window.__activityFetch(...args)`);
+  await cdp.evaluate("[...document.querySelectorAll('button')].find(b=>b.textContent==='Activitate și vânzări').click()");
+  await waitFor(()=>cdp.evaluate("document.querySelector('.partner-activity-list')?.textContent.includes('Partener demonstrativ')"),'activity portfolio renders');
+  check(await cdp.evaluate("document.querySelector('.partner-activity').textContent.includes('30 anterioare')"),'equal period comparison visible');
+  check(await cdp.evaluate("document.querySelector('.partner-activity').getBoundingClientRect().right<=innerWidth&&document.documentElement.scrollWidth<=innerWidth"),'activity portfolio fits mobile');
+  await cdp.evaluate("document.querySelector('.partner-activity').scrollIntoView({block:'start'})");
+  const activityShot=await cdp.send('Page.captureScreenshot',{format:'png'});writeFileSync('work/partner-activity-390.png',Buffer.from(activityShot.data,'base64'));
+  await cdp.evaluate("[...document.querySelectorAll('.partner-activity button')].find(b=>b.textContent.includes('Înapoi la Parteneri')).click();window.fetch=window.__activityFetch");
 
   await cdp.evaluate(`(() => {
     window.__browseFetch=window.fetch;

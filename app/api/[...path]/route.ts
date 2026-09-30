@@ -1,3 +1,5 @@
+import {partnerActivityOverview} from '@/lib/partner-activity-api';
+import { readPartnerSales, PartnerSalesInputError } from '@/lib/partner-sales-store';
 import { visitWeek, saveDayPlan } from '@/lib/partner-planning';
 import { portfolio, portfolioSummary, partnerDetail, updatePartner, recordVisit } from '@/lib/partner-portfolio';
 import { browsePartners, mapPartners } from '@/lib/partner-map-api';
@@ -213,9 +215,15 @@ async function dispatch(req: Request) {
   if(path.join('/')==='notifications/push'&&req.method==='DELETE')return response(await removePushSubscription(user,await jsonBody(req)));
   if(path.join('/')==='partner/planning'&&req.method==='GET')return response(await visitWeek(user,new URL(req.url).searchParams.get('week')||''));
   if(path.join('/')==='partner/planning'&&req.method==='PUT')return response(await saveDayPlan(user,await jsonBody(req)));
+  if(path.join('/')==='partner/activity'&&req.method==='GET')return response(await partnerActivityOverview(readUser,new URL(req.url).searchParams));
   if(path.join('/')==='partner/browse'&&req.method==='GET')return response(await browsePartners(readUser,new URL(req.url).searchParams));
   if(path.join('/')==='partner/map'&&req.method==='GET')return response(await mapPartners(readUser,new URL(req.url).searchParams));
   if(path.join('/')==='partner/summary'&&req.method==='GET')return response({partners:await portfolioSummary(readUser)});
+  if(path[0]==='partner'&&path[1]==='portfolio'&&path[2]&&path[3]==='sales'&&!path[4]&&req.method==='GET') {
+    const detail=await partnerDetail(readUser,path[2],null,user);
+    try { return response(readPartnerSales(path[2],detail.partner.cui,new URL(req.url).searchParams)); }
+    catch(error) { if(error instanceof PartnerSalesInputError) fail(400,error.message); throw error; }
+  }
   if(path[0]==='partner'&&path[1]==='portfolio') {
     if(!path[2]&&req.method==='GET')return response(await portfolio(readUser));
     if(path[2]&&!path[3]&&req.method==='GET')return response(await partnerDetail(readUser,path[2],new URL(req.url).searchParams.get('cursor'),user));

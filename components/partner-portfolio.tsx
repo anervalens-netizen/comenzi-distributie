@@ -1,4 +1,6 @@
 'use client';
+import { PartnerActivity } from './partner-activity';
+import { PartnerSales } from './partner-sales';
 import {
   lazy,
   Suspense,
@@ -20,6 +22,7 @@ import './partner-portfolio.css';
 const PartnerMap = lazy(() => import('./partner-map'));
 const date = (s: string) => new Date(s).toLocaleString('ro-RO');
 export function PartnerPortfolio({ userId, manager=false, scopeQuery='' }: { userId: string; manager?: boolean; scopeQuery?: string }) {
+  const [activityOpen,setActivityOpen]=useState(false);
   const [layout,setLayout]=useState<'split'|'list'|'map'>('split');
   const [highlighted,setHighlighted]=useState<string|null>(null);
   const [planning, setPlanning] = useState(false),
@@ -180,6 +183,7 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='' }: { use
         )}
       </>
     );
+  if(activityOpen)return <><PartnerActivity key={scopeQuery} scopeQuery={scopeQuery} onBack={()=>setActivityOpen(false)} onOpen={openPartner}/>{selected&&<PartnerSheet key={selected} id={selected} onClose={()=>setSelected(null)} onSaved={refresh}/>}</>;
   if (adding)
     return (
       <section className="partner-hub">
@@ -197,6 +201,7 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='' }: { use
           <h1>Parteneri</h1>
           <p>Puncte de lucru, contacte și vizite.</p>
         </div>
+        <button type="button" className="secondary" onClick={()=>setActivityOpen(true)}>Activitate și vânzări</button>
         {!manager&&<><button className="primary" onClick={() => setAdding(true)}>
           + Adaugă partener
         </button>
@@ -731,13 +736,7 @@ export function PartnerSheet({
               </button>
             )}
           </section>
-          <section>
-            <h3>Vânzări și facturi</h3>
-            <p className="muted">
-              Date indisponibile momentan. Istoricul va fi disponibil după
-              importul CRM.
-            </p>
-          </section>
+          <PartnerSales id={id}/>
         </>
       )}
     </dialog>
