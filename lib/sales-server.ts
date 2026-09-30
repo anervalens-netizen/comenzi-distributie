@@ -8,26 +8,21 @@ import { getSalesViewRuntime } from './sales-view-runtime';
 import { managerFilter } from './manager-scope';
 import type { SalesView } from './sales-types';
 import type { SalesAgentMapping } from './sales-types';
+import { salesLocationKey, salesSiteKey as mappingKey, salesPairKey, type SalesScope } from './sales-location';
 
-type AgentRecord = { id: string; name: string; siteCode: string };
-
-async function activeAgents() {
-  const result = await db().prepare("SELECT id,name,site_code FROM users WHERE role='agent' AND active=1 ORDER BY name,id").all<Record<string, unknown>>();
-  return result.results.map(row => ({ id: String(row.id), name: String(row.name), siteCode: typeof row.site_code === 'string' ? row.site_code.trim() : '' }));
-}
-
-function mappingKey(siteCode: string) { return siteCode.trim().toUpperCase(); }
+type SalesActor = { id: string; name: string; siteCode: string; warehouseName: string };
 
 async function mappingSnapshot() {
-  const agents = await activeAgents();
-  const grouped = new Map<string, AgentRecord[]>();
-  for (const agent of agents) if (agent.siteCode) {
-    const list = grouped.get(mappingKey(agent.siteCode)) || [];
-    list.push(agent);
-    grouped.set(mappingKey(agent.siteCode), list);
+  const result = await db().prepare("SELECT id,name,role,site_code,warehouse_name FROM users WHERE active=1 AND (role='agent' OR (role='manager' AND TRIM(site_code)<>'')) ORDER BY name,id").all<{ id: string; name: string; role: string; site_code: string | null; warehouse_name: string | null }>();
+  const actors: SalesActor[] = result.results.map(row => ({ id: String(row.id), name: String(row.name), siteCode: row.site_code?.trim() || '', warehouseName: row.role === 'agent' ? row.warehouse_name?.trim() || '' : '' }));
+  const grouped = new Map<string, SalesActor[]>(), locations = new Map<string, SalesActor[]>();
+  for (const actor of actors) {
+    for (const [key, index] of [[mappingKey(actor.siteCode), grouped], [salesLocationKey(actor.warehouseName), locations]] as const) {
+      if (key) index.set(key, [...(index.get(key) || []), actor]);
+    }
   }
-  const canonical = agents.map(agent => [agent.id, agent.name, mappingKey(agent.siteCode)]);
-  return { agents, grouped, hash: salesHash(JSON.stringify(canonical)) };
+  const canonical = actors.map(actor => [actor.id, actor.name, mappingKey(actor.siteCode), salesLocationKey(actor.warehouseName)]);
+  return { actors, grouped, locations, hash: salesHash(JSON.stringify(canonical)) };
 }
 
 function validateMonth(value: string | null) {
@@ -42,22 +37,38 @@ function filenameFrom(req: Request) {
   return filename;
 }
 
-function mappingsFor(siteCodes: string[], snapshot: Awaited<ReturnType<typeof mappingSnapshot>>) {
-  const unique = new Map<string, string>();
-  for (const site of siteCodes) { const trimmed = site.trim(); if (!unique.has(mappingKey(trimmed))) unique.set(mappingKey(trimmed), trimmed); }
-  return [...unique.values()].sort((a, b) => a.localeCompare(b, 'ro')).map((siteCode): SalesAgentMapping => {
-    const candidates = snapshot.grouped.get(mappingKey(siteCode)) || [];
-    if (candidates.length === 1) return { siteCode, userId: candidates[0].id, name: candidates[0].name, status: 'mapped' };
-    if (candidates.length > 1) return { siteCode, userId: null, name: null, status: 'duplicate', candidates: candidates.map(item => ({ id: item.id, name: item.name })) };
-    return { siteCode, userId: null, name: null, status: 'missing' };
-  });
+function mappingFor(site: { siteCode: string; location: string }, snapshot: Awaited<ReturnType<typeof mappingSnapshot>>): SalesAgentMapping {
+  const locationMatches = snapshot.locations.get(salesLocationKey(site.location)) || [];
+  const candidates = locationMatches.length === 1 ? locationMatches : snapshot.grouped.get(mappingKey(site.siteCode)) || [];
+  // A historical location is not evidence that the current warehouse sold there.
+  const owner = candidates.length === 1 ? candidates[0] : undefined;
+  if (owner && (locationMatches.length === 1 || !owner.warehouseName || salesLocationKey(owner.warehouseName) === salesLocationKey(site.location))) return { ...site, userId: owner.id, name: owner.name, status: 'mapped' };
+  if (candidates.length > 1) return { ...site, userId: null, name: null, status: 'duplicate', candidates: candidates.map(item => ({ id: item.id, name: item.name })) };
+  return { ...site, userId: null, name: null, status: 'missing' };
+}
+
+function mappingsFor(sites: { siteCode: string; location: string }[], snapshot: Awaited<ReturnType<typeof mappingSnapshot>>) {
+  const unique = new Map(sites.map(site => [salesPairKey(site), { siteCode: site.siteCode, location: site.location }]));
+  return [...unique.values()].sort((a, b) => a.siteCode.localeCompare(b.siteCode, 'ro') || a.location.localeCompare(b.location, 'ro')).map(site => mappingFor(site, snapshot));
 }
 
 function decoratedView(view: SalesView, snapshot: Awaited<ReturnType<typeof mappingSnapshot>>) {
-  return { ...view, sites: view.sites.map(site => {
-    const match = snapshot.grouped.get(mappingKey(site.siteCode)) || [];
-    return { ...site, agent: match.length === 1 ? match[0].name : '' };
-  }) };
+  return { ...view, sites: view.sites.map(site => ({ ...site, agent: mappingFor(site, snapshot).name || '' })) };
+}
+
+function actorScope(actorIds: string[], snapshot: Awaited<ReturnType<typeof mappingSnapshot>>, siteCode?: string): SalesScope {
+  const actors = snapshot.actors.filter(actor => actorIds.includes(actor.id));
+  const warehouseNames: string[] = [], siteCodes: string[] = [];
+  for (const actor of actors) {
+    if (actor.warehouseName) {
+      if (snapshot.locations.get(salesLocationKey(actor.warehouseName))?.length !== 1) fail(409, 'Gestiunea nu este asociată unui singur agent activ.');
+      warehouseNames.push(actor.warehouseName);
+    } else if (actor.siteCode) {
+      if (snapshot.grouped.get(mappingKey(actor.siteCode))?.length !== 1) fail(409, 'SiteCode-ul nu este asociat unui singur utilizator activ.');
+      siteCodes.push(mappingKey(actor.siteCode));
+    }
+  }
+  return { warehouseNames, siteCodes, excludedWarehouseNames: [...snapshot.locations].filter(([, matches]) => matches.length === 1).map(([key]) => key), siteCode };
 }
 
 async function salesCatalog() {
@@ -83,35 +94,29 @@ export async function salesView(req: Request, user: User) {
   if (fromMonth > toMonth) fail(400, 'Intervalul lunar este invalid.');
   const snapshot = await mappingSnapshot();
   const requestedSite = query.get('siteCode')?.trim() || undefined;
-  let siteScope:string|string[]|undefined=requestedSite;
+  let siteScope: SalesScope | undefined = requestedSite;
+  let actorIds: string[] | undefined;
   if (user.role === 'agent') {
-    const own = snapshot.grouped.get(mappingKey(user.siteCode)) || [];
-    if (!user.siteCode.trim()) fail(409, 'Contul tău nu are un SiteCode configurat.');
-    if (own.length !== 1 || own[0].id !== user.id) fail(409, 'SiteCode-ul contului nu este asociat unui singur agent activ.');
-    siteScope = user.siteCode.trim();
+    const own = snapshot.actors.find(actor => actor.id === user.id);
+    if (!own || (!own.warehouseName && !own.siteCode)) fail(409, 'Contul tău nu are o gestiune sau un SiteCode configurat.');
+    actorIds = [user.id];
   } else if (!isGlobalManager(user)) {
-    const assigned=await db().prepare("SELECT a.id,a.site_code siteCode FROM manager_agents ma JOIN users a ON a.id=ma.agent_id WHERE ma.manager_id=? AND a.role='agent' AND a.active=1 ORDER BY a.id").bind(user.id).all<{id:string;siteCode:string}>();
-    for(const agent of assigned.results){
-      const key=mappingKey(agent.siteCode||'');
-      if(!key)continue;
-      const matches=snapshot.grouped.get(key)||[];
-      if(matches.length!==1||matches[0].id!==agent.id)fail(409,'Un SiteCode din aria ta nu este asociat unui singur agent activ.');
-    }
-    const siteCodes=[...new Map(assigned.results.map(row=>row.siteCode?.trim()).filter(Boolean).map(site=>[mappingKey(site),site])).values()];
-    if(requestedSite&&!siteCodes.some(site=>mappingKey(site)===mappingKey(requestedSite)))fail(404,'Gestiunea nu a fost găsită.');
-    siteScope=requestedSite||siteCodes;
+    const assigned = await db().prepare("SELECT a.id FROM manager_agents ma JOIN users a ON a.id=ma.agent_id WHERE ma.manager_id=? AND a.role='agent' AND a.active=1 ORDER BY a.id").bind(user.id).all<{ id: string }>();
+    actorIds = [...assigned.results.map(actor => actor.id), user.id];
   }
   const selected = await managerFilter(user, query);
   if (selected) {
-    const allowed = siteScope === undefined ? null : new Set((Array.isArray(siteScope) ? siteScope : [siteScope]).map(mappingKey));
-    const narrowed = selected.siteCodes.filter(site => !allowed || allowed.has(mappingKey(site)));
-    if (requestedSite && !narrowed.some(site => mappingKey(site) === mappingKey(requestedSite))) fail(404, 'Gestiunea nu a fost găsită în selecție.');
-    for (const site of narrowed) {
-      const matches = snapshot.grouped.get(mappingKey(site)) || [];
-      if (matches.length !== 1 || !selected.agentIds.includes(matches[0].id)) fail(409, 'Un SiteCode din selecție nu este asociat unui singur agent activ.');
+    const selectedIds = [...selected.agentIds];
+    // Manager seller identity belongs only to sales, never to operational agent/warehouse scope.
+    const managerId = query.get('managerId');
+    if (!query.get('agentId')) {
+      if (managerId && managerId !== '__unassigned') selectedIds.push(managerId);
+      else if (!managerId && !isGlobalManager(user)) selectedIds.push(user.id);
     }
-    siteScope = requestedSite || narrowed;
+    const allowedIds = actorIds;
+    actorIds = allowedIds ? selectedIds.filter(id => allowedIds.includes(id)) : selectedIds;
   }
+  if (actorIds) siteScope = actorScope(actorIds, snapshot, user.role === 'agent' ? undefined : requestedSite);
   return response(decoratedView(await getSalesViewRuntime(month, siteScope, fromMonth, toMonth, await salesCatalog()), snapshot));
 }
 
@@ -134,7 +139,7 @@ export async function salesUpload(req: Request, user: User, apply: boolean) {
   const existing=currentSalesImport(month);
   if(existing?.file_hash===fileHash&&existing.imported_by!==user.id)fail(409,await duplicateImportMessage('Vânzările',String(existing.imported_by)));
   let snapshot = await mappingSnapshot();
-  const mappings = mappingsFor(rows.map(row => row.siteCode), snapshot);
+  const mappings = mappingsFor(rows, snapshot);
   const historical = !!latestSalesMonth() && month < String(latestSalesMonth());
   const firstDate = rows.reduce((earliest, row) => row.date < earliest ? row.date : earliest, rows[0].date);
   const lastDate = rows.reduce((latest, row) => row.date > latest ? row.date : latest, rows[0].date);
@@ -143,9 +148,9 @@ export async function salesUpload(req: Request, user: User, apply: boolean) {
   const currentRevision = salesRevision();
   if (!apply) {
     const sitesInCents = rows.reduce((result, row) => {
-      const found = result.find(item => mappingKey(item.siteCode) === mappingKey(row.siteCode));
+      const found = result.find(item => salesPairKey(item) === salesPairKey(row));
       if (found) { found.rows++; found.quantity += row.quantity; found.valueCents += row.valueCents; }
-      else result.push({ siteCode: row.siteCode, location: row.location, agent: mappings.find(m => mappingKey(m.siteCode) === mappingKey(row.siteCode))?.name || '', rows: 1, quantity: row.quantity, valueCents: row.valueCents });
+      else result.push({ siteCode: row.siteCode, location: row.location, agent: mappings.find(m => salesPairKey({ siteCode: m.siteCode, location: m.location || '' }) === salesPairKey(row))?.name || '', rows: 1, quantity: row.quantity, valueCents: row.valueCents });
       return result;
     }, [] as { siteCode: string; location: string; agent: string; rows: number; quantity: number; valueCents: number }[]);
     const sites = sitesInCents.sort((a, b) => b.valueCents - a.valueCents || a.siteCode.localeCompare(b.siteCode)).map(({ valueCents, ...site }) => ({ ...site, value: valueCents / 100 }));

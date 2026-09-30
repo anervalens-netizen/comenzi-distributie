@@ -6,6 +6,7 @@ import { Worker } from 'node:worker_threads';
 import { DatabaseSync } from 'node:sqlite';
 import type { SalesCatalogEntry } from './sales-classification';
 import type { SalesView } from './sales-types';
+import { salesLocationKey, type SalesScope } from './sales-location.ts';
 
 function workerPath() {
   const candidates = [resolve(process.cwd(), 'sales-view-worker.mjs'), resolve(process.cwd(), 'dist/standalone/sales-view-worker.mjs')];
@@ -13,7 +14,7 @@ function workerPath() {
   if (!found) throw new Error('Workerul de agregare a vânzărilor nu este disponibil.');
   return found;
 }
-type Input = { month: string; siteCode?: string[]; fromMonth: string; toMonth: string; catalog: readonly SalesCatalogEntry[] };
+type Input = { month: string; siteCode?: SalesScope; fromMonth: string; toMonth: string; catalog: readonly SalesCatalogEntry[] };
 type Identity = { revision: number; dataPath: string };
 const digest = (text: string) => createHash('sha256').update(text).digest('hex');
 // Match SQLite's built-in UPPER(TRIM()) exactly (ASCII case, space trimming).
@@ -59,10 +60,13 @@ export function createSalesViewRuntime(options: {
       worker.once('exit', code => finish(new Error(`Workerul de vânzări s-a oprit cu codul ${code}.`)));
     });
   }
-  return function getSalesViewRuntime(month: string, siteCode: string | string[] | undefined, fromMonth: string, toMonth: string, catalog: readonly SalesCatalogEntry[]): Promise<SalesView> {
+  return function getSalesViewRuntime(month: string, siteCode: SalesScope | undefined, fromMonth: string, toMonth: string, catalog: readonly SalesCatalogEntry[]): Promise<SalesView> {
     try {
       const identity = options.identity();
-      const scope = Array.isArray(siteCode) ? [...new Set(siteCode.map(siteKey).filter(Boolean))].sort()
+      const unique = (values: string[], key: (value: string) => string) => [...new Set(values.map(key).filter(Boolean))].sort();
+      const scope = siteCode && typeof siteCode === 'object' && !Array.isArray(siteCode)
+        ? { warehouseNames: unique(siteCode.warehouseNames, salesLocationKey), siteCodes: unique(siteCode.siteCodes, siteKey), excludedWarehouseNames: unique(siteCode.excludedWarehouseNames, salesLocationKey), siteCode: siteCode.siteCode ? siteKey(siteCode.siteCode) : undefined }
+        : Array.isArray(siteCode) ? [...new Set(siteCode.map(siteKey).filter(Boolean))].sort()
         : siteCode?.trim() ? [siteKey(siteCode)] : undefined;
       const catalogJson = JSON.stringify(catalog);
       const inputJson = JSON.stringify({ month, siteCode: scope, fromMonth, toMonth, catalog: JSON.parse(catalogJson) });

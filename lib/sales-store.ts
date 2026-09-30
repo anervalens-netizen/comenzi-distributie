@@ -6,6 +6,7 @@ import { resolve } from 'node:path';
 import type { SalesAggregate, SalesCardsSim, SalesDaily, SalesMonthly, SalesProduct, SalesRow, SalesSegment, SalesSegments, SalesSite, SalesView, SalesCoverageChange } from './sales-types';
 import { createSalesProductClassifier, type SalesCatalogEntry } from './sales-classification';
 import seed from '../resources/seed.json';
+import { salesLocationKey, type SalesScope } from './sales-location';
 
 const dataDirectory = resolve(process.env.MOBIUP_DATA_DIR || './work/server-data');
 export const salesDatabasePath = resolve(dataDirectory, 'sales.sqlite');
@@ -16,6 +17,7 @@ function database() {
   if (connection) return connection;
   mkdirSync(dataDirectory, { recursive: true, mode: 0o700 });
   connection = new DatabaseSync(salesDatabasePath);
+  connection.function('sales_location_key', { deterministic: true }, value => salesLocationKey(String(value || '')));
   connection.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;');
   connection.exec(`
     CREATE TABLE IF NOT EXISTS sales_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -49,7 +51,22 @@ function database() {
 const aggregate = (row: Record<string, unknown>): SalesAggregate => ({ rows: Number(row.rows || 0), quantity: Number(row.quantity || 0), value: Number(row.value_cents || 0) / 100 });
 const currency = (value: number) => Math.round((value + (value >= 0 ? 1e-9 : -1e-9)) * 100) / 100;
 const safeText = (value: unknown) => typeof value === 'string' ? value : typeof value === 'number' ? String(value) : '';
-const sqlFilter = (siteCodes?: string | string[]) => {
+const sqlFilter = (siteCodes?: SalesScope) => {
+  if (siteCodes && typeof siteCodes === 'object' && !Array.isArray(siteCodes)) {
+    const { warehouseNames, excludedWarehouseNames, siteCode } = siteCodes;
+    const args: string[] = [], clauses: string[] = [];
+    const placeholders = (values: string[]) => { args.push(...values); return values.map(() => '?').join(','); };
+    if (warehouseNames.length) clauses.push(`sales_location_key(location) IN (${placeholders(warehouseNames.map(salesLocationKey))})`);
+    if (siteCodes.siteCodes.length) {
+      let fallback = `UPPER(TRIM(site_code)) IN (${placeholders(siteCodes.siteCodes)})`;
+      // A site-only seller cannot take rows owned by a unique current warehouse.
+      if (excludedWarehouseNames.length) fallback += ` AND sales_location_key(location) NOT IN (${placeholders(excludedWarehouseNames.map(salesLocationKey))})`;
+      clauses.push(`(${fallback})`);
+    }
+    let sql = ` AND (${clauses.join(' OR ') || '0'})`;
+    if (siteCode) { sql += ' AND UPPER(TRIM(site_code))=UPPER(TRIM(?))'; args.push(siteCode); }
+    return { sql, args };
+  }
   if (Array.isArray(siteCodes)) { const values=siteCodes.map(value=>value.trim()).filter(Boolean); return values.length?{sql:` AND UPPER(TRIM(site_code)) IN (${values.map(()=> 'UPPER(TRIM(?))').join(',')})`,args:values}:{sql:' AND 0',args:[] as string[]}; }
   return siteCodes?.trim()?{sql:' AND UPPER(TRIM(site_code))=UPPER(TRIM(?))',args:[siteCodes.trim()]}:{sql:'',args:[] as string[]};
 };
@@ -74,7 +91,7 @@ function emptySegments(): SalesSegments {
 
 export function salesRevision() { return Number(database().prepare("SELECT value FROM sales_meta WHERE key='revision'").get()?.value || 0); }
 
-export function salesMonths(siteCode?: string | string[]) {
+export function salesMonths(siteCode?: SalesScope) {
   const filter = sqlFilter(siteCode);
   return database().prepare(`SELECT month, imported_at AS importedAt, filename, file_hash AS fileHash, revision, (SELECT COUNT(*) FROM sales_rows r WHERE r.import_id=m.import_id${filter.sql.replaceAll('site_code', 'r.site_code')}) AS rowCount FROM sales_months m ORDER BY month DESC`).all(...filter.args) as Record<string, unknown>[];
 }
@@ -107,11 +124,11 @@ export function salesCoverage(month: string) {
 export function salesCoverageChange(month: string, incoming: readonly SalesRow[]): SalesCoverageChange {
   const previous = salesCoverage(month);
   const normalize = (value: string) => value.trim().toUpperCase();
-  type Line = Pick<SalesRow, 'siteCode'|'company'|'date'|'orderNumber'|'itemCode'|'itemName'|'brand'|'quantity'|'priceCents'|'valueCents'>;
-  const oldRows = database().prepare(`SELECT site_code siteCode, company, date, order_number orderNumber,
+  type Line = Pick<SalesRow, 'siteCode'|'location'|'company'|'date'|'orderNumber'|'itemCode'|'itemName'|'brand'|'quantity'|'priceCents'|'valueCents'>;
+  const oldRows = database().prepare(`SELECT site_code siteCode, location, company, date, order_number orderNumber,
     item_code itemCode, item_name itemName, brand, quantity, price_cents priceCents, value_cents valueCents
     FROM sales_rows WHERE month=?`).all(month) as Line[];
-  const documentKey = (row: Line) => JSON.stringify([normalize(row.siteCode), normalize(row.company), row.date, normalize(row.orderNumber)]);
+  const documentKey = (row: Line) => JSON.stringify([normalize(row.siteCode), salesLocationKey(row.location), normalize(row.company), row.date, normalize(row.orderNumber)]);
   const lineKey = (row: Line) => JSON.stringify([normalize(row.itemCode), normalize(row.itemName), normalize(row.brand), row.quantity, row.priceCents, row.valueCents]);
   function group(rows: readonly Line[]) {
     const sites = new Map<string, number>();
@@ -137,7 +154,7 @@ export function salesCoverageChange(month: string, incoming: readonly SalesRow[]
     if (!removed) continue;
     affectedDocumentCount++; removedLineCount += removed;
     // Bound preview payload while retaining exact totals and concrete examples.
-    if (reducedDocuments.length < 50) reducedDocuments.push({ siteCode: normalize(doc.row.siteCode), company: doc.row.company,
+    if (reducedDocuments.length < 50) reducedDocuments.push({ siteCode: normalize(doc.row.siteCode), location: doc.row.location, company: doc.row.company,
       date: doc.row.date, orderNumber: doc.row.orderNumber, previousRows: doc.count, incomingRows: next?.count || 0, removedLines: removed });
   }
   return { previousRowCount: previous.rowCount, rowDelta: incoming.length - previous.rowCount,
@@ -146,7 +163,7 @@ export function salesCoverageChange(month: string, incoming: readonly SalesRow[]
     reducedDocuments, affectedDocumentCount, removedLineCount, requiresRegressionAcknowledgement: removedLineCount > 0 };
 }
 
-export function getSalesView(month: string, siteCode?: string | string[], fromMonth = month, toMonth = month, catalog: readonly SalesCatalogEntry[] = seedSalesCatalog): SalesView {
+export function getSalesView(month: string, siteCode?: SalesScope, fromMonth = month, toMonth = month, catalog: readonly SalesCatalogEntry[] = seedSalesCatalog): SalesView {
   const classifySalesProduct = createSalesProductClassifier(catalog);
   const current = currentSalesImport(month);
   const revision = salesRevision();
@@ -167,7 +184,7 @@ export function getSalesView(month: string, siteCode?: string | string[], fromMo
   const db = database();
   const args: (string | number)[] = [Number(current.import_id), ...filter.args];
   const summary = aggregate(db.prepare(`SELECT COUNT(*) rows, COALESCE(SUM(quantity),0) quantity, COALESCE(SUM(value_cents),0) value_cents FROM sales_rows WHERE import_id=?${filter.sql}`).get(...args) as Record<string, unknown>);
-  const sites = db.prepare(`SELECT MIN(site_code) siteCode, MIN(location) location, MIN(agent) agent, COUNT(*) rows, COALESCE(SUM(quantity),0) quantity, COALESCE(SUM(value_cents),0) value_cents FROM sales_rows WHERE import_id=?${filter.sql} GROUP BY UPPER(TRIM(site_code)) ORDER BY value_cents DESC, siteCode`).all(...args).map(row => ({ ...aggregate(row as Record<string, unknown>), siteCode: safeText((row as Record<string, unknown>).siteCode), location: safeText((row as Record<string, unknown>).location), agent: safeText((row as Record<string, unknown>).agent) })) as SalesSite[];
+  const sites = db.prepare(`SELECT MIN(site_code) siteCode, MIN(location) location, MIN(agent) agent, COUNT(*) rows, COALESCE(SUM(quantity),0) quantity, COALESCE(SUM(value_cents),0) value_cents FROM sales_rows WHERE import_id=?${filter.sql} GROUP BY UPPER(TRIM(site_code)), location ORDER BY value_cents DESC, siteCode, location`).all(...args).map(row => ({ ...aggregate(row as Record<string, unknown>), siteCode: safeText((row as Record<string, unknown>).siteCode), location: safeText((row as Record<string, unknown>).location), agent: safeText((row as Record<string, unknown>).agent) })) as SalesSite[];
   const daily = db.prepare(`SELECT date, COUNT(*) rows, COALESCE(SUM(quantity),0) quantity, COALESCE(SUM(value_cents),0) value_cents FROM sales_rows WHERE import_id=?${filter.sql} GROUP BY date ORDER BY date`).all(...args).map(row => ({ ...aggregate(row as Record<string, unknown>), date: String((row as Record<string, unknown>).date) })) as SalesDaily[];
   const productRows = db.prepare(`SELECT item_code itemCode, item_name itemName, brand, category, sub_category subCategory, COUNT(*) rows, COALESCE(SUM(quantity),0) quantity, COALESCE(SUM(value_cents),0) value_cents FROM sales_rows WHERE import_id=?${filter.sql} GROUP BY item_code, item_name, brand, category, sub_category ORDER BY value_cents DESC, item_code`).all(...args) as Record<string, unknown>[];
   const products = productRows.map(row => { const bucket = classify(row, classifySalesProduct); return { ...aggregate(row), itemCode: safeText(row.itemCode), itemName: safeText(row.itemName), brand: safeText(row.brand), category: safeText(row.category), subCategory: safeText(row.subCategory), segment: bucket.segment, ...(bucket.subsegment ? { subsegment: bucket.subsegment } : {}) }; }) as SalesProduct[];
@@ -184,7 +201,7 @@ export function getSalesView(month: string, siteCode?: string | string[], fromMo
 }
 
 
-export function getSalesViewSnapshot(month: string, siteCode?: string | string[], fromMonth = month, toMonth = month, catalog: readonly SalesCatalogEntry[] = seedSalesCatalog): SalesView {
+export function getSalesViewSnapshot(month: string, siteCode?: SalesScope, fromMonth = month, toMonth = month, catalog: readonly SalesCatalogEntry[] = seedSalesCatalog): SalesView {
   const db=database();
   db.exec('BEGIN;');
   try {

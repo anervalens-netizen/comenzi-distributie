@@ -10,5 +10,5 @@ declare module '#mobiup-stock-parser' {
   export function parseStockFileRuntime(bytes:Uint8Array,filename:string):Promise<import('./stock-file').ParsedStockGroup[]>;
 }
 declare module '#mobiup-sales-view' {
-  export function getSalesViewRuntime(month:string,siteCode:string|string[]|undefined,fromMonth:string,toMonth:string,catalog:readonly import('./sales-classification').SalesCatalogEntry[]):Promise<import('./sales-types').SalesView>;
+  export function getSalesViewRuntime(month:string,siteCode:import('./sales-location').SalesScope|undefined,fromMonth:string,toMonth:string,catalog:readonly import('./sales-classification').SalesCatalogEntry[]):Promise<import('./sales-types').SalesView>;
 }

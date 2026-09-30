@@ -17,8 +17,8 @@ const hash = `scrypt:${salt}:${scryptSync(password, salt, 32, { N: 32768, r: 8, 
 const add = db.prepare('INSERT INTO users (id,username,name,role,manager_scope,warehouse_id,password_hash,must_change_password,warehouse_name,site_code) VALUES (?,?,?,?,?,?,?,0,?,?)');
 add.run('sales-manager', 'sales.manager', 'Manager verificare', 'manager', 'global', null, hash, null, '');
 add.run('sales-regional', 'sales.regional', 'Manager regional verificare', 'manager', 'assigned', null, hash, null, '');
-add.run('sales-agent', 'sales.agent', 'Agent verificare', 'agent', 'assigned', 'g-2', hash, 'Gestiune DAVIDD', 'DAVIDD');
-add.run('sales-other', 'sales.other', 'Alt agent', 'agent', 'assigned', 'g-5', hash, 'Gestiune TR01PH', 'TR01PH');
+add.run('sales-agent', 'sales.agent', 'Agent verificare', 'agent', 'assigned', 'g-2', hash, 'TR Gestiune DAVIDD', 'DAVIDD');
+add.run('sales-other', 'sales.other', 'Alt agent', 'agent', 'assigned', 'g-5', hash, 'TR Gestiune TR01PH', 'TR01PH');
 add.run('sales-pending', 'sales.pending', 'Agent în curs de angajare', 'agent', 'assigned', 'g-15', hash, null, '');
 db.prepare("INSERT INTO manager_agents(manager_id,agent_id) VALUES ('sales-regional','sales-agent')").run();
 db.prepare("INSERT INTO settings (key,value) VALUES ('seed-v1','1')").run();

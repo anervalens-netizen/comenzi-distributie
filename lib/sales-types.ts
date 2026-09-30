@@ -21,6 +21,7 @@ export type SalesRow = {
 
 export type SalesAgentMapping = {
   siteCode: string;
+  location?: string;
   userId: string | null;
   name: string | null;
   status: 'mapped' | 'missing' | 'duplicate';
@@ -91,7 +92,7 @@ export type SalesCoverageChange = {
   previousRowCount: number; rowDelta: number; previousFirstDate: string | null; previousLastDate: string | null; missingSiteCodes: string[];
   requiresRegressionAcknowledgement: boolean;
   reducedSites: { siteCode: string; previousRows: number; incomingRows: number }[];
-  reducedDocuments: { siteCode: string; company: string; date: string; orderNumber: string; previousRows: number; incomingRows: number; removedLines: number }[];
+  reducedDocuments: { siteCode: string; location?: string; company: string; date: string; orderNumber: string; previousRows: number; incomingRows: number; removedLines: number }[];
   affectedDocumentCount: number; removedLineCount: number;
 };
 

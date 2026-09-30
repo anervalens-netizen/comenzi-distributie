@@ -22,7 +22,7 @@ async function login(username) {
   return (await call('auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password: 'Sales-QA-2026-only' }) })).cookie;
 }
 const columns = ['Data','SiteCode','ItemCode','ItemName','Cantitate','Brand','Pret','Valoare','Locatie','Firma','ASM','Regional','Nr','Categorie','SubCategorie','Agent'];
-const row = (site, quantity, value, date = '2026-09-01', location = 'TR Gestiune') => [date,site,'P1','Produs verificare',quantity,'Brand',10,value,location,'MobiUp','-','-','BON-1','Cartele','SIM','SURSA'];
+const row = (site, quantity, value, date = '2026-09-01', location = `TR Gestiune ${site}`) => [date,site,'P1','Produs verificare',quantity,'Brand',10,value,location,'MobiUp','-','-','BON-1','Cartele','SIM','SURSA'];
 function excel(rows) {
   const book = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet([columns,...rows]), 'Vanzari');
