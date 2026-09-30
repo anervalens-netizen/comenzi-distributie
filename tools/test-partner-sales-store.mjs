@@ -18,8 +18,8 @@ try{
  INSERT INTO history_meta VALUES('current_reference','ref');
  CREATE TABLE history_references(id TEXT,master_json TEXT);
  INSERT INTO history_references VALUES('ref','[]');
- CREATE TABLE history_imports(id INTEGER,state TEXT,period_start TEXT,period_end TEXT);
- INSERT INTO history_imports VALUES(1,'active','2026-01-01','2026-09-30');
+ CREATE TABLE history_imports(id INTEGER,state TEXT,period_start TEXT,period_end TEXT,value_cents INTEGER,quantity_micros INTEGER,row_count INTEGER);
+ INSERT INTO history_imports VALUES(1,'active','2026-01-01','2026-09-30',560000,8000000,10);
  CREATE TABLE history_identities(id INTEGER,client_code TEXT);
  INSERT INTO history_identities VALUES(1,'123'),(2,'999');
  CREATE TABLE history_allocations(identity_id INTEGER,reference_id TEXT,status TEXT,partner_ids_json TEXT,candidates_json TEXT);
