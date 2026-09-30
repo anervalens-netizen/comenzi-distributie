@@ -1,10 +1,11 @@
 'use client';
 import {useEffect,useState} from 'react';
-import {api,errorMessage,money} from '@/lib/client-api';
+import {api,errorMessage} from '@/lib/client-api';
 import type {PartnerActivityOverview,ActivityFilter,ActivitySort} from '@/lib/partner-activity-api';
 import './partner-sales.css';
 const filters:{key:ActivityFilter;label:string}[]=[{key:'all',label:'Toți clienții'},{key:'attention',label:'De contactat'},{key:'regular',label:'Comenzi constante'},{key:'inactive',label:'Nu au mai facturat'},{key:'reactivated',label:'Au revenit'},{key:'incomplete',label:'Date insuficiente'}];
 const sorts:{key:ActivitySort;label:string}[]=[{key:'value',label:'Valoare vânzări'},{key:'documents',label:'Număr facturări'},{key:'lastBilling',label:'Ultima facturare'},{key:'name',label:'Client'},{key:'county',label:'Județ'},{key:'agent',label:'Agent actual'}];
+const amount=new Intl.NumberFormat('ro-RO',{minimumFractionDigits:2,maximumFractionDigits:2});
 const date=(value:string|null|undefined)=>value?value.split('-').reverse().join('.'):'—';
 export function PartnerActivity({scopeQuery,salesPeriod,onPeriodChange,onOpen,onBack}:{scopeQuery:string;salesPeriod:string;onPeriodChange:(value:string)=>void;onOpen:(id:string)=>void;onBack:()=>void}){
   const [filter,setFilter]=useState<ActivityFilter>('all'),[query,setQuery]=useState(''),[county,setCounty]=useState(''),[page,setPage]=useState(0),[retry,setRetry]=useState(0);
@@ -45,7 +46,7 @@ export function PartnerActivity({scopeQuery,salesPeriod,onPeriodChange,onOpen,on
           <table className="partner-sales-table"><thead><tr>{heading('name','Client')}{heading('value','Vânzări (lei)')}{heading('county','Județ')}{heading('agent','Agent actual')}{heading('documents','Facturări*')}{heading('lastBilling','Ultima facturare')}</tr></thead>
           <tbody>{ready.partners.map(({partner,sales,metrics,agents})=><tr key={partner.id}>
             <th scope="row"><button type="button" className="partner-activity-name" onClick={()=>onOpen(partner.id)}>{partner.name}</button><small>{partner.historyCatalog?.franchiseCode?'Punct '+partner.historyCatalog.franchiseCode:'CUI '+partner.cui}</small>{partner.city&&<small>{partner.city}</small>}</th>
-            <td className="numeric"><strong>{metrics?.valueCents!==null&&metrics?.valueCents!==undefined?money(metrics.valueCents/100):'—'}</strong>{!sales?<small>Neasociat</small>:!sales.coverageComplete&&<small>Valoare parțială</small>}</td>
+            <td className="numeric"><strong>{metrics?.valueCents!==null&&metrics?.valueCents!==undefined?amount.format(metrics.valueCents/100):'—'}</strong>{!sales?<small>Neasociat</small>:!sales.coverageComplete&&<small>Valoare parțială</small>}</td>
             <td>{partner.county||'De stabilit'}</td>
             <td>{agents.length?agents.map(a=><span className="partner-table-agent" key={a.id}>{a.name}</span>):<span className="muted">Fără agent</span>}{agents.length>1&&<small>Portofoliu comun</small>}</td>
 
