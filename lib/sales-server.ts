@@ -56,19 +56,35 @@ function decoratedView(view: SalesView, snapshot: Awaited<ReturnType<typeof mapp
   return { ...view, sites: view.sites.map(site => ({ ...site, agent: mappingFor(site, snapshot).name || '' })) };
 }
 
+async function regionManagerIds(managerId: string) {
+  const rows = await db().prepare("SELECT m.id,a.id AS agent_id FROM users m LEFT JOIN manager_agents ma ON ma.manager_id=m.id LEFT JOIN users a ON a.id=ma.agent_id AND a.role='agent' AND a.active=1 WHERE m.role='manager' AND m.manager_scope='assigned' AND m.active=1").all<{ id: string; agent_id: string | null }>();
+  const assignments = new Map<string, Set<string>>();
+  for (const row of rows.results) {
+    const ids = assignments.get(row.id) || new Set<string>();
+    if (row.agent_id) ids.add(row.agent_id);
+    assignments.set(row.id, ids);
+  }
+  const selected = assignments.get(managerId);
+  return selected ? [...assignments].filter(([, ids]) => ids.size === selected.size && [...ids].every(id => selected.has(id))).map(([id]) => id) : [];
+}
+
 function actorScope(actorIds: string[], snapshot: Awaited<ReturnType<typeof mappingSnapshot>>, siteCode?: string): SalesScope {
   const actors = snapshot.actors.filter(actor => actorIds.includes(actor.id));
   const warehouseNames: string[] = [], siteCodes: string[] = [];
+  const warehouseSites: { warehouseName: string; siteCode: string }[] = [];
   for (const actor of actors) {
     if (actor.warehouseName) {
-      if (snapshot.locations.get(salesLocationKey(actor.warehouseName))?.length !== 1) fail(409, 'Gestiunea nu este asociată unui singur agent activ.');
-      warehouseNames.push(actor.warehouseName);
+      if (snapshot.locations.get(salesLocationKey(actor.warehouseName))?.length === 1) warehouseNames.push(actor.warehouseName);
+      else {
+        if (!actor.siteCode || snapshot.grouped.get(mappingKey(actor.siteCode))?.length !== 1) fail(409, 'Gestiunea nu este asociată unui singur agent activ.');
+        warehouseSites.push({ warehouseName: actor.warehouseName, siteCode: mappingKey(actor.siteCode) });
+      }
     } else if (actor.siteCode) {
       if (snapshot.grouped.get(mappingKey(actor.siteCode))?.length !== 1) fail(409, 'SiteCode-ul nu este asociat unui singur utilizator activ.');
       siteCodes.push(mappingKey(actor.siteCode));
     }
   }
-  return { warehouseNames, siteCodes, excludedWarehouseNames: [...snapshot.locations].filter(([, matches]) => matches.length === 1).map(([key]) => key), siteCode };
+  return { warehouseNames, warehouseSites, siteCodes, excludedWarehouseNames: [...snapshot.locations].filter(([, matches]) => matches.length === 1).map(([key]) => key), siteCode };
 }
 
 async function salesCatalog() {
@@ -110,7 +126,7 @@ export async function salesView(req: Request, user: User) {
     // Manager seller identity belongs only to sales, never to operational agent/warehouse scope.
     const managerId = query.get('managerId');
     if (!query.get('agentId')) {
-      if (managerId && managerId !== '__unassigned') selectedIds.push(managerId);
+      if (managerId && managerId !== '__unassigned') selectedIds.push(...await regionManagerIds(managerId));
       else if (!managerId && !isGlobalManager(user)) selectedIds.push(user.id);
     }
     const allowedIds = actorIds;

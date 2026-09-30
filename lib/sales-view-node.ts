@@ -65,7 +65,14 @@ export function createSalesViewRuntime(options: {
       const identity = options.identity();
       const unique = (values: string[], key: (value: string) => string) => [...new Set(values.map(key).filter(Boolean))].sort();
       const scope = siteCode && typeof siteCode === 'object' && !Array.isArray(siteCode)
-        ? { warehouseNames: unique(siteCode.warehouseNames, salesLocationKey), siteCodes: unique(siteCode.siteCodes, siteKey), excludedWarehouseNames: unique(siteCode.excludedWarehouseNames, salesLocationKey), siteCode: siteCode.siteCode ? siteKey(siteCode.siteCode) : undefined }
+        ? {
+          warehouseNames: unique(siteCode.warehouseNames, salesLocationKey),
+          warehouseSites: [...new Map((siteCode.warehouseSites || []).map(pair => {
+            const normalized = { warehouseName: salesLocationKey(pair.warehouseName), siteCode: siteKey(pair.siteCode) };
+            return [JSON.stringify(normalized), normalized] as const;
+          })).entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, pair]) => pair),
+          siteCodes: unique(siteCode.siteCodes, siteKey), excludedWarehouseNames: unique(siteCode.excludedWarehouseNames, salesLocationKey), siteCode: siteCode.siteCode ? siteKey(siteCode.siteCode) : undefined,
+        }
         : Array.isArray(siteCode) ? [...new Set(siteCode.map(siteKey).filter(Boolean))].sort()
         : siteCode?.trim() ? [siteKey(siteCode)] : undefined;
       const catalogJson = JSON.stringify(catalog);

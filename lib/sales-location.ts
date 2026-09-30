@@ -3,9 +3,10 @@ export const salesLocationKey = (value: string) => value.normalize('NFD').replac
 export const salesSiteKey = (value: string) => value.trim().replace(/[a-z]/g, char => char.toUpperCase());
 export const salesPairKey = (site: { siteCode: string; location: string }) => JSON.stringify([salesSiteKey(site.siteCode), site.location]);
 
-/** Location selectors and site-only sellers are ORed; a requested site narrows both. */
+/** Locations, constrained location/site pairs and site-only sellers are ORed; a requested site narrows all. */
 export type SalesScope = string | string[] | {
   warehouseNames: string[];
+  warehouseSites?: { warehouseName: string; siteCode: string }[];
   siteCodes: string[];
   excludedWarehouseNames: string[];
   siteCode?: string;

@@ -6,7 +6,7 @@ import { resolve } from 'node:path';
 import type { SalesAggregate, SalesCardsSim, SalesDaily, SalesMonthly, SalesProduct, SalesRow, SalesSegment, SalesSegments, SalesSite, SalesView, SalesCoverageChange } from './sales-types';
 import { createSalesProductClassifier, type SalesCatalogEntry } from './sales-classification';
 import seed from '../resources/seed.json';
-import { salesLocationKey, type SalesScope } from './sales-location';
+import { salesLocationKey, salesSiteKey, type SalesScope } from './sales-location';
 
 const dataDirectory = resolve(process.env.MOBIUP_DATA_DIR || './work/server-data');
 export const salesDatabasePath = resolve(dataDirectory, 'sales.sqlite');
@@ -57,6 +57,10 @@ const sqlFilter = (siteCodes?: SalesScope) => {
     const args: string[] = [], clauses: string[] = [];
     const placeholders = (values: string[]) => { args.push(...values); return values.map(() => '?').join(','); };
     if (warehouseNames.length) clauses.push(`sales_location_key(location) IN (${placeholders(warehouseNames.map(salesLocationKey))})`);
+    for (const pair of siteCodes.warehouseSites || []) {
+      clauses.push('(sales_location_key(location)=? AND UPPER(TRIM(site_code))=?)');
+      args.push(salesLocationKey(pair.warehouseName), salesSiteKey(pair.siteCode));
+    }
     if (siteCodes.siteCodes.length) {
       let fallback = `UPPER(TRIM(site_code)) IN (${placeholders(siteCodes.siteCodes)})`;
       // A site-only seller cannot take rows owned by a unique current warehouse.

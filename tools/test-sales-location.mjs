@@ -18,10 +18,15 @@ add('south', 'agent', 'SHARED', 'TR Oras Sud 01');
 add('stable', 'agent', 'STABLE', 'TR Oras Est 04');
 add('seller', 'manager', 'SELLER', null);
 add('peer', 'manager', '', null);
+add('different', 'manager', 'DIFFERENT', null);
+add('inactive-manager', 'manager', 'INACTIVE-MANAGER', null, 'assigned', 0);
 add('global', 'manager', '', null, 'global');
 add('site-only', 'agent', 'ONLY', null);
 add('inactive', 'agent', 'DISABLED', 'TR Inactive', 'assigned', 0);
 for (const manager of ['seller', 'peer']) for (const agent of ['north', 'stable']) app.prepare('INSERT INTO manager_agents VALUES(?,?)').run(manager, agent);
+for (const agent of ['north', 'stable', 'south']) app.prepare('INSERT INTO manager_agents VALUES(?,?)').run('different', agent);
+for (const agent of ['north', 'stable']) app.prepare('INSERT INTO manager_agents VALUES(?,?)').run('inactive-manager', agent);
+app.prepare('INSERT INTO manager_agents VALUES(?,?)').run('peer', 'inactive');
 const user = id => { const row = app.prepare('SELECT * FROM users WHERE id=?').get(id); return { id, role: row.role, managerScope: row.manager_scope, siteCode: row.site_code, warehouseName: row.warehouse_name }; };
 const stubs = {
   './server': `import {DatabaseSync} from 'node:sqlite';import {resolve} from 'node:path';
@@ -82,7 +87,40 @@ try {
   assert.equal((await read('site-only')).summary.rows, 1);
   assert.equal((await read('seller')).summary.rows, 5, 'Own scope contains assigned warehouses plus manager seller');
   assert.equal((await read('global', '&managerId=seller')).summary.rows, 5);
-  assert.equal((await read('global', '&managerId=peer')).summary.rows, 4, 'Shared assignments do not transfer another manager seller identity');
+  assert.equal((await read('peer')).summary.rows, 4, 'Direct regional default retains only its own seller identity');
+  for (const manager of ['seller', 'peer']) {
+    const region = await read('global', `&managerId=${manager}`);
+    assert.equal(region.summary.rows, 5, 'Equal active assignments include the co-manager seller for either selector ID');
+    assert.ok(region.sites.some(site => site.agent === 'Synthetic seller'));
+    assert.deepEqual((await read('global', `&managerId=${manager}&agentId=north`)).summary, north.summary);
+  }
+  // Both co-managers can be sellers; agent selections must exclude both identities.
+  app.prepare("UPDATE users SET site_code='' WHERE id='site-only'").run();
+  app.prepare("UPDATE users SET site_code='ONLY' WHERE id='peer'").run();
+  for (const manager of ['seller', 'peer']) {
+    assert.equal((await read('global', `&managerId=${manager}`)).summary.rows, 6);
+    assert.deepEqual((await read('global', `&managerId=${manager}&agentId=north`)).summary, north.summary);
+  }
+  assert.equal((await read('seller')).summary.rows, 5);
+  assert.equal((await read('peer')).summary.rows, 5);
+  await assert.rejects(read('seller', '&managerId=peer'), /404/);
+  app.prepare("UPDATE users SET site_code='' WHERE id='peer'").run();
+  app.prepare("UPDATE users SET site_code='ONLY' WHERE id='site-only'").run();
+  // A non-equal assignment must not contribute its seller, even when it overlaps the whole region.
+  app.prepare("UPDATE users SET site_code='SELLER' WHERE id='different'").run();
+  app.prepare("UPDATE users SET site_code='' WHERE id='seller'").run();
+  assert.equal((await read('global', '&managerId=peer')).summary.rows, 4);
+  app.prepare("UPDATE users SET site_code='DIFFERENT' WHERE id='different'").run();
+  app.prepare("UPDATE users SET site_code='SELLER' WHERE id='seller'").run();
+  // Inactive and global managers with identical assignments cannot contribute sellers.
+  app.prepare("UPDATE users SET site_code='SELLER' WHERE id='inactive-manager'").run();
+  app.prepare("UPDATE users SET site_code='' WHERE id='seller'").run();
+  assert.equal((await read('global', '&managerId=peer')).summary.rows, 4);
+  app.prepare("UPDATE users SET site_code='SELLER' WHERE id='global'").run();
+  for (const agent of ['north', 'stable']) app.prepare('INSERT INTO manager_agents VALUES(?,?)').run('global', agent);
+  assert.equal((await read('global', '&managerId=peer')).summary.rows, 4);
+  app.prepare("UPDATE users SET site_code='' WHERE id='global'").run();
+  app.prepare("UPDATE users SET site_code='SELLER' WHERE id='seller'").run();
   assert.equal((await read('seller', '&managerId=seller&agentId=north')).summary.rows, 3);
   assert.equal((await read('global', '&managerId=seller&siteCode=SHARED')).summary.rows, 3, 'Requested colliding code cannot broaden region');
   assert.equal((await read('global', '&managerId=seller')).sites.some(s => s.location === 'TR Oras Sud 01'), false);
@@ -122,7 +160,42 @@ try {
   await assert.rejects(read('site-only'), /409/);
   app.prepare("UPDATE users SET active=0 WHERE id='seller-collision'").run();
   assert.equal((await preview()).mappings.find(m => m.siteCode === 'ONLY').userId, 'site-only');
-  console.log('PASS: exact location attribution, shared source pairs, manager seller and regional/agent scopes, worker cache, historical/inactive isolation, preview freshness, authoritative totals and location replacement protection.');
+  // A/B share a normalized warehouse: each unique site is constrained to that location.
+  add('shared-a', 'agent', ' a ', 'TR Oraș Comun');
+  add('shared-b', 'agent', 'B', 'tr oras-comun');
+  add('shared-region', 'manager', '', null);
+  for (const agent of ['shared-a', 'shared-b']) app.prepare('INSERT INTO manager_agents VALUES(?,?)').run('shared-region', agent);
+  const sharedRows = [...rows, row(' A ', 'tr ORAS comun'), row('b', 'TR Oraș Comun'), row('A', 'TR Historical A'), row('B', 'TR Historical B'), row('OTHER', 'TR Oras Comun')].map((r, i) => ({ ...r, rowNumber: i + 2 }));
+  const sharedPreview = await preview(sharedRows);
+  assert.equal(sharedPreview.mappings.find(m => m.siteCode.trim() === 'A' && m.location === 'tr ORAS comun').userId, 'shared-a');
+  assert.equal(sharedPreview.mappings.find(m => m.siteCode === 'b' && m.location === 'TR Oraș Comun').userId, 'shared-b');
+  await apply(sharedRows, sharedPreview);
+  for (const [id, code] of [['shared-a', 'A'], ['shared-b', 'B']]) {
+    const own = await read(id);
+    assert.deepEqual(own.summary, { rows: 1, quantity: 1, value: 1.19 });
+    assert.equal(own.sites[0].siteCode.trim().toUpperCase(), code);
+    assert.equal(own.sites[0].agent, `Synthetic ${id}`);
+    for (const aggregate of [own.products[0], own.daily[0], own.monthly[0]]) assert.equal(aggregate.rows, 1);
+    assert.equal(own.months[0].rowCount, 1);
+    assert.deepEqual((await read('global', `&agentId=${id}`)).summary, own.summary);
+  }
+  assert.equal((await read('global', '&managerId=shared-region')).summary.rows, 2);
+  assert.equal((await read('shared-region')).summary.rows, 2);
+  assert.equal((await read('global', '&managerId=shared-region&siteCode=A')).summary.rows, 1);
+  assert.equal((await read('global', '&managerId=shared-region&agentId=shared-a&siteCode=B')).summary.rows, 0);
+  // Site-only changes must change the worker/cache scope even with the same warehouse.
+  app.prepare("UPDATE users SET site_code='C' WHERE id='shared-a'").run();
+  assert.equal((await read('shared-a')).summary.rows, 0);
+  app.prepare("UPDATE users SET site_code='A' WHERE id='shared-a'").run();
+  assert.equal((await read('shared-a')).summary.rows, 1);
+  app.prepare("UPDATE users SET site_code=' a ' WHERE id='shared-b'").run();
+  for (const id of ['shared-a', 'shared-b', 'shared-region']) await assert.rejects(read(id), /409/);
+  await assert.rejects(read('global', '&managerId=shared-region'), /409/);
+  assert.equal((await preview(sharedRows)).mappings.find(m => m.siteCode.trim() === 'A' && m.location === 'tr ORAS comun').status, 'duplicate');
+  app.prepare("UPDATE users SET site_code=' ' WHERE id='shared-b'").run();
+  await assert.rejects(read('shared-b'), /409/);
+  await assert.rejects(read('global', '&managerId=shared-region'), /409/);
+  console.log('PASS: exact location attribution, grouped co-manager sellers, constrained duplicate warehouse/site scopes, collision rejection, worker cache, historical/inactive isolation, preview freshness, authoritative totals and location replacement protection.');
 } finally {
   process.chdir(root); app.close(); rmSync(directory, { recursive: true, force: true });
 }
