@@ -38,6 +38,11 @@ try{
  const first=await call('qa-agent1');assert.equal(first.state,'ready');assert.equal(first.total,2);assert(!JSON.stringify(first).includes('activity-other'));
  const second=await call('qa-agent2');assert.equal(second.total,2);assert(second.partners.some(p=>p.partner.id==='activity-shared'));
  const manager=await call('qa-manager');assert.equal(manager.total,3);assert.equal(manager.counts.all,3,'national records not summed across shared agents');
+ assert.deepEqual(manager.partners.map(r=>r.partner.id),['activity-other','activity-shared','activity-one'],'sales ranked across complete selection');
+ assert.equal(manager.partners[0].metrics.valueCents,90000);assert.equal(manager.partners[0].metrics.documents,1);assert.equal(manager.partners[0].metrics.lastBilling,'2026-09-15');
+ assert.deepEqual(manager.partners.find(r=>r.partner.id==='activity-shared').agents.map(a=>a.id).sort(),app.prepare("SELECT id FROM users WHERE role='agent' AND active=1 AND warehouse_id IN ('g-5','g-3')").all().map(a=>a.id).sort(),'all shared current owners shown');
+ assert.deepEqual((await call('qa-manager','sort=value&direction=asc')).partners.map(r=>r.partner.id),['activity-one','activity-shared','activity-other']);
+ await call('qa-manager','sort=bad',400);await call('qa-manager','direction=sideways',400);
  const scoped=await call('qa-manager','agentId=qa-agent1');assert.equal(scoped.total,2);
  await call('qa-agent1','agentId=qa-agent2',403);await call('qa-agent1','activity=unknown',400);await call('qa-agent1','page=-1',400);
  assert.equal((await call('qa-agent1','county=Different')).total,0);
@@ -61,6 +66,9 @@ try{
  for(const [period,expected] of [['year:2026',['activity-one','activity-shared']],['year:2023',['activity-old']],['unknown',['activity-unlinked']],['older365',['activity-old']]]){
    assert.deepEqual(await idsFor('browse',period),expected);assert.deepEqual(await idsFor('map',period),expected);
  }
+ const ranked=await call('qa-agent1','sort=value&direction=asc');
+ assert.equal(ranked.partners.at(-1).partner.id,'activity-unlinked','unknown sales stay last in either direction');
+ const oldYear=await call('qa-agent1','salesPeriod=year:2023');assert.equal(oldYear.partners[0].metrics.valueCents,15000);assert.equal(oldYear.partners[0].metrics.documents,1);
  await call('qa-agent1','salesPeriod=bad',400);
  console.log('PASS: activity HTTP enforces current agent scope, shared records, national scope, manager filters and validated paging.');
 }finally{

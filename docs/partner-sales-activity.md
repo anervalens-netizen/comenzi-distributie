@@ -134,3 +134,25 @@ Seller territory references may provide sellerProvenance to distinguish an owner
 confirmation from customer-distribution inference. Geographic inference must use
 independently known client counties, count distinct companies rather than lines,
 and inspect changes across years and conflicting clients. Real evidence is private.
+
+
+## Sales table
+
+The activity page uses one paginated sortable table, initially descending by net
+sales value across the full selected portfolio. Client and value appear first so
+both fit on mobile; remaining columns scroll within the table. Period, county,
+search and optional activity filters sit above it. The existing manager region
+and agent controls scope the same table. Current shared owners are displayed;
+unassigned counties remain visible to managers without an agent filter.
+
+Snapshot version 3 adds a derived daily table. Selected-period sales include
+returns and preserve missing amounts. Positive document groups are counted once
+per partner/date/site/number, excluding blank numbers, net cancellations and free
+movements. This is labeled “Facturări”, not a verified count of application orders.
+The latest positive billing date is scoped to the selected period too. Unlinked
+records display a dash, never a false zero; partial associations are marked.
+All sorting occurs before pagination, with unknown values last in both directions.
+No national total is calculated by summing potentially shared/legacy aliases.
+
+After deployment, rebuild the derived snapshot using the version 3 builder;
+source history, original seller attribution and existing TR reports stay intact.

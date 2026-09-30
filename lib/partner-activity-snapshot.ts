@@ -3,7 +3,7 @@ import {createHash,randomUUID} from 'node:crypto';
 import {existsSync,renameSync,rmSync,chmodSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {partnerActivity,type PartnerActivity} from './partner-sales-health';
-export const activityVersion='2';
+export const activityVersion='3';
 export const normalizedCui=(s:string)=>s.toUpperCase().replace(/[^A-Z0-9]/g,'').replace(/^RO/,'');
 export const bucharestToday=()=>new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Bucharest',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
 export function historyStamp(c:DatabaseSync) {
@@ -11,9 +11,15 @@ export function historyStamp(c:DatabaseSync) {
   const imports=c.prepare("SELECT id,sha256,period_start,period_end,row_count FROM history_imports WHERE state='active' ORDER BY period_start,id").all() as {id:number;sha256:string;period_start:string;period_end:string;row_count:number}[];
   let through='',complete=true;
   for(const row of imports){if(through&&Date.parse(row.period_start)-Date.parse(through)>86400000)complete=false;if(row.period_end>through)through=row.period_end;}
-  return {reference,through,complete,signature:createHash('sha256').update(JSON.stringify([activityVersion,reference,imports])).digest('hex')};
+  return {reference,through,start:imports[0]?.period_start||'',complete,signature:createHash('sha256').update(JSON.stringify([activityVersion,reference,imports])).digest('hex')};
 }
 export type ActivitySnapshotRow={id:string;cui:string;activity:PartnerActivity;billingYears:string[];recentCents:number;previousCents:number;missingValues:number;coverageComplete:boolean};
+export type PartnerPeriodMetrics={valueCents:number|null;documents:number;lastBilling:string|null;missingValues:number};
+export function activityRange(period:string,start:string,asOf:string){
+ if(period.startsWith('year:'))return {from:period.slice(5)+'-01-01',to:[period.slice(5)+'-12-31',asOf].sort()[0]};
+ const days=period==='recent90'?90:period==='recent365'?365:0;
+ return {from:days?new Date(Date.parse(asOf)-(days-1)*86400000).toISOString().slice(0,10):start,to:asOf};
+}
 export type ActivitySnapshot=ReturnType<typeof readActivitySnapshot>;
 /** Batch rebuild outside the HTTP process. Source history and application DBs are read-only. */
 export function buildActivitySnapshot(directory:string,today=bucharestToday()) {
@@ -39,14 +45,20 @@ export function buildActivitySnapshot(directory:string,today=bucharestToday()) {
     const asOf=today<stamp.through?today:stamp.through;
     const recentStart=new Date(Date.parse(asOf)-29*86400000).toISOString().slice(0,10),previousStart=new Date(Date.parse(asOf)-59*86400000).toISOString().slice(0,10);
     const stats=c.prepare(prefix+"SELECT partner_id,SUM(value_cents IS NULL) missing,SUM(CASE WHEN date>=? AND date<=? THEN COALESCE(value_cents,0) ELSE 0 END) recent,SUM(CASE WHEN date>=? AND date<? THEN COALESCE(value_cents,0) ELSE 0 END) previous FROM facts GROUP BY partner_id").all(stamp.reference,recentStart,asOf,previousStart,recentStart) as {partner_id:string;missing:number;recent:number;previous:number}[];
-    const billing=new Map<string,{date:string;valueCents:number}[]>();
-    for(const row of c.prepare(prefix+"SELECT partner_id,date,SUM(valueCents) valueCents FROM (SELECT partner_id,date,site_id,document_number,SUM(value_cents) valueCents FROM facts GROUP BY partner_id,date,site_id,document_number HAVING SUM(value_cents)>0 AND SUM(CASE WHEN quantity_micros>0 AND value_cents>0 THEN 1 ELSE 0 END)>0 AND SUM(value_cents IS NULL)=0) GROUP BY partner_id,date ORDER BY partner_id,date").iterate(stamp.reference)){
+    const billing=new Map<string,{date:string;valueCents:number;documents:number}[]>();
+    for(const row of c.prepare(prefix+"SELECT partner_id,date,SUM(valueCents) valueCents,SUM(CASE WHEN TRIM(document_number)<>'' THEN 1 ELSE 0 END) documents FROM (SELECT partner_id,date,site_id,document_number,SUM(value_cents) valueCents FROM facts GROUP BY partner_id,date,site_id,document_number HAVING SUM(value_cents)>0 AND SUM(CASE WHEN quantity_micros>0 AND value_cents>0 THEN 1 ELSE 0 END)>0 AND SUM(value_cents IS NULL)=0) GROUP BY partner_id,date ORDER BY partner_id,date").iterate(stamp.reference)){
       const id=String(row.partner_id),days=billing.get(id)||[];
-      days.push({date:String(row.date),valueCents:Number(row.valueCents)});billing.set(id,days);
+      days.push({date:String(row.date),valueCents:Number(row.valueCents),documents:Number(row.documents)});billing.set(id,days);
     }
     const catalogById=new Map(partners.map(p=>[p.id,normalizedCui(p.cui||'')]));
     out=new DatabaseSync(temp);chmodSync(temp,0o600);
-    out.exec('CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT NOT NULL); CREATE TABLE activity(partner_id TEXT PRIMARY KEY,payload TEXT NOT NULL); BEGIN');
+    out.exec('CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT NOT NULL); CREATE TABLE activity(partner_id TEXT PRIMARY KEY,payload TEXT NOT NULL); CREATE TABLE daily(partner_id TEXT NOT NULL,date TEXT NOT NULL,value_cents INTEGER,missing_values INTEGER NOT NULL,documents INTEGER NOT NULL,last_billing TEXT,PRIMARY KEY(partner_id,date)); BEGIN');
+    const dailyInsert=out.prepare('INSERT INTO daily VALUES(?,?,?,?,?,?)');
+    const billingByDate=new Map([...billing].map(([id,days])=>[id,new Map(days.map(day=>[day.date,day]))]));
+    for(const row of c.prepare(prefix+"SELECT partner_id,date,SUM(value_cents) value_cents,SUM(value_cents IS NULL) missing_values FROM facts GROUP BY partner_id,date").iterate(stamp.reference)){
+      const id=String(row.partner_id),date=String(row.date),day=billingByDate.get(id)?.get(date);
+      if(catalogById.has(id))dailyInsert.run(id,date,row.value_cents,row.missing_values,day?.documents||0,day?date:null);
+    }
     const insert=out.prepare('INSERT INTO activity VALUES(?,?)');
     let count=0;
     for(const s of stats){
@@ -64,7 +76,7 @@ export function buildActivitySnapshot(directory:string,today=bucharestToday()) {
   } finally {out?.close();c.close();catalog.close();rmSync(temp,{force:true});}
 }
 /** Call only with current authorized partner IDs. Never cache access membership. */
-export function readActivitySnapshot(partners:{id:string;cui:string}[],directory=process.env.MOBIUP_DATA_DIR||'./work/server-data',today=bucharestToday()) {
+export function readActivitySnapshot(partners:{id:string;cui:string}[],directory=process.env.MOBIUP_DATA_DIR||'./work/server-data',today=bucharestToday(),options?:{period:string}) {
   const base=resolve(directory,'client-history'),history=resolve(base,'client-sales-history.sqlite'),path=resolve(base,'partner-activity.sqlite');
   if(!existsSync(history)||!existsSync(path))return {state:'unavailable' as const,message:'Centralizarea activității nu este încă pregătită.'};
   const c=new DatabaseSync(history,{readOnly:true}),snapshot=new DatabaseSync(path,{readOnly:true});
@@ -82,6 +94,13 @@ export function readActivitySnapshot(partners:{id:string;cui:string}[],directory
       row.activity.stale=lag>3;row.activity.sourceLagDays=lag;row.activity.alertEligible=row.activity.alertEligible&&lag<=3;
       rows.set(row.id,row);
     }
-    return {state:'ready' as const,through:stamp.through,builtAt:meta.builtAt,asOf:meta.asOf,recentStart:meta.recentStart,previousStart:meta.previousStart,stale:lag>3,rows};
+    const metrics=new Map<string,PartnerPeriodMetrics>(),range=activityRange(options?.period||'',stamp.start,meta.asOf);
+    if(options){
+      for(const row of snapshot.prepare('SELECT partner_id,SUM(value_cents) valueCents,SUM(documents) documents,MAX(last_billing) lastBilling,SUM(missing_values) missingValues FROM daily WHERE partner_id IN (SELECT value FROM json_each(?)) AND date>=? AND date<=? GROUP BY partner_id').all(JSON.stringify([...rows.keys()]),range.from,range.to)){
+        metrics.set(String(row.partner_id),{valueCents:row.valueCents===null?null:Number(row.valueCents),documents:Number(row.documents),lastBilling:row.lastBilling===null?null:String(row.lastBilling),missingValues:Number(row.missingValues)});
+      }
+      for(const id of rows.keys())if(!metrics.has(id))metrics.set(id,{valueCents:0,documents:0,lastBilling:null,missingValues:0});
+    }
+    return {state:'ready' as const,range,metrics,through:stamp.through,builtAt:meta.builtAt,asOf:meta.asOf,recentStart:meta.recentStart,previousStart:meta.previousStart,stale:lag>3,rows};
   }finally{c.close();snapshot.close();}
 }

@@ -36,6 +36,13 @@ try{
  const built=buildActivitySnapshot(root,'2026-09-30');assert.equal(built.rows,3);
  const result=readActivitySnapshot([{id:'a',cui:'RO123'},{id:'b',cui:'123'},{id:'unlinked',cui:'123'}],root,'2026-09-30');
  assert.equal(result.state,'ready');assert.equal(result.rows.size,2,'snapshot returns authorized exact IDs only');
+ const allMetrics=readActivitySnapshot([{id:'a',cui:'123'},{id:'b',cui:'123'}],root,'2026-09-30',{period:''});
+ assert.deepEqual(allMetrics.metrics.get('a'),{valueCents:60000,documents:6,lastBilling:'2026-07-06',missingValues:0});
+ assert.deepEqual(allMetrics.metrics.get('a'),allMetrics.metrics.get('b'),'shared membership does not multiply document totals');
+ const recent=readActivitySnapshot([{id:'a',cui:'123'}],root,'2026-09-30',{period:'recent90'});
+ assert.equal(recent.range.from,'2026-07-03');assert.equal(recent.metrics.get('a').valueCents,10000);assert.equal(recent.metrics.get('a').documents,1);
+ const empty=readActivitySnapshot([{id:'a',cui:'123'}],root,'2026-09-30',{period:'year:2025'});
+ assert.equal(empty.metrics.get('a').valueCents,0);assert.equal(empty.metrics.get('a').lastBilling,null);
  const sales=result.rows.get('a');
  assert.deepEqual(sales.billingYears,['2026']);assert.equal(sales.activity.lastBilling,'2026-07-06');assert.equal(sales.activity.billingDays,6,'duplicate membership never multiplies days');
  assert.equal(sales.activity.status,'inactive');assert.equal(sales.activity.alertEligible,true);

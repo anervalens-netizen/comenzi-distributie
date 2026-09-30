@@ -3,6 +3,7 @@ import type { FeatureCollection, Point } from 'geojson';
 
 export type PartnerSummary = Pick<
   PortfolioPartner,
+  | 'warehouseIds'
   | 'historyCatalog'
   | 'id'
   | 'name'

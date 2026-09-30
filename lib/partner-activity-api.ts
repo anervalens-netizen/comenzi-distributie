@@ -1,10 +1,12 @@
 import {validBillingPeriod,selectBillingPeriod} from './partner-billing-period';
 import {portfolioSummary} from './partner-portfolio';
 import {managerFilter} from './manager-scope';
-import {fail} from './server';
+import {db,fail} from './server';
 import {readActivitySnapshot} from './partner-activity-snapshot';
 import type {User} from './types';
 export const activityFilters=['all','attention','regular','overdue','inactive','reactivated','new','occasional','incomplete'] as const;
+export const activitySorts=['value','documents','lastBilling','name','county','agent'] as const;
+export type ActivitySort=typeof activitySorts[number];
 export type ActivityFilter=typeof activityFilters[number];
 const normalize=(s:string)=>s.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
 export type PartnerActivityOverview=Awaited<ReturnType<typeof partnerActivityOverview>>;
@@ -14,13 +16,16 @@ export async function partnerActivityOverview(user:User,params:URLSearchParams){
   const filter=params.get('activity')||'all',rawPage=params.get('page')||'0';
   if(!activityFilters.includes(filter as ActivityFilter)||!/^\d{1,5}$/.test(rawPage))fail(400,'Filtrul de activitate este invalid.');
   for(const key of ['q','county'])if((params.get(key)?.length||0)>300)fail(400,'Filtrul este prea lung.');
+  const sort=params.get('sort')||'value',direction=params.get('direction')||'desc';
+  if(!activitySorts.includes(sort as ActivitySort)||!['asc','desc'].includes(direction))fail(400,'Sortarea este invalidă.');
   const scope=await managerFilter(user,params),partners=await portfolioSummary(user,undefined,scope?.warehouseIds);
   const counties=[...new Set(partners.map(p=>p.county).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ro'));
   const q=normalize(params.get('q')||''),county=params.get('county')||'';
   const selected=partners.filter(p=>(!county||p.county===county)&&(!q||normalize([p.name,p.cui,p.address,p.city].join(' ')).includes(q)));
-  const snapshot=readActivitySnapshot(selected);
+  const snapshot=readActivitySnapshot(selected,undefined,undefined,{period});
   if(snapshot.state!=='ready')return snapshot;
-  const all=selectBillingPeriod(selected,snapshot,period).map(partner=>({partner,sales:snapshot.rows.get(partner.id)||null}));
+  const agents=(await db().prepare("SELECT id,name,warehouse_id FROM users WHERE role='agent' AND active=1 ORDER BY name,id").all<{id:string;name:string;warehouse_id:string}>()).results;
+  const all=selectBillingPeriod(selected,snapshot,period).map(partner=>({partner,sales:snapshot.rows.get(partner.id)||null,metrics:snapshot.metrics.get(partner.id)||null,agents:agents.filter(a=>partner.warehouseIds?.includes(a.warehouse_id)).map(a=>({id:a.id,name:a.name}))}));
   const matches=(r:typeof all[number],kind:string)=>{
     const a=r.sales?.activity;
     if(kind==='all')return true;
@@ -33,11 +38,13 @@ export async function partnerActivityOverview(user:User,params:URLSearchParams){
   };
   const counts=Object.fromEntries(activityFilters.map(kind=>[kind,all.filter(r=>matches(r,kind)).length])) as Record<ActivityFilter,number>;
   const filtered=all.filter(r=>matches(r,filter)).sort((a,b)=>{
-    const aa=a.sales?.activity,bb=b.sales?.activity;
-    const score=(v:typeof aa)=>v?.alertEligible?(v.daysSinceBilling||0)/Math.max(1,v.cadenceDays||1):0;
-    return score(bb)-score(aa)||(b.sales?.previousCents||0)-(a.sales?.previousCents||0)||a.partner.name.localeCompare(b.partner.name,'ro')||a.partner.id.localeCompare(b.partner.id);
+    const value=(r:typeof a):number|string|null=>sort==='value'?r.metrics?.valueCents??null:sort==='documents'?r.metrics?.documents??null:sort==='lastBilling'?r.metrics?.lastBilling??null:sort==='name'?r.partner.name:sort==='county'?r.partner.county||null:r.agents.map(a=>a.name).join(', ')||null;
+    const aa=value(a),bb=value(b);
+    if(aa===null&&bb!==null)return 1;if(bb===null&&aa!==null)return -1;
+    const comparison=aa===null||bb===null?0:typeof aa==='number'&&typeof bb==='number'?aa-bb:String(aa).localeCompare(String(bb),'ro');
+    return comparison*(direction==='asc'?1:-1)||a.partner.name.localeCompare(b.partner.name,'ro')||a.partner.id.localeCompare(b.partner.id);
   });
   const page=Number(rawPage),total=filtered.length;
   return {state:'ready' as const,through:snapshot.through,asOf:snapshot.asOf,recentStart:snapshot.recentStart,previousStart:snapshot.previousStart,stale:snapshot.stale,
-    counties,counts,total,page,hasMore:(page+1)*50<total,partners:filtered.slice(page*50,(page+1)*50)};
+    range:snapshot.range,sort:sort as ActivitySort,direction:direction as 'asc'|'desc',counties,counts,total,page,hasMore:(page+1)*50<total,partners:filtered.slice(page*50,(page+1)*50)};
 }
