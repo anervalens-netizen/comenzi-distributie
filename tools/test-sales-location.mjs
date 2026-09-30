@@ -93,6 +93,10 @@ try {
     assert.ok(region.sites.some(site => site.agent === 'Synthetic seller'));
     assert.deepEqual((await read('global', `&managerId=${manager}&agentId=north`)).summary, north.summary);
   }
+  app.prepare("INSERT INTO manager_agents VALUES('peer','inactive')").run();
+  assert.equal((await read('global', '&managerId=peer')).summary.rows, 4, 'Inactive assignment differences keep UI regions distinct');
+  app.prepare("DELETE FROM manager_agents WHERE manager_id='peer' AND agent_id='inactive'").run();
+  assert.equal((await read('global', '&managerId=peer')).summary.rows, 5, 'Exactly equal assignment sets restore grouped seller identity');
   // Both co-managers can be sellers; agent selections must exclude both identities.
   app.prepare("UPDATE users SET site_code='' WHERE id='site-only'").run();
   app.prepare("UPDATE users SET site_code='ONLY' WHERE id='peer'").run();
