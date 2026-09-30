@@ -156,3 +156,26 @@ No national total is calculated by summing potentially shared/legacy aliases.
 
 After deployment, rebuild the derived snapshot using the version 3 builder;
 source history, original seller attribution and existing TR reports stay intact.
+
+## Sales-first partner sheet
+
+Opening a partner expands its sales section immediately. Contact/location editing
+and visits are closed disclosures; navigation and any saved phone remain reachable.
+Internal catalog IDs are not presented as work-point codes.
+
+The default date range spans all active historical imports. The period controls
+can narrow the summary, document count, recent documents and products. Cadence
+continues to use the whole history and is explicitly labeled separately.
+
+The five most recent positive-net documents are grouped by partner identity,
+date, site and document number, using only authorized linked facts and active
+imports. Exact cancellations, standalone returns and unnamed movements are not
+counted as bills; their amounts remain in net sales and raw transactions.
+Each document expands to aggregated products/quantities/amounts and its original
+seller(s). Product previews are bounded to 20 per document and explicitly flag
+truncation. The sum of the visible documents is separate from period net sales.
+
+Missing history stays unavailable/unlinked rather than zero. Partial coverage
+is called out next to the total. These are source billing documents, not verified
+application order IDs. No allocations, contacts, coordinates or visits are changed
+by viewing the sheet.

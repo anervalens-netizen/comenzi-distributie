@@ -586,7 +586,7 @@ export function PartnerSheet({
             {form.city}, {form.county}
           </p>
           <p className="muted">
-            CUI {form.cui} · Punct {form.id} · Ruta {form.route || '—'}
+            CUI {form.cui}{form.route&&<> · Ruta {form.route}</>}
           </p>
           {form.historyCatalog?.kind==='company'&&<p className="muted">Firmă identificată în istoricul de vânzări. Punctul de lucru și adresa necesită confirmare.</p>}
           {form.historyCatalog?.franchiseCode&&<p className="muted">Cod punct de lucru: {form.historyCatalog.franchiseCode}</p>}
@@ -629,6 +629,10 @@ export function PartnerSheet({
               )}
             </details>
           )}
+          {(detail?.partner.contact||detail?.partner.phone)&&<p className="partner-contact-summary">{detail.partner.contact}{detail.partner.contact&&detail.partner.phone?' · ':''}{detail.partner.phone&&<a href={'tel:'+detail.partner.phone}>{detail.partner.phone}</a>}</p>}
+          <PartnerSales key={id} id={id}/>
+          <details className="partner-contact-edit">
+            <summary>Date de contact și poziția magazinului</summary>
           <form
             onSubmit={(e) => {
               e.preventDefault();
@@ -705,8 +709,9 @@ export function PartnerSheet({
               </div>
             </fieldset>
           </form>
-          <section>
-            <h3>Vizite {detail ? `(${detail.visitCount})` : ''}</h3>
+          </details>
+          <details className="partner-visits">
+            <summary>Vizite {detail ? `(${detail.visitCount})` : ''}</summary>
             {!manager&&<><label>
               Notă vizită
               <textarea
@@ -745,8 +750,7 @@ export function PartnerSheet({
                 Vizite mai vechi
               </button>
             )}
-          </section>
-          <PartnerSales id={id}/>
+          </details>
         </>
       )}
     </dialog>
