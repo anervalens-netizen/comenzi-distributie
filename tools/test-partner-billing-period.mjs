@@ -1,0 +1,17 @@
+import assert from 'node:assert/strict';
+import {billingPeriodMatches,validBillingPeriod} from '../lib/partner-billing-period.ts';
+const row={billingYears:['2023','2026'],coverageComplete:true,activity:{lastBilling:'2026-09-01'}};
+assert(validBillingPeriod('year:2023'));assert(!validBillingPeriod('year:2023 OR 1=1'));
+assert(billingPeriodMatches(row,'year:2023','2026-09-30'));
+assert(!billingPeriodMatches(row,'year:2024','2026-09-30'));
+assert(billingPeriodMatches(row,'recent90','2026-09-30'));
+assert(!billingPeriodMatches(row,'older365','2026-09-30'));
+assert(billingPeriodMatches(undefined,'unknown','2026-09-30'));
+assert(!billingPeriodMatches(undefined,'year:2026','2026-09-30'),'unknown never passes a positive billing filter');
+const old={...row,activity:{lastBilling:'2023-09-30'}};
+assert(billingPeriodMatches(old,'older365','2026-09-30'));
+assert(!billingPeriodMatches({...old,coverageComplete:false},'older365','2026-09-30'),'partial history cannot establish absence of recent billing');
+assert(billingPeriodMatches({...old,coverageComplete:false},'unknown','2026-09-30'));
+assert(billingPeriodMatches({...row,coverageComplete:false},'year:2026','2026-09-30'),'known positive billing remains evidence despite other incomplete links');
+assert(!billingPeriodMatches({...row,activity:{lastBilling:'2026-07-02'}},'recent90','2026-09-30'),'exact 90-day boundary is excluded');
+console.log('PASS: billing year, rolling periods, old history, unknown coverage and exact boundaries.');

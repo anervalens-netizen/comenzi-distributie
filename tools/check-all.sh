@@ -15,6 +15,7 @@ python3 tools/test_client_catalog_geography.py
 node tools/test-partner-sales-health.mjs
 node tools/test-partner-sales-store.mjs
 node tools/test-partner-activity.mjs
+node tools/test-partner-billing-period.mjs
 python3 tools/test-partner-portfolio-schema.py
 node tools/test-partner-geocode.mjs
 node tools/test-partner-geocode-worker.mjs

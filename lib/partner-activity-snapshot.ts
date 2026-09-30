@@ -3,7 +3,7 @@ import {createHash,randomUUID} from 'node:crypto';
 import {existsSync,renameSync,rmSync,chmodSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {partnerActivity,type PartnerActivity} from './partner-sales-health';
-export const activityVersion='1';
+export const activityVersion='2';
 export const normalizedCui=(s:string)=>s.toUpperCase().replace(/[^A-Z0-9]/g,'').replace(/^RO/,'');
 export const bucharestToday=()=>new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Bucharest',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
 export function historyStamp(c:DatabaseSync) {
@@ -13,7 +13,7 @@ export function historyStamp(c:DatabaseSync) {
   for(const row of imports){if(through&&Date.parse(row.period_start)-Date.parse(through)>86400000)complete=false;if(row.period_end>through)through=row.period_end;}
   return {reference,through,complete,signature:createHash('sha256').update(JSON.stringify([activityVersion,reference,imports])).digest('hex')};
 }
-export type ActivitySnapshotRow={id:string;cui:string;activity:PartnerActivity;recentCents:number;previousCents:number;missingValues:number;coverageComplete:boolean};
+export type ActivitySnapshotRow={id:string;cui:string;activity:PartnerActivity;billingYears:string[];recentCents:number;previousCents:number;missingValues:number;coverageComplete:boolean};
 export type ActivitySnapshot=ReturnType<typeof readActivitySnapshot>;
 /** Batch rebuild outside the HTTP process. Source history and application DBs are read-only. */
 export function buildActivitySnapshot(directory:string,today=bucharestToday()) {
@@ -53,7 +53,7 @@ export function buildActivitySnapshot(directory:string,today=bucharestToday()) {
       if(!catalogById.has(s.partner_id))continue;
       const cui=catalogById.get(s.partner_id)!;
       const complete=stamp.complete&&!s.missing&&!unresolvedPartners.has(s.partner_id)&&![...(companyCodes.get(cui)||[])].some(code=>unresolvedCodes.has(code));
-      const row:ActivitySnapshotRow={id:s.partner_id,cui,activity:partnerActivity(billing.get(s.partner_id)||[],stamp.through,today,complete),recentCents:s.recent,previousCents:s.previous,missingValues:s.missing,coverageComplete:complete};
+      const row:ActivitySnapshotRow={id:s.partner_id,cui,activity:partnerActivity(billing.get(s.partner_id)||[],stamp.through,today,complete),billingYears:[...new Set((billing.get(s.partner_id)||[]).filter(d=>d.date<=asOf).map(d=>d.date.slice(0,4)))].sort(),recentCents:s.recent,previousCents:s.previous,missingValues:s.missing,coverageComplete:complete};
       insert.run(row.id,JSON.stringify(row));count++;
     }
     const metadata={...stamp,version:activityVersion,builtAt:new Date().toISOString(),asOf,recentStart,previousStart,rows:count};

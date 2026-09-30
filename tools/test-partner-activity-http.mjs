@@ -42,8 +42,29 @@ try{
  await call('qa-agent1','agentId=qa-agent2',403);await call('qa-agent1','activity=unknown',400);await call('qa-agent1','page=-1',400);
  assert.equal((await call('qa-agent1','county=Different')).total,0);
  assert.equal((await call('qa-agent1','page=1')).partners.length,0);
+
+ // Period selection must use exactly the same IDs for list, map and activity.
+ insert.run('activity-old','g-5',JSON.stringify({id:'activity-old',warehouseId:'g-5',warehouseIds:['g-5'],name:'activity-old',cui:'123',county:'Test',city:'Test',address:'Synthetic address',route:''}));
+ insert.run('activity-unlinked','g-5',JSON.stringify({id:'activity-unlinked',warehouseId:'g-5',warehouseIds:['g-5'],name:'activity-unlinked',cui:'456',county:'Test',city:'Test',address:'Synthetic address',route:''}));
+ const edit=new DatabaseSync(join(historyDir,'client-sales-history.sqlite'));
+ edit.exec("INSERT INTO history_identities VALUES(4,'123'); INSERT INTO history_allocations VALUES(4,'ref','direct_code','[\"activity-old\"]','[]'); INSERT INTO history_rows VALUES(1,4,'2023-09-15','test','old',15000,1000000); UPDATE history_imports SET period_start='2023-01-01',row_count=4;");
+ edit.close();buildActivitySnapshot(root);
+ const fingerprint=createHash('sha256').update(JSON.stringify(['Synthetic address','Test','Test'])).digest('hex');
+ for(const id of ['activity-one','activity-shared','activity-other','activity-old','activity-unlinked'])app.prepare("INSERT INTO partner_profiles(customer_id,latitude,longitude,position_source,address_fingerprint,revision,updated_at) VALUES(?,44.4,26.1,'manual',?,1,'2026-09-30T00:00:00Z')").run(id,fingerprint);
+ async function idsFor(path,period){
+   const r=await fetch('http://127.0.0.1:3000/api/partner/'+path+'?q=activity-&salesPeriod='+encodeURIComponent(period),{headers:{Cookie:sessions['qa-agent1']}});
+   const data=await r.json();assert.equal(r.status,200,JSON.stringify(data));
+   return (path==='map'?data.features.map(f=>f.id):data.partners.map(p=>p.id)).sort();
+ }
+ assert.deepEqual((await call('qa-agent1','salesPeriod=year:2026')).partners.map(p=>p.partner.id).sort(),['activity-one','activity-shared']);
+ assert.deepEqual((await call('qa-agent1','salesPeriod=year:2023')).partners.map(p=>p.partner.id),['activity-old']);
+ for(const [period,expected] of [['year:2026',['activity-one','activity-shared']],['year:2023',['activity-old']],['unknown',['activity-unlinked']],['older365',['activity-old']]]){
+   assert.deepEqual(await idsFor('browse',period),expected);assert.deepEqual(await idsFor('map',period),expected);
+ }
+ await call('qa-agent1','salesPeriod=bad',400);
  console.log('PASS: activity HTTP enforces current agent scope, shared records, national scope, manager filters and validated paging.');
 }finally{
+ app.exec("DELETE FROM partner_profiles WHERE customer_id LIKE 'activity-%'");
  app.exec("DELETE FROM customers WHERE id LIKE 'activity-%'");app.close();
  rmSync(historyDir,{recursive:true,force:true});rmSync(temp,{recursive:true,force:true});
 }

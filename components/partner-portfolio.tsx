@@ -1,4 +1,5 @@
 'use client';
+import {PartnerBillingPeriod} from './partner-billing-period';
 import { PartnerActivity } from './partner-activity';
 import { PartnerSales } from './partner-sales';
 import {
@@ -22,6 +23,7 @@ import './partner-portfolio.css';
 const PartnerMap = lazy(() => import('./partner-map'));
 const date = (s: string) => new Date(s).toLocaleString('ro-RO');
 export function PartnerPortfolio({ userId, manager=false, scopeQuery='' }: { userId: string; manager?: boolean; scopeQuery?: string }) {
+  const [salesPeriod,setSalesPeriod]=useState('');
   const [activityOpen,setActivityOpen]=useState(false);
   const [layout,setLayout]=useState<'split'|'list'|'map'>('split');
   const [highlighted,setHighlighted]=useState<string|null>(null);
@@ -55,8 +57,9 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='' }: { use
         route,
         position,
         days,
+        salesPeriod,
       }).toString(),
-    [query, county, city, route, position, days, scopeQuery],
+    [query, county, city, route, position, days, scopeQuery, salesPeriod],
   );
   useEffect(()=>{queueMicrotask(()=>{setOffset(0);setSelected(null);setHighlighted(null);setCounty('');setCity('');setRoute('');});},[scopeQuery]);
   const [requestKey, setRequestKey] = useState(filterKey),
@@ -183,7 +186,7 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='' }: { use
         )}
       </>
     );
-  if(activityOpen)return <><PartnerActivity key={scopeQuery} scopeQuery={scopeQuery} onBack={()=>setActivityOpen(false)} onOpen={openPartner}/>{selected&&<PartnerSheet key={selected} id={selected} onClose={()=>setSelected(null)} onSaved={refresh}/>}</>;
+  if(activityOpen)return <><PartnerActivity key={scopeQuery} scopeQuery={scopeQuery} salesPeriod={salesPeriod} onPeriodChange={setSalesPeriod} onBack={()=>setActivityOpen(false)} onOpen={openPartner}/>{selected&&<PartnerSheet key={selected} id={selected} onClose={()=>setSelected(null)} onSaved={refresh}/>}</>;
   if (adding)
     return (
       <section className="partner-hub">
@@ -223,6 +226,7 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='' }: { use
         </div>
       )}
       <div className="partner-filters">
+        <PartnerBillingPeriod value={salesPeriod} onChange={v=>{setSalesPeriod(v);setOffset(0);}}/>
         <label>
           Caută partener
           <input
@@ -319,6 +323,7 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='' }: { use
           </select>
         </label>
       </div>
+      {salesPeriod&&<p className="muted">Lista și harta folosesc aceeași perioadă de facturare, conform ultimului import. Istoricul neasociat se vede separat în filtru.</p>}
       <p className="muted" aria-live="polite">
         {loading || !current
           ? 'Se încarcă portofoliul…'

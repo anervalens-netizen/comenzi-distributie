@@ -1,14 +1,15 @@
 'use client';
+import {PartnerBillingPeriod} from './partner-billing-period';
 import {useEffect,useState} from 'react';
 import {api,errorMessage,money} from '@/lib/client-api';
 import type {PartnerActivityOverview,ActivityFilter} from '@/lib/partner-activity-api';
 import './partner-sales.css';
 const filters:{key:ActivityFilter;label:string}[]=[{key:'all',label:'Toți'},{key:'attention',label:'De contactat'},{key:'regular',label:'Constanți'},{key:'overdue',label:'Peste ritm'},{key:'inactive',label:'Inactivi'},{key:'reactivated',label:'Reactivați'},{key:'new',label:'Prima facturare recentă'},{key:'occasional',label:'Ocazionali'},{key:'incomplete',label:'Istoric insuficient'}];
 const labels={no_billing:'Fără facturare comercială asociată',insufficient_history:'Istoric insuficient',occasional:'Ocazional',regular:'Constant',overdue:'Peste ritmul obișnuit',inactive:'Inactiv față de ritmul anterior'};
-export function PartnerActivity({scopeQuery,onOpen,onBack}:{scopeQuery:string;onOpen:(id:string)=>void;onBack:()=>void}){
+export function PartnerActivity({scopeQuery,salesPeriod,onPeriodChange,onOpen,onBack}:{scopeQuery:string;salesPeriod:string;onPeriodChange:(value:string)=>void;onOpen:(id:string)=>void;onBack:()=>void}){
   const [filter,setFilter]=useState<ActivityFilter>('all'),[query,setQuery]=useState(''),[county,setCounty]=useState(''),[page,setPage]=useState(0),[retry,setRetry]=useState(0);
   const [response,setResponse]=useState<{key:string;data:PartnerActivityOverview}|null>(null),[failure,setFailure]=useState<{key:string;message:string}|null>(null);
-  const params=new URLSearchParams(scopeQuery);params.set('activity',filter);params.set('q',query);params.set('county',county);params.set('page',String(page));
+  const params=new URLSearchParams(scopeQuery);params.set('activity',filter);params.set('q',query);params.set('county',county);params.set('page',String(page));params.set('salesPeriod',salesPeriod);
   const request=params.toString(),key=request+'|'+retry;
   const data=response?.key===key?response.data:null,error=failure?.key===key?failure.message:'';
   useEffect(()=>{
@@ -23,6 +24,7 @@ export function PartnerActivity({scopeQuery,onOpen,onBack}:{scopeQuery:string;on
     <h2>Activitatea partenerilor</h2>
     <p>Ritmul de facturare al punctelor de lucru din portofoliul actual. Deschide fișa pentru produse, tranzacții și contact.</p>
     <div className="partner-sales-filters">
+      <PartnerBillingPeriod value={salesPeriod} onChange={v=>{onPeriodChange(v);setPage(0);}}/>
       <label>Caută partener<input type="search" value={query} onChange={e=>{setQuery(e.target.value);setPage(0);}}/></label>
       <label>Județ<select value={county} onChange={e=>{setCounty(e.target.value);setPage(0);}}><option value="">Toate județele</option>{counties.map(c=><option key={c}>{c}</option>)}</select></label>
     </div>
@@ -31,6 +33,7 @@ export function PartnerActivity({scopeQuery,onOpen,onBack}:{scopeQuery:string;on
     {error&&<p role="alert">{error} <button type="button" onClick={()=>setRetry(v=>v+1)}>Reîncearcă</button></p>}
     {data&&data.state!=='ready'&&<p>{data.message}</p>}
     {ready&&<>
+      {salesPeriod&&<p>Filtrul selectează partenerii facturați în perioada aleasă. Ritmul și comparația valorilor rămân evaluate la ultimul import.</p>}
       <p>Date până la <strong>{ready.through}</strong>. Evaluare la {ready.asOf}. Valorile compară 30 de zile ({ready.recentStart} – {ready.asOf}) cu cele 30 anterioare.</p>
       {ready.stale&&<p className="partner-sales-caution">Importul nu este la zi. Semnalele descriu situația de la data indicată; lista „De contactat” este suspendată.</p>}
       <p>{ready.total.toLocaleString('ro-RO')} fișe în selecție. Categoriile „Reactivat” și „Prima facturare recentă” se pot suprapune cu ritmul de facturare. Portofoliile agenților pot fi comune.</p>

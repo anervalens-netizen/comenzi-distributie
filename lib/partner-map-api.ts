@@ -1,3 +1,5 @@
+import {readActivitySnapshot} from './partner-activity-snapshot';
+import {validBillingPeriod,selectBillingPeriod} from './partner-billing-period';
 import { db, fail } from './server';
 import { portfolioSummary } from './partner-portfolio';
 import { managerFilter } from './manager-scope';
@@ -96,6 +98,14 @@ export function partnerBounds(partners: PartnerSummary[]): MapBounds | null {
     }
   return Number.isFinite(west) ? [west, south, east, north] : null;
 }
+function billingSelection(partners:PartnerSummary[],params:URLSearchParams) {
+  const period=params.get('salesPeriod')||'';
+  if(!validBillingPeriod(period))fail(400,'Perioada de facturare este invalidă.');
+  if(!period)return partners;
+  const snapshot=readActivitySnapshot(partners);
+  if(snapshot.state!=='ready')fail(409,snapshot.message);
+  return selectBillingPeriod(partners,snapshot,period);
+}
 export async function browsePartners(
   user: User,
   params: URLSearchParams,
@@ -105,7 +115,7 @@ export async function browsePartners(
     offset = integer(params, 'offset', 0, 0, 10000000);
   const scope = await managerFilter(user, params);
   const all = await portfolioSummary(user, undefined, scope?.warehouseIds),
-    selected = all.filter(match);
+    selected = billingSelection(all.filter(match),params);
   const inCounty = all.filter(
     (p) => !params.get('county') || p.county === params.get('county'),
   );
@@ -139,9 +149,9 @@ export async function mapPartners(
   const match = filters(params),
     bbox = parseBounds(params.get('bbox'));
   const scope = await managerFilter(user, params);
-  const partners = (await portfolioSummary(user, bbox, scope?.warehouseIds)).filter(
+  const partners = billingSelection((await portfolioSummary(user, bbox, scope?.warehouseIds)).filter(
     (p) => p.latitude !== null && p.longitude !== null && match(p),
-  );
+  ),params);
   // Do not silently truncate or mislabel cluster totals. Above this measured tier,
   // narrow the viewport/filters; a future MVT implementation can replace this API.
   if (partners.length > 50000)

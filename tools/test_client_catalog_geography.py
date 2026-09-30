@@ -19,4 +19,8 @@ class GeoTests(unittest.TestCase):
   plan={'additions':[{'id':'p','county':'Vaslui','historyCatalog':{}}],'identityLinks':[{'identityId':1,'partnerIds':['p']}]}
   result=enrich(plan,[(1,'TR Iasi 01 Example')],{})
   self.assertEqual(result['additions'][0]['county'],'Vaslui')
+ def test_customer_distribution_provenance(self):
+  result=infer(['Example'],{'EXAMPLE':['MS']},{'EXAMPLE':'customer_distribution_inferred'})
+  self.assertEqual(result['county'],'MS')
+  self.assertEqual(result['evidence'][0]['method'],'customer_distribution_inferred')
 if __name__=='__main__':unittest.main()

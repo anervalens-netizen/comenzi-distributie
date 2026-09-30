@@ -16,10 +16,11 @@ def seller_counties(seller,territories):
  if 'TIMISOARA' in key:found.add('TM')
  if 'B' in found:found.add('IF') # Shared metro territory does not identify exact address.
  return found,'source_seller_label' if found else 'unknown_seller'
-def infer(sellers,territories):
+def infer(sellers,territories,provenance=None):
  evidence=[];sets=[];unknown=[]
  for seller in sorted(set(sellers)):
   counties,method=seller_counties(seller,territories)
+  if method=='seller_reference' and provenance:method=provenance.get(norm(seller),method)
   evidence.append({'seller':seller,'candidateCounties':sorted(counties),'method':method})
   if counties:sets.append(counties)
   else:unknown.append(seller)
@@ -30,8 +31,9 @@ def infer(sellers,territories):
  status='seller_inferred' if candidate and not unknown else 'seller_unknown' if unknown else 'seller_conflict' if not common else 'multi_county'
  return {'county':candidate if status=='seller_inferred' else None,
          'candidateCounties':sorted(common if common else union),'status':status,'evidence':evidence}
-def enrich(plan,seller_rows,territories):
+def enrich(plan,seller_rows,territories,provenance=None):
  territories={norm(k):{county_key(c) for c in v} for k,v in territories.items()}
+ provenance={norm(k):v for k,v in (provenance or {}).items()}
  if any(None in v for v in territories.values()):raise ValueError('Unknown county in territory reference')
  by_identity=collections.defaultdict(set)
  for identity,seller in seller_rows:by_identity[identity].add(seller)
@@ -42,7 +44,7 @@ def enrich(plan,seller_rows,territories):
  for p in plan['additions']:
   if p.get('county'):
    counts['existing_county']+=1;continue
-  result=infer(by_partner[p['id']],territories)
+  result=infer(by_partner[p['id']],territories,provenance)
   p['historyCatalog']['geography']=result
   if result['county']:
    p['county']=COUNTIES[result['county']]
@@ -59,7 +61,8 @@ def main():
  a=p.parse_args()
  c=sqlite3.connect(pathlib.Path(a.history_db).resolve().as_uri()+'?mode=ro',uri=True)
  seller_rows=c.execute("SELECT DISTINCT r.identity_id,r.tr FROM history_rows r JOIN history_imports b ON b.id=r.import_id WHERE b.state='active'").fetchall()
- plan=enrich(json.loads(pathlib.Path(a.plan).read_text()),seller_rows,json.loads(pathlib.Path(a.territories).read_text())['historicalSellers'])
+ reference=json.loads(pathlib.Path(a.territories).read_text())
+ plan=enrich(json.loads(pathlib.Path(a.plan).read_text()),seller_rows,reference['historicalSellers'],reference.get('sellerProvenance'))
  out=pathlib.Path(a.out);out.write_text(dump(plan));out.chmod(0o600)
  print(dump(plan['geographySummary']))
 if __name__=='__main__':main()

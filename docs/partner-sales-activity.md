@@ -113,3 +113,24 @@ agent portfolio subtotals. Agent-specific portfolios may legitimately overlap.
 Run the history, catalog plan/geography, partner sales health and read-only
 store tests, plus typecheck, lint and the application acceptance tests.
 Fixtures must be synthetic. Real plans, maps and customer data remain private.
+
+## Billing-period filters
+
+The partner list, map and activity overview share salesPeriod. Choices are an
+explicit calendar year, the latest 90/365 days, last billing at least 365 days
+ago, and unlinked/incomplete history. The default includes every catalog record.
+The filter follows commercial billing, excluding zero-value movements and net
+cancelled documents, using the same definition as cadence. Years are stored in
+the derived snapshot (version 2); rebuild older snapshots before serving filters.
+
+Period selection changes which partners are visible, not their current portfolio
+assignment. Cadence and 30-day financial comparisons remain evaluated at source
+coverage, as labeled; selecting an old year does not imply an as-of-year replay.
+Unknown records are never called old merely because no linked sale was found.
+Missing/stale-derived snapshots return an explicit error rather than an empty map.
+No-filter browsing and geocoding remain independent of history availability.
+
+Seller territory references may provide sellerProvenance to distinguish an owner
+confirmation from customer-distribution inference. Geographic inference must use
+independently known client counties, count distinct companies rather than lines,
+and inspect changes across years and conflicting clients. Real evidence is private.

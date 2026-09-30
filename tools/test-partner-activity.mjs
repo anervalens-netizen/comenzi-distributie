@@ -37,7 +37,7 @@ try{
  const result=readActivitySnapshot([{id:'a',cui:'RO123'},{id:'b',cui:'123'},{id:'unlinked',cui:'123'}],root,'2026-09-30');
  assert.equal(result.state,'ready');assert.equal(result.rows.size,2,'snapshot returns authorized exact IDs only');
  const sales=result.rows.get('a');
- assert.equal(sales.activity.lastBilling,'2026-07-06');assert.equal(sales.activity.billingDays,6,'duplicate membership never multiplies days');
+ assert.deepEqual(sales.billingYears,['2026']);assert.equal(sales.activity.lastBilling,'2026-07-06');assert.equal(sales.activity.billingDays,6,'duplicate membership never multiplies days');
  assert.equal(sales.activity.status,'inactive');assert.equal(sales.activity.alertEligible,true);
  assert.equal(sales.recentCents,0);assert.equal(result.rows.get('b').activity.billingDays,6);
  assert.equal(readActivitySnapshot([{id:'a',cui:'changed'}],root,'2026-09-30').rows.size,0,'changed company must be reconciled');

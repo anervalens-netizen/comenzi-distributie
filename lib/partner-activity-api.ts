@@ -1,3 +1,4 @@
+import {validBillingPeriod,selectBillingPeriod} from './partner-billing-period';
 import {portfolioSummary} from './partner-portfolio';
 import {managerFilter} from './manager-scope';
 import {fail} from './server';
@@ -8,6 +9,8 @@ export type ActivityFilter=typeof activityFilters[number];
 const normalize=(s:string)=>s.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
 export type PartnerActivityOverview=Awaited<ReturnType<typeof partnerActivityOverview>>;
 export async function partnerActivityOverview(user:User,params:URLSearchParams){
+  const period=params.get('salesPeriod')||'';
+  if(!validBillingPeriod(period))fail(400,'Perioada de facturare este invalidă.');
   const filter=params.get('activity')||'all',rawPage=params.get('page')||'0';
   if(!activityFilters.includes(filter as ActivityFilter)||!/^\d{1,5}$/.test(rawPage))fail(400,'Filtrul de activitate este invalid.');
   for(const key of ['q','county'])if((params.get(key)?.length||0)>300)fail(400,'Filtrul este prea lung.');
@@ -17,7 +20,7 @@ export async function partnerActivityOverview(user:User,params:URLSearchParams){
   const selected=partners.filter(p=>(!county||p.county===county)&&(!q||normalize([p.name,p.cui,p.address,p.city].join(' ')).includes(q)));
   const snapshot=readActivitySnapshot(selected);
   if(snapshot.state!=='ready')return snapshot;
-  const all=selected.map(partner=>({partner,sales:snapshot.rows.get(partner.id)||null}));
+  const all=selectBillingPeriod(selected,snapshot,period).map(partner=>({partner,sales:snapshot.rows.get(partner.id)||null}));
   const matches=(r:typeof all[number],kind:string)=>{
     const a=r.sales?.activity;
     if(kind==='all')return true;
