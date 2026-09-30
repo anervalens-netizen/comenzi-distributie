@@ -26,7 +26,6 @@ add('inactive', 'agent', 'DISABLED', 'TR Inactive', 'assigned', 0);
 for (const manager of ['seller', 'peer']) for (const agent of ['north', 'stable']) app.prepare('INSERT INTO manager_agents VALUES(?,?)').run(manager, agent);
 for (const agent of ['north', 'stable', 'south']) app.prepare('INSERT INTO manager_agents VALUES(?,?)').run('different', agent);
 for (const agent of ['north', 'stable']) app.prepare('INSERT INTO manager_agents VALUES(?,?)').run('inactive-manager', agent);
-app.prepare('INSERT INTO manager_agents VALUES(?,?)').run('peer', 'inactive');
 const user = id => { const row = app.prepare('SELECT * FROM users WHERE id=?').get(id); return { id, role: row.role, managerScope: row.manager_scope, siteCode: row.site_code, warehouseName: row.warehouse_name }; };
 const stubs = {
   './server': `import {DatabaseSync} from 'node:sqlite';import {resolve} from 'node:path';

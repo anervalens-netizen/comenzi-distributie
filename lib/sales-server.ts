@@ -57,7 +57,7 @@ function decoratedView(view: SalesView, snapshot: Awaited<ReturnType<typeof mapp
 }
 
 async function regionManagerIds(managerId: string) {
-  const rows = await db().prepare("SELECT m.id,a.id AS agent_id FROM users m LEFT JOIN manager_agents ma ON ma.manager_id=m.id LEFT JOIN users a ON a.id=ma.agent_id AND a.role='agent' AND a.active=1 WHERE m.role='manager' AND m.manager_scope='assigned' AND m.active=1").all<{ id: string; agent_id: string | null }>();
+  const rows = await db().prepare("SELECT m.id,a.id AS agent_id FROM users m LEFT JOIN manager_agents ma ON ma.manager_id=m.id LEFT JOIN users a ON a.id=ma.agent_id AND a.role='agent' WHERE m.role='manager' AND m.manager_scope='assigned' AND m.active=1").all<{ id: string; agent_id: string | null }>();
   const assignments = new Map<string, Set<string>>();
   for (const row of rows.results) {
     const ids = assignments.get(row.id) || new Set<string>();
