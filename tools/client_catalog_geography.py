@@ -6,7 +6,7 @@ multi-county results retain candidate counties and provenance for reconciliation
 from __future__ import annotations
 import argparse,collections,json,pathlib,re,sqlite3
 from client_sales_history import norm,dump
-from client_catalog_plan import COUNTIES,county_key
+from client_catalog_plan import COUNTIES,county_key,refresh_addition_memberships
 def seller_counties(seller,territories):
  key=norm(seller)
  explicit=territories.get(key)
@@ -58,11 +58,14 @@ def enrich(plan,seller_rows,territories,provenance=None):
 def main():
  p=argparse.ArgumentParser(description=__doc__)
  for flag in ['plan','history-db','territories','out']:p.add_argument('--'+flag,required=True)
+ p.add_argument('--snapshot');p.add_argument('--roster')
  a=p.parse_args()
+ if bool(a.snapshot)!=bool(a.roster):p.error('Use --snapshot and --roster together')
  c=sqlite3.connect(pathlib.Path(a.history_db).resolve().as_uri()+'?mode=ro',uri=True)
  seller_rows=c.execute("SELECT DISTINCT r.identity_id,r.tr FROM history_rows r JOIN history_imports b ON b.id=r.import_id WHERE b.state='active'").fetchall()
  reference=json.loads(pathlib.Path(a.territories).read_text())
  plan=enrich(json.loads(pathlib.Path(a.plan).read_text()),seller_rows,reference['historicalSellers'],reference.get('sellerProvenance'))
+ if a.roster:refresh_addition_memberships(plan,json.loads(pathlib.Path(a.roster).read_text()),json.loads(pathlib.Path(a.snapshot).read_text())['agents'])
  out=pathlib.Path(a.out);out.write_text(dump(plan));out.chmod(0o600)
  print(dump(plan['geographySummary']))
 if __name__=='__main__':main()

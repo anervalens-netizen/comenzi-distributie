@@ -8,7 +8,7 @@ import xml.etree.ElementTree as ET
 D=decimal.Decimal
 NS={'s':'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
 HEADERS=['Data','Regional','TR','ItemCode','ItemName','Cantitate','Brand','Pret','Valoare','PretFD','Denumire Client','Nr','TRVechi','ItemType','Cod Client','SiteId','TipArticol','PriceWithVAT','Categorie','Cod_Franciza']
-RULE_VERSION='customer-history-v1.1'
+RULE_VERSION='customer-history-v1.2'
 def dump(v):return json.dumps(v,ensure_ascii=False,separators=(',',':'))
 def sha(v):return hashlib.sha256(v).hexdigest()
 def file_sha(path):
@@ -113,29 +113,43 @@ def workbook(path):
    yield 'row',{'sheet':sheet.get('name'),'row':rn,'date':date,'raw':v,'quantity_micros':scaled(v['Cantitate'],1_000_000),'price_cents':scaled(v['Pret'],100) if v['Pret'].strip() else None,'value_cents':scaled(v['Valoare'],100) if v['Valoare'].strip() else None,'quality_issue':','.join(k+'_missing' for k in ('Pret','Valoare') if not v[k].strip())}
   if header is None:raise ValueError('Header not found')
 class Resolver:
- def __init__(self,partners,master):
+ def __init__(self,partners,master,source_identities=()):
   self.partners=collections.defaultdict(list);self.master=collections.defaultdict(list);self.franchises=collections.defaultdict(list);self.aliases=collections.defaultdict(set)
+  self.named_franchises=collections.defaultdict(list);self.partner_codes=collections.defaultdict(set);self.source_codes=collections.defaultdict(set)
   for p in partners:
+   codes={code_key(v) for v in p.get('historyFranchises',[])}|{code_key(p.get('historyCatalog',{}).get('franchiseCode'))}
+   for code in codes-{''}:self.named_franchises[code].append(p)
+   self.partner_codes[cui_key(p.get('cui'))]|=codes-{''}
    if cui_key(p.get('cui')):self.partners[cui_key(p['cui'])].append(p)
   for r in master:
    key=code_key(r.get('Cod_Franciza'));cui=cui_key(r.get('CIF'));client=cui_key(r.get('PartnerCode'))
    if key:self.franchises[key].append(r)
    if cui:self.master[cui].append(r)
    if client and cui:self.aliases[client].add(cui)
+  for identity in source_identities:
+   client=cui_key(identity['client_code']);code=code_key(identity['franchise_code'])
+   if code:
+    for company in self.aliases.get(client,{client}):self.source_codes[company].add(code)
  def resolve(self,client,franchise):
   client=cui_key(client);franchise=code_key(franchise)
   def result(status,point=None,ids=(),reason='',candidates=()):
    return {'status':status,'point_key':point,'partner_ids':sorted(set(ids)),'reason':reason,'candidates':sorted(set(candidates))}
   if franchise:
    refs=self.franchises.get(franchise,[])
+   named=self.named_franchises.get(franchise,[])
+   possible={client}|self.aliases.get(client,set())
+   named_owners={cui_key(p.get('cui')) for p in named}
+   if named and (len(named_owners)!=1 or (client and client!='CLIENTGEN' and not named_owners.issubset(possible))):
+    return result('reconcile',reason='Conflicting stored franchise ownership',candidates=[p['id'] for p in named])
    # Explicit code remains the direct work-point identity even outside a partial master.
-   if not refs:return result('direct_code','franchise:'+franchise,reason='Code present; address/partner link absent from partial master')
+   if not refs:return result('direct_code','franchise:'+franchise,[p['id'] for p in named],reason='Stored franchise association' if named else 'Code present; address/partner link absent from partial master')
    identities={(cui_key(r.get('CIF')),master_place(r)) for r in refs}
    if len(identities)!=1:return result('reconcile',reason='Conflicting master entries for franchise',candidates=[franchise])
    cui,address=next(iter(identities))
    possible={client}|self.aliases.get(client,set())
    if client and client!='CLIENTGEN' and cui and cui not in possible:return result('reconcile',reason='Franchise/client mismatch',candidates=[franchise])
-   matches=[p for p in self.partners.get(cui,[]) if place(p)==address and address[2]]
+   if named and named_owners!={cui}:return result('reconcile',reason='Stored franchise conflicts with master ownership',candidates=[p['id'] for p in named])
+   matches=named or [p for p in self.partners.get(cui,[]) if place(p)==address and address[2]]
    return result('direct_code','franchise:'+franchise,[p['id'] for p in matches],'Explicit franchise code'+(' with exact partner address link' if matches else '; current partner address link unresolved'))
   if client=='CLIENTGEN':return result('consumer',reason='Direct fiscal receipt; no business work point')
   if not client:return result('reconcile',reason='Missing client and franchise')
@@ -151,6 +165,9 @@ class Resolver:
   if known and (len(known)>1 or address not in known):
    return result('reconcile',reason='Master contains other work-point addresses',candidates=[code_key(r.get('Cod_Franciza')) for r in refs])
   codes={code_key(r.get('Cod_Franciza')) for r in refs if code_key(r.get('Cod_Franciza'))}
+  codes|=self.partner_codes[cui]
+  if self.source_codes[cui]-codes:
+   return result('reconcile',reason='Source contains work-point codes not yet associated with the known address',candidates=[p['id'] for p in partners])
   if len(codes)>1:return result('reconcile',reason='Multiple franchise identities at address',candidates=codes)
   point='franchise:'+next(iter(codes)) if codes else 'partner:'+sha(dump([cui,*address]).encode())
   return result('single_partner',point,[p['id'] for p in partners],'Unique identified Partner with complete address across current and historical references')
@@ -184,9 +201,12 @@ def connect(path):
 def store_reference(c,partners_path,master_path):
  partners=json.loads(pathlib.Path(partners_path).read_text());master=json.loads(pathlib.Path(master_path).read_text())
  rows=partners['partners'] if isinstance(partners,dict) else partners
- ref=sha(dump([RULE_VERSION,partners,master]).encode())
- resolver=Resolver(rows,master)
- c.execute('INSERT OR IGNORE INTO history_references VALUES(?,?,?,?,?)',(ref,now(),RULE_VERSION,dump(partners),dump(master)))
+ identities=[dict(r) for r in c.execute('SELECT client_code,franchise_code FROM history_identities ORDER BY client_code,franchise_code')]
+ reference_partners=dict(partners) if isinstance(partners,dict) else {'partners':partners}
+ reference_partners['historySourceIdentities']=identities
+ ref=sha(dump([RULE_VERSION,reference_partners,master]).encode())
+ resolver=Resolver(rows,master,identities)
+ c.execute('INSERT OR IGNORE INTO history_references VALUES(?,?,?,?,?)',(ref,now(),RULE_VERSION,dump(reference_partners),dump(master)))
  for r in c.execute('SELECT * FROM history_identities').fetchall():add_allocation(c,r['id'],r['client_code'],r['franchise_code'],ref,resolver)
  c.execute("INSERT INTO history_meta VALUES('current_reference',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",(ref,))
  return ref,resolver
@@ -228,7 +248,7 @@ def import_file(c,source,partners,master,replace=False,allow_regression=False):
    identity=identities.get(key)
    if identity is None:
     identity=c.execute('INSERT INTO history_identities(client_code,franchise_code) VALUES(?,?)',key).lastrowid
-    identities[key]=identity;add_allocation(c,identity,*key,ref,resolver)
+    identities[key]=identity
    raw=dump(v);count+=1;value+=r['value_cents'] or 0;quantity+=r['quantity_micros']
    values=(imp,r['sheet'],r['row'],r['date'],identity,v['SiteId'],v['TR'],v['TRVechi'],v['Regional'],v['Nr'],v['ItemCode'],v['ItemName'],v['Denumire Client'],v['Brand'],v['ItemType'],v['TipArticol'],v['Categorie'],r['quantity_micros'],r['price_cents'],r['value_cents'],r['quality_issue'],sha(raw.encode()),raw)
    c.execute('INSERT INTO history_rows VALUES('+','.join('?' for _ in values)+')',values)
@@ -242,6 +262,9 @@ def import_file(c,source,partners,master,replace=False,allow_regression=False):
   if removed and not allow_regression:raise ValueError(str(removed)+' previous line occurrences missing/changed: --allow-regression required; original import remains active')
   c.execute("UPDATE history_imports SET row_count=?,value_cents=?,quantity_micros=?,state='active' WHERE id=?",(count,value,quantity,imp))
   for old in overlapping:c.execute("UPDATE history_imports SET state='superseded' WHERE id=?",(old['id'],))
+  # New codes can make previously unique no-code rows ambiguous, including earlier rows in this import.
+  ref,_=store_reference(c,partners,master)
+  c.execute('UPDATE history_imports SET reference_id=? WHERE id=?',(ref,imp))
   c.commit()
   return {'status':'imported','import_id':imp,'rows':count,'value_cents':value,'quantity_micros':quantity,'removed_or_changed_occurrences':removed,'sha256':h}
  except BaseException:c.rollback();raise

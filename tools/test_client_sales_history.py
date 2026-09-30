@@ -113,4 +113,19 @@ class Tests(unittest.TestCase):
   self.assertEqual(h.iso('45292'),'2024-01-01');self.assertEqual(h.scaled('-1.20',100),-120)
   with self.assertRaises(ValueError):h.iso('31.02.2024')
   with self.assertRaises(ValueError):h.scaled('1.235',100)
+ def test_stored_alias_preserves_link_after_address_correction(self):
+  p={**self.partner,'address':'Corrected Road 2','historyFranchises':['F001']}
+  self.assertEqual(self.resolve(franchise='F001',partners=[p])['partner_ids'],['p1'])
+  self.assertEqual(self.resolve(franchise='F001',partners=[p],master=[])['partner_ids'],['p1'])
+ def test_stored_alias_ownership_conflict(self):
+  p={**self.partner,'cui':'999','historyFranchises':['F001']}
+  self.assertEqual(self.resolve(franchise='F001',partners=[p],master=[])['status'],'reconcile')
+ def test_new_unknown_code_invalidates_earlier_no_code_row(self):
+  self.put('first.xlsx',[row(),row(Cod_Franciza='F999')])
+  result=self.c.execute("SELECT allocation_status FROM history_current WHERE franchise_code='' ").fetchone()[0]
+  self.assertEqual(result,'reconcile')
+  self.assertEqual(self.c.execute('SELECT count(*),sum(value_cents) FROM history_current').fetchone()[:],(2,4000))
+ def test_unknown_code_blocks_unambiguous_old_address(self):
+  r=h.Resolver([self.partner],[self.master],[{'client_code':'123','franchise_code':'F999'}])
+  self.assertEqual(r.resolve('123','')['status'],'reconcile')
 if __name__=='__main__':unittest.main()

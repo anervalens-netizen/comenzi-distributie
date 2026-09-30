@@ -78,7 +78,8 @@ def build_plan(snapshot,identities,master,roster=None):
  for p in partners.values():
   if cui_key(p.get('cui')):companies[cui_key(p['cui'])].append(p)
  territories,reviewed=roster_map(roster,snapshot['agents'])
- additions={};links=[];issues=[];represented=set()
+ original_companies={k:list(v) for k,v in companies.items()}
+ additions={};links=[];issues=[];represented=set();pending=[];pending_companies=set();alias_sets=collections.defaultdict(set)
  def company(client):
   key=cui_key(client)
   options=aliases.get(key,{key})
@@ -119,14 +120,26 @@ def build_plan(snapshot,identities,master,roster=None):
    conflict=bool(records) and (len(ref_identities)!=1 or next(iter(ref_identities))[0]!=cui)
    location=records[0] if records and not conflict else None
    # An earlier generated/linked CRM identity is stronger than an address comparison.
-   matches=[p for p in candidates if p.get('historyCatalog',{}).get('franchiseCode')==franchise]
+   matches=[p for p in candidates if franchise in ({code_key(p.get('historyCatalog',{}).get('franchiseCode'))}|{code_key(v) for v in p.get('historyFranchises',[])})]
    if not matches and location and location.get('Street'):
     matches=[p for p in candidates if place(p)==master_place(location)]
    # A partial catalog cannot prove that an unlinked explicit code is the old address.
    ids=sorted({p['id'] for p in matches})
-   if not ids:ids=[create(i,cui,franchise,location)]
+   if not ids and (conflict or (original_companies.get(cui) and not (location and location.get('Street') and location.get('Oras')))):
+    pending_companies.add(cui)
+    pending.append({'identityId':i['id'],'companyKey':cui,'franchiseCode':franchise,
+                    'candidatePartnerIds':sorted(p['id'] for p in original_companies.get(cui,[])),
+                    'reason':'Conflicting point ownership/address' if conflict else 'Existing company; explicit point code has no independently matched address'})
+   elif not ids:ids=[create(i,cui,franchise,location)]
+   if not conflict:
+    for id in ids:
+     if id in partners:alias_sets[id].add(franchise)
+     elif id in additions:
+      additions[id]['historyFranchises']=sorted(set(additions[id].get('historyFranchises',[]))|{franchise})
+
    link.update(partnerIds=ids,status='reconcile' if conflict else 'direct_code',
-               reason='Conflicting CRM ownership/address' if conflict else 'Explicit franchise identity')
+               reason='Conflicting CRM ownership/address' if conflict else 'Explicit franchise identity; current partner association pending' if not ids else 'Explicit franchise identity')
+   if not ids:link['candidatePartnerIds']=sorted(p['id'] for p in original_companies.get(cui,[]))
    if conflict:issues.append({'identityId':i['id'],'reason':link['reason']})
   else:
    if not candidates:
@@ -136,12 +149,17 @@ def build_plan(snapshot,identities,master,roster=None):
    complete=len(addresses)==1 and all(a[1] and a[2] for a in addresses)
    known=master_locations[cui]
    compatible=not known or (len(known)==1 and next(iter(known))[1] in addresses)
-   if complete and compatible and len(source_codes[cui])<=1:
+   if complete and compatible and len(source_codes[cui])<=1 and cui not in pending_companies:
     link.update(partnerIds=sorted({p['id'] for p in candidates}),status='single_partner',
                 reason='Single complete known work-point address')
    else:
     link.update(partnerIds=sorted({p['id'] for p in candidates}),reason='Company represented; work point unresolved')
   links.append(link)
+ alias_updates=[]
+ for id,codes in sorted(alias_sets.items()):
+  old=partners[id].get('historyFranchises',[])
+  aliases=sorted({code_key(v) for v in old}|codes)
+  if sorted(old)!=aliases:alias_updates.append({'id':id,'before':customers[id],'franchiseCodes':aliases})
  updates=[];allocation=collections.Counter();county_totals=collections.Counter()
  for key,p in {**partners,**additions}.items():
   county=county_key(p.get('county'))
@@ -167,17 +185,31 @@ def build_plan(snapshot,identities,master,roster=None):
   hint=[key for key,name in COUNTIES.items() if re.search(r'(?<!\w)'+re.escape(norm(name))+r'(?!\w)',norm(a.get('warehouse_name','')))]
   agent_gaps.append({'agentId':a['id'],'name':a['name'],'warehouseId':a['warehouse_id'],'siteCode':a['site_code'],'countyHints':hint,'counties':[]})
  counts=collections.Counter(l['status'] for l in links)
- return {'version':1,'createdAt':now(),'sourceSnapshotHash':sha(dump(snapshot['customers']).encode()),
-         'sourceAgentsHash':sha(dump(snapshot['agents']).encode()),'rosterReviewed':reviewed,
+ return {'version':2,'createdAt':now(),'sourceSnapshotHash':sha(dump(sorted(snapshot['customers'],key=lambda r:r['id'])).encode()),
+         'sourceAgentsHash':sha(dump(sorted(snapshot['agents'],key=lambda r:r['id'])).encode()),'rosterReviewed':reviewed,
          'summary':{'sourceIdentities':len(identities),'sourceCompanies':len(represented),'additions':len(additions),
                     'newWorkPoints':sum(p['historyCatalog']['kind']=='work_point' for p in additions.values()),
                     'newCompanyOnly':sum(p['historyCatalog']['kind']=='company' for p in additions.values()),
-                    'existingMembershipUpdates':len(updates),'linksByStatus':dict(counts),
+                    'existingMembershipUpdates':len(updates),'existingAliasUpdates':len(alias_updates),'pendingExistingCompanyPoints':len(pending),'linksByStatus':dict(counts),
                     'allocation':dict(allocation),'newByCounty':dict(sorted(county_totals.items())),
                     'conflicts':len(issues),'linksToInactiveOnly':inactive_links,
                     'sourceRows':sum(i['row_count'] for i in identities)},
-         'additions':list(additions.values()),'membershipUpdates':updates,'identityLinks':links,
+         'additions':list(additions.values()),'membershipUpdates':updates,'aliasUpdates':alias_updates,'pendingPoints':pending,'identityLinks':links,
          'issues':issues,'rosterTemplate':{'reviewed':False,'agents':agent_gaps}}
+
+def refresh_addition_memberships(plan,roster,agents):
+ """Reassign inferred counties using the same reviewed current roster as the plan."""
+ territories,reviewed=roster_map(roster,agents)
+ if not reviewed or not plan.get('rosterReviewed'):raise ValueError('Reviewed roster required before geographic enrichment')
+ if sha(dump(sorted(agents,key=lambda r:r['id'])).encode())!=plan['sourceAgentsHash']:raise ValueError('Roster snapshot mismatch')
+ allocation=collections.Counter();counties=collections.Counter()
+ for p in plan['additions']:
+  county=county_key(p.get('county'));wh=territories.get(county,[])
+  p['warehouseIds']=wh;p['warehouseId']=wh[0] if wh else ''
+  status='allocated' if wh else 'county_missing' if not county else 'county_unstaffed'
+  p['historyCatalog']['allocationStatus']=status;allocation[status]+=1;counties[county or 'UNKNOWN']+=1
+ plan['summary']['allocation']=dict(allocation);plan['summary']['newByCounty']=dict(sorted(counties.items()))
+ return plan
 
 def main():
  p=argparse.ArgumentParser(description=__doc__)

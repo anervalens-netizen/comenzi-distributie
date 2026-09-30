@@ -11,6 +11,7 @@ stop_last(){ local i=$((${#pids[@]}-1)); kill "${pids[$i]}" 2>/dev/null || true;
 
 python3 tools/test_client_sales_history.py
 python3 tools/test_client_catalog_plan.py
+python3 tools/test_client_catalog_apply.py
 python3 tools/test_client_catalog_geography.py
 node tools/test-partner-sales-health.mjs
 node tools/test-partner-sales-store.mjs

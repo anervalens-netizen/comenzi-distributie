@@ -42,8 +42,9 @@ rows are silently filtered by TR, category, customer or franchise.
    Assign only an unambiguous Partner with a locality and address. Inactive historical records
    are included to avoid assigning old sales to the only location still active.
    Shared portfolio membership does not create extra points.
-3. Additional locations found in the master prevent an unsafe single-point
-   assumption. Ambiguous/missing identities remain visible for reconciliation.
+3. Additional locations found in the master or unassociated codes in the imported
+   source prevent an unsafe single-point assumption. The complete source identity
+   set is versioned with the reference; allocation does not depend on row order. Ambiguous/missing identities remain visible for reconciliation.
 4. Generic consumer receipts retain a separate consumer classification.
 5. Original seller attribution never changes when references or portfolios change.
 
@@ -84,3 +85,45 @@ allocation coverage, missing amounts, SQLite integrity and foreign keys.
 Keep an independent copy of the completed database and original XLSX files.
 When copying a live database, use SQLite backup rather than copying only the main
 file while WAL is active. Reimport from the retained sources is also supported.
+
+
+## Additive integration with existing partners
+
+Run `tools/client_catalog_plan.py` against explicit private application, history,
+location-master and reviewed current-roster snapshots. Plan version 2 treats the
+existing catalog as partial. Exact client identity plus matching complete address,
+or a previously verified franchise alias, reuses the existing customer ID.
+A company ID alone never proves that two work points are identical.
+
+For an existing company, a new code without a sufficiently known address remains
+in `pendingPoints`. Ownership conflicts are also retained for reconciliation;
+they never create a guessed customer. New companies may have coded work points
+or an explicitly marked company-only record. Neither implies verified geography.
+Source transactions remain in the historical store in all these cases.
+
+Verified code associations are stored in `historyFranchises` metadata. This lets
+future reconciliation keep the association after an address correction. Existing
+names, addresses, routes, active states and customer IDs remain unchanged. Inactive
+records are retained and never silently reactivated. Legacy records sharing an
+address are not deleted or merged automatically.
+
+If enriching missing counties with `tools/client_catalog_geography.py`, also pass
+`--snapshot` and `--roster` to recompute new-customer membership after inference.
+Use only reviewed current territories, with all agents in a shared county included.
+Original invoicing TR fields are immutable. An inferred county does not justify a
+map coordinate; only geocoded points appear on the map.
+
+Apply a reviewed plan using `tools/client_catalog_apply.py` with explicit
+`--application`, `--plan`, `--snapshot` and a new private `--receipt-directory`.
+The tool refuses unrelated DB filenames, stale catalogs and changed active rosters.
+It verifies a SQLite recovery copy before entering one write transaction. It adds
+new rows, updates only existing membership and verified code metadata, and verifies
+that every other application table is unchanged. A repeated successful plan is a
+no-op. The existing portfolio-replacing importer must not be used for this task.
+
+Before activating the integrated catalog, rehearse with copies of the actual
+application and history databases. Reconcile a fresh partner snapshot, confirm
+unchanged transaction hashes/totals, rebuild the derived activity snapshot, and
+release the matching period filters so historical-only clients remain manageable.
+The two database updates are separate operations: retain recovery receipts for
+each and do not advertise complete integration before both are verified.
