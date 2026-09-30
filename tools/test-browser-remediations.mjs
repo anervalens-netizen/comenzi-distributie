@@ -195,8 +195,10 @@ try {
   await cdp.evaluate("Object.defineProperty(navigator,'geolocation',{configurable:true,value:{getCurrentPosition(ok){window.gpsCalls=(window.gpsCalls||0)+1;ok({coords:{latitude:44.431,longitude:26.101,accuracy:8}})}}})");
   check(await cdp.evaluate("!window.gpsCalls"),'GPS remains idle until explicit click');
   check(await cdp.evaluate("document.querySelector('.partner-sales').open&&!document.querySelector('.partner-contact-edit').open&&!document.querySelector('.partner-visits').open"),'Partner opens with sales first and editing/visits collapsed');
-  await cdp.evaluate("document.querySelector('.partner-contact-edit').open=true");
-  await cdp.evaluate("document.querySelector('.partner-position-correction').open=true;document.querySelector('.partner-position-link').click()");
+  check(await cdp.evaluate("(()=>{const b=document.querySelector('.partner-position-update');return b?.textContent.includes('Actualizează poziția magazinului')&&b.getBoundingClientRect().height>=56&&!!(b.compareDocumentPosition(document.querySelector('.partner-sales'))&Node.DOCUMENT_POSITION_FOLLOWING);})()"),'Large position action appears before sales');
+  await cdp.evaluate("document.querySelector('.partner-position-update').click()");
+  check(await cdp.evaluate("document.querySelector('.partner-contact-edit').open&&document.querySelector('.partner-position-correction').open&&document.activeElement===document.querySelector('.partner-position-link')&&!window.gpsCalls"),'Header shortcut opens and focuses GPS without requesting or saving location');
+  await cdp.evaluate("document.querySelector('.partner-position-link').click()");
   await waitFor(()=>cdp.evaluate("document.querySelector('dialog output')?.textContent.includes('Poziția a fost preluată')"),'GPS captured for confirmation');
   check((await api('partner/portfolio/browser-ph-located',cookie)).partner.latitude===44.43,'GPS does not save before confirmation');
   await cdp.evaluate("document.querySelector('dialog form').requestSubmit()");

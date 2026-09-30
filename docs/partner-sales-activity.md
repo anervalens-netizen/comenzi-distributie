@@ -195,3 +195,9 @@ their allocation. Ambiguous aliases, generic consumers and name-only matches
 are excluded. No source facts or point assignments are rewritten. Map/activity
 point metrics continue to use confirmed point allocations; company history in
 the detail sheet is explicitly separate until point reconciliation is completed.
+
+The partner header exposes a full-width position-update action for editable
+partners. It opens the contact and position controls, scrolls directly to GPS
+and moves keyboard focus to its button. Opening the shortcut does not request
+geolocation or write data; GPS capture and the existing save confirmation remain
+explicit. Sales still opens by default and contact editing starts collapsed.

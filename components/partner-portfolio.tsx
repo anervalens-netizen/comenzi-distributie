@@ -448,6 +448,18 @@ export function PartnerSheet({
       null,
     );
   const dialog = useRef<HTMLDialogElement>(null);
+  const contactEditor = useRef<HTMLDetailsElement>(null);
+  const positionEditor = useRef<HTMLDetailsElement>(null);
+  const gpsButton = useRef<HTMLButtonElement>(null);
+  function openPositionEditor() {
+    if (form?.canEdit !== true) return;
+    if (contactEditor.current) contactEditor.current.open = true;
+    if (positionEditor.current) {
+      positionEditor.current.open = true;
+      positionEditor.current.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    }
+    gpsButton.current?.focus({ preventScroll: true });
+  }
   useEffect(() => {
     dialog.current?.showModal();
     let alive = true;
@@ -571,6 +583,21 @@ export function PartnerSheet({
           Închide
         </button>
       </header>
+      {form?.canEdit === true && (
+        <button
+          type="button"
+          className="primary partner-position-update"
+          onClick={openPositionEditor}
+          disabled={busy}
+          aria-controls={'partner-position-' + id}
+        >
+          <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M20 10c0 6-8 12-8 12S4 16 4 10a8 8 0 1 1 16 0Z" />
+            <circle cx="12" cy="10" r="3" />
+          </svg>
+          Actualizează poziția magazinului
+        </button>
+      )}
       {error && (
         <p className="error-banner" role="alert">
           {error}
@@ -631,7 +658,7 @@ export function PartnerSheet({
           )}
           {(detail?.partner.contact||detail?.partner.phone)&&<p className="partner-contact-summary">{detail.partner.contact}{detail.partner.contact&&detail.partner.phone?' · ':''}{detail.partner.phone&&<a href={'tel:'+detail.partner.phone}>{detail.partner.phone}</a>}</p>}
           <PartnerSales key={id} id={id}/>
-          <details className="partner-contact-edit">
+          <details ref={contactEditor} className="partner-contact-edit">
             <summary>Date de contact și poziția magazinului</summary>
           <form
             onSubmit={(e) => {
@@ -687,7 +714,7 @@ export function PartnerSheet({
                   magazinului înainte de navigare.
                 </p>
               )}
-              <details className="partner-position-correction">
+              <details ref={positionEditor} id={'partner-position-' + id} className="partner-position-correction">
                 <summary>Corectează poziția magazinului</summary>
                 <p className="muted">
                   Folosește această opțiune doar dacă pinul lipsește sau este
@@ -697,6 +724,7 @@ export function PartnerSheet({
                 <button
                   type="button"
                   className="partner-position-link"
+                  ref={gpsButton}
                   onClick={gps}
                 >
                   Preia poziția GPS a magazinului

@@ -443,3 +443,34 @@
 .partner-map-choices { display: grid; gap: 6px; max-height: 220px; overflow-y: auto; }
 .partner-map-choices button { text-align: left; padding: 6px; color: #176b62; border-bottom: 1px solid #d7e1e5; }
 .partner-map .maplibregl-ctrl-attrib { font-size: 10px; max-width: calc(100% - 10px); }
+
+/* Primary field action stays visible before the partner details and sales. */
+.partner-sheet .partner-position-update {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 56px;
+  margin: 16px 0;
+  padding: 14px 16px;
+  border: 0;
+  border-radius: 12px;
+  background: #e51d36;
+  color: white;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.35;
+  white-space: normal;
+}
+.partner-position-update svg {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+}
+.partner-sheet .partner-position-update:hover { background: #be123c; }
+.partner-sheet .partner-position-update:focus-visible {
+  outline: 3px solid #152a3a;
+  outline-offset: 3px;
+}
+.partner-position-correction { scroll-margin-top: 16px; }
