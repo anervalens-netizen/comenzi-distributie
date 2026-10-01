@@ -155,7 +155,7 @@ try{
   await resolveMail(0,'closed');await evaluate('fixture.calls[1].resolve("closed excel");true');await delay(40);
   check(await evaluate('fixture.created.length===0&&fixture.downloads.length===0'),'Unmount cancellation suppresses late automatic download');
 
-  const stock={warehouseId:'w-a',importedAt:'2026-09-30T10:00:00Z',filename:'synthetic-stock.xlsx',rows:[{code:'B2',name:'Încărcător',category:'B',quantity:3},{code:'A1',name:'Cablu',category:'A',quantity:2},{code:'B1',name:'Telefon',category:'B',quantity:4},{code:'N1',name:'Produs fără grup',category:null,quantity:5},{code:'A2',name:'Cablu USB',category:'A',quantity:7}]};
+  const stock={warehouseId:'w-a',importedAt:'2026-09-30T10:00:00Z',depotImportedAt:null,depot:{},filename:'synthetic-stock.xlsx',rows:[{code:'B2',name:'Încărcător',category:'B',quantity:3},{code:'A1',name:'Cablu',category:'A',quantity:2},{code:'B1',name:'Telefon',category:'B',quantity:4},{code:'N1',name:'Produs fără grup',category:null,quantity:5},{code:'A2',name:'Cablu USB',category:'A',quantity:7}]};
   await reset();await evaluate('fixture.stock("w-a");true');await waitFor('fixture.calls.length===1');
   await evaluate('fixture.calls[0].resolve('+JSON.stringify(stock)+');true');await waitFor('document.querySelectorAll(".stock-row").length===5');
   check(await evaluate('[...document.querySelectorAll(".stock-row small")].map(node=>node.textContent).join(",")==="A1,A2,B2,B1,N1"'),'One-pass stock grouping preserves category order and input order');
@@ -164,7 +164,7 @@ try{
   await fill('[aria-label="Caută în stoc"]','incarcator');await waitFor('document.querySelectorAll(".stock-row").length===1');
   check(await evaluate('document.querySelector(".stock-row small").textContent==="B2"'),'Stock normalized accent-insensitive search is unchanged');
   await fill('[aria-label="Caută în stoc"]','Cablu');await waitFor('document.querySelectorAll(".stock-row").length===2');
-  check(await evaluate('document.querySelector(".stock-result-count").textContent==="Afișate 2 coduri · 9 buc."'),'Filtered count and pieces use all matching stock rows');
+  check(await evaluate('document.querySelector(".stock-result-count").textContent==="2 coduri găsite · 9 buc. · pagina 1 din 1"'),'Filtered count and pieces use all matching stock rows');
   await fill('[aria-label="Caută în stoc"]','');
   await select('[aria-label="Filtrează după categorie"]','B');
   await waitFor('document.querySelectorAll(".stock-row").length===2');
