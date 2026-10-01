@@ -1,7 +1,9 @@
+import {portfolioSummary} from './partner-portfolio';
+import {pagedBrowse,readyReadModel,selectedSql,selectedSummaries} from './portfolio-read-model';
+import {aggregateMapPoints} from './partner-map-aggregation';
 import {readActivitySnapshot} from './partner-activity-snapshot';
 import {validBillingPeriod,selectBillingPeriod} from './partner-billing-period';
 import { db, fail } from './server';
-import { portfolioSummary } from './partner-portfolio';
 import { managerFilter } from './manager-scope';
 import type { User } from './types';
 import type {
@@ -13,11 +15,6 @@ import type {
 
 export const DEFAULT_MAP_STYLE =
   'https://tiles.openfreemap.org/styles/positron';
-const normalize = (s: string) =>
-  s
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase();
 function integer(
   params: URLSearchParams,
   key: string,
@@ -50,7 +47,60 @@ export function parseBounds(raw: string | null): MapBounds | undefined {
     fail(400, 'Zona hărții este invalidă.');
   return b as MapBounds;
 }
-function filters(params: URLSearchParams) {
+export function partnerBounds(partners: PartnerSummary[]): MapBounds | null {
+  let west = Infinity,
+    south = Infinity,
+    east = -Infinity,
+    north = -Infinity;
+  for (const p of partners)
+    if (p.latitude !== null && p.longitude !== null) {
+      west = Math.min(west, p.longitude);
+      east = Math.max(east, p.longitude);
+      south = Math.min(south, p.latitude);
+      north = Math.max(north, p.latitude);
+    }
+  return Number.isFinite(west) ? [west, south, east, north] : null;
+}
+function billingSelection(partners:PartnerSummary[],params:URLSearchParams) {
+  const period=params.get('salesPeriod')||'';
+  if(!validBillingPeriod(period))fail(400,'Perioada de facturare este invalidă.');
+  if(!period)return partners;
+  const snapshot=readActivitySnapshot(partners,undefined,undefined,{period,scope:'company'});
+  if(snapshot.state!=='ready')fail(409,snapshot.message);
+  return selectBillingPeriod(partners,snapshot,period);
+}
+export async function browsePartners(
+  user: User,
+  params: URLSearchParams,
+): Promise<PartnerBrowse> {
+  if(!(db() as D1Database&{portfolioReadVersion?:unknown}).portfolioReadVersion)return legacyBrowse(user,params);
+  const limit = integer(params, 'limit', 100, 1, 200),
+    offset = integer(params, 'offset', 0, 0, 10000000);
+  const scope = await managerFilter(user, params);
+  const period=params.get('salesPeriod')||'';if(!validBillingPeriod(period))fail(400,'Perioada de facturare este invalidă.');
+  const ids=period?billingSelection(await selectedSummaries(user,params,scope?.warehouseIds),params).map(p=>p.id):undefined;
+  return pagedBrowse(user,params,scope?.warehouseIds,offset,limit,ids);
+}
+
+export async function mapPartners(
+  user: User,
+  params: URLSearchParams,
+): Promise<PartnerMapData> {
+  if(!(db() as D1Database&{portfolioReadVersion?:unknown}).portfolioReadVersion)return legacyMap(user,params);
+  const bbox = parseBounds(params.get('bbox'));
+  const scope = await managerFilter(user, params);
+  const rawZoom=params.get('zoom');const zoom=rawZoom===null?undefined:integer(params,'zoom',0,0,22);
+  const period=params.get('salesPeriod')||'';if(!validBillingPeriod(period))fail(400,'Perioada de facturare este invalidă.');
+  await readyReadModel();const query=selectedSql(user,params,scope?.warehouseIds,bbox);query.where+=' AND m.latitude IS NOT NULL AND m.longitude IS NOT NULL';
+  if(period){const ids=billingSelection(await selectedSummaries(user,params,scope?.warehouseIds,bbox),params).map(p=>p.id);query.where+=' AND m.id IN (SELECT value FROM json_each(?))';query.args.push(JSON.stringify(ids));}
+  const points=(await db().prepare(`SELECT m.id,m.name,m.latitude,m.longitude,json_extract(m.summary,'$.positionQuality') quality FROM ${query.from} WHERE ${query.where} ORDER BY m.id`).bind(...query.args).all<{id:string;name:string;latitude:number;longitude:number;quality:string|null}>()).results;
+  if(zoom===undefined&&points.length>50000)fail(413,'Prea multe puncte în această zonă. Mărește harta sau restrânge filtrele.');
+  const data:PartnerMapData={type:'FeatureCollection',features:points.map(p=>({type:'Feature',id:p.id,geometry:{type:'Point',coordinates:[p.longitude,p.latitude]},properties:{id:p.id,name:p.name,approximate:!!p.quality?.endsWith('_approximate')}}))};
+  return zoom===undefined?data:aggregateMapPoints(data,zoom);
+}
+
+const normalize=(s:string)=>s.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+function legacyFilters(params: URLSearchParams) {
   for (const key of ['q', 'county', 'city', 'route'])
     if ((params.get(key)?.length || 0) > 300)
       fail(400, 'Filtrul este prea lung.');
@@ -82,35 +132,14 @@ function filters(params: URLSearchParams) {
         : !!p.lastVisitedAt &&
           now - Date.parse(p.lastVisitedAt) >= Number(days) * 86400000));
 }
-const unique = (values: string[]) =>
+const legacyUnique = (values: string[]) =>
   [...new Set(values.filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ro'));
-export function partnerBounds(partners: PartnerSummary[]): MapBounds | null {
-  let west = Infinity,
-    south = Infinity,
-    east = -Infinity,
-    north = -Infinity;
-  for (const p of partners)
-    if (p.latitude !== null && p.longitude !== null) {
-      west = Math.min(west, p.longitude);
-      east = Math.max(east, p.longitude);
-      south = Math.min(south, p.latitude);
-      north = Math.max(north, p.latitude);
-    }
-  return Number.isFinite(west) ? [west, south, east, north] : null;
-}
-function billingSelection(partners:PartnerSummary[],params:URLSearchParams) {
-  const period=params.get('salesPeriod')||'';
-  if(!validBillingPeriod(period))fail(400,'Perioada de facturare este invalidă.');
-  if(!period)return partners;
-  const snapshot=readActivitySnapshot(partners,undefined,undefined,{period,scope:'company'});
-  if(snapshot.state!=='ready')fail(409,snapshot.message);
-  return selectBillingPeriod(partners,snapshot,period);
-}
-export async function browsePartners(
+
+async function legacyBrowse(
   user: User,
   params: URLSearchParams,
 ): Promise<PartnerBrowse> {
-  const match = filters(params),
+  const match = legacyFilters(params),
     limit = integer(params, 'limit', 100, 1, 200),
     offset = integer(params, 'offset', 0, 0, 10000000);
   const scope = await managerFilter(user, params);
@@ -134,19 +163,19 @@ export async function browsePartners(
     nextOffset: offset + limit < selected.length ? offset + limit : null,
     bounds: partnerBounds(selected),
     facets: {
-      counties: unique(all.map((p) => p.county)),
-      cities: unique(inCounty.map((p) => p.city)),
-      routes: unique(inCounty.map((p) => p.route)),
+      counties: legacyUnique(all.map((p) => p.county)),
+      cities: legacyUnique(inCounty.map((p) => p.city)),
+      routes: legacyUnique(inCounty.map((p) => p.route)),
     },
     styleUrl,
     observedAt: new Date().toISOString(),
   };
 }
-export async function mapPartners(
+async function legacyMap(
   user: User,
   params: URLSearchParams,
 ): Promise<PartnerMapData> {
-  const match = filters(params),
+  const match = legacyFilters(params),
     bbox = parseBounds(params.get('bbox'));
   const scope = await managerFilter(user, params);
   const partners = billingSelection((await portfolioSummary(user, bbox, scope?.warehouseIds)).filter(

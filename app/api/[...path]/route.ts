@@ -197,12 +197,13 @@ async function dispatch(req: Request) {
     if(!sessionResults[0]?.meta.changes)fail(401,'Datele de acces s-au modificat. Autentifică-te din nou.');
     return response({user:userView(row)},200,{'Set-Cookie':cookie(req,token)});
   }
-  if(path[0]==='bootstrap' && req.method==='GET') {
+  if((path[0]==='bootstrap'||path.join('/')==='auth/session') && req.method==='GET') {
     let user=await currentUser(req);
     const existingToken=sessionToken(req);
     const refreshedToken=user?await refreshSession(req):'';
     if(user&&!refreshedToken)user=null;
     const sessionHeaders=refreshedToken?{'Set-Cookie':cookie(req,refreshedToken)}:existingToken?{'Set-Cookie':cookie(req,'',0)}:undefined;
+    if(path.join('/')==='auth/session')return response({user},200,sessionHeaders);
     if(!user||user.mustChangePassword) return response({user},200,sessionHeaders);
     const cfg=await settings();
     const regional=user.role==='manager'&&!isGlobalManager(user)?await regionalOperationalSettings(user.id):undefined;

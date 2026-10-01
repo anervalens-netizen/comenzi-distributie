@@ -1,3 +1,4 @@
+import portfolioReadModelSchema from '@/drizzle/0009_portfolio_read_model.sql?raw';
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { mkdir, readFile, writeFile, rename, rm } from 'node:fs/promises';
@@ -40,6 +41,7 @@ function sqlite() {
     candidate.exec(partnerPortfolioSchema);
     candidate.exec(partnerDayPlansSchema);
     candidate.exec(partnerMapIndex);
+    candidate.exec(portfolioReadModelSchema);
     connection=candidate;
     return candidate;
   } catch(error) {
@@ -70,6 +72,7 @@ const database = {
     const connection = sqlite();
     return JSON.stringify([connection.prepare('PRAGMA data_version').get()!.data_version, connection.prepare('SELECT total_changes() n').get()!.n]);
   },
+  async portfolioReadVersion(){return JSON.stringify(sqlite().prepare('SELECT data_revision,scope_revision FROM portfolio_revision WHERE id=1').get());},
   prepare: (sql: string) => new Statement(sql),
   async batch(statements: Statement[]) {
     const db = sqlite();

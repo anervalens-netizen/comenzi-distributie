@@ -23,8 +23,9 @@ export type PartnerMapProperties = {
   id: string;
   name: string;
   approximate: boolean;
+  cluster?:boolean;point_count?:number;point_count_abbreviated?:string;expansionZoom?:number;bounds?:MapBounds;
 };
-export type PartnerMapData = FeatureCollection<Point, PartnerMapProperties>;
+export type PartnerMapData = FeatureCollection<Point, PartnerMapProperties>&{serverAggregated?:boolean;zoom?:number;totalPoints?:number};
 export type PartnerBrowse = {
   partners: PartnerSummary[];
   total: number;

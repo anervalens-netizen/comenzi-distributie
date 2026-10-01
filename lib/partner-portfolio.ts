@@ -40,7 +40,7 @@ function fingerprint(c: Client) {
     JSON.stringify([c.address || '', c.city || '', c.county || '']),
   );
 }
-function view(row: Row): PortfolioPartner {
+export function portfolioRowView(row: Row): PortfolioPartner {
   const c = JSON.parse(row.data) as Client,
     fp = fingerprint(c),
     valid = row.address_fingerprint === fp;
@@ -103,7 +103,7 @@ export async function portfolio(user: User) {
     .bind(...s.args)
     .all<Row>();
   return {
-    partners: rows.results.map(view),
+    partners: rows.results.map(portfolioRowView),
     observedAt: new Date().toISOString(),
   };
 }
@@ -114,7 +114,7 @@ async function get(user: User, id: string) {
     .bind(id, ...s.args)
     .first<Row>();
   if (!row) fail(404, 'Partenerul nu a fost găsit.');
-  return { ...view(row), canEdit: true };
+  return { ...portfolioRowView(row), canEdit: true };
 }
 export async function partnerDetail(
   user: User,
@@ -283,11 +283,16 @@ export async function recordVisit(
   return partnerDetail(user, id, null);
 }
 
+export async function portfolioSummary(user:User,bbox?:import('./partner-map-types').MapBounds,warehouseIds?:string[]){
+ if(!(db() as D1Database&{portfolioReadVersion?:unknown}).portfolioReadVersion)return legacyPortfolioSummary(user,bbox,warehouseIds);
+ const {selectedSummaries}=await import('./portfolio-read-model');return selectedSummaries(user,new URLSearchParams(),warehouseIds,bbox);
+}
+
 const summaryCache=createReadProjectionCache();
 
 // Lightweight read projection for lists/maps. No contact/request/financial data.
 // Reuse the canonical fingerprint and scope, including shared work locations.
-export async function portfolioSummary(
+async function legacyPortfolioSummary(
   user: User,
   bbox?: import('./partner-map-types').MapBounds,
   warehouseIds?: string[],
@@ -324,7 +329,7 @@ export async function portfolioSummary(
     .bind(...args)
     .all<Row>();
   const summaries=rows.results.map((row) => {
-    const p = view(row);
+    const p = portfolioRowView(row);
     // Finite range checks also protect against malformed legacy/imported coordinates.
     const located =
       typeof p.latitude === 'number' &&
