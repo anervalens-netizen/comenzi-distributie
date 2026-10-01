@@ -54,13 +54,34 @@ const server=createServer((request,response)=>{
   response.setHeader('Content-Type','text/html');response.end('<!doctype html><html lang="ro"><head><meta charset="utf-8"><link rel="stylesheet" href="/fixture.css"></head><body><div id="root"></div><script src="/fixture.js"></script></body></html>');
 });
 await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
-const profile=join(directory,'chrome'),child=spawn(process.env.CHROME_BIN||'/usr/bin/google-chrome',['--headless=new','--no-sandbox','--disable-gpu','--disable-background-networking','--remote-debugging-port=0','--user-data-dir='+profile,'about:blank'],{stdio:'ignore',detached:true});
-let socket,closeBrowser;
+const chrome=process.env.CHROME_BIN||'/usr/bin/google-chrome';
+const profile=join(directory,'chrome'),child=spawn(chrome,['--headless=new','--no-sandbox','--disable-dev-shm-usage','--no-first-run','--no-default-browser-check','--disable-gpu','--disable-background-networking','--remote-debugging-port=0','--user-data-dir='+profile,'about:blank'],{stdio:['ignore','ignore','pipe'],detached:true});
+let chromeError,chromeStderr='',childClosed=false;
+child.on('error',error=>{chromeError=error;});
+child.stderr.on('data',chunk=>{chromeStderr=(chromeStderr+chunk.toString()).slice(-8000);});
+// `close` also fires when spawning fails, while `exit` does not.
+const closed=new Promise(resolve=>child.once('close',()=>{childClosed=true;resolve();}));
+const chromeFailure=reason=>new Error(`${reason} (${chrome}); exit=${child.exitCode??'none'}, signal=${child.signalCode??'none'}${chromeError?`; ${chromeError.message}`:''}\nChrome stderr (last 8000 chars):\n${chromeStderr||'(empty)'}`);
+let socket,closeBrowser,testError,cleanupError;
 try{
-  for(let i=0;!existsSync(join(profile,'DevToolsActivePort'))&&i<100;i++)await delay(50);
-  const port=Number(readFileSync(join(profile,'DevToolsActivePort'),'utf8').split('\n')[0]);
-  const target=await fetch('http://127.0.0.1:'+port+'/json/new?about:blank',{method:'PUT'}).then(r=>r.json());
-  socket=new WebSocket(target.webSocketDebuggerUrl);await new Promise(resolve=>socket.addEventListener('open',resolve,{once:true}));
+  let port;
+  const startupDeadline=performance.now()+30000;
+  while(!port&&performance.now()<startupDeadline){
+    if(chromeError||childClosed||child.exitCode!==null||child.signalCode!==null)throw chromeFailure('Chrome failed before DevTools became ready');
+    // The file may be absent or only partially written during startup.
+    try{const candidate=Number(readFileSync(join(profile,'DevToolsActivePort'),'utf8').split(/\r?\n/)[0]);if(Number.isInteger(candidate)&&candidate>0&&candidate<=65535)port=candidate;}catch{}
+    if(!port)await delay(100);
+  }
+  if(!port)throw chromeFailure('Timeout after 30000 ms waiting for Chrome DevTools port');
+  const response=await fetch('http://127.0.0.1:'+port+'/json/new?about:blank',{method:'PUT',signal:AbortSignal.timeout(5000)}).catch(error=>{throw chromeFailure(`Chrome DevTools connection failed: ${error.message}`);});
+  if(!response.ok)throw chromeFailure(`Chrome DevTools returned HTTP ${response.status}`);
+  const target=await response.json();
+  socket=new WebSocket(target.webSocketDebuggerUrl);
+  await new Promise((resolve,reject)=>{
+    const timer=setTimeout(()=>reject(chromeFailure('Timeout opening Chrome DevTools WebSocket')),5000);
+    socket.addEventListener('open',()=>{clearTimeout(timer);resolve();},{once:true});
+    socket.addEventListener('error',()=>{clearTimeout(timer);reject(chromeFailure('Chrome DevTools WebSocket failed'));},{once:true});
+  });
   let next=1;const pending=new Map(),errors=[];
   socket.addEventListener('message',event=>{const message=JSON.parse(event.data);if(message.method==='Runtime.exceptionThrown')errors.push(message.params.exceptionDetails.text);if(!message.id)return;const entry=pending.get(message.id);if(!entry)return;pending.delete(message.id);clearTimeout(entry.timer);if(message.error)entry.reject(new Error(message.error.message));else entry.resolve(message.result);});
   const send=(method,params={})=>new Promise((resolve,reject)=>{const id=next++,timer=setTimeout(()=>reject(new Error('Timeout: '+method)),15000);pending.set(id,{resolve,reject,timer});socket.send(JSON.stringify({id,method,params}));});
@@ -165,9 +186,24 @@ try{
   const result={checks,synthetic:true,desktopHistoryRequests:1,nativeShareRequests:2,autoDownloadRequests:2,stockGrouping:'single-pass',raceAndAbortGuards:true};
   if(process.env.PERFORMANCE_EVIDENCE_PATH)writeFileSync(process.env.PERFORMANCE_EVIDENCE_PATH,JSON.stringify(result,null,2));
   console.log(JSON.stringify(result,null,2));console.log('PASS: '+checks+' synthetic order-result/stock browser checks.');
-}finally{
-  await closeBrowser?.().catch(()=>{});socket?.close();
-  const exited=new Promise(resolve=>child.exitCode!==null?resolve():child.once('exit',resolve));
-  await Promise.race([exited,delay(2000)]);if(child.exitCode===null){try{process.kill(-child.pid,'SIGTERM');}catch{}await exited;}
-  await delay(200);await new Promise(resolve=>server.close(resolve));rmSync(directory,{recursive:true,force:true,maxRetries:10,retryDelay:100});
+}catch(error){testError=error;throw error;}finally{
+  const cleanupErrors=[];
+  await closeBrowser?.().catch(()=>{});
+  try{socket?.close();}catch(error){cleanupErrors.push(error);}
+  await Promise.race([closed,delay(2000)]);
+  // Only the dedicated process group we spawned, including surviving children.
+  if(child.pid){
+    try{process.kill(-child.pid,'SIGTERM');}catch(error){if(error.code!=='ESRCH')cleanupErrors.push(error);}
+    await Promise.race([closed,delay(2000)]);
+    if(!childClosed){
+      try{process.kill(-child.pid,'SIGKILL');}catch(error){if(error.code!=='ESRCH')cleanupErrors.push(error);}
+      await Promise.race([closed,delay(2000)]);
+      if(!childClosed)cleanupErrors.push(chromeFailure('Chrome did not close after SIGKILL'));
+    }
+  }
+  await delay(200);
+  try{await new Promise((resolve,reject)=>server.close(error=>error?reject(error):resolve()));}catch(error){cleanupErrors.push(error);}
+  try{rmSync(directory,{recursive:true,force:true,maxRetries:10,retryDelay:100});}catch(error){cleanupErrors.push(error);}
+  if(cleanupErrors.length){cleanupError=new AggregateError(cleanupErrors,'Browser fixture cleanup failed');if(testError)console.error(cleanupError);}
 }
+if(cleanupError)throw cleanupError;
