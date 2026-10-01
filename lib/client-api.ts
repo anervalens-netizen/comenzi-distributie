@@ -15,15 +15,16 @@ export class ApiError extends Error {
 }
 
 export async function networkApi<T=Record<string,unknown>>(path: string,method='GET',body?: unknown, signal?: AbortSignal, operationId?:string): Promise<T> {
+  const requestOwner=currentLocalWorkUserId();
   const controller=new AbortController();
   const cancel=()=>controller.abort(signal?.reason);signal?.addEventListener('abort',cancel,{once:true});if(signal?.aborted)cancel();
   const timer=setTimeout(()=>controller.abort(new Error('Cererea a depășit timpul de așteptare.')),20000);
   const options:RequestInit={method,credentials:'same-origin',signal:controller.signal};
   if(body && method!=='GET' && method!=='HEAD'){options.headers={'Content-Type':'application/json',...(operationId?{'X-Operation-Id':operationId}:{})};options.body=JSON.stringify(body);}
-  let res:Response;try{res=await fetch('/api/'+path,options);}finally{clearTimeout(timer);signal?.removeEventListener('abort',cancel);}
+  let res:Response;try{res=await fetch('/api/'+path,options);}catch(error){clearTimeout(timer);signal?.removeEventListener('abort',cancel);throw error;}
   let data:unknown;
   try { data=await res.json(); }
-  catch { data=null; }
+  catch(error) {if(controller.signal.aborted)throw error;data=null;}finally{clearTimeout(timer);signal?.removeEventListener('abort',cancel);}
   if(!res.ok) {
     const message=data && typeof data==='object' && 'error' in data && typeof (data as {error?:unknown}).error==='string'
       ? (data as {error:string}).error
@@ -31,11 +32,12 @@ export async function networkApi<T=Record<string,unknown>>(path: string,method='
     if(res.status===401&&path.split('/').at(-1)!=='login'&&typeof window!=='undefined')window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
     throw new ApiError(res.status,message,data);
   }
+  if((path==='bootstrap'||path==='auth/session')&&requestOwner!==currentLocalWorkUserId())throw new ApiError(409,'Contul s-a schimbat. Reîncarcă datele.',null);
   if((path==='bootstrap'||path==='auth/session')&&data&&typeof data==='object'&&'user' in data) {
     const user=(data as {user?:unknown}).user;
     setLocalWorkUserId(user&&typeof user==='object'&&'id' in user&&typeof (user as {id?:unknown}).id==='string'?(user as {id:string}).id:'');
   } else if(path==='auth/logout'&&method==='POST') {
-    setLocalWorkUserId('');
+    if(requestOwner===currentLocalWorkUserId())setLocalWorkUserId('');
   } else if(method==='DELETE'&&/^orders\/[^/]+$/.test(path)) {
     const userId=currentLocalWorkUserId();
     const orderId=path.slice('orders/'.length);
@@ -49,9 +51,10 @@ export async function api<T=Record<string,unknown>>(path:string,method='GET',bod
  try{
   const result=await networkApi<T>(path,method,body,signal);
   if(path==='auth/logout'){await rememberAccount('').catch(()=>{});return result;}
+  if(!path.startsWith('auth/')&&path!=='bootstrap'&&owner&&owner!==currentLocalWorkUserId())throw new ApiError(409,'Contul s-a schimbat. Reîncarcă datele.',null);
   const user=(result as {user?:{id:string}|null})?.user;
   if((path==='bootstrap'||path==='auth/session')&&user!==undefined){await rememberAccount(user?.id||'').catch(()=>{});if(user)await migrateLegacy(user.id).catch(()=>{});}
-  const account=user?.id||currentLocalWorkUserId();
+  const account=user?.id||owner||currentLocalWorkUserId();
   if(typeof window!=='undefined'&&method==='GET'&&cacheable(path)&&account)await saveSnapshot(account,path,result).catch(()=>{window.dispatchEvent(new CustomEvent('mobiup-storage-error',{detail:'Datele primite nu au putut fi pregătite pentru offline.'}));});
   return result;
  }catch(e){

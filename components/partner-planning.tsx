@@ -3,7 +3,7 @@
 /* oxlint-disable jsx-a11y/prefer-tag-over-role */
 import { useEffect, useState } from 'react';
 import { currentLocalWorkUserId } from '@/lib/local-work';
-import { enqueue, readWork, saveWork, removeWork } from '@/lib/offline-work';
+import { enqueue, readWork, saveWork } from '@/lib/offline-work';
 import { api, ApiError } from '@/lib/client-api';
 import type { PartnerSummary as PortfolioPartner } from '@/lib/partner-map-types';
 type Plan = { date: string; stops: string[]; revision: number };
@@ -70,6 +70,24 @@ export function PartnerPlanning({
       alive = false;controller.abort();
     };
   }, [week, reload, refreshKey]);
+  useEffect(() => {
+    const confirmed = (event: Event) => {
+      const detail = (event as CustomEvent<{userId:string;path:string;result:Plan}>).detail;
+      if (detail.userId !== currentLocalWorkUserId() || detail.path !== 'partner/planning') return;
+      const plan = detail.result;
+      if (!plan?.date || monday(plan.date) !== week) return;
+      setData(d => d ? {...d, plans:[...d.plans.filter(p => p.date !== plan.date), plan]} : d);
+      setDraft(d => {
+        if (JSON.stringify(d[plan.date]) !== JSON.stringify(plan.stops)) return d;
+        const next = {...d}; delete next[plan.date];
+        void saveWork(currentLocalWorkUserId(), 'plans', week, next).catch(e => setError(e.message));
+        return next;
+      });
+      setNotice('Planul zilei a fost sincronizat.');
+    };
+    window.addEventListener('mobiup-sync-confirmed', confirmed);
+    return () => window.removeEventListener('mobiup-sync-confirmed', confirmed);
+  }, [week]);
   const dates = Array.from({ length: 5 }, (_, i) => shift(week, i));
   const labels = ['Luni', 'Marți', 'Miercuri', 'Joi', 'Vineri'];
   const byId = new Map(partners.map((p) => [p.id, p]));
@@ -110,9 +128,10 @@ export function PartnerPlanning({
       setDraft((d) => {
         const next = { ...d };
         delete next[date];
+        void saveWork(currentLocalWorkUserId(),'plans',week,next).catch(e=>setError(e.message));
         return next;
       });
-      await removeWork(currentLocalWorkUserId(),'plans',week);setNotice('Planul zilei a fost sincronizat.');
+      setNotice('Planul zilei a fost sincronizat.');
     } catch (e) {
       if(!(e instanceof ApiError)||e.status>=500){try{await enqueue(currentLocalWorkUserId(),'partner/planning','PUT',payload,{scope:'plans',id:week,value:draft});setNotice('Plan salvat pe telefon · În așteptare.');}catch(storage){setError((storage as Error).message);}}else setError((e as Error).message);
     } finally {

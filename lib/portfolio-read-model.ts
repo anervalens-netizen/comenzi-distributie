@@ -20,7 +20,7 @@ async function rebuild(){
   const statements=ids.map(id=>db().prepare('DELETE FROM portfolio_read_rows WHERE id=?').bind(id));
   for(const row of rows){const p=portfolioRowView(row as Parameters<typeof portfolioRowView>[0]);const located=typeof p.latitude==='number'&&Number.isFinite(p.latitude)&&Math.abs(p.latitude)<=90&&typeof p.longitude==='number'&&Number.isFinite(p.longitude)&&Math.abs(p.longitude)<=180;
    const summary:PartnerSummary={id:p.id,warehouseIds:p.warehouseIds,historyCatalog:p.historyCatalog?{kind:p.historyCatalog.kind,franchiseCode:p.historyCatalog.franchiseCode,countySource:p.historyCatalog.countySource}:undefined,name:p.name,cui:p.cui,address:p.address,city:p.city,county:p.county,route:p.route,latitude:located?p.latitude:null,longitude:located?p.longitude:null,positionSource:located?p.positionSource:null,positionQuality:located?p.positionQuality:null,lastVisitedAt:p.lastVisitedAt};
-   statements.push(db().prepare('INSERT INTO portfolio_read_rows VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)').bind(p.id,JSON.stringify(summary),p.name??null,normalize([p.id,p.name,p.cui,p.city,p.county,p.address].join(' ')),normalize(p.city||''),typeof p.county==='string'?p.county:null,typeof p.city==='string'?p.city:null,typeof p.route==='string'?p.route:null,summary.latitude,summary.longitude,summary.positionSource,p.lastVisitedAt));
+   statements.push(db().prepare('INSERT INTO portfolio_read_rows VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').bind(p.id,JSON.stringify(summary),p.name??null,normalize([p.id,p.name,p.cui,p.city,p.county,p.address].join(' ')),normalize(p.city||''),typeof p.county==='string'?p.county:null,typeof p.city==='string'?p.city:null,typeof p.route==='string'?p.route:null,summary.latitude,summary.longitude,summary.positionSource,p.lastVisitedAt));
   }
   const rev=JSON.parse(version) as {data_revision:number;scope_revision:number};
   statements.push(db().prepare('DELETE FROM portfolio_dirty WHERE id IN (SELECT value FROM json_each(?)) AND (SELECT data_revision FROM portfolio_revision WHERE id=1)=?').bind(JSON.stringify(ids),rev.data_revision));
@@ -45,7 +45,7 @@ export async function selectedSummaries(user:User,params:URLSearchParams,warehou
  await readyReadModel();const q=selectedSql(user,params,warehouseIds,bbox);readModelMetrics.queries++;
  return (await db().prepare(`SELECT m.summary FROM ${q.from} WHERE ${q.where} ORDER BY m.name,m.id`).bind(...q.args).all<{summary:string}>()).results.map(r=>JSON.parse(r.summary) as PartnerSummary);
 }
-export async function pagedBrowse(user:User,params:URLSearchParams,warehouseIds:string[]|undefined,offset:number,limit:number,selectedIds?:string[]){
+export async function pagedBrowse(user:User,params:URLSearchParams,warehouseIds:string[]|undefined,offset:number,limit:number,selectedIds?:string[],attempt=0){
  await readyReadModel();const version=await portfolioVersion(),key=JSON.stringify([user.id,user.role,user.managerScope,user.warehouseId,warehouseIds,params.toString(),offset,limit]);
  const configuredRevision=JSON.stringify(await db().prepare("SELECT value FROM settings WHERE key='partner-map-style-url'").first());
  const cached=cache.get<import('./partner-map-types').PartnerBrowse>(key,version+configuredRevision);if(cached)return cached;
@@ -56,5 +56,6 @@ export async function pagedBrowse(user:User,params:URLSearchParams,warehouseIds:
  const values=async(field:string,s:typeof q)=>(await db().prepare(`SELECT DISTINCT m.${field} value FROM ${s.from} WHERE ${s.where} AND m.${field} IS NOT NULL AND m.${field}<>''`).bind(...s.args).all<{value:string}>()).results.map(r=>r.value).sort((a,b)=>a.localeCompare(b,'ro'));
  const configured=await db().prepare("SELECT value FROM settings WHERE key='partner-map-style-url'").first<{value:string}>();const styleUrl=configured?.value?.trim()||'https://tiles.openfreemap.org/styles/positron';if(!styleUrl.startsWith('https://')&&!/^\/(?!\/)/.test(styleUrl))fail(500,'Configurația hărții este invalidă.');
  const result:import('./partner-map-types').PartnerBrowse={partners:page.results.map(r=>JSON.parse(r.summary)),total:totals!.total,located:totals!.located,geocoded:totals!.geocoded||0,nextOffset:offset+limit<totals!.total?offset+limit:null,bounds:totals!.west===null?null:[totals!.west,totals!.south!,totals!.east!,totals!.north!],facets:{counties:await values('county',scope),cities:await values('city',facets),routes:await values('route',facets)},styleUrl,observedAt:new Date().toISOString()};
- if(version===await portfolioVersion())cache.put(key,version+configuredRevision,result);return result;
+ if(version!==await portfolioVersion()){if(attempt>=2)fail(503,'Portofoliul se modifică. Reîncearcă.');return pagedBrowse(user,params,warehouseIds,offset,limit,selectedIds,attempt+1);}
+ cache.put(key,version+configuredRevision,result);return result;
 }

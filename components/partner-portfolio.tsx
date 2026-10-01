@@ -489,6 +489,12 @@ export function PartnerSheet({
     };
   }, [id]);
   useEffect(()=>{if(form)void saveWork(userIdForWork(),'partner',id,form).catch(e=>setError(e.message));},[form,id]);
+  useEffect(()=>{
+    const synced=(event:Event)=>{const value=(event as CustomEvent).detail;if(value.userId!==userIdForWork())return;
+      if(value.path===`partner/portfolio/${encodeURIComponent(id)}`&&value.result?.partner){const saved=value.result.partner as PortfolioPartner;setForm(current=>current?{...current,revision:saved.revision}:saved);setDetail(current=>current?{...current,partner:saved}:current);setNotice('Datele trimise au fost sincronizate. Modificările noi rămân în fișă.');}
+      if(value.path===`partner/portfolio/${encodeURIComponent(id)}/visits`&&value.result?.visits){setDetail(value.result);setPending(null);void removeWork(userIdForWork(),'visit',id).catch(e=>setError(e.message));setNotice('Vizita a fost sincronizată.');}
+    };window.addEventListener('mobiup-sync-confirmed',synced);return()=>window.removeEventListener('mobiup-sync-confirmed',synced);
+  },[id]);
   async function save() {
     if (form?.canEdit!==true) return;
     setBusy(true);

@@ -40,6 +40,8 @@ export default function PartnerMap({
   selectedId?: string | null;
   focusPoint?: {id:string;latitude:number|null;longitude:number|null};
 }) {
+  const datasetScope=useRef<string|null>(null);
+  const retainedData=useRef<PartnerMapData|null>(null);
   const host = useRef<HTMLDivElement>(null),
     map = useRef<MapLibreMap | null>(null),
     select = useRef(onSelect);
@@ -348,10 +350,8 @@ export default function PartnerMap({
       controller: AbortController | undefined,
       timer: ReturnType<typeof setTimeout>;
     const source = () => m.getSource(SOURCE) as GeoJSONSource | undefined;
-    void source()
-      ?.setData(empty())
-      .catch(() => {});
-    if (host.current) host.current.dataset.featureCount = '0';
+    if(datasetScope.current!==filters){retainedData.current=null;void source()?.setData(empty()).catch(()=>{});if(host.current)host.current.dataset.featureCount='0';}
+    else if(retainedData.current)void source()?.setData(retainedData.current).catch(()=>{});
     if (boundsKey === undefined) return;
     const box = JSON.parse(boundsKey) as MapBounds | null;
     m.stop();
@@ -378,9 +378,10 @@ export default function PartnerMap({
       const request = new AbortController();
       controller = request;
       setLoading(true);
+      const requestedZoom=Math.floor(m.getZoom());
       const b = m.getBounds(),
-        dx = (b.getEast() - b.getWest()) * 0.25,
-        dy = (b.getNorth() - b.getSouth()) * 0.25;
+        dx = (b.getEast() - b.getWest()) * 0.5,
+        dy = (b.getNorth() - b.getSouth()) * 0.5;
       const bbox = [
         Math.max(-180, b.getWest() - dx),
         Math.max(-90, b.getSouth() - dy),
@@ -391,7 +392,7 @@ export default function PartnerMap({
         .join(',');
       try {
         const data = await api<PartnerMapData>(
-          `partner/map?${filters}&bbox=${bbox}&zoom=${Math.floor(m.getZoom())}`,
+          `partner/map?${filters}&bbox=${bbox}&zoom=${requestedZoom}`,
           'GET',
           undefined,
           request.signal,
@@ -399,7 +400,7 @@ export default function PartnerMap({
         if (cancelled || request.signal.aborted) return;
         const aggregated=data as PartnerMapData&{serverAggregated?:boolean};await source()?.setClusterOptions({cluster:!aggregated.serverAggregated});await source()?.setData(data);
         if (cancelled || request.signal.aborted) return;
-        loadedZoom=Math.floor(m.getZoom());loadedArea=bbox.split(',').map(Number) as MapBounds;
+        datasetScope.current=filters;retainedData.current=data;loadedZoom=requestedZoom;loadedArea=bbox.split(',').map(Number) as MapBounds;
         setDataError('');
         if (host.current)
           host.current.dataset.featureCount = String(data.features.length);

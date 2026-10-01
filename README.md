@@ -27,3 +27,13 @@ The resource files used by builds are generated and ignored by Git. `npm run pre
 ## Manager access
 
 All managers can view national activity, partners, orders, stock, inventory and sales, with region and agent filters. Regional assignments still govern account changes and operational writes. Managers change their own password from their profile; regional managers reset assigned agents' passwords under Team → Passwords and accounts (the default subtab). Regional managers cannot change other regions' accounts or manager assignments.
+
+## Lucru mobil și offline
+
+Agentul poate folosi modul Listă și poate pregăti datele din „Lucru pe telefon” înainte de deplasare. Interfața arată data pregătirii și acoperirea catalogului/fișelor; pregătirea este limitată, cu fișele traseului săptămânii prioritare. Fundalul hărții necesită conexiune.
+
+Ciornele, modificările fișelor, vizitele și planurile sunt păstrate separat pentru fiecare cont în IndexedDB. „Salvat pe telefon” confirmă doar persistența locală. Operațiunile se sincronizează în ordine când aplicația este deschisă și conexiunea revine. Finalizarea și exportul necesită confirmarea serverului. Erorile de sesiune, permisiune sau revizie păstrează lucrul pentru verificare; scoaterea unei operațiuni din coadă păstrează copia locală de recuperare.
+
+Actualizările PWA nu reîncarcă automat editorul. Activarea unei versiuni noi este oferită după golirea cozii, iar resursele versiunilor anterioare rămân disponibile taburilor deschise.
+
+Runtime-ul Node construiește un model derivat, regenerabil pentru portofoliu, cu revizii dedicate datelor și acoperirii utilizatorilor. Triggerele SQLite urmăresc și modificările făcute din alte conexiuni, fără funcții SQL private. Browse păstrează paginarea, totalurile și fațetele complete pentru selecție; harta agregă după nivelul de zoom și permite apropierea până la punctele individuale. Datele autoritative nu sunt rescrise pentru această optimizare.

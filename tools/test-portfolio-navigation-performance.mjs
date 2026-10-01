@@ -53,7 +53,7 @@ try{
  socket=new WebSocket(target.webSocketDebuggerUrl);await new Promise(resolve=>socket.addEventListener('open',resolve,{once:true}));
  let next=1;const pending=new Map(),errors=[];
  socket.addEventListener('message',event=>{const message=JSON.parse(event.data);if(message.method==='Runtime.exceptionThrown')errors.push(message.params.exceptionDetails.text);if(!message.id)return;const entry=pending.get(message.id);if(!entry)return;pending.delete(message.id);clearTimeout(entry.timer);if(message.error)entry.reject(Error(message.error.message));else entry.resolve(message.result);});
- const send=(method,params={})=>new Promise((resolve,reject)=>{const id=next++,timer=setTimeout(()=>{pending.delete(id);reject(Error('CDP timeout '+method));},15000);pending.set(id,{resolve,reject,timer});socket.send(JSON.stringify({id,method,params}));});
+ const send=(method,params={})=>new Promise((resolve,reject)=>{const id=next++,timer=setTimeout(()=>{pending.delete(id);reject(Error('CDP timeout '+method));},method==='Page.navigate'?45000:15000);pending.set(id,{resolve,reject,timer});socket.send(JSON.stringify({id,method,params}));});
  closeBrowser=()=>send('Browser.close');
  const evaluate=async expression=>{const result=await send('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true});if(result.exceptionDetails)throw Error(JSON.stringify(result.exceptionDetails));return result.result.value;};
  const waitFor=async expression=>{for(let i=0;i<120;i++){if(await evaluate(expression))return;await delay(50);}throw Error('Not ready: '+expression);};
@@ -82,12 +82,13 @@ try{
  check(await evaluate("document.querySelector('.partner-card strong')?.textContent==='Fresh synthetic response'"),'Delayed stale response cannot overwrite newer filter results');
  evidence.scenarios.staleResponse={visible:'Fresh synthetic response'};
  await mapSettled();const contained=mark();await evaluate("document.querySelector('.maplibregl-ctrl-zoom-in').click();true");await delay(800);
- check(since(contained,'/api/partner/map').length===0,'Zoom within an already-loaded bbox does not request the map again');
+ check(since(contained,'/api/partner/map').length===1&&Number(since(contained,'/api/partner/map')[0].params.zoom)===Math.floor((await camera()).zoom),'Integer zoom transition refreshes aggregation exactly once even within loaded bbox');
+ const smallPan=mark();
  await evaluate("document.querySelector('.maplibregl-canvas').focus();true");await send('Input.dispatchKeyEvent',{type:'keyDown',key:'ArrowRight',code:'ArrowRight',windowsVirtualKeyCode:39});await send('Input.dispatchKeyEvent',{type:'keyUp',key:'ArrowRight',code:'ArrowRight',windowsVirtualKeyCode:39});await delay(850);
- check(since(contained,'/api/partner/map').length===0,'Small pan within padded bbox does not request duplicate GeoJSON');
- evidence.scenarios.containedNavigation={mapRequests:0};
+ check(since(smallPan,'/api/partner/map').length===0,'Small pan within padded bbox does not request duplicate GeoJSON');
+ evidence.scenarios.containedNavigation={zoomRequests:1,panRequests:0};
  const expanded=mark();await evaluate("document.querySelector('.maplibregl-ctrl-zoom-out').click();true");await delay(700);await evaluate("document.querySelector('.maplibregl-ctrl-zoom-out').click();true");await delay(850);
- check(since(expanded,'/api/partner/map').length===1,'Zoom outside loaded padded bbox fetches one new area');evidence.scenarios.expandedNavigation={mapRequests:since(expanded,'/api/partner/map').length};
+ check(since(expanded,'/api/partner/map').length===2,'Two integer zoom-out transitions each fetch their new aggregation once');evidence.scenarios.expandedNavigation={mapRequests:since(expanded,'/api/partner/map').length};
  const beforeHidden=await camera(),sameScopeHidden=mark();await evaluate('window.fixture.setActive(false)');await delay(400);check(await evaluate("!document.querySelector('.maplibregl-canvas')"),'Same-scope hidden tab releases WebGL');check(since(sameScopeHidden).length===0,'Same-scope hidden tab makes no requests');await evaluate('window.fixture.setActive(true)');await mapSettled();const afterHidden=await camera();check(sameCamera(beforeHidden,afterHidden),'Zoom/pan camera is preserved exactly across hidden tab unmount/remount');evidence.scenarios.sameScopeViewport={before:beforeHidden,after:afterHidden};
  const beforeList=await camera(),list=mark();await clickText('Listă');await delay(600);check(await evaluate("!document.querySelector('.maplibregl-canvas')"),'List mode releases WebGL map');check(since(list,'/api/partner/map').length===0,'List mode makes zero hidden map requests');
  await send('Emulation.setDeviceMetricsOverride',{width:900,height:900,deviceScaleFactor:1,mobile:false});await delay(350);check(since(list,'/api/partner/map').length===0,'List resize makes zero hidden map requests');

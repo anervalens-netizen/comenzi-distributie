@@ -16,6 +16,7 @@ python3 tools/test_client_catalog_apply.py
 python3 tools/test_client_catalog_geography.py
 node tools/test-customer-counts.mjs
 node tools/test-read-projection-cache.mjs
+node tools/test-mobile-read-model.mjs
 node tools/test-client-import-worker.mjs
 node tools/test-partner-sales-health.mjs
 node tools/test-partner-sales-store.mjs
@@ -84,6 +85,8 @@ node tools/test-stock.mjs --api
 node tools/test-inventory.mjs
 CHROME_BIN="${CHROME_BIN:-$(command -v google-chrome || command -v chromium || true)}"
 if [ -n "$CHROME_BIN" ]; then
+  CHROME_BIN="$CHROME_BIN" node tools/test-offline-work-browser.mjs
+  CHROME_BIN="$CHROME_BIN" node tools/test-offline-upgrade-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-list-pagination-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-client-import-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-portfolio-navigation-performance.mjs

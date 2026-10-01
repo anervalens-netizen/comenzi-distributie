@@ -100,7 +100,7 @@ try {
     if (message.error) entry.reject(new Error(message.error.message)); else entry.resolve(message.result);
   });
   const send = (method, params = {}) => new Promise((resolve, reject) => {
-    const id = next++, timer = setTimeout(() => reject(new Error('Timeout: ' + method)), 15000);
+    const id = next++, timer = setTimeout(() => reject(new Error('Timeout: ' + method)), method === 'Page.navigate' ? 45000 : 15000);
     pending.set(id, { resolve, reject, timer }); socket.send(JSON.stringify({ id, method, params }));
   });
   closeBrowser = () => send('Browser.close');

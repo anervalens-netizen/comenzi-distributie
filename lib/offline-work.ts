@@ -22,7 +22,7 @@ async function transaction<T>(stores:string[],mode:IDBTransactionMode,run:(tx:ID
 export async function snapshot<T>(userId:string,path:string):Promise<{value:T;at:number}|null>{if(!userId)return null;const row=await transaction(['snapshots'],'readonly',tx=>request(tx.objectStore('snapshots').get(userId+'|'+path))) as Snapshot|undefined;return row?{value:row.value as T,at:row.at}:null;}
 export async function saveSnapshot(userId:string,path:string,value:unknown){
  if(!userId)return;const bytes=JSON.stringify(value).length*2;if(bytes>8*1024*1024)return;
- await transaction(['snapshots'],'readwrite',async tx=>{const s=tx.objectStore('snapshots');const rows=await request(s.getAll()) as Snapshot[];let size=rows.reduce((n,r)=>n+r.bytes,0);for(const r of rows.sort((a,b)=>a.at-b.at)){if(size+bytes<=24*1024*1024&&rows.length<250)break;await request(s.delete(r.key));size-=r.bytes;}await request(s.put({key:userId+'|'+path,userId,path,value,at:Date.now(),bytes}));});
+ await transaction(['snapshots'],'readwrite',async tx=>{const s=tx.objectStore('snapshots');const key=userId+'|'+path;const rows=(await request(s.getAll()) as Snapshot[]).filter(r=>r.key!==key);let size=rows.reduce((n,r)=>n+r.bytes,0),count=rows.length;for(const r of rows.sort((a,b)=>a.at-b.at)){if(size+bytes<=24*1024*1024&&count<650)break;await request(s.delete(r.key));size-=r.bytes;count--;}await request(s.put({key:userId+'|'+path,userId,path,value,at:Date.now(),bytes}));});
 }
 export async function rememberAccount(userId:string){await transaction(['meta'],'readwrite',tx=>request(tx.objectStore('meta').put({key:'active',value:userId})));}
 export async function lastAccount(){return transaction(['meta'],'readonly',async tx=>(await request(tx.objectStore('meta').get('active')))?.value as string||'');}
@@ -83,7 +83,15 @@ export async function replay(userId:string,transport:(path:string,method:string,
     result??=await transport(op.path,op.method,op.body,op.id);
     if(active()!==userId)break;
     // Leave recovery work until the UI has reconciled the confirmed server document.
-    await saveSnapshot(userId,op.path,result);await removeOperation(op.id);
+    await saveSnapshot(userId,op.path,result);
+    if(op.path==='partner/planning'){
+      const plan=result as {date:string;stops:string[];revision:number};
+      const day=new Date(plan.date+'T12:00:00Z');day.setUTCDate(day.getUTCDate()-((day.getUTCDay()+6)%7));
+      const path='partner/planning?week='+day.toISOString().slice(0,10);
+      const cached=await snapshot<{week:string;plans:{date:string;stops:string[];revision:number}[];visits:unknown[]}>(userId,path);
+      if(cached)await saveSnapshot(userId,path,{...cached.value,plans:[...cached.value.plans.filter(p=>p.date!==plan.date),plan]});
+    }
+    await removeOperation(op.id);
     window.dispatchEvent(new CustomEvent('mobiup-sync-confirmed',{detail:{path:op.path,result,userId}}));
    }catch(e){const status=(e as {status?:number}).status;op.error=e instanceof Error?e.message:'Conexiune indisponibilă';
     if(status===401){op.next=Date.now()+60000;await updateOperation(op);break;}

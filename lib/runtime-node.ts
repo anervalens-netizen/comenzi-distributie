@@ -41,7 +41,8 @@ function sqlite() {
     candidate.exec(partnerPortfolioSchema);
     candidate.exec(partnerDayPlansSchema);
     candidate.exec(partnerMapIndex);
-    candidate.exec(portfolioReadModelSchema);
+    candidate.exec('BEGIN IMMEDIATE;');
+    try{candidate.exec(portfolioReadModelSchema);candidate.exec('COMMIT;');}catch(error){candidate.exec('ROLLBACK;');throw error;}
     connection=candidate;
     return candidate;
   } catch(error) {
