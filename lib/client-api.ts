@@ -29,6 +29,7 @@ function validGetContract(path:string,data:unknown){
  if(/^partner\/portfolio\/[^/?]+$/.test(path))return record(data)&&record(data.partner)&&array(data.visits);
  if(/^partner\/planning(?:\?|$)/.test(path))return record(data)&&array(data.plans);
  if(/^stock(?:\?|\/|$)/.test(path))return record(data)&&typeof data.warehouseId==='string'&&array(data.rows)&&record(data.depot);
+ if(/^sales\/clients(?:\?|$)/.test(path))return record(data)&&(data.state==='unavailable'?typeof data.message==='string':data.state==='ready'&&typeof data.month==='string'&&record(data.totals)&&record(data.source)&&array(data.rows)&&array(data.comparisons)&&record(data.counts));
  if(/^sales(?:\?|\/|$)/.test(path))return record(data)&&typeof data.month==='string'&&record(data.summary)&&array(data.sites)&&array(data.daily)&&array(data.products);
  return true;
 }

@@ -1,3 +1,4 @@
+import {clientSalesOverview} from '@/lib/client-sales-api';
 import {partnerActivityOverview} from '@/lib/partner-activity-api';
 import { readPartnerSales, PartnerSalesInputError } from '@/lib/partner-sales-store';
 import { visitWeek, saveDayPlan } from '@/lib/partner-planning';
@@ -251,6 +252,7 @@ async function dispatch(req: Request) {
     const month=new URL(req.url).searchParams.get('month');
     return response(await teamActivity(readUser,month));
   }
+  if(path.join('/')==='sales/clients'&&req.method==='GET')return response(await clientSalesOverview(readUser,new URL(req.url).searchParams));
   if(path.join('/')==='sales'&&req.method==='GET')return salesView(req,readUser);
   if(path.join('/')==='sales/preview'&&req.method==='POST')return salesUpload(req,user,false);
   if(path.join('/')==='sales/import'&&req.method==='POST')return salesUpload(req,user,true);

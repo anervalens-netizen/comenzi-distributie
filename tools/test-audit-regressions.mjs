@@ -7,7 +7,7 @@ import { partnerPointKey } from '../lib/partner-identity.ts';
 // Fixed loopback + fixed synthetic DB: never point this destructive fixture at production.
 const origin='http://127.0.0.1:3000';
 const db=new DatabaseSync('work/qa/mobiup.sqlite');
-const {password}=JSON.parse(readFileSync('../tools/qa/credentials.json','utf8'));
+const {password}=JSON.parse(readFileSync('work/qa-credentials/credentials.json','utf8'));
 const salt=randomBytes(16).toString('hex');
 const hash=`scrypt:${salt}:${scryptSync(password,salt,32,{N:32768,r:8,p:3,maxmem:40*1024*1024}).toString('hex')}`;
 let checks=0;

@@ -21,6 +21,7 @@ node tools/test-client-import-worker.mjs
 node tools/test-partner-sales-health.mjs
 node tools/test-partner-sales-store.mjs
 node tools/test-partner-activity.mjs
+node tools/test-client-sales.mjs
 node tools/test-partner-billing-period.mjs
 python3 tools/test-partner-portfolio-schema.py
 node tools/test-partner-geocode.mjs
@@ -62,19 +63,20 @@ python3 -W error::ResourceWarning tools/test-recovery.py
 node tools/test-password-race.mjs
 node tools/test-session-persistence.mjs
 # API acceptance on isolated SQLite.
-rm -rf work/qa ../tools/qa
+rm -rf work/qa work/qa-credentials
 mkdir -p work/qa
 node tools/test-api.mjs --prepare
 start_server "$ROOT/work/qa" 3000 /tmp/comenzi-check-api.log
 python3 - <<'PY'
 import sqlite3
-p='work/qa/mobiup.sqlite'; s='../tools/qa/setup.sql'
+p='work/qa/mobiup.sqlite'; s='work/qa-credentials/setup.sql'
 con=sqlite3.connect(p); con.executescript(open(s).read()); con.commit(); con.close()
 PY
 node tools/test-api.mjs
 node tools/test-audit-regressions.mjs
 node tools/test-partner-portfolio.mjs
 node tools/test-partner-activity-http.mjs
+node tools/test-client-sales-http.mjs
 node tools/test-partner-map.mjs
 node tools/test-manager-workspace.mjs
 node tools/test-partner-planning.mjs
@@ -91,6 +93,7 @@ if [ -n "$CHROME_BIN" ]; then
   CHROME_BIN="$CHROME_BIN" node tools/test-offline-work-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-offline-upgrade-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-list-pagination-browser.mjs
+  CHROME_BIN="$CHROME_BIN" node tools/test-client-sales-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-client-import-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-portfolio-navigation-performance.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-order-result-stock-browser.mjs

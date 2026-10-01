@@ -9,7 +9,7 @@ import { PartnerActivityDetail } from './partner-activity-detail';
 import type { ManagerScope } from './manager-scope';
 import './manager-workspace.css';
 
-export type ManagerDestination = 'partner' | 'sales' | 'stock' | 'inventory' | 'orders';
+export type ManagerDestination = 'partner' | 'sales' | 'clients' | 'stock' | 'inventory' | 'orders';
 type Activity = {activity: TeamActivityView; pending: number; confirmed: number; pendingByAgent: Record<string, number>; confirmedByAgent: Record<string, number>; finalizedOrders: number; finalizedNotices: number};
 export const managerCurrentMonth = () => bucharestReportingMonthKey(new Date());
 function useActivity(query: string, month: string, reload: number) {
@@ -100,6 +100,6 @@ export function ManagerRequests({scopeQuery,month,onMonth,focusRequestId,onBack,
 
 export function ManagerTeamLinks({scope,onAgent}: {scope:ManagerScope;onAgent:(id:string,destination:ManagerDestination)=>void}) {
   return <section className="manager-team-links"><div className="page-heading"><div><span className="eyebrow">ECHIPA TA</span><h1>Echipă</h1><p>Deschide direct spațiul de lucru al unui agent.</p></div><Users size={24}/></div>
-    {scope.selectedAgents.length?<div className="panel manager-table-scroll"><table className="manager-agent-table"><thead><tr><th>Agent / TR</th><th>Acces rapid</th></tr></thead><tbody>{scope.selectedAgents.map(agent=><tr key={agent.id}><th>{agent.name}<small>{agent.siteCode||agent.warehouseName}{agent.active===0?' · inactiv':''}</small></th><td><div className="manager-agent-actions">{([['partner','Parteneri'],['sales','Vânzări'],['stock','Stoc'],['inventory','Inventar'],['orders','Comenzi']] as const).map(([destination,label])=><button className="secondary" key={destination} onClick={()=>onAgent(agent.id,destination)}>{label}</button>)}</div></td></tr>)}</tbody></table></div>:<p className="portfolio-message">Nu există agenți în selecție.</p>}
+    {scope.selectedAgents.length?<div className="panel manager-table-scroll"><table className="manager-agent-table"><thead><tr><th>Agent / TR</th><th>Acces rapid</th></tr></thead><tbody>{scope.selectedAgents.map(agent=><tr key={agent.id}><th>{agent.name}<small>{agent.siteCode||agent.warehouseName}{agent.active===0?' · inactiv':''}</small></th><td><div className="manager-agent-actions">{([['partner','Parteneri'],['sales','Vânzări'],['clients','Vânzări pe clienți'],['stock','Stoc'],['inventory','Inventar'],['orders','Comenzi']] as const).map(([destination,label])=><button className="secondary" key={destination} onClick={()=>onAgent(agent.id,destination)}>{label}</button>)}</div></td></tr>)}</tbody></table></div>:<p className="portfolio-message">Nu există agenți în selecție.</p>}
   </section>;
 }

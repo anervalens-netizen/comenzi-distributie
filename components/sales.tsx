@@ -11,6 +11,7 @@ import { bucharestMonthKey, bucharestReportingMonthKey } from '@/lib/bucharest-m
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import './sales.css';
 
+const ClientSales = lazy(() => import('./client-sales'));
 const SalesChart = lazy(() => import('./sales-chart'));
 
 const MAX_SIZE = 8_000_000;
@@ -39,9 +40,10 @@ function monthLabel(month: string) {
   return Number.isNaN(date.valueOf()) ? month : date.toLocaleDateString('ro-RO', { timeZone: 'Europe/Bucharest', month: 'long', year: 'numeric' });
 }
 
-export function SalesPanel({ user, users, scopeQuery, scopeLabel, initialMonth, onMonthChange }: { user: User; users: User[]; scopeQuery?: string; scopeLabel?: string; initialMonth?: string; onMonthChange?: (month:string)=>void }) {
+export function SalesPanel({ user, users, scopeQuery, scopeLabel, initialMonth, onMonthChange, initialView, onViewChange }: { user: User; users: User[]; scopeQuery?: string; scopeLabel?: string; initialMonth?: string; onMonthChange?: (month:string)=>void; initialView?: 'current'|'history'|'clients'; onViewChange?: (view:'current'|'history'|'clients')=>void }) {
   const manager = user.role === 'manager';
-  const [view, setView] = useState<'current' | 'history'>(()=>(initialMonth||reportingMonth())!==currentMonth()?'history':'current');
+  const [view, setView] = useState<'current' | 'history' | 'clients'>(()=>initialView||((initialMonth||reportingMonth())!==currentMonth()?'history':'current'));
+  const [clientMonth,setClientMonth]=useState(initialMonth||reportingMonth);
   const [month, setMonth] = useState(initialMonth||reportingMonth);
   const [siteCode, setSiteCode] = useState('all');
   const [siteQuery, setSiteQuery] = useState('');
@@ -67,6 +69,7 @@ export function SalesPanel({ user, users, scopeQuery, scopeLabel, initialMonth, 
   const waiting=loading||(!visibleSnapshot&&!activeError);
   useEffect(() => {
     const id = ++requestId.current;
+    if(view==='clients')return;
     const forceRefresh=lastReload.current!==reload;lastReload.current=reload;
     const controller = new AbortController();
     queueMicrotask(() => { if (id === requestId.current) { setLoading(true); setError(''); setSnapshot(null); } });
@@ -75,7 +78,7 @@ export function SalesPanel({ user, users, scopeQuery, scopeLabel, initialMonth, 
       .catch(err => { if (id === requestId.current && (err as Error)?.name !== 'AbortError') {setError(errorMessage(err));setErrorScope(requestScope);} })
       .finally(() => { if (id === requestId.current) setLoading(false); });
     return () => controller.abort();
-  }, [query, requestScope, siteCode, reload]);
+  }, [query, requestScope, siteCode, reload, view]);
   useEffect(() => {
     const refresh = () => {invalidateApiReadCache('sales');setReload(value => value + 1);};
     window.addEventListener('sales-imported', refresh);
@@ -113,11 +116,12 @@ export function SalesPanel({ user, users, scopeQuery, scopeLabel, initialMonth, 
       {waiting ? <output className="sales-loading"><LoaderCircle className="spin" size={22}/> Se încarcă vânzările…</output> : activeError ? <div className="sales-empty sales-load-error"><AlertTriangle size={25}/><strong>Vânzările nu au putut fi încărcate.</strong><span>Verifică conexiunea și încearcă din nou.</span></div> : visibleSnapshot?.filename ? <SalesData view={visibleSnapshot} history={view === 'history'} showGlobalStats={user.role === 'manager' && user.managerScope === 'global'} showSites={manager} fromMonth={fromMonth} toMonth={toMonth} onFromMonth={setFromMonth} onToMonth={setToMonth}/> : <div className="sales-empty sales-no-import"><AlertTriangle size={25}/><strong>Datele pentru {monthLabel(month)} nu sunt disponibile.</strong><span>Managerul poate încărca datele cumulate ale lunii din caseta de import.</span></div>}
   </>;
   return <div className="sales-page">
-    <div className="page-heading sales-heading"><div><span className="eyebrow">PERFORMANȚĂ COMERCIALĂ</span><h1>Vânzări</h1></div><div className="heading-controls"><button className="icon-button refresh" aria-label="Actualizează vânzările" title="Actualizează" disabled={loading} onClick={() => setReload(value => value + 1)}><RefreshCw size={19}/></button></div></div>
-    <Tabs className="sales-tabs" value={view} onValueChange={value=>{const next=String(value) as 'current'|'history';setView(next);if(next==='current')selectMonth(currentMonth());else{const previous=snapshot?.months.find(item=>item.month<currentMonth())?.month||snapshot?.months[0]?.month;if(previous)selectMonth(previous);}}}>
-      <TabsList className="sales-subnav" variant="line" aria-label="Vânzări"><TabsTrigger value="current"><TrendingUp size={17}/>Luna curentă</TabsTrigger><TabsTrigger value="history"><Clock3 size={17}/>Istoric</TabsTrigger></TabsList>
+    <div className="page-heading sales-heading"><div><span className="eyebrow">PERFORMANȚĂ COMERCIALĂ</span><h1>Vânzări</h1></div><div className="heading-controls">{view!=='clients'&&<button className="icon-button refresh" aria-label="Actualizează vânzările" title="Actualizează" disabled={loading} onClick={() => setReload(value => value + 1)}><RefreshCw size={19}/></button>}</div></div>
+    <Tabs className="sales-tabs" value={view} onValueChange={value=>{const next=String(value) as 'current'|'history'|'clients';setView(next);onViewChange?.(next);if(next==='clients')return;if(next==='current')selectMonth(currentMonth());else{const previous=snapshot?.months.find(item=>item.month<currentMonth())?.month||snapshot?.months[0]?.month;if(previous)selectMonth(previous);}}}>
+      <TabsList className="sales-subnav" variant="line" aria-label="Vânzări"><TabsTrigger value="current"><TrendingUp size={17}/>Luna curentă</TabsTrigger><TabsTrigger value="history"><Clock3 size={17}/>Istoric</TabsTrigger><TabsTrigger value="clients">Pe clienți</TabsTrigger></TabsList>
       <TabsContent className="sales-tab-content" value="current" keepMounted>{view==='current'?salesBody:null}</TabsContent>
       <TabsContent className="sales-tab-content" value="history" keepMounted>{view==='history'?salesBody:null}</TabsContent>
+      <TabsContent className="sales-tab-content" value="clients">{view==='clients'&&<Suspense fallback={<output>Se încarcă raportul pe clienți…</output>}><ClientSales key={user.id+'|'+(scopeQuery||'')} scopeQuery={scopeQuery} scopeLabel={scopeLabel} manager={manager} initialMonth={clientMonth} onMonthChange={setClientMonth}/></Suspense>}</TabsContent>
     </Tabs>
   </div>;
 }

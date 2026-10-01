@@ -156,7 +156,7 @@ records display a dash, never a false zero; partial associations are marked.
 All sorting occurs before pagination, with unknown values last in both directions.
 No national total is calculated by summing potentially shared/legacy aliases.
 
-After deployment, rebuild the derived snapshot using the version 4 builder;
+After deployment, rebuild the derived snapshot using the matching current builder;
 source history, original seller attribution and existing TR reports stay intact.
 
 ## Sales-first partner sheet
@@ -205,3 +205,82 @@ partners. It opens the contact and position controls, scrolls directly to GPS
 and moves keyboard focus to its button. Opening the shortcut does not request
 geolocation or write data; GPS capture and the existing save confirmation remain
 explicit. Sales still opens by default and contact editing starts collapsed.
+
+## Monthly client report (snapshot version 5)
+
+Navigation: **Vânzări → Pe clienți**, or **Echipă → Agenți → Vânzări pe
+clienți**. This is a separate, lazy subtab in the existing sales screen. Its
+independent month selection never fetches or supplements from the daily TR
+upload. The manager's current region/agent selection follows the existing
+national read policy; write authorization is unchanged.
+
+`GET /api/sales/clients` accepts `month` (`YYYY-MM`), `filter`, `q`, `county`,
+`sort`, `direction`, zero-based `page`, and existing manager scope parameters.
+Pages contain 50 companies and at most 20 authorized point shortcuts per company;
+remaining points stay accessible in the existing partner portfolio. Search/geography select companies through any
+currently authorized point, retaining their full legal-company history.
+Totals and chip counts apply before status filtering and pagination. Null
+amounts sort last in both directions. Unlinked histories stay unknown.
+
+Version 5 retains the version 4 tables and adds company identity quality plus
+import-level coverage metadata. Rebuild with the same explicitly configured
+`MOBIUP_DATA_DIR` and `node tools/build-partner-activity.mjs`. Older snapshots
+return an explicit rebuild message in all readers. Raw source aggregation only
+runs during that batch build; HTTP reads the derived daily company aggregates.
+Source and application databases remain read-only during building. Current
+portfolio membership is resolved afresh on every report request.
+
+Each active import exposes its declared end, latest actual transaction date
+across the **whole import**, and import timestamp. Its effective observation
+end is the minimum of declared end, observed end, and today in Bucharest.
+Declared coverage supplies the start and internal coverage claim; the last
+observed date alone never proves export completeness. Gaps between effective
+import intervals suspend affected absence/health conclusions. No transactions
+within a declared interval is not independently verified proof of completeness.
+A month beyond observation is **not imported**, with null financial KPIs and
+an explicit latest-available-month action. Missing final days remain visible.
+
+Full months compare preceding full calendar months. Partial months compare
+through the same day number, clamped to each month's length. Previous/three-month
+absence filters require covered equivalent windows and known associations and
+amounts. These lists are exploratory absences up to the cutoff, never proven
+churn. Documents are distinct positive-net company/date/site/number groups with
+positive commercial quantity/value and no missing amounts. Blank document
+numbers, free movements, returns alone and cancellations do not establish a
+purchase; all known source amounts still contribute to net sales, including
+returns and unnamed movements. These are not verified application orders.
+
+Recent means the first **observed** positive documented billing day is within
+60 calendar days ending at the selected cutoff (elapsed 0–59). A later billing
+day establishes repeat; multiple bills on the first day do not. Without repeat,
+less than 30 elapsed covered days means waiting; at least 30 means a review
+signal, only with continuous coverage, known identity/amounts, and fresh source
+coverage. Incomplete historical months cannot issue current overdue alerts.
+Completed historical months show signals as of that month. Future bills and
+future missing amounts do not influence those signals. Reactivation requires
+an earlier actual purchase, at least 60 days between billing days and known
+continuous coverage; it is a simple disclosed rule, not a risk score. It does
+not require the regular-cadence baseline used by the older activity overview.
+
+Visits are completed `partner_visits` records, grouped once by authorized
+company, with the selected agent as actor when applicable. Their range is the
+full selected Europe/Bucharest calendar month, independently of imported sales
+coverage. Comparative visit ranges are labeled separately. Visits on unlinked
+cards still count. Cards without a usable company identifier retain their visits
+and have a separate unidentified-card count, rather than an invented unique-company
+count. Zero records shows a caution; “Fără vizită înregistrată”
+never claims a physical visit did not occur. Plans and GPS are not used.
+
+The report is explicitly a **current portfolio** report, not personal historical
+seller performance. Source-author mode is intentionally absent: current
+ownership and shared site codes cannot safely establish that attribution.
+Open a company or any authorized point to see its original sellers/documents in
+the existing partner sheet. It starts at the selected reporting window and
+retains the explicit company/point toggle. Monthly health explanations stay in
+the report; the sheet does not show its separate whole-history cadence in this
+entry path.
+
+Synthetic checks: `npm run test:client-sales`, `npm run test:client-sales:browser`,
+and `npm run test:client-sales:http` (the isolated QA server must be running).
+All are included by `npm run check`; its API credentials now remain inside the
+checkout's ignored `work/qa-credentials` directory.

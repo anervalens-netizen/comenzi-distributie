@@ -1,0 +1,12 @@
+export const clientFilters = ['all','billed','unbilled','absentPrevious','absentThree','new','repeat','waiting','overdue','reactivated','visited','unvisited','unvisitedPrevious','unvisitedThree','unknown'] as const;
+export type ClientFilter = typeof clientFilters[number];
+export const clientSorts = ['value','name','county','documents','lastBilling','previous'] as const;
+export type ClientSort = typeof clientSorts[number];
+export type SourceCoverage = {start:string;declaredEnd:string;observedEnd:string|null;importedAt:string|null};
+export type MonthWindow = {month:string;from:string;to:string|null;imported:boolean;covered:boolean;complete:boolean};
+export type ClientMetrics = {valueCents:number|null;documents:number|null;lastBilling:string|null;missingValues:number};
+export type ClientHealth = {firstBilling:string|null;lastBilling:string|null;documents:number|null;elapsedDays:number|null;observedDays:number;recent:boolean;repeat:boolean;status:'unknown'|'established'|'repeat'|'waiting'|'overdue'|'uncertain';alertEligible:boolean;reactivated:boolean;reason:string};
+export type ClientSalesRow = {key:string;id:string;name:string;cui:string;city:string;counties:string[];pointCount:number;points:{id:string;name:string;city:string}[];linked:boolean;identityComplete:boolean;metrics:ClientMetrics;previous:ClientMetrics;health:ClientHealth;visits:number;flags:ClientFilter[]};
+export type ClientSalesTotals = {valueCents:number|null;billed:number|null;documents:number|null;perClient:number|null;missingValues:number;unknown:number;visited:number;visitedUnidentified:number;visits:number};
+export type ClientSalesReport = {state:'ready';month:string;source:{label:string;builtAt:string;updatedAt:string|null;declaredEnd:string;observedEnd:string|null;effectiveCutoff:string|null;latestMonth:string|null;coverage:SourceCoverage[]};window:MonthWindow;comparisons:(MonthWindow & ClientSalesTotals & {visitsFrom:string;visitsTo:string})[];totals:ClientSalesTotals;counts:Record<ClientFilter,number>;absenceEligible:boolean;counties:string[];total:number;page:number;hasMore:boolean;rows:ClientSalesRow[];visitRange:{from:string;to:string};noVisitRecords:boolean};
+export type ClientSalesResult = ClientSalesReport | {state:'unavailable';message:string};

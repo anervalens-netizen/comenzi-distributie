@@ -5,7 +5,7 @@ import {randomBytes,scryptSync,randomUUID} from 'node:crypto';
 import {DatabaseSync} from 'node:sqlite';
 
 const root='http://localhost:3000/api/';
-const folder='../tools/qa';mkdirSync(folder,{recursive:true});
+const folder='work/qa-credentials';mkdirSync(folder,{recursive:true});
 if(process.argv.includes('--prepare')) {
   const password=randomBytes(15).toString('base64url'),salt=randomBytes(16).toString('hex');
   const hash=`scrypt:${salt}:${scryptSync(password,salt,32,{N:32768,r:8,p:3,maxmem:40*1024*1024}).toString('hex')}`;

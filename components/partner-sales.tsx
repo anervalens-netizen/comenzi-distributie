@@ -11,8 +11,8 @@ type Product={code:string;name:string;quantityMicros:number;valueCents:number|nu
 function Products({items}:{items:Product[]}){
   return <div className="partner-sales-scroll"><table><thead><tr><th>Produs</th><th className="numeric">Cant.</th><th className="numeric">Valoare</th></tr></thead><tbody>{items.map(p=><tr key={p.code}><td>{p.name}<small>{p.code}</small></td><td className="numeric">{quantity(p.quantityMicros)}</td><td className="numeric">{amount(p.valueCents)}</td></tr>)}</tbody></table></div>;
 }
-export function PartnerSales({id}:{id:string}) {
-  const [open,setOpen]=useState(true),[scope,setScope]=useState('auto'),[from,setFrom]=useState(''),[to,setTo]=useState(''),[page,setPage]=useState(0),[retry,setRetry]=useState(0);
+export function PartnerSales({id,initialRange}:{id:string;initialRange?:{from:string;to:string}}) {
+  const [open,setOpen]=useState(true),[scope,setScope]=useState('auto'),[from,setFrom]=useState(initialRange?.from||''),[to,setTo]=useState(initialRange?.to||''),[page,setPage]=useState(0),[retry,setRetry]=useState(0);
   const [data,setData]=useState<{key:string;value:PartnerSalesResult}|null>(null),[failure,setFailure]=useState<{key:string;text:string}|null>(null),[transactionsOpen,setTransactionsOpen]=useState(false);
   const key=JSON.stringify([id,scope,from,to,page,retry]);
   const result=data?.key===key?data.value:null,error=failure?.key===key?failure.text:'',loading=open&&!result&&!error;
@@ -68,7 +68,7 @@ export function PartnerSales({id}:{id:string}) {
         <h4>Produse cumpărate · top după valoare</h4>
         {ready.products.length?<><Products items={ready.products.slice(0,5)}/>{ready.products.length>5&&<details><summary>Mai multe produse · top {ready.products.length}</summary><Products items={ready.products.slice(5)}/></details>}</>:<p>Nu există produse asociate în această perioadă.</p>}
 
-        <details className="partner-sales-cadence"><summary>Ritmul de facturare · {labels[ready.activity.status]}</summary>
+        {!initialRange&&<details className="partner-sales-cadence"><summary>Ritmul de facturare · {labels[ready.activity.status]}</summary>
           <div className="partner-sales-health">
             <p>{ready.activity.reason}</p>
             {ready.activity.cadenceDays!==null&&<p>Ritm obișnuit: aproximativ <strong>{ready.activity.cadenceDays} zile</strong>.</p>}
@@ -77,7 +77,7 @@ export function PartnerSales({id}:{id:string}) {
             {ready.activity.seasonalPossible&&<span>Posibil sezonier</span>}
             <p>Evaluare pe întregul istoric, până la {date(ready.activity.asOf)}.</p>
           </div>
-        </details>
+        </details>}
         <details><summary>Evoluție lunară</summary>
           {ready.monthly.length?<div className="partner-sales-scroll"><table><thead><tr><th>Luna</th><th>Cantitate</th><th>Valoare</th></tr></thead><tbody>{ready.monthly.map(m=><tr key={m.month}><td>{m.month}</td><td>{quantity(m.quantityMicros)}</td><td>{amount(m.valueCents)}{m.missingValues?' *':''}</td></tr>)}</tbody></table></div>:<p>Nu există tranzacții asociate în perioada selectată.</p>}
         </details>

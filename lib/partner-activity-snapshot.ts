@@ -5,7 +5,7 @@ import {resolve} from 'node:path';
 import {partnerActivity,type PartnerActivity} from './partner-sales-health';
 import {normalizedCui,companyIdentityIndex,type CompanyAlias} from './partner-company-identity';
 export {normalizedCui} from './partner-company-identity';
-export const activityVersion='4';
+export const activityVersion='5';
 export const bucharestToday=()=>new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Bucharest',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
 export function historyStamp(c:DatabaseSync) {
   const reference=String(c.prepare("SELECT value FROM history_meta WHERE key='current_reference'").get()?.value||'');
@@ -106,7 +106,14 @@ export function buildActivitySnapshot(directory:string,today=bucharestToday()) {
       const row:ActivitySnapshotRow={id:key,cui:key,scope:'company',movementYears:[...stat.years].sort(),lastMovement:stat.last,activity:partnerActivity(days,stamp.through,today,complete),billingYears:[...new Set(days.filter(d=>d.date<=asOf).map(d=>d.date.slice(0,4)))].sort(),recentCents:stat.recent,previousCents:stat.previous,missingValues:stat.missing,coverageComplete:complete};
       companyInsert.run(key,JSON.stringify(row));
     }
-    const metadata={...stamp,version:activityVersion,builtAt:new Date().toISOString(),asOf,recentStart,previousStart,rows:count,companies:companyStats.size};
+    // Import-level coverage is national, never inferred from an agent's last sale.
+    // A declared month end cannot extend observation past the actual export.
+    const hasImportedAt=c.prepare('PRAGMA table_info(history_imports)').all().some(row=>row.name==='imported_at');
+    const coverage=c.prepare(`SELECT b.period_start start,b.period_end declaredEnd,MAX(r.date) observedEnd,${hasImportedAt?'b.imported_at':'NULL'} importedAt FROM history_imports b LEFT JOIN history_rows r ON r.import_id=b.id WHERE b.state='active' GROUP BY b.id ORDER BY b.period_start`).all();
+    out.exec('CREATE TABLE company_identity(company_id TEXT PRIMARY KEY,complete INTEGER NOT NULL)');
+    const identityInsert=out.prepare('INSERT INTO company_identity VALUES(?,?)');
+    for(const key of new Set(Object.values(companyLinks)))identityInsert.run(key,Number(!companyIndex.ambiguousCompanies.has(key)));
+    const metadata={...stamp,version:activityVersion,builtAt:new Date().toISOString(),asOf,recentStart,previousStart,rows:count,companies:companyStats.size,coverage};
     out.prepare("INSERT INTO meta VALUES('snapshot',?)").run(JSON.stringify(metadata));out.exec('COMMIT');
     if(out.prepare('PRAGMA quick_check').get()?.quick_check!=='ok')throw new Error('Snapshot integrity failed');
     out.close();out=undefined;renameSync(temp,target);

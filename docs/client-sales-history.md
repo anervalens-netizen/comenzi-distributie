@@ -1,7 +1,9 @@
 # Per-customer sales history
 
 This is a separate dataset from the application's existing per-TR sales reports.
-It neither reads nor modifies `sales.sqlite`, the monthly uploader, or the sales UI.
+It neither reads nor modifies `sales.sqlite` or the monthly uploader. The existing
+sales UI exposes it independently under Vânzări → Pe clienți; see
+[monthly report semantics](partner-sales-activity.md#monthly-client-report-snapshot-version-5).
 Never sum the two datasets: they describe overlapping sales at different grains.
 
 ## Schema and source contract
@@ -131,3 +133,17 @@ each and do not advertise complete integration before both are verified.
 The scheduled application backup includes the dedicated historical database and
 checksum-verified originals. Restore validates both. The derived activity cache
 is rebuilt after restore; it is not an authoritative source or a backup input.
+
+### Monthly navigation and recorded-visit comparisons
+
+The customer report defaults to the Bucharest reporting month, including the
+previous month on calendar day one. Month and customer search remain visible;
+geography, ordering and detailed source provenance expand on demand. KPI cards
+open their customer lists. Search is debounced by 250 ms and stale requests are
+ignored. The last-billing column and sort use the latest observed billing at or
+before the report cutoff, including prior months.
+
+Recorded-visit filters include customers with a visit in the previous calendar
+month (or any of the previous three) and none recorded in the selected calendar
+month. These use authorized points and the selected visit actor, independently
+of billing imports. No recorded visit is not evidence of no physical visit.

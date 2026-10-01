@@ -451,11 +451,13 @@ export function PartnerSheet({
   onClose,
   onSaved,
   manager=false,
+  salesRange,
 }: {
   id: string;
   onClose: () => void;
   onSaved: () => void;
   manager?: boolean;
+  salesRange?: {from:string;to:string};
 }) {
   const [detail, setDetail] = useState<PartnerDetail | null>(null),
     [form, setForm] = useState<PortfolioPartner | null>(null),
@@ -685,7 +687,7 @@ export function PartnerSheet({
             </details>
           )}
           {(detail?.partner.contact||detail?.partner.phone)&&<p className="partner-contact-summary">{detail.partner.contact}{detail.partner.contact&&detail.partner.phone?' · ':''}{detail.partner.phone&&<a href={'tel:'+detail.partner.phone}>{detail.partner.phone}</a>}</p>}
-          <PartnerSales key={id} id={id}/>
+          <PartnerSales key={id} id={id} initialRange={salesRange}/>
           <details ref={contactEditor} className="partner-contact-edit">
             <summary>Date de contact și poziția magazinului</summary>
           <form
