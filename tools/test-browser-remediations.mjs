@@ -204,7 +204,7 @@ try {
   await waitFor(()=>cdp.evaluate("document.querySelector('dialog output')?.textContent.includes('Poziția a fost preluată')"),'GPS captured for confirmation');
   check((await api('partner/portfolio/browser-ph-located',cookie)).partner.latitude===44.43,'GPS does not save before confirmation');
   await cdp.evaluate("document.querySelector('dialog form').requestSubmit()");
-  await waitFor(()=>cdp.evaluate("document.querySelector('dialog output')?.textContent.includes('Datele au fost salvate')"),'GPS save acknowledged');
+  await waitFor(()=>cdp.evaluate("document.querySelector('dialog output')?.textContent.includes('Datele au fost sincronizate')"),'GPS save acknowledged');
   const gpsPartner=(await api('partner/portfolio/browser-ph-located',cookie)).partner;
   check(gpsPartner.positionQuality===null,'GPS correction clears geocoding approximation');
   check(gpsPartner.latitude===44.431&&gpsPartner.positionSource==='gps'&&gpsPartner.positionAccuracy===8,'Confirmed GPS persists source and precision');
@@ -233,7 +233,7 @@ try {
   await cdp.evaluate("window.fetch=window.__salesOriginalFetch;document.querySelector('.partner-sales').open=false");
 
   await cdp.evaluate("document.querySelector('.partner-visits').open=true;[...document.querySelectorAll('dialog button')].find(b=>b.textContent.includes('Înregistrează vizita acum')).click()");
-  await waitFor(()=>cdp.evaluate("document.querySelector('dialog output')?.textContent.includes('Vizita a fost înregistrată')"),'explicit visit saved from browser');checks++;
+  await waitFor(()=>cdp.evaluate("document.querySelector('dialog output')?.textContent.includes('Vizita a fost sincronizată')"),'explicit visit saved from browser');checks++;
   await cdp.evaluate("document.querySelector('dialog [aria-label=\"Închide fișa\"]').click()");
 
 
@@ -289,7 +289,7 @@ try {
   await cdp.evaluate("[...document.querySelectorAll('.partner-planning button')].find(b=>b.textContent==='Adaugă în plan').click()");
   await waitFor(()=>cdp.evaluate("document.querySelector('.partner-day ol').innerText.includes('browser-ph-located')"),'store added to Monday draft');
   await cdp.evaluate("document.querySelector('.partner-day .primary').click()");
-  await waitFor(()=>cdp.evaluate("document.querySelector('.partner-planning output')?.textContent.includes('salvat')"),'Monday plan persisted');
+  await waitFor(()=>cdp.evaluate("document.querySelector('.partner-planning output')?.textContent.includes('sincronizat')"),'Monday plan persisted');
   for(const width of [390,768,1440]){await cdp.send('Emulation.setDeviceMetricsOverride',{width,height:900,deviceScaleFactor:1,mobile:width===390});await sleep(100);check(await cdp.evaluate('document.documentElement.scrollWidth<=innerWidth+1'),'Weekly planner fits '+width+'px');}
   check(await cdp.evaluate("document.querySelectorAll('.partner-day:not([hidden])').length===1&&!document.querySelector('.partner-day .primary')"),'Planner focuses one day and hides unchanged save actions');
   check(await cdp.evaluate("(()=>{window.dispatchEvent(new Event('beforeinstallprompt',{cancelable:true}));return !document.querySelector('.pwa-install')})()"),'No floating install invitation');
