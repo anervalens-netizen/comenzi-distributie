@@ -1,5 +1,5 @@
-import { existsSync } from 'node:fs';
-import { createHash } from 'node:crypto';
+import { existsSync, statSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
 import { resolve, dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { Worker } from 'node:worker_threads';
@@ -15,7 +15,8 @@ function workerPath() {
   return found;
 }
 type Input = { month: string; siteCode?: SalesScope; fromMonth: string; toMonth: string; catalog: readonly SalesCatalogEntry[] };
-type Identity = { revision: number; dataPath: string };
+type Identity = { revision: number; dataPath: string; fileStamp?: string };
+export const SALES_VIEW_CACHE_TTL_MS = 15 * 60 * 1000;
 const digest = (text: string) => createHash('sha256').update(text).digest('hex');
 // Match SQLite's built-in UPPER(TRIM()) exactly (ASCII case, space trimming).
 const siteKey = (text: string) => text.trim().replace(/[a-z]/g, char => char.toUpperCase());
@@ -78,7 +79,7 @@ export function createSalesViewRuntime(options: {
       const catalogJson = JSON.stringify(catalog);
       const inputJson = JSON.stringify({ month, siteCode: scope, fromMonth, toMonth, catalog: JSON.parse(catalogJson) });
       if (Buffer.byteLength(inputJson) > maxBytes) throw new Error('Cererea raportului de vânzări este prea mare.');
-      const currentGeneration = JSON.stringify([identity.dataPath, identity.revision, digest(catalogJson)]);
+      const currentGeneration = JSON.stringify([identity.dataPath, identity.revision, identity.fileStamp ?? '', digest(catalogJson)]);
       if (generation !== currentGeneration) { cache.clear(); cacheBytes = 0; generation = currentGeneration; }
       for (const [key, item] of cache) if (item.expires <= now()) remove(key);
       const key = digest(JSON.stringify([currentGeneration, month, fromMonth, toMonth, scope ?? null]));
@@ -95,9 +96,9 @@ export function createSalesViewRuntime(options: {
             const json = JSON.stringify(view), bytes = Buffer.byteLength(json);
             // An import during a worker snapshot must never publish a stale cache entry.
             const latest = options.identity();
-            if (generation === currentGeneration && latest.revision === identity.revision && latest.dataPath === identity.dataPath && bytes <= maxBytes) {
+            if (generation === currentGeneration && latest.revision === identity.revision && latest.dataPath === identity.dataPath && latest.fileStamp === identity.fileStamp && bytes <= maxBytes) {
               while (cache.size >= 16 || cacheBytes + bytes > maxBytes) remove(cache.keys().next().value!);
-              cache.set(key, { json, bytes, expires: now() + 5_000 }); cacheBytes += bytes;
+              cache.set(key, { json, bytes, expires: now() + SALES_VIEW_CACHE_TTL_MS }); cacheBytes += bytes;
             }
             return json;
           }).then(json => {
@@ -118,11 +119,17 @@ export function createSalesViewRuntime(options: {
 const salesDatabasePath = resolve(process.env.MOBIUP_DATA_DIR || './work/server-data', 'sales.sqlite');
 function runtimeIdentity(): Identity {
   if (!existsSync(salesDatabasePath)) return { revision: 0, dataPath: salesDatabasePath };
+  const stamp = () => { const stat = statSync(salesDatabasePath); return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}`; };
+  const before = stamp();
   const db = new DatabaseSync(salesDatabasePath, { readOnly: true });
   try {
     const hasMeta = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='sales_meta'").get();
     const revision = hasMeta ? Number(db.prepare("SELECT value FROM sales_meta WHERE key='revision'").get()?.value || 0) : 0;
-    return { revision, dataPath: salesDatabasePath };
+    const fileStamp = stamp();
+    // A replaced/restored database can reuse the revision at the same path.
+    // A racing replacement/checkpoint bypasses caching rather than failing a
+    // valid read. The worker still takes its own coherent SQLite snapshot.
+    return { revision, dataPath: salesDatabasePath, fileStamp: before === fileStamp ? fileStamp : `unstable:${randomUUID()}` };
   } finally { db.close(); }
 }
 export const getSalesViewRuntime = createSalesViewRuntime({ identity: runtimeIdentity });

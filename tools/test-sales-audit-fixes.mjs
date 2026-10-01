@@ -33,7 +33,7 @@ try {
   const { salesUpload } = await import(pathToFileURL(resolve(directory, 'sales-server.mjs')));
   const preview = async rows => (await salesUpload(new Request('https://example.invalid/api/sales/preview', { method: 'POST', headers: { 'X-Sales-Filename': 'synthetic.xlsx' }, body: JSON.stringify(rows) }), { id: 'synthetic-manager', role: 'manager' }, false)).json();
   const store = await import(pathToFileURL(resolve(directory, 'sales-store.mjs')));
-  const { createSalesViewRuntime, getSalesViewRuntime } = await import(pathToFileURL(resolve(directory, 'sales-view-node.mjs')));
+  const { createSalesViewRuntime, getSalesViewRuntime, SALES_VIEW_CACHE_TTL_MS } = await import(pathToFileURL(resolve(directory, 'sales-view-node.mjs')));
   const month = '2026-09';
   const row = (siteCode, orderNumber, extra = {}) => ({ rowNumber: 0, date: `${month}-01`, month, siteCode, orderNumber, company: 'Example', itemCode: 'P1', itemName: 'Synthetic accessory', quantity: 1, brand: 'Example', priceCents: 123, valueCents: 119, location: 'TR Example', asm: '', regional: '', category: 'Accesorii', subCategory: '', agent: '', ...extra });
   const numbered = rows => rows.map((row, i) => ({ ...row, rowNumber: i + 2 }));
@@ -113,13 +113,14 @@ try {
   identityPath += '.other'; await read('A', catalog); assert.equal(starts, 8); identityPath = store.salesDatabasePath;
   apply(numbered([...lostRepeat, row('A', 'extra')]), true);
   assert.equal((await read('A')).summary.rows, 5); assert.equal(starts, 9);
-  clock += 5001; await read('A'); assert.equal(starts, 10);
+  clock += 5 * 60 * 1000; await read('A'); assert.equal(starts, 9, 'Revision-validated reports survive navigation five minutes later');
+  clock += SALES_VIEW_CACHE_TTL_MS; await read('A'); assert.equal(starts, 10);
   // Revision changes while work is queued cannot leave a cache entry under the old revision.
   const racing = read('A', [], '2026-07');
   apply(numbered([...lostRepeat, row('A', 'extra'), row('A', 'another')]), true);
   await racing; const startsBefore = starts; assert.equal((await read('A', [], '2026-07')).summary.rows, 6); assert.equal(starts, startsBefore + 1);
   for (const failure of ['exit', 'error', 'message', 'constructor', 'timeout']) {
-    clock += 5001; mode = failure;
+    clock += SALES_VIEW_CACHE_TTL_MS + 1; mode = failure;
     await assert.rejects(read(`FAIL-${failure}`));
     mode = 'ok'; assert.equal((await read(`FAIL-${failure}`)).summary.rows, 0);
   }

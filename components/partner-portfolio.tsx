@@ -20,9 +20,13 @@ import { PartnerPlanning } from './partner-planning';
 import { PartnerNew } from './partner-new';
 import type { PartnerSummary, PartnerBrowse } from '@/lib/partner-map-types';
 import './partner-portfolio.css';
+import type { PartnerMapView } from './partner-map';
 const PartnerMap = lazy(() => import('./partner-map'));
 const date = (s: string) => new Date(s).toLocaleString('ro-RO');
-export function PartnerPortfolio({ userId, manager=false, scopeQuery='' }: { userId: string; manager?: boolean; scopeQuery?: string }) {
+export function PartnerPortfolio({ userId, manager=false, scopeQuery='', active=true }: { userId: string; manager?: boolean; scopeQuery?: string; active?: boolean }) {
+  const mapView=useRef<PartnerMapView|null>(null);
+  const getMapView=useCallback(()=>mapView.current,[]);
+  const saveMapView=useCallback((view:PartnerMapView)=>{mapView.current=view;},[]);
   const [salesPeriod,setSalesPeriod]=useState('');
   const [activityOpen,setActivityOpen]=useState(false);
   const [layout,setLayout]=useState<'split'|'list'|'map'>('split');
@@ -43,7 +47,6 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='' }: { use
     [route, setRoute] = useState(''),
     [position, setPosition] = useState(''),
     [days, setDays] = useState(''),
-    [offset, setOffset] = useState(0),
     [selected, setSelected] = useState<string | null>(null),
     [refreshIndex, setRefreshIndex] = useState(0);
   const openPartner=(id:string|null)=>{setSelected(id);if(id)setHighlighted(id);};
@@ -61,24 +64,27 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='' }: { use
       }).toString(),
     [query, county, city, route, position, days, scopeQuery, salesPeriod],
   );
-  useEffect(()=>{queueMicrotask(()=>{setOffset(0);setSelected(null);setHighlighted(null);setCounty('');setCity('');setRoute('');});},[scopeQuery]);
-  const [requestKey, setRequestKey] = useState(filterKey),
-    [dataKey, setDataKey] = useState('');
+  useEffect(()=>{queueMicrotask(()=>{setSelected(null);setHighlighted(null);setCounty('');setCity('');setRoute('');});},[scopeQuery]);
+  const [request, setRequest] = useState({key:filterKey,offset:0});
+  const {key:requestKey,offset}=request;
+  const [dataKey, setDataKey] = useState('');
+  const browseActive=active&&!planning&&!adding&&!activityOpen;
   useEffect(() => {
     const timer = setTimeout(() => {
       if (filterKey !== requestKey) {
         setLoading(true);
-        setRequestKey(filterKey);
+        setRequest({key:filterKey,offset:0});
       }
     }, 200);
     return () => clearTimeout(timer);
   }, [filterKey, requestKey]);
   const refresh = useCallback(() => {
     setLoading(true);
-    setOffset(0);
+    setRequest({key:filterKey,offset:0});
     setRefreshIndex((n) => n + 1);
-  }, []);
+  }, [filterKey]);
   useEffect(() => {
+    if (!browseActive || requestKey!==filterKey) return;
     // No full portfolio/contact download on opening Parteneri. Only 100 list rows.
     const controller = new AbortController();
     api<PartnerBrowse>(
@@ -114,9 +120,9 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='' }: { use
         }
       });
     return () => controller.abort();
-  }, [requestKey, offset, refreshIndex]);
+  }, [browseActive, filterKey, requestKey, offset, refreshIndex]);
   useEffect(() => {
-    if (!planning) return;
+    if (!active || !planning) return;
     const controller = new AbortController();
     // Planner needs its search catalog only when explicitly opened, not on map pan.
     api<{ partners: PartnerSummary[] }>(
@@ -139,12 +145,13 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='' }: { use
         }
       });
     return () => controller.abort();
-  }, [planning, planRefresh, refreshIndex, catalogReload]);
+  }, [active, planning, planRefresh, refreshIndex, catalogReload]);
   const current = dataKey === filterKey && requestKey === filterKey;
   const filtered = current ? data?.partners || [] : [];
   const counties = data?.facets.counties || [],
     cities = data?.facets.cities || [],
     routes = data?.facets.routes || [];
+  if (!active) return null;
   if (planning)
     return (
       <>
@@ -226,14 +233,13 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='' }: { use
         </div>
       )}
       <div className="partner-filters">
-        <PartnerBillingPeriod value={salesPeriod} onChange={v=>{setSalesPeriod(v);setOffset(0);}}/>
+        <PartnerBillingPeriod value={salesPeriod} onChange={v=>{setSalesPeriod(v);}}/>
         <label>
           Caută partener
           <input
             value={query}
             onChange={(e) => {
               setQuery(e.target.value);
-              setOffset(0);
             }}
             placeholder="Nume, CUI, localitate sau adresă"
           />
@@ -246,7 +252,6 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='' }: { use
               setCounty(e.target.value);
               setCity('');
               setRoute('');
-              setOffset(0);
             }}
           >
             <option value="">Toate județele</option>
@@ -264,7 +269,6 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='' }: { use
             placeholder="Caută localitatea…"
             onChange={(e) => {
               setCity(e.target.value);
-              setOffset(0);
             }}
           />
           <datalist id="partner-localities">
@@ -281,7 +285,6 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='' }: { use
             value={route}
             onChange={(e) => {
               setRoute(e.target.value);
-              setOffset(0);
             }}
           >
             <option value="">Toate rutele</option>
@@ -296,7 +299,6 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='' }: { use
             value={position}
             onChange={(e) => {
               setPosition(e.target.value);
-              setOffset(0);
             }}
           >
             <option value="">Toate</option>
@@ -310,7 +312,6 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='' }: { use
             value={days}
             onChange={(e) => {
               setDays(e.target.value);
-              setOffset(0);
             }}
           >
             <option value="">Toate</option>
@@ -332,8 +333,11 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='' }: { use
       <div className={manager?'manager-partner-grid':undefined}>
       <div className={manager?'manager-partner-map-pane':undefined}>
       <Suspense fallback={<div className="partner-map">Se încarcă harta…</div>}>
-        {data && (
+        {data && browseActive && (!manager || layout!=='list') && (
           <PartnerMap
+            getView={getMapView}
+            onView={saveMapView}
+            active={current}
             filters={requestKey}
             bounds={current ? data.bounds : undefined}
             styleUrl={data.styleUrl}
@@ -408,7 +412,7 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='' }: { use
           disabled={loading}
           onClick={() => {
             setLoading(true);
-            setOffset(data.nextOffset!);
+            setRequest({key:requestKey,offset:data.nextOffset!});
           }}
         >
           Arată încă 100

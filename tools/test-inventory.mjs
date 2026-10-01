@@ -69,11 +69,17 @@ check(activityAgent.inventories===1&&activityAgent.finalizedInventories===1&&act
 check(expectedDelta===0&&activityAgent.latestInventory.delta===0&&activity.totals.inventoryDelta===0,'Signed inventory delta can be zero');
 check(activityAgent.latestInventory.shortage===5&&activityAgent.latestInventory.surplus===5&&activityAgent.latestInventory.discrepantLines===2,'Latest inventory keeps shortages and surpluses separate when signed delta cancels');
 check(activity.totals.inventoryShortage===5&&activity.totals.inventorySurplus===5&&activity.totals.inventoryDiscrepantLines===2,'Manager totals never turn compensating discrepancies into OK');
+// Freeze both records used by the month-boundary assertion. A fixture finalized
+// at wall-clock time would leave September when this test runs in another month.
+const finalizedKey=`inventory-v1:${inv.id}`;
+const finalizedFixture=JSON.parse(db.prepare('SELECT value FROM settings WHERE key=?').get(finalizedKey).value);
+finalizedFixture.finalizedAt='2026-09-15T09:00:00.000Z';
+db.prepare('UPDATE settings SET value=? WHERE key=?').run(JSON.stringify(finalizedFixture),finalizedKey);
 const boundaryInventory=(await req('inventory',agent,'POST',{id:crypto.randomUUID(),warehouseId:'g-5',scope:'product',value:'ERP-ONLY'})).data.inventory;
 const boundaryKey=`inventory-v1:${boundaryInventory.id}`,boundaryRow=db.prepare('SELECT value FROM settings WHERE key=?').get(boundaryKey),boundaryRecord=JSON.parse(boundaryRow.value);boundaryRecord.createdAt='2026-08-31T21:30:00.000Z';db.prepare('UPDATE settings SET value=? WHERE key=?').run(JSON.stringify(boundaryRecord),boundaryKey);
 const augustActivity=(await req('activity/team?month=2026-08',manager)).data.agents.find(item=>item.agentId==='stock-agent');
 const septemberActivity=(await req('activity/team?month=2026-09',manager)).data.agents.find(item=>item.agentId==='stock-agent');
-check(augustActivity.inventories===0&&septemberActivity.inventories>=2,'Inventory at 1 September 00:30 Bucharest belongs only to September');
+check(augustActivity.inventories===0&&septemberActivity.inventories===2,'Inventory at 1 September 00:30 Bucharest belongs only to September');
 await req('inventory/'+boundaryInventory.id,agent,'PATCH',{revision:boundaryInventory.revision,operationId:crypto.randomUUID(),action:'cancel'});
 await req('inventory/'+inv.id,agent,'PATCH',op('scan',{ean:p.ean}),409);
 const staleDeleteStart=(await req('inventory',agent,'POST',{id:crypto.randomUUID(),warehouseId:'g-5',scope:'product',value:'ERP-ONLY'})).data.inventory;

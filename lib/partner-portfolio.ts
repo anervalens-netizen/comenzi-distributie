@@ -1,3 +1,4 @@
+import { createReadProjectionCache } from './read-projection-cache';
 import { db, fail, isGlobalManager, sha256, textField } from './server';
 import type { Client, User } from './types';
 import type { PortfolioPartner, PartnerVisit } from './partner-portfolio-types';
@@ -282,6 +283,8 @@ export async function recordVisit(
   return partnerDetail(user, id, null);
 }
 
+const summaryCache=createReadProjectionCache();
+
 // Lightweight read projection for lists/maps. No contact/request/financial data.
 // Reuse the canonical fingerprint and scope, including shared work locations.
 export async function portfolioSummary(
@@ -289,6 +292,10 @@ export async function portfolioSummary(
   bbox?: import('./partner-map-types').MapBounds,
   warehouseIds?: string[],
 ) {
+  const database=db() as D1Database & {readVersion?:()=>Promise<string>};
+  const cacheKey=JSON.stringify([user.id,user.role,user.managerScope,user.warehouseId,bbox||null,warehouseIds?[...warehouseIds].sort():null]);
+  const version=await database.readVersion?.();
+  if(version!==undefined){const cached=summaryCache.get<import('./partner-map-types').PartnerSummary[]>(cacheKey,version);if(cached)return cached;}
   const scope = partnerScope(user);
   const args: (string | number)[] = [...scope.args];
   let area = '';
@@ -303,7 +310,10 @@ export async function portfolioSummary(
     args.push(south, north, west, east);
   }
   const rows = await db()
-    .prepare(`SELECT c.id,c.warehouse_id,c.data,
+    .prepare(`SELECT c.id,c.warehouse_id,
+    (SELECT json_group_object(j.key,CASE WHEN j.type IN ('array','object','true','false')
+      THEN json(CASE j.type WHEN 'true' THEN 'true' WHEN 'false' THEN 'false' ELSE j.value END) ELSE j.value END)
+     FROM json_each(c.data) j WHERE j.key IN ('id','warehouseId','warehouseIds','name','cui','address','city','county','route','historyCatalog')) data,
     '' contact,'' phone,'' email,p.latitude,p.longitude,p.position_source,
     p.position_accuracy,p.position_provider,p.position_metadata,p.address_fingerprint,
     p.revision,p.updated_at,
@@ -313,7 +323,7 @@ export async function portfolioSummary(
     ORDER BY json_extract(c.data,'$.name'),c.id`)
     .bind(...args)
     .all<Row>();
-  return rows.results.map((row) => {
+  const summaries=rows.results.map((row) => {
     const p = view(row);
     // Finite range checks also protect against malformed legacy/imported coordinates.
     const located =
@@ -340,4 +350,6 @@ export async function portfolioSummary(
       lastVisitedAt: p.lastVisitedAt,
     } satisfies import('./partner-map-types').PartnerSummary;
   });
+  if(version!==undefined && version===await database.readVersion?.())summaryCache.put(cacheKey,version,summaries);
+  return summaries;
 }

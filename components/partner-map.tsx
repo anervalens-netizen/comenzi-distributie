@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { api } from '@/lib/client-api';
 import {
   createMapResourceHealth,
@@ -15,16 +15,23 @@ const empty = (): PartnerMapData => ({
   type: 'FeatureCollection',
   features: [],
 });
+export type PartnerMapView={filters:string;refreshKey:number;center:[number,number];zoom:number;bearing:number;pitch:number};
 const SOURCE = 'partners';
 export default function PartnerMap({
   filters,
+  active = true,
   bounds,
   styleUrl,
   refreshKey,
   onSelect,
   selectedId,
   focusPoint,
+  getView,
+  onView,
 }: {
+  getView?:()=>PartnerMapView|null;
+  onView?:(view:PartnerMapView)=>void;
+  active?: boolean;
   filters: string;
   bounds: MapBounds | null | undefined;
   styleUrl: string;
@@ -42,6 +49,17 @@ export default function PartnerMap({
     [resourceError, setResourceError] = useState(''),
     [loading, setLoading] = useState(true),
     [retry, setRetry] = useState(0);
+  const viewScope=useRef<{filters:string;refreshKey:number}|null>(null);
+  const viewCallbacks=useRef({getView,onView});
+  useLayoutEffect(()=>{viewCallbacks.current={getView,onView};},[getView,onView]);
+  const captureView=(m:MapLibreMap)=>{
+    if(!viewScope.current)return;
+    const center=m.getCenter(),view:PartnerMapView={...viewScope.current,center:[center.lng,center.lat],zoom:m.getZoom(),bearing:m.getBearing(),pitch:m.getPitch()};
+    viewCallbacks.current.onView?.(view);
+    if(host.current)host.current.dataset.viewState=JSON.stringify({center:view.center,zoom:view.zoom,bearing:view.bearing,pitch:view.pitch});
+  };
+  const activeRef=useRef(active);
+  useLayoutEffect(()=>{activeRef.current=active;},[active]);
   const boundsKey = JSON.stringify(bounds);
   useEffect(()=>{
     const m=map.current;
@@ -92,12 +110,20 @@ export default function PartnerMap({
           attributionControl: { compact: true },
         });
         map.current = m;
+        m.on('moveend',()=>captureView(m));
         m.touchZoomRotate.disableRotation();
         m.addControl(
           new L.NavigationControl({ showCompass: false }),
           'top-right',
         );
-        observer = new ResizeObserver(() => m.resize());
+        let previousWidth=0, previousHeight=0;
+        observer = new ResizeObserver(() => {
+          const element=host.current;
+          if (!activeRef.current || !element) return;
+          const {width,height}=element.getBoundingClientRect();
+          if (!width || !height || (width===previousWidth && height===previousHeight)) return;
+          previousWidth=width; previousHeight=height; m.resize();
+        });
         observer.observe(host.current);
         m.on('error', (event) => {
           if (cancelled) return;
@@ -308,14 +334,15 @@ export default function PartnerMap({
       observer?.disconnect();
       hover?.remove();
       popup?.remove();
-      map.current?.remove();
+      if(map.current){captureView(map.current);map.current.remove();}
+      viewScope.current=null;
       map.current = null;
     };
   }, [styleUrl, retry]);
 
   useEffect(() => {
     const m = map.current;
-    if (!ready || !m) return;
+    if (!ready || !m || !active) return;
     let cancelled = false,
       controller: AbortController | undefined,
       timer: ReturnType<typeof setTimeout>;
@@ -327,7 +354,11 @@ export default function PartnerMap({
     if (boundsKey === undefined) return;
     const box = JSON.parse(boundsKey) as MapBounds | null;
     m.stop();
-    if (box)
+    const saved=viewCallbacks.current.getView?.();
+    viewScope.current={filters,refreshKey};
+    if(saved&&saved.filters===filters&&saved.refreshKey===refreshKey)
+      m.jumpTo({center:saved.center,zoom:saved.zoom,bearing:saved.bearing,pitch:saved.pitch});
+    else if (box)
       m.fitBounds(
         [
           [box[0], box[1]],
@@ -336,7 +367,12 @@ export default function PartnerMap({
         { padding: 40, maxZoom: 15, duration: 0 },
       );
     else m.jumpTo({ center: [24.96, 45.94], zoom: 5.5 });
+    captureView(m);
+    let loadedArea:MapBounds|undefined;
     const fetchArea = async () => {
+      if (!activeRef.current || !host.current?.clientWidth || !host.current.clientHeight) return;
+      const visible=m.getBounds();
+      if (loadedArea && visible.getWest()>=loadedArea[0] && visible.getSouth()>=loadedArea[1] && visible.getEast()<=loadedArea[2] && visible.getNorth()<=loadedArea[3]) return;
       controller?.abort();
       const request = new AbortController();
       controller = request;
@@ -362,6 +398,7 @@ export default function PartnerMap({
         if (cancelled || request.signal.aborted) return;
         await source()?.setData(data);
         if (cancelled || request.signal.aborted) return;
+        loadedArea=bbox.split(',').map(Number) as MapBounds;
         setDataError('');
         if (host.current)
           host.current.dataset.featureCount = String(data.features.length);
@@ -377,6 +414,7 @@ export default function PartnerMap({
       }
     };
     const schedule = () => {
+      if (!activeRef.current) return;
       clearTimeout(timer);
       controller?.abort();
       timer = setTimeout(() => void fetchArea(), 180);
@@ -389,10 +427,10 @@ export default function PartnerMap({
       controller?.abort();
       m.off('moveend', schedule);
     };
-  }, [ready, filters, boundsKey, refreshKey]);
+  }, [active, ready, filters, boundsKey, refreshKey]);
 
   return (
-    <div className="partner-map-wrap">
+    <div className="partner-map-wrap" hidden={!active}>
       <div
         ref={host}
         className="partner-map"

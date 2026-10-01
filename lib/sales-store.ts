@@ -43,6 +43,7 @@ function database() {
     CREATE INDEX IF NOT EXISTS idx_sales_rows_month_site ON sales_rows(month, site_code);
     CREATE INDEX IF NOT EXISTS idx_sales_rows_import_site_normalized ON sales_rows(import_id, UPPER(TRIM(site_code)), date);
     CREATE INDEX IF NOT EXISTS idx_sales_rows_site_month_normalized ON sales_rows(UPPER(TRIM(site_code)), month, import_id);
+    CREATE INDEX IF NOT EXISTS idx_sales_rows_location_import ON sales_rows(location, import_id);
     INSERT OR IGNORE INTO sales_meta(key,value) VALUES ('revision','0');
   `);
   return connection;
@@ -56,15 +57,34 @@ const sqlFilter = (siteCodes?: SalesScope) => {
     const { warehouseNames, excludedWarehouseNames, siteCode } = siteCodes;
     const args: string[] = [], clauses: string[] = [];
     const placeholders = (values: string[]) => { args.push(...values); return values.map(() => '?').join(','); };
-    if (warehouseNames.length) clauses.push(`sales_location_key(location) IN (${placeholders(warehouseNames.map(salesLocationKey))})`);
+    // Normalize each distinct raw location once, not every historical sale row.
+    // A plain column index keeps external SQLite writers/restore tools compatible:
+    // no stored expression or trigger depends on the process-local JS function.
+    const locations = new Map<string, string[]>();
+    if (warehouseNames.length || siteCodes.warehouseSites?.length || (siteCodes.siteCodes.length && excludedWarehouseNames.length)) {
+      for (const row of database().prepare('SELECT DISTINCT location FROM sales_rows').all()) {
+        const raw = String(row.location), key = salesLocationKey(raw);
+        const values = locations.get(key) || []; values.push(raw); locations.set(key, values);
+      }
+    }
+    const locationFilter = (names: string[], exclude = false) => {
+      const normalized = [...new Set(names.map(salesLocationKey))];
+      const aliases = normalized.flatMap(name => locations.get(name) || []);
+      if (!aliases.length) return exclude ? '1' : '0';
+      // Extremely fragmented historical spellings retain the exact old predicate
+      // instead of risking SQLite's parameter limit with an unbounded alias list.
+      if (aliases.length > 500) return `sales_location_key(location) ${exclude ? 'NOT ' : ''}IN (${placeholders(normalized)})`;
+      return `location ${exclude ? 'NOT ' : ''}IN (${placeholders(aliases)})`;
+    };
+    if (warehouseNames.length) clauses.push(locationFilter(warehouseNames));
     for (const pair of siteCodes.warehouseSites || []) {
-      clauses.push('(sales_location_key(location)=? AND UPPER(TRIM(site_code))=?)');
-      args.push(salesLocationKey(pair.warehouseName), salesSiteKey(pair.siteCode));
+      clauses.push(`(${locationFilter([pair.warehouseName])} AND UPPER(TRIM(site_code))=?)`);
+      args.push(salesSiteKey(pair.siteCode));
     }
     if (siteCodes.siteCodes.length) {
       let fallback = `UPPER(TRIM(site_code)) IN (${placeholders(siteCodes.siteCodes)})`;
       // A site-only seller cannot take rows owned by a unique current warehouse.
-      if (excludedWarehouseNames.length) fallback += ` AND sales_location_key(location) NOT IN (${placeholders(excludedWarehouseNames.map(salesLocationKey))})`;
+      if (excludedWarehouseNames.length) fallback += ` AND ${locationFilter(excludedWarehouseNames, true)}`;
       clauses.push(`(${fallback})`);
     }
     let sql = ` AND (${clauses.join(' OR ') || '0'})`;

@@ -18,6 +18,7 @@ import { partnerMail } from '@/lib/partner-mail';
 import { confirmPartnerRequest, getPartnerRequest, listPartnerRequests, partnerLocations, teamActivity, managerActivity } from '@/lib/partner-requests';
 import { managerRequestInbox, pushPublicConfig, removePushSubscription, upsertPushSubscription } from '@/lib/push-notifications';
 import { importClients } from '@/lib/client-import-server';
+import { selectUsersWithClientCounts } from '@/lib/customer-counts';
 import type { User, Order, Line, Client, Kind, Product } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -28,7 +29,7 @@ function nationalReadScope(user:User):User {
   return user.role==='manager'?{...user,managerScope:'global'}:user;
 }
 async function getUsers(viewer:User) {
-  const select="SELECT u.*, (SELECT COUNT(*) FROM customers c WHERE EXISTS (SELECT 1 FROM json_each(COALESCE(json_extract(c.data,'$.warehouseIds'),json_array(c.warehouse_id))) WHERE value=u.warehouse_id) AND c.active=1) AS client_count FROM users u";
+  const select=selectUsersWithClientCounts();
   const query=viewer.role==='manager'?db().prepare(select+" ORDER BY role DESC,name"):db().prepare(select+" WHERE u.id=? OR EXISTS (SELECT 1 FROM manager_agents ma WHERE ma.manager_id=? AND ma.agent_id=u.id) ORDER BY role DESC,name").bind(viewer.id,viewer.id);
   const [result,assignments]=await Promise.all([query.all<Record<string,unknown>>(),db().prepare('SELECT manager_id,agent_id FROM manager_agents ORDER BY manager_id,agent_id').all<{manager_id:string;agent_id:string}>()]);
   return result.results.map(row=>{

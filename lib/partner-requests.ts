@@ -3,6 +3,7 @@ import { bucharestMonthKey, bucharestMonthUtcRange } from './bucharest-month';
 import { managerFilter, type ManagerFilter } from './manager-scope';
 import { hasPartnerCounty, normalizeCui, partnerLegacyPointKey, partnerPointKey } from './partner-identity';
 import { sendPartnerRequestPush } from './push-notifications';
+import { selectUsersWithClientCounts } from './customer-counts';
 import type { Client, PartnerLocation, PartnerRequest, PartnerRequestRecord, TeamActivityAgent, TeamActivityView, User } from './types';
 
 type RequestRow={id:string;agent_id:string;warehouse_id:string;cui_key:string;status:string;payload:string;created_at:string;updated_at:string;confirmed_at:string|null;confirmed_by:string|null;customer_id:string|null;revision:number;agent_name?:string;warehouse_name?:string|null};
@@ -22,7 +23,7 @@ function requestPayload(row:RequestRow){return JSON.parse(row.payload) as Partne
 function summarizeInventory(record:InventoryRecord):InventoryDifference{return record.lines.reduce((summary,line)=>{const diff=(line.counted??0)-line.expected;if(diff<0)summary.shortage+=-diff;else if(diff>0)summary.surplus+=diff;if(diff!==0)summary.discrepantLines++;summary.delta+=diff;return summary;},{delta:0,shortage:0,surplus:0,discrepantLines:0});}
 
 export async function partnerLocations(cui:string){const key=normalizeCui(cui);if(!key)return [];const rows=await allActiveCustomers();return rows.filter(row=>normalizeCui(customerFromRow(row).cui)===key).map(location);}
-async function decorate(rows:RequestRow[]){const keys=new Set(rows.map(row=>row.cui_key)),customers=await allActiveCustomers();const byKey=new Map<string,PartnerLocation[]>();for(const row of customers){const item=location(row),key=normalizeCui(item.cui);if(!keys.has(key))continue;byKey.set(key,[...(byKey.get(key)||[]),item]);}return rows.map(row=>{const partner=requestPayload(row);return {...partner,id:row.id,agentId:row.agent_id,agentName:row.agent_name||'',warehouseId:row.warehouse_id,warehouseName:row.warehouse_name||'',status:row.status==='confirmed'?'confirmed':'requested',createdAt:row.created_at,updatedAt:row.updated_at,confirmedAt:row.confirmed_at,confirmedBy:row.confirmed_by,customerId:row.customer_id,revision:Number(row.revision),existingLocations:byKey.get(row.cui_key)||[]} satisfies PartnerRequestRecord;});}
+async function decorate(rows:RequestRow[]){if(!rows.length)return [];const keys=new Set(rows.map(row=>row.cui_key)),customers=await allActiveCustomers();const byKey=new Map<string,PartnerLocation[]>();for(const row of customers){const item=location(row),key=normalizeCui(item.cui);if(!keys.has(key))continue;byKey.set(key,[...(byKey.get(key)||[]),item]);}return rows.map(row=>{const partner=requestPayload(row);return {...partner,id:row.id,agentId:row.agent_id,agentName:row.agent_name||'',warehouseId:row.warehouse_id,warehouseName:row.warehouse_name||'',status:row.status==='confirmed'?'confirmed':'requested',createdAt:row.created_at,updatedAt:row.updated_at,confirmedAt:row.confirmed_at,confirmedBy:row.confirmed_by,customerId:row.customer_id,revision:Number(row.revision),existingLocations:byKey.get(row.cui_key)||[]} satisfies PartnerRequestRecord;});}
 
 export async function savePartnerRequest(user:User,requestId:unknown,revisionInput:unknown,partner:PartnerRequest){
   if(user.role!=='agent'||!user.warehouseId)fail(403,'Cererea de partener nou se salvează din contul agentului.');
@@ -87,12 +88,16 @@ export async function confirmPartnerRequest(user:User,id:string,revision:unknown
 }
 
 export async function teamActivity(user:User,monthInput:string|null,selected:ManagerFilter|null=null):Promise<TeamActivityView>{
+  return readTeamActivity(user,monthInput,selected,true);
+}
+
+async function readTeamActivity(user:User,monthInput:string|null,selected:ManagerFilter|null,includeRequests:boolean):Promise<TeamActivityView>{
   requireManager(user);
-  const month=monthValue(monthInput),agentSelect="SELECT u.id,u.name,u.active,u.warehouse_id,COALESCE(u.warehouse_name,'') warehouse_name,(SELECT COUNT(*) FROM customers c WHERE c.active=1 AND EXISTS (SELECT 1 FROM json_each(COALESCE(json_extract(c.data,'$.warehouseIds'),json_array(c.warehouse_id))) WHERE value=u.warehouse_id)) client_count FROM users u WHERE u.role='agent'";
+  const month=monthValue(monthInput),agentSelect=selectUsersWithClientCounts("u.id,u.name,u.active,u.warehouse_id,COALESCE(u.warehouse_name,'') warehouse_name")+" WHERE u.role='agent'";
   const visibleAgents=isGlobalManager(user)?(await db().prepare(agentSelect+' ORDER BY u.name').all<{id:string;name:string;active:number;warehouse_id:string|null;warehouse_name:string;client_count:number}>()).results:(await db().prepare(agentSelect+' AND EXISTS (SELECT 1 FROM manager_agents ma WHERE ma.manager_id=? AND ma.agent_id=u.id) ORDER BY u.name').bind(user.id).all<{id:string;name:string;active:number;warehouse_id:string|null;warehouse_name:string;client_count:number}>()).results;
   const agentRows=visibleAgents.filter(agent=>!selected||selected.agentIds.includes(agent.id));
   const warehouseIds=new Set(agentRows.map(agent=>agent.warehouse_id).filter(Boolean));
-  const partnerView=await listPartnerRequests(user,month);
+  const partnerView=includeRequests?await listPartnerRequests(user,month):{month,requests:[] as PartnerRequestRecord[]};
   partnerView.requests=partnerView.requests.filter(request=>!selected||selected.agentIds.includes(request.agentId));
   const inventoryRows=(await db().prepare("SELECT value FROM settings WHERE key LIKE 'inventory-v1:%'").all<{value:string}>()).results;
   const inventories:InventoryRecord[]=[];
@@ -120,7 +125,9 @@ export async function managerActivity(user: User, params: URLSearchParams) {
   requireManager(user);
   const month = monthValue(params.get('month'));
   const selected = await managerFilter(user, params);
-  const original = await teamActivity(user, month, selected);
+  // This workspace uses all-time pending and confirmation-event months below.
+  // Skip the unused creation-month request query/decorating of the team view.
+  const original = await readTeamActivity(user, month, selected, false);
   const scopedAgents = original.agents.filter(agent => !selected || selected.agentIds.includes(agent.agentId));
   const ids = new Set(scopedAgents.map(agent => agent.agentId));
   const {start, end} = bucharestMonthUtcRange(month);

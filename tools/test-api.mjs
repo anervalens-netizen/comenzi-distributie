@@ -466,7 +466,9 @@ ok(acc.status==='finalized'&&!!acc.finalizedAt,'Finalization persisted');
   duplicateA=(await call('admin/users','POST',{action:'toggle',id:'qa-agent1',version:duplicateA.profileVersion},manager)).data.users.find(u=>u.id==='qa-agent1');
   await call('admin/users/qa-agent1','PUT',{name:duplicateA.name,warehouseName:duplicateA.warehouseName,siteCode:originalProfile.siteCode,version:duplicateA.profileVersion},manager);
   const manifest=await (await fetch('http://localhost:3000/manifest.webmanifest')).json();ok(manifest.display==='standalone'&&manifest.icons.some(i=>i.sizes==='192x192')&&manifest.icons.some(i=>i.sizes==='512x512'),'Install manifest has required icons');
-  const serviceWorker=await (await fetch('http://localhost:3000/sw.js')).text();ok(serviceWorker.includes("addEventListener('push'")&&serviceWorker.includes("addEventListener('notificationclick'")&&serviceWorker.includes('showNotification'),'Service worker handles native push and notification clicks');
+  const workerResponse=await fetch('http://localhost:3000/sw.js');
+  ok(/no-cache/.test(workerResponse.headers.get('cache-control')||'')&&/max-age=0/.test(workerResponse.headers.get('cache-control')||''),'Service worker update script must revalidate');
+  const serviceWorker=await workerResponse.text();ok(serviceWorker.includes("addEventListener('push'")&&serviceWorker.includes("addEventListener('notificationclick'")&&serviceWorker.includes('showNotification'),'Service worker handles native push and notification clicks');
   for(const icon of manifest.icons){const r=await fetch('http://localhost:3000'+icon.src);ok(r.ok,`Icon available ${icon.src}`);}
   writeFileSync(folder+'/results.json',JSON.stringify({checks,orders:created,accessory:acc,stand,sim},null,2));
   console.log(`PASS: ${checks} API, authorization, export and PWA checks.`);

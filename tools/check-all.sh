@@ -13,6 +13,9 @@ python3 tools/test_client_sales_history.py
 python3 tools/test_client_catalog_plan.py
 python3 tools/test_client_catalog_apply.py
 python3 tools/test_client_catalog_geography.py
+node tools/test-customer-counts.mjs
+node tools/test-read-projection-cache.mjs
+node tools/test-client-import-worker.mjs
 node tools/test-partner-sales-health.mjs
 node tools/test-partner-sales-store.mjs
 node tools/test-partner-activity.mjs
@@ -41,6 +44,8 @@ node tools/test-order-draft.mjs
 node tools/test-sales-classification.mjs
 node tools/test-sales.mjs
 node tools/test-sales-audit-fixes.mjs
+node tools/test-sales-cache.mjs
+node tools/test-sales-location-index.mjs
 node tools/test-sales-location.mjs
 node tools/test-import-inventory-safety.mjs
 node tools/test-r2-imports.mjs
@@ -78,6 +83,10 @@ node tools/test-stock.mjs --api
 node tools/test-inventory.mjs
 CHROME_BIN="${CHROME_BIN:-$(command -v google-chrome || command -v chromium || true)}"
 if [ -n "$CHROME_BIN" ]; then
+  CHROME_BIN="$CHROME_BIN" node tools/test-list-pagination-browser.mjs
+  CHROME_BIN="$CHROME_BIN" node tools/test-client-import-browser.mjs
+  CHROME_BIN="$CHROME_BIN" node tools/test-portfolio-navigation-performance.mjs
+  CHROME_BIN="$CHROME_BIN" node tools/test-order-result-stock-browser.mjs
   CHROME_BIN="$CHROME_BIN" BROWSER_TEST_ORIGIN="http://127.0.0.1:3014" node tools/test-browser-remediations.mjs
 elif [ "${CI:-}" = true ]; then
   echo 'Chrome is required for the complete CI gate.' >&2; exit 1

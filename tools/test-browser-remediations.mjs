@@ -527,17 +527,22 @@ try {
   await cdp.evaluate('window.fetch=window.kpiOriginalFetch;true');
   await cdp.evaluate("(()=>{const choice=[...document.querySelectorAll('.manager-scope-choice')].find(item=>item.querySelector('summary')?.getAttribute('aria-label')==='Agent / TR');choice.open=true;choice.querySelector('button[data-value=\"stock-agent\"]').click();return true;})()");
   await clickTab(cdp,'Parteneri');
+  // The earlier request deep-link preserves its subview. Select the visible
+  // portfolio explicitly; hidden mounted cards are not proof of navigation.
+  await cdp.evaluate("[...document.querySelectorAll('.manager-partner-nav button')].find(button=>button.textContent==='Portofoliu').click();true");
   await waitFor(()=>cdp.evaluate("document.querySelectorAll('.manager-partner-hub .partner-card').length>0"),'manager scoped partner portfolio');
   check(await cdp.evaluate("![...document.querySelectorAll('.manager-partner-hub button')].some(button=>button.textContent.includes('Adaugă partener')||button.textContent.includes('Vizite și traseu'))"),'Manager does not expose agent-only request/planner actions');
   await cdp.evaluate("(()=>{const input=document.querySelector('.manager-partner-hub .partner-filters input');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'browser-ph');input.dispatchEvent(new Event('input',{bubbles:true}));window.managerMapNode=document.querySelector('.manager-partner-hub .partner-map');return true;})()");
   await waitFor(()=>cdp.evaluate("document.querySelectorAll('.manager-partner-hub .partner-card').length===2"),'manager partner code search');
   await clickTab(cdp,'Vânzări');
+  check(await cdp.evaluate("!document.querySelector('.manager-partner-hub .partner-map')"),'Hidden manager portfolio releases the map');
   await waitFor(()=>cdp.evaluate("!!document.querySelector('.sales-scope')"),'scoped manager sales');
   check(await cdp.evaluate("JSON.parse(localStorage.getItem('manager-selection-v1:stock-manager')).agentId==='stock-agent'"),'Agent selection persists across manager sections');
   await clickTab(cdp,'Operațiuni');
   check(await cdp.evaluate("document.querySelectorAll('.manager-operation-nav button').length===4"),'Operations keeps orders, notices, stock and catalog destinations');
   await clickTab(cdp,'Parteneri');
-  check(await cdp.evaluate("document.querySelector('.manager-partner-hub .partner-filters input').value==='browser-ph'&&window.managerMapNode===document.querySelector('.manager-partner-hub .partner-map')"),'Partner search and map instance survive navigation');
+  await waitFor(()=>cdp.evaluate("!!document.querySelector('.manager-partner-hub .partner-map')"),'manager map remount after navigation');
+  check(await cdp.evaluate("document.querySelector('.manager-partner-hub .partner-filters input').value==='browser-ph'&&window.managerMapNode!==document.querySelector('.manager-partner-hub .partner-map')"),'Partner search survives navigation and the visible map remounts');
   await cdp.send('Page.reload',{ignoreCache:true});
   await waitFor(()=>cdp.evaluate("document.querySelector('.manager-overview h1')?.textContent==='Sinteză'"),'manager reload restores workspace');
   await waitFor(()=>cdp.evaluate("document.querySelector('.manager-scope-options button[data-value=\"stock-agent\"]')?.getAttribute('aria-pressed')==='true'"),'saved agent selection restored');

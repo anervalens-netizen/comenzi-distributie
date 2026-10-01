@@ -1,5 +1,5 @@
 'use client';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Plus, Search, Pencil, Trash2, Save, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -18,6 +18,7 @@ import {
   TableCell,
 } from '@/components/ui/table';
 import { Choice } from './choice';
+import { ListPagination, useListPage } from './list-pagination';
 import { api, errorMessage, normalize, money } from '@/lib/client-api';
 import type { Product } from '@/lib/types';
 const empty: Product = {
@@ -46,27 +47,43 @@ export function ProductCatalog({
     [remove, setRemove] = useState<Product | null>(null),
     [busy, setBusy] = useState(false),
     [error, setError] = useState('');
-  const categories = [
+  const categories = useMemo(() => [
     ...new Set(
       products
         .filter((p) => kind === 'all' || p.kind === kind)
         .map((p) => p.category),
     ),
-  ].sort((a, b) => a.localeCompare(b, 'ro'));
-  const filtered = products.filter(
+  ].sort((a, b) => a.localeCompare(b, 'ro')), [products, kind]);
+  const searchIndex = useMemo(() => new Map(products.map(p => [p.id, normalize(
+    p.code + ' ' + (p.eans || [p.ean]).join(' ') + ' ' + p.name + ' ' + p.brand,
+  )])), [products]);
+  const normalizedQuery = normalize(query);
+  const filtered = useMemo(() => products.filter(
     (p) =>
       (kind === 'all' || p.kind === kind) &&
       (category === 'all' || p.category === category) &&
-      normalize(
-        p.code +
-          ' ' +
-          (p.eans || [p.ean]).join(' ') +
-          ' ' +
-          p.name +
-          ' ' +
-          p.brand,
-      ).includes(normalize(query)),
-  );
+      searchIndex.get(p.id)!.includes(normalizedQuery),
+  ), [products, kind, category, searchIndex, normalizedQuery]);
+  // Retain the previous category/input ordering and full category totals; only
+  // the current page of products becomes DOM rows.
+  const grouped = useMemo(() => {
+    const groups = new Map<string, Product[]>();
+    for (const product of filtered) {
+      const items = groups.get(product.category);
+      if (items) items.push(product);
+      else groups.set(product.category, [product]);
+    }
+    return groups;
+  }, [filtered]);
+  const ordered = useMemo(() => categories.flatMap(c => grouped.get(c) || []), [categories, grouped]);
+  const pagination = useListPage(ordered.length, JSON.stringify([query, kind, category]));
+  const shown = ordered.slice(pagination.start, pagination.end);
+  const shownGroups = new Map<string, Product[]>();
+  for (const product of shown) {
+    const items = shownGroups.get(product.category);
+    if (items) items.push(product);
+    else shownGroups.set(product.category, [product]);
+  }
   async function refresh() {
     setBusy(true);
     try {
@@ -176,6 +193,7 @@ export function ProductCatalog({
             ]}
           />
         </div>
+        <ListPagination count={ordered.length} {...pagination} onPage={pagination.setPage} label="Pagini catalog produse"/>
         <Table className="orders-table catalog-admin-table">
           <TableHeader>
             <TableRow>
@@ -188,8 +206,7 @@ export function ProductCatalog({
             </TableRow>
           </TableHeader>
           <TableBody>
-            {categories.flatMap((c) => {
-              const items = filtered.filter((p) => p.category === c);
+            {[...shownGroups].flatMap(([c, items]) => {
               return items.length
                 ? [
                     <TableRow
@@ -197,11 +214,11 @@ export function ProductCatalog({
                       key={'category-' + c}
                     >
                       <TableCell colSpan={6}>
-                        <strong>{c}</strong> · {items.length} produse
+                        <strong>{c}</strong> · {grouped.get(c)!.length} produse
                       </TableCell>
                     </TableRow>,
                     ...items.map((p) => (
-                      <TableRow key={p.id}>
+                      <TableRow key={p.id} data-product-id={p.id}>
                         <TableCell>
                           {p.code}
                           {p.ean && <small>EAN: {p.ean}</small>}

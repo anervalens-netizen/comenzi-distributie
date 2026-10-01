@@ -64,6 +64,12 @@ class Statement {
   async run() { return this.execute(); }
 }
 const database = {
+  // data_version observes commits by other connections; total_changes observes all
+  // writes through this connection (including batches/triggers). No guessed TTL.
+  async readVersion() {
+    const connection = sqlite();
+    return JSON.stringify([connection.prepare('PRAGMA data_version').get()!.data_version, connection.prepare('SELECT total_changes() n').get()!.n]);
+  },
   prepare: (sql: string) => new Statement(sql),
   async batch(statements: Statement[]) {
     const db = sqlite();

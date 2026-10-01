@@ -1,0 +1,4 @@
+.list-pagination { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 12px 0; }
+.list-pagination output { margin: 0; color: var(--muted-foreground, #687383); font-size: 13px; }
+.list-pagination > div { display: flex; gap: 8px; }
+@media (max-width: 480px) { .list-pagination { align-items: flex-start; flex-direction: column; } }
