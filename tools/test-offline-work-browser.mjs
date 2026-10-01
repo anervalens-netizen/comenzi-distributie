@@ -18,7 +18,7 @@ class Cdp{constructor(socket){this.socket=socket;this.n=1;this.pending=new Map()
 async function wait(fn,label,attempts=160){for(let i=0;i<attempts;i++){if(await fn())return;await sleep(100);}throw new Error('Timeout: '+label);}
 const check=(v,label)=>{assert.ok(v,label);checks++;};
 try{
- chrome=spawn(process.env.CHROME_BIN||'/usr/bin/google-chrome',['--headless=new','--no-sandbox','--disable-dev-shm-usage','--no-first-run','--remote-debugging-port=0','--user-data-dir='+profile,origin],{stdio:['ignore','ignore','pipe']});let stderr='';chrome.stderr.on('data',c=>stderr=(stderr+c).slice(-3000));let port;await wait(async()=>{try{port=Number(readFileSync(join(profile,'DevToolsActivePort'),'utf8').split('\n')[0]);return !!port;}catch{if(chrome.exitCode!==null)throw new Error(stderr);return false;}},'Chrome startup',300);
+ chrome=spawn(process.env.CHROME_BIN||'/usr/bin/google-chrome',['--headless=new','--no-sandbox','--disable-dev-shm-usage','--no-first-run','--remote-debugging-port=0','--user-data-dir='+profile,origin],{stdio:['ignore','ignore','pipe'],detached:true});let stderr='';chrome.stderr.on('data',c=>stderr=(stderr+c).slice(-3000));let port;await wait(async()=>{try{port=Number(readFileSync(join(profile,'DevToolsActivePort'),'utf8').split('\n')[0]);return !!port;}catch{if(chrome.exitCode!==null)throw new Error(stderr);return false;}},'Chrome startup',300);
  const page=await fetch(`http://127.0.0.1:${port}/json/new?${origin}`,{method:'PUT'}).then(r=>r.json());socket=new WebSocket(page.webSocketDebuggerUrl);await new Promise(r=>socket.addEventListener('open',r,{once:true}));const cdp=new Cdp(socket);await cdp.send('Page.enable');await cdp.send('Runtime.enable');await cdp.send('Network.enable');await wait(()=>cdp.eval(`location.origin===${JSON.stringify(origin)}&&document.readyState==='complete'`),'page',300);
  await cdp.eval(`window.work=await import(${JSON.stringify(moduleUrl)})`);
  // Actual browser IndexedDB, not a hand-written storage mock.
@@ -69,4 +69,15 @@ try{
  await wait(()=>cdp.eval(`fetch('/api/orders/${id}').then(r=>r.ok?r.json():null).then(d=>d?.order.notes==='Offline restart QA')`),'replay creates and edits once',400);
  check(await cdp.eval(`fetch('/api/orders').then(r=>r.json()).then(d=>d.orders.filter(o=>o.id===${JSON.stringify(id)}).length===1)`),'exactly one real synthetic server draft');
  console.log('PASS: '+checks+' offline browser checks including real application create/reopen/replay.');
-}finally{socket?.close();if(chrome&&chrome.exitCode===null){chrome.kill('SIGTERM');await Promise.race([new Promise(r=>chrome.once('exit',r)),sleep(3000)]);if(chrome.exitCode===null)chrome.kill('SIGKILL');}proxy.closeAllConnections();await new Promise(r=>proxy.close(r));rmSync(profile,{recursive:true,force:true});}
+ }finally{
+ socket?.close();
+ // Chrome descendants share this test's process group and may outlive its launcher.
+ if(chrome){
+  const signalGroup=signal=>{try{process.kill(-chrome.pid,signal);}catch(error){if(error.code!=='ESRCH')throw error;}};
+  signalGroup('SIGTERM');
+  if(chrome.exitCode===null&&chrome.signalCode===null)await Promise.race([new Promise(r=>chrome.once('exit',r)),sleep(3000)]);
+  signalGroup('SIGKILL');
+ }
+ proxy.closeAllConnections();await new Promise(r=>proxy.close(r));
+ rmSync(profile,{recursive:true,force:true,maxRetries:30,retryDelay:100});
+}
