@@ -52,6 +52,7 @@ try{
  console.log('PASS: IndexedDB/outbox module scenarios');
  const {password}=JSON.parse(readFileSync('work/stock-qa-20260914/credentials.json','utf8'));
  check(await cdp.eval(`(await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:'stock-agent',password:${JSON.stringify(password)}})})).ok`),'synthetic agent login');
+ check(await cdp.eval(`const crossed=crypto.randomUUID();const denied=await fetch('/api/orders',{method:'POST',headers:{'Content-Type':'application/json','X-Operation-User':'another-account'},body:JSON.stringify({id:crossed,kind:'stands'})});denied.status===409&&(await fetch('/api/orders/'+crossed)).status===404`),'server rejects a replay under another account before any write');
  await cdp.send('Page.addScriptToEvaluateOnNewDocument',{source:"window.loginFlashes=0;new MutationObserver(()=>{if(document.querySelector('.login-form'))window.loginFlashes++;}).observe(document,{childList:true,subtree:true});"});await cdp.send('Page.reload');await wait(()=>cdp.eval("!!document.querySelector('.main-nav')&&!!document.querySelector('.action-card')"),'agent UI');
  await wait(()=>cdp.eval("!!navigator.serviceWorker.controller"),'versioned SW activated',300);
  check(await cdp.eval("!document.querySelector('.login-form')&&window.loginFlashes===0"),'valid session has zero login DOM flash');await cdp.eval(`window.work=await import(${JSON.stringify(moduleUrl)})`);

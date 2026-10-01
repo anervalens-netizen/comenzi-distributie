@@ -31,10 +31,10 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='', active=
   const savedView=()=>{try{return JSON.parse(localStorage.getItem(stateKey)||'{}');}catch{return {};}};
   const mapView=useRef<PartnerMapView|null>(savedView().map||null);
   const getMapView=useCallback(()=>mapView.current,[]);
-  const saveMapView=useCallback((view:PartnerMapView)=>{mapView.current=view;},[]);
+  const saveMapView=useCallback((view:PartnerMapView)=>{mapView.current=view;try{const state=JSON.parse(localStorage.getItem(stateKey)||'{}');localStorage.setItem(stateKey,JSON.stringify({...state,map:view}));}catch{}},[stateKey]);
   const [salesPeriod,setSalesPeriod]=useState('');
   const [activityOpen,setActivityOpen]=useState(false);
-  const [layout,setLayout]=useState<'split'|'list'|'map'>('split');
+  const [layout,setLayout]=useState<'split'|'list'|'map'>(()=>{const saved=savedView().layout;return ['split','list','map'].includes(saved)?saved:typeof window!=='undefined'&&window.innerWidth<700?'list':'split';});
   const [highlighted,setHighlighted]=useState<string|null>(null);
   const [planning, setPlanning] = useState(false),
     [planRefresh, setPlanRefresh] = useState(0),

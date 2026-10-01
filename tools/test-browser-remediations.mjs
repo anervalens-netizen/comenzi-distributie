@@ -184,7 +184,9 @@ try {
     await noGl.cdp.send('Page.addScriptToEvaluateOnNewDocument',{source:"const original=HTMLCanvasElement.prototype.getContext;HTMLCanvasElement.prototype.getContext=function(kind,...args){return String(kind).includes('webgl')?null:original.call(this,kind,...args);};"});
     await noGl.cdp.send('Page.reload',{ignoreCache:true});
     await clickTab(noGl.cdp,'Parteneri');
-    await waitFor(()=>noGl.cdp.evaluate("document.querySelectorAll('.partner-card').length>0&&document.querySelector('.partner-map-status')?.textContent.includes('WebGL')"),'list usable when WebGL is unavailable',160); checks++;
+    await waitFor(()=>noGl.cdp.evaluate("!!document.querySelector('.manager-map-modes')"),'portfolio display controls');
+    await noGl.cdp.evaluate("[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='Listă + Hartă').click()");
+    await waitFor(()=>noGl.cdp.evaluate("document.querySelectorAll('.partner-card').length>0&&document.querySelector('.partner-map-status')?.textContent.includes('WebGL')"),'list usable when WebGL is unavailable',160).catch(async error=>{console.log('NOGL diagnostic',await noGl.cdp.evaluate("({body:document.body.innerText.slice(0,3000),layout:document.querySelector('.partner-hub')?.dataset.layout})"));throw error;}); checks++;
     await noGl.cdp.send('Page.close');
   } finally { noGl.socket.close(); }
   await cdp.evaluate("[...document.querySelectorAll('.partner-card')].find(b=>b.textContent.includes('browser-ph-located')).click()");

@@ -60,6 +60,8 @@ export async function refreshSession(req: Request) {
 export async function requireUser(req: Request, allowPasswordChange=false) {
   const u=await currentUser(req);
   if (!u) fail(401,'Sesiunea a expirat. Autentifică-te din nou.');
+  const operationUser=req.headers.get('X-Operation-User');
+  if(operationUser&&operationUser!==u.id)fail(409,'Operațiunea locală aparține altui cont. Lucrul rămâne păstrat pentru verificare.');
   if (u.mustChangePassword && !allowPasswordChange) fail(428,'Alege o parolă personală înainte să continui.');
   return u;
 }

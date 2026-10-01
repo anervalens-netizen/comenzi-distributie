@@ -63,7 +63,7 @@ export default function DistributionApp() {
   const creating=useRef(false);
   const sessionUserId=useRef('');
   const loadBootstrap=useCallback(async()=>{
-    try{const session=await api<{user:User|null}>('auth/session');if(!session.user){setSessionState('unauthenticated');setData({user:null});return {user:null};}setSessionState(current=>current==='offline-local'?'offline-local':'authenticated');setData(current=>({...current,user:session.user}));const result=await api<Bootstrap>('bootstrap');if(result.user){const local=await readWork<Order[]>(result.user.id,'draft-list','all')||[];result.orders=[...local.filter(o=>!result.orders?.some(r=>r.id===o.id)),...(result.orders||[])];}if(result.user&&sessionUserId.current!==result.user.id){sessionUserId.current=result.user.id;setPartnerOpened(false);setPartnerView('portfolio');setTab(result.user.role==='manager'?'activity':'orders');}setData(result);setError('');if(result.user&&result.orders){const orphaned=readOrphanedOrderRecoveries(result.orders,result.user.id);if(orphaned.recoveries[0])setOrderRecovery(current=>current||orphaned.recoveries[0]);}return result;}catch(err){setError(errorMessage(err));setSessionState(current=>current==='authenticated'||current==='offline-local'?current:'network-error');return undefined;}finally{setLoading(false);}
+    try{const session=await api<{user:User|null}>('auth/session');if(!session.user){setSessionState('unauthenticated');setData({user:null});return {user:null};}const changedAccount=sessionUserId.current!==session.user.id;if(changedAccount){sessionUserId.current=session.user.id;setActiveOrder(null);setPartnerOpened(false);setPartnerView('portfolio');setTab(session.user.role==='manager'?'activity':'orders');}setSessionState(current=>current==='offline-local'?'offline-local':'authenticated');setData(current=>changedAccount?{user:session.user}:({...current,user:session.user}));const result=await api<Bootstrap>('bootstrap');if(result.user){const local=await readWork<Order[]>(result.user.id,'draft-list','all')||[];result.orders=[...local.filter(o=>!result.orders?.some(r=>r.id===o.id)),...(result.orders||[])];}setData(result);setError('');if(result.user&&result.orders){const orphaned=readOrphanedOrderRecoveries(result.orders,result.user.id);if(orphaned.recoveries[0])setOrderRecovery(current=>current||orphaned.recoveries[0]);}return result;}catch(err){setError(errorMessage(err));setSessionState(current=>current==='authenticated'||current==='offline-local'?current:'network-error');return undefined;}finally{setLoading(false);}
   },[]);
   const refreshOrders=useCallback(async()=>{
     try{
@@ -80,7 +80,7 @@ export default function DistributionApp() {
     if(data.user?.role!=='manager')return;
     try{setRequestInbox(await api<ManagerRequestInbox>('notifications/inbox'));}catch(err){if(!(err instanceof ApiError&&err.status===401))console.warn('Request inbox refresh failed');}
   },[data.user?.role]);
-  useEffect(()=>{queueMicrotask(()=>void loadBootstrap());return startOfflineSync();},[loadBootstrap]);
+  useEffect(()=>{queueMicrotask(()=>void loadBootstrap());return startOfflineSync(()=>void loadBootstrap());},[loadBootstrap]);
   useEffect(()=>{
     const stale=(event:Event)=>{const at=(event as CustomEvent).detail.at;setSessionState('offline-local');setOfflineNotice('Date locale · ultima pregătire '+new Date(at).toLocaleString('ro-RO'));};
     const update=()=>{if(sessionUserId.current)void pendingOperations(sessionUserId.current).then(rows=>setPendingCount(rows.length));};

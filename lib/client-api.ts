@@ -1,4 +1,4 @@
-import { snapshot, saveSnapshot, rememberAccount, lastAccount, migrateLegacy, replay } from './offline-work.ts';
+import { snapshot, saveSnapshot, rememberAccount, lastAccount, migrateLegacy, replay, pendingOperations } from './offline-work.ts';
 import { currentLocalWorkUserId, removeLocalWork, setLocalWorkUserId } from './local-work.ts';
 
 export const SESSION_EXPIRED_EVENT='mobiup-session-expired';
@@ -14,13 +14,14 @@ export class ApiError extends Error {
   }
 }
 
-export async function networkApi<T=Record<string,unknown>>(path: string,method='GET',body?: unknown, signal?: AbortSignal, operationId?:string): Promise<T> {
+export async function networkApi<T=Record<string,unknown>>(path: string,method='GET',body?: unknown, signal?: AbortSignal, operationId?:string, operationUser?:string): Promise<T> {
   const requestOwner=currentLocalWorkUserId();
   const controller=new AbortController();
   const cancel=()=>controller.abort(signal?.reason);signal?.addEventListener('abort',cancel,{once:true});if(signal?.aborted)cancel();
   const timer=setTimeout(()=>controller.abort(new Error('Cererea a depășit timpul de așteptare.')),20000);
-  const options:RequestInit={method,credentials:'same-origin',signal:controller.signal};
-  if(body && method!=='GET' && method!=='HEAD'){options.headers={'Content-Type':'application/json',...(operationId?{'X-Operation-Id':operationId}:{})};options.body=JSON.stringify(body);}
+  const headers:Record<string,string>={};if(operationUser)headers['X-Operation-User']=operationUser;
+  const options:RequestInit={method,credentials:'same-origin',signal:controller.signal,headers};
+  if(body && method!=='GET' && method!=='HEAD'){headers['Content-Type']='application/json';if(operationId)headers['X-Operation-Id']=operationId;options.body=JSON.stringify(body);}
   let res:Response;try{res=await fetch('/api/'+path,options);}catch(error){clearTimeout(timer);signal?.removeEventListener('abort',cancel);throw error;}
   let data:unknown;
   try { data=await res.json(); }
@@ -77,10 +78,20 @@ export async function api<T=Record<string,unknown>>(path:string,method='GET',bod
   throw e;
  }
 }
-export function startOfflineSync(){
- const sync=()=>{if(document.visibilityState!=='hidden')void replay(currentLocalWorkUserId(),(path,method,body,id)=>networkApi(path,method,body,undefined,id),currentLocalWorkUserId).catch(()=>{});};
+export function startOfflineSync(accountChanged?:()=>void){
+ let checking=false,stopped=false;
+ const sync=()=>{if(stopped||checking||document.visibilityState==='hidden'||!navigator.onLine)return;
+  const owner=currentLocalWorkUserId();if(!owner)return;checking=true;
+  void (async()=>{
+   if(!(await pendingOperations(owner)).some(op=>op.state==='pending'&&op.next<=Date.now()))return;
+   const session=await networkApi<{user:{id:string}|null}>('auth/session');
+   if(stopped)return;
+   if(session.user?.id!==owner){accountChanged?.();return;}
+   await replay(owner,(path,method,body,id)=>networkApi(path,method,body,undefined,id,owner),currentLocalWorkUserId);
+  })().catch(()=>{}).finally(()=>{checking=false;});
+ };
  window.addEventListener('online',sync);document.addEventListener('visibilitychange',sync);const timer=setInterval(sync,4000);sync();
- return()=>{clearInterval(timer);window.removeEventListener('online',sync);document.removeEventListener('visibilitychange',sync);};
+ return()=>{stopped=true;clearInterval(timer);window.removeEventListener('online',sync);document.removeEventListener('visibilitychange',sync);};
 }
 export function errorMessage(err: unknown) { return err instanceof Error?err.message:'Conexiunea a fost întreruptă. Încearcă din nou.'; }
 export function normalize(value: string) { return value.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase(); }
