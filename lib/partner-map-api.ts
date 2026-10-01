@@ -1,5 +1,5 @@
 import {portfolioSummary} from './partner-portfolio';
-import {pagedBrowse,readyReadModel,selectedSql,selectedSummaries} from './portfolio-read-model';
+import {pagedBrowse,portfolioVersion,readyReadModel,selectedSql,selectedBillingCandidates} from './portfolio-read-model';
 import {aggregateMapPoints} from './partner-map-aggregation';
 import {readActivitySnapshot} from './partner-activity-snapshot';
 import {validBillingPeriod,selectBillingPeriod} from './partner-billing-period';
@@ -61,7 +61,7 @@ export function partnerBounds(partners: PartnerSummary[]): MapBounds | null {
     }
   return Number.isFinite(west) ? [west, south, east, north] : null;
 }
-function billingSelection(partners:PartnerSummary[],params:URLSearchParams) {
+function billingSelection<T extends {id:string;cui:string}>(partners:T[],params:URLSearchParams) {
   const period=params.get('salesPeriod')||'';
   if(!validBillingPeriod(period))fail(400,'Perioada de facturare este invalidă.');
   if(!period)return partners;
@@ -76,26 +76,35 @@ export async function browsePartners(
   if(!(db() as D1Database&{portfolioReadVersion?:unknown}).portfolioReadVersion)return legacyBrowse(user,params);
   const limit = integer(params, 'limit', 100, 1, 200),
     offset = integer(params, 'offset', 0, 0, 10000000);
-  const scope = await managerFilter(user, params);
   const period=params.get('salesPeriod')||'';if(!validBillingPeriod(period))fail(400,'Perioada de facturare este invalidă.');
-  const ids=period?billingSelection(await selectedSummaries(user,params,scope?.warehouseIds),params).map(p=>p.id):undefined;
-  return pagedBrowse(user,params,scope?.warehouseIds,offset,limit,ids);
+  for(let attempt=0;attempt<3;attempt++){
+    const scope=await managerFilter(user,params);
+    if(!period)return pagedBrowse(user,params,scope?.warehouseIds,offset,limit);
+    await readyReadModel();const version=await portfolioVersion();
+    // readActivitySnapshot still validates its authoritative history signature on every request.
+    const ids=billingSelection(await selectedBillingCandidates(user,params,scope?.warehouseIds),params).map(p=>p.id);
+    const result=await pagedBrowse(user,params,scope?.warehouseIds,offset,limit,ids);
+    if(version===await portfolioVersion())return result;
+  }
+  return fail(503,'Portofoliul se modifică. Reîncearcă.');
 }
 
 export async function mapPartners(
   user: User,
   params: URLSearchParams,
+  attempt=0,
 ): Promise<PartnerMapData> {
   if(!(db() as D1Database&{portfolioReadVersion?:unknown}).portfolioReadVersion)return legacyMap(user,params);
   const bbox = parseBounds(params.get('bbox'));
   const scope = await managerFilter(user, params);
   const rawZoom=params.get('zoom');const zoom=rawZoom===null?undefined:integer(params,'zoom',0,0,22);
   const period=params.get('salesPeriod')||'';if(!validBillingPeriod(period))fail(400,'Perioada de facturare este invalidă.');
-  await readyReadModel();const query=selectedSql(user,params,scope?.warehouseIds,bbox);query.where+=' AND m.latitude IS NOT NULL AND m.longitude IS NOT NULL';
-  if(period){const ids=billingSelection(await selectedSummaries(user,params,scope?.warehouseIds,bbox),params).map(p=>p.id);query.where+=' AND m.id IN (SELECT value FROM json_each(?))';query.args.push(JSON.stringify(ids));}
+  await readyReadModel();const version=await portfolioVersion();const query=selectedSql(user,params,scope?.warehouseIds,bbox);query.where+=' AND m.latitude IS NOT NULL AND m.longitude IS NOT NULL';
+  if(period){const ids=billingSelection(await selectedBillingCandidates(user,params,scope?.warehouseIds,bbox),params).map(p=>p.id);query.where+=' AND m.id IN (SELECT value FROM json_each(?))';query.args.push(JSON.stringify(ids));}
   const points=(await db().prepare(`SELECT m.id,m.name,m.latitude,m.longitude,json_extract(m.summary,'$.positionQuality') quality FROM ${query.from} WHERE ${query.where} ORDER BY m.id`).bind(...query.args).all<{id:string;name:string;latitude:number;longitude:number;quality:string|null}>()).results;
   if(zoom===undefined&&points.length>50000)fail(413,'Prea multe puncte în această zonă. Mărește harta sau restrânge filtrele.');
   const data:PartnerMapData={type:'FeatureCollection',features:points.map(p=>({type:'Feature',id:p.id,geometry:{type:'Point',coordinates:[p.longitude,p.latitude]},properties:{id:p.id,name:p.name,approximate:!!p.quality?.endsWith('_approximate')}}))};
+  if(version!==await portfolioVersion()){if(attempt>=2)fail(503,'Portofoliul se modifică. Reîncearcă.');return mapPartners(user,params,attempt+1);}
   return zoom===undefined?data:aggregateMapPoints(data,zoom);
 }
 

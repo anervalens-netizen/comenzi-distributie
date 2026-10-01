@@ -14,7 +14,7 @@ import {
 import { currentLocalWorkUserId } from '@/lib/local-work';
 const userIdForWork=()=>currentLocalWorkUserId();
 import { enqueue, readWork, saveWork, removeWork } from '@/lib/offline-work';
-import { api, ApiError } from '@/lib/client-api';
+import { api, ApiError, invalidateApiReadCache } from '@/lib/client-api';
 import type {
   PartnerDetail,
   PortfolioPartner,
@@ -23,12 +23,14 @@ import { PartnerPlanning } from './partner-planning';
 import { PartnerNew } from './partner-new';
 import type { PartnerSummary, PartnerBrowse } from '@/lib/partner-map-types';
 import './partner-portfolio.css';
+import './interaction-ui.css';
 import type { PartnerMapView } from './partner-map';
 const PartnerMap = lazy(() => import('./partner-map'));
+const preloadPartnerMap = () => { void import('./partner-map').catch(()=>{}); };
 const date = (s: string) => new Date(s).toLocaleString('ro-RO');
 export function PartnerPortfolio({ userId, manager=false, scopeQuery='', active=true }: { userId: string; manager?: boolean; scopeQuery?: string; active?: boolean }) {
   const stateKey='mobiup-partner-view|'+userId+'|'+scopeQuery;
-  const savedView=()=>{try{return JSON.parse(localStorage.getItem(stateKey)||'{}');}catch{return {};}};
+  const savedView=()=>{if(typeof window==='undefined')return {};try{return JSON.parse(localStorage.getItem(stateKey)||'{}');}catch{return {};}};
   const mapView=useRef<PartnerMapView|null>(savedView().map||null);
   const getMapView=useCallback(()=>mapView.current,[]);
   const saveMapView=useCallback((view:PartnerMapView)=>{mapView.current=view;try{const state=JSON.parse(localStorage.getItem(stateKey)||'{}');localStorage.setItem(stateKey,JSON.stringify({...state,map:view}));}catch{}},[stateKey]);
@@ -70,10 +72,10 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='', active=
       }).toString(),
     [query, county, city, route, position, days, scopeQuery, salesPeriod],
   );
-  useEffect(()=>{queueMicrotask(()=>{setSelected(null);setHighlighted(null);setCounty('');setCity('');setRoute('');});},[scopeQuery]);
   const [request, setRequest] = useState({key:filterKey,offset:0});
   const {key:requestKey,offset}=request;
   const [dataKey, setDataKey] = useState('');
+  const refreshSeen=useRef(refreshIndex);
   const browseActive=active&&!planning&&!adding&&!activityOpen;
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -93,28 +95,18 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='', active=
     if (!browseActive || requestKey!==filterKey) return;
     // No full portfolio/contact download on opening Parteneri. Only 100 list rows.
     const controller = new AbortController();
+    const forceRefresh=refreshSeen.current!==refreshIndex;
+    refreshSeen.current=refreshIndex;
     api<PartnerBrowse>(
       `partner/browse?${requestKey}&offset=${offset}`,
       'GET',
       undefined,
       controller.signal,
+      {preferCache:true,maxAgeMs:15000,forceRefresh},
     )
       .then((result) => {
         if (controller.signal.aborted) return;
-        setData((previous) => ({
-          ...result,
-          partners:
-            offset && previous
-              ? [
-                  ...new Map(
-                    [...previous.partners, ...result.partners].map((p) => [
-                      p.id,
-                      p,
-                    ]),
-                  ).values(),
-                ]
-              : result.partners,
-        }));
+        setData(result);
         setDataKey(requestKey);
         setError('');
         setLoading(false);
@@ -136,6 +128,7 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='', active=
       'GET',
       undefined,
       controller.signal,
+      {preferCache:true,maxAgeMs:15000,forceRefresh:refreshIndex!==0||catalogReload!==0},
     )
       .then((result) => {
         if (!controller.signal.aborted) {
@@ -153,7 +146,7 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='', active=
     return () => controller.abort();
   }, [active, planning, planRefresh, refreshIndex, catalogReload]);
   const current = dataKey === filterKey && requestKey === filterKey;
-  const filtered = current ? data?.partners || [] : [];
+  const filtered = data?.partners || [];
   const counties = data?.facets.counties || [],
     cities = data?.facets.cities || [],
     routes = data?.facets.routes || [];
@@ -231,7 +224,7 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='', active=
         >
           Vizite și traseu
         </button></>}
-        {<div className="manager-map-modes" aria-label="Afișarea partenerilor">{([['split','Listă + Hartă'],['list','Listă'],['map','Hartă']] as const).map(([value,label])=><button type="button" key={value} aria-pressed={layout===value} onClick={()=>setLayout(value)}>{label}</button>)}</div>}
+        {<div className="manager-map-modes" aria-label="Afișarea partenerilor">{([['split','Listă + Hartă'],['list','Listă'],['map','Hartă']] as const).map(([value,label])=><button type="button" key={value} aria-pressed={layout===value} onPointerEnter={value==='list'?undefined:preloadPartnerMap} onFocus={value==='list'?undefined:preloadPartnerMap} onClick={()=>setLayout(value)}>{label}</button>)}</div>}
       </div>
       {error && (
         <div className="error-banner" role="alert">
@@ -332,7 +325,9 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='', active=
       </div>
       {salesPeriod&&<p className="muted">Lista și harta folosesc aceeași perioadă de facturare, conform ultimului import. Istoricul neasociat se vede separat în filtru.</p>}
       <p className="muted" aria-live="polite">
-        {loading || !current
+        {error
+          ? filtered.length ? 'Datele afișate au rămas disponibile, dar actualizarea a eșuat.' : 'Portofoliul nu a putut fi încărcat.'
+          : loading || !current
           ? 'Se încarcă portofoliul…'
           : `${data?.total || 0} puncte de lucru · ${data?.located || 0} pe hartă · ${(data?.total || 0) - (data?.located || 0)} fără poziție`}
       </p>
@@ -409,20 +404,34 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='', active=
           </button>
         ))}
       </div>
-      {!loading && current && !data?.total && !error && (
+      {!loading && current && !filtered.length && !error && (
         <p>Nu există parteneri pentru filtrele alese.</p>
       )}
-      {current && data?.nextOffset != null && (
-        <button
-          className="secondary"
-          disabled={loading}
-          onClick={() => {
-            setLoading(true);
-            setRequest({key:requestKey,offset:data.nextOffset!});
-          }}
-        >
-          Arată încă 100
-        </button>
+      {current && data && (offset>0 || data.nextOffset != null) && (
+        <nav className="bounded-pagination" aria-label="Pagini parteneri">
+          <button
+            className="secondary"
+            disabled={loading||offset===0}
+            onClick={() => {
+              setLoading(true);
+              setRequest({key:requestKey,offset:Math.max(0,offset-100)});
+            }}
+          >
+            Pagina anterioară
+          </button>
+          <span>{offset+1}–{Math.min(offset+filtered.length,data.total)} din {data.total}</span>
+          <button
+            className="secondary"
+            disabled={loading||data.nextOffset==null}
+            onClick={() => {
+              if(data.nextOffset==null)return;
+              setLoading(true);
+              setRequest({key:requestKey,offset:data.nextOffset});
+            }}
+          >
+            Pagina următoare
+          </button>
+        </nav>
       )}
       </div></div>
       {selected && (
@@ -509,6 +518,7 @@ export function PartnerSheet({
       setForm(data.partner);
       setDetail((d) => (d ? { ...d, partner: data.partner } : d));
       await removeWork(userIdForWork(),'partner',id);setNotice('Datele au fost sincronizate.');
+      invalidateApiReadCache('partner/');
       onSaved();
     } catch (e) {
       if(!(e instanceof ApiError)||e.status>=500){try{await enqueue(userIdForWork(),`partner/portfolio/${encodeURIComponent(id)}`,'PATCH',form,{scope:'partner',id,value:form});setNotice('Salvat pe telefon · În așteptare.');}catch(storage){setError((storage as Error).message);}}else setError((e as Error).message);
@@ -565,6 +575,7 @@ export function PartnerSheet({
       setNotes('');
       setPending(null);
       await removeWork(userIdForWork(),'visit',id);setNotice('Vizita a fost sincronizată.');
+      invalidateApiReadCache('partner/');
       onSaved();
     } catch (e) {
       if(!(e instanceof ApiError)||e.status>=500){try{await enqueue(userIdForWork(),`partner/portfolio/${encodeURIComponent(id)}/visits`,'POST',payload,{scope:'visit',id,value:payload});setNotice('Vizită salvată pe telefon · În așteptare.');}catch(storage){setError((storage as Error).message);}}else setError((e as Error).message);

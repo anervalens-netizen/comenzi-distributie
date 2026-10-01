@@ -3,26 +3,174 @@ import type {Order} from './types';
 /** Account-bound durable work. Transactions never evict pending mutations. */
 export type PendingOperation = { id:string; userId:string; entity:string; path:string; method:string; body:unknown; created:number; attempts:number; next:number; state:'pending'|'blocked'; error?:string };
 type Snapshot = {key:string;userId:string;path:string;value:unknown;at:number;bytes:number};
+type SnapshotMetadata = {key:string;userId:string;path:string;at:number;bytes:number;pinned:boolean};
+type SnapshotStats = {key:'snapshot-stats';bytes:number;count:number;pinnedBytes:number};
+type FragmentMarker = {__mobiupFragments:string[];property:string;count:number};
+export type CoverageManifest = {
+ version:1;
+ preparedAt:number;
+ paths:string[];
+ valid:boolean;
+ missing:string[];
+ dataOnly:true;
+ partners:{saved:number;total:number;limited:boolean};
+ details:number;
+ shellRequested:boolean;
+};
+export type SnapshotSaveResult = {saved:true;bytes:number;evicted:string[]};
 export const OFFLINE_EVENT='mobiup-offline-work';
-let opening:Promise<IDBDatabase>|undefined;
+export const OFFLINE_CACHE_INVALIDATED_EVENT='mobiup-offline-cache-invalidated';
+// Durable work stays at the original v1 format so an older installed PWA remains compatible.
+const CACHE_DATABASE='mobiup-offline-cache-v1';
+const MAX_SNAPSHOT_BYTES=8*1024*1024;
+const MAX_TOTAL_BYTES=24*1024*1024;
+const MAX_SNAPSHOTS=650;
+const MAX_PINNED_ACCOUNT_BYTES=4*1024*1024;
+const MAX_PINNED_TOTAL_BYTES=12*1024*1024;
+const openings:Partial<Record<'cache'|'work',Promise<IDBDatabase>>>={};
 const notify=()=>{if(typeof window!=='undefined')window.dispatchEvent(new Event(OFFLINE_EVENT));};
 const request=<T>(req:IDBRequest<T>)=>new Promise<T>((resolve,reject)=>{req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});
-function database(){
+const isPinnedPath=(path:string)=>path==='bootstrap'||path==='auth/session';
+const isFragmentMarker=(value:unknown):value is FragmentMarker=>!!value&&typeof value==='object'&&Array.isArray((value as FragmentMarker).__mobiupFragments)&&typeof (value as FragmentMarker).property==='string';
+export class OfflineSnapshotCapacityError extends Error {
+ code:'SNAPSHOT_TOO_LARGE'|'OFFLINE_CAPACITY';
+ bytes:number;
+ constructor(code:'SNAPSHOT_TOO_LARGE'|'OFFLINE_CAPACITY',message:string,bytes:number){super(message);this.name='OfflineSnapshotCapacityError';this.code=code;this.bytes=bytes;}
+}
+function database(kind:'cache'|'work'='work'):Promise<IDBDatabase>{
  if(typeof indexedDB==='undefined')return Promise.reject(new Error('Stocarea locală nu este disponibilă.'));
- return opening??=new Promise<IDBDatabase>((resolve,reject)=>{
-  const req=indexedDB.open('mobiup-offline-v3',1);
-  req.onupgradeneeded=()=>{const d=req.result;d.createObjectStore('snapshots',{keyPath:'key'});d.createObjectStore('work',{keyPath:'key'});d.createObjectStore('outbox',{keyPath:'id'}).createIndex('user','userId');d.createObjectStore('meta',{keyPath:'key'});};
-  req.onsuccess=()=>{req.result.onversionchange=()=>{req.result.close();opening=undefined;};resolve(req.result);};req.onerror=()=>{opening=undefined;reject(req.error);};req.onblocked=()=>{opening=undefined;reject(new Error('Închide celelalte ferestre pentru actualizarea stocării locale.'));};
+ return openings[kind]??=new Promise<IDBDatabase>((resolve,reject)=>{
+  let settled=false;
+  const req=indexedDB.open(kind==='cache'?CACHE_DATABASE:'mobiup-offline-v3',1);
+  req.onupgradeneeded=()=>{
+   const d=req.result;
+   d.createObjectStore('snapshots',{keyPath:'key'});
+   d.createObjectStore('meta',{keyPath:'key'});
+   if(kind==='work'){
+    d.createObjectStore('work',{keyPath:'key'});
+    d.createObjectStore('outbox',{keyPath:'id'}).createIndex('user','userId');
+   }else{
+    const index=d.createObjectStore('snapshotIndex',{keyPath:'key'});index.createIndex('at','at');index.createIndex('user','userId');
+   }
+  };
+  req.onsuccess=()=>{
+   if(settled){req.result.close();return;}settled=true;
+   const d=req.result;d.onversionchange=()=>{d.close();delete openings[kind];};
+   void(kind==='cache'?adoptLegacyCache(d):Promise.resolve()).then(()=>resolve(d),error=>{d.close();delete openings[kind];reject(error);});
+  };
+  req.onerror=()=>{if(settled)return;settled=true;delete openings[kind];reject(req.error);};
+  req.onblocked=()=>{if(settled)return;settled=true;delete openings[kind];reject(new Error('Stocarea locală este ocupată de o altă fereastră. Reîncearcă.'));};
  });
 }
-async function transaction<T>(stores:string[],mode:IDBTransactionMode,run:(tx:IDBTransaction)=>Promise<T>){
- const d=await database();const tx=d.transaction(stores,mode);const done=new Promise<void>((resolve,reject)=>{tx.oncomplete=()=>resolve();tx.onabort=()=>reject(tx.error||new Error('Datele nu au fost salvate local.'));tx.onerror=()=>{};});
+/** One-time cache-only adoption. The old database, work/outbox and old-client snapshots are never rewritten. */
+async function adoptLegacyCache(cache:IDBDatabase){
+ if(await request(cache.transaction('meta','readonly').objectStore('meta').get('legacy-cache-adopted')))return;
+ const legacy=await database('work');
+ const rows=await request(legacy.transaction('snapshots','readonly').objectStore('snapshots').getAll()) as Snapshot[];
+ const selected=rows.filter(row=>row&&typeof row.key==='string'&&typeof row.path==='string'&&row.bytes<=MAX_SNAPSHOT_BYTES).sort((a,b)=>Number(isPinnedPath(b.path))-Number(isPinnedPath(a.path))||b.at-a.at);
+ const tx=cache.transaction(['snapshots','snapshotIndex','meta'],'readwrite');
+ const done=new Promise<void>((resolve,reject)=>{tx.oncomplete=()=>resolve();tx.onabort=()=>reject(tx.error);tx.onerror=()=>{};});
+ const meta=tx.objectStore('meta');
+ if(!await request(meta.get('legacy-cache-adopted'))){
+  let bytes=0,count=0,pinnedBytes=0;
+  for(const row of selected){
+   if(count>=MAX_SNAPSHOTS||bytes+row.bytes>MAX_TOTAL_BYTES)continue;
+   const pinned=isPinnedPath(row.path);tx.objectStore('snapshots').put(row);tx.objectStore('snapshotIndex').put({key:row.key,userId:row.userId,path:row.path,at:row.at,bytes:row.bytes,pinned});bytes+=row.bytes;count++;if(pinned)pinnedBytes+=row.bytes;
+  }
+  meta.put({key:'snapshot-stats',bytes,count,pinnedBytes});meta.put({key:'legacy-cache-adopted',at:Date.now()});
+ }
+ await done;
+}
+async function transaction<T>(stores:string[],mode:IDBTransactionMode,run:(tx:IDBTransaction)=>Promise<T>,retry=true):Promise<T>{
+ const kind=stores.some(store=>store==='snapshots'||store==='snapshotIndex')?'cache':'work';
+ const d=await database(kind);let tx:IDBTransaction;
+ try{tx=d.transaction(stores,mode);}
+ catch(error){if(retry&&error instanceof DOMException&&error.name==='InvalidStateError'){delete openings[kind];return transaction(stores,mode,run,false);}throw error;}
+ const done=new Promise<void>((resolve,reject)=>{tx.oncomplete=()=>resolve();tx.onabort=()=>reject(tx.error||new Error('Datele nu au fost salvate local.'));tx.onerror=()=>{};});
  try{const value=await run(tx);await done;return value;}catch(e){try{tx.abort();}catch{}await done.catch(()=>{});throw e;}
 }
-export async function snapshot<T>(userId:string,path:string):Promise<{value:T;at:number}|null>{if(!userId)return null;const row=await transaction(['snapshots'],'readonly',tx=>request(tx.objectStore('snapshots').get(userId+'|'+path))) as Snapshot|undefined;return row?{value:row.value as T,at:row.at}:null;}
-export async function saveSnapshot(userId:string,path:string,value:unknown){
- if(!userId)return;const bytes=JSON.stringify(value).length*2;if(bytes>8*1024*1024)return;
- await transaction(['snapshots'],'readwrite',async tx=>{const s=tx.objectStore('snapshots');const key=userId+'|'+path;const rows=(await request(s.getAll()) as Snapshot[]).filter(r=>r.key!==key);let size=rows.reduce((n,r)=>n+r.bytes,0),count=rows.length;for(const r of rows.sort((a,b)=>a.at-b.at)){if(size+bytes<=24*1024*1024&&count<650)break;await request(s.delete(r.key));size-=r.bytes;count--;}await request(s.put({key:userId+'|'+path,userId,path,value,at:Date.now(),bytes}));});
+async function rawSnapshot(userId:string,path:string){
+ return transaction(['snapshots'],'readonly',tx=>request(tx.objectStore('snapshots').get(userId+'|'+path))) as Promise<Snapshot|undefined>;
+}
+export async function snapshot<T>(userId:string,path:string):Promise<{value:T;at:number}|null>{
+ if(!userId)return null;
+ const row=await rawSnapshot(userId,path);
+ if(!row)return null;
+ if(!isFragmentMarker(row.value))return {value:row.value as T,at:row.at};
+ const values:unknown[]=[];
+ for(const fragmentPath of row.value.__mobiupFragments){
+  const fragment=await rawSnapshot(userId,fragmentPath);
+  if(!fragment||!Array.isArray(fragment.value))return null;
+  values.push(...fragment.value);
+ }
+ if(values.length!==row.value.count)return null;
+ return {value:{[row.value.property]:values} as T,at:row.at};
+}
+async function statsFor(tx:IDBTransaction){
+ const meta=tx.objectStore('meta'),stored=await request(meta.get('snapshot-stats')) as SnapshotStats|undefined;
+ if(stored)return stored;
+ const rows=await request(tx.objectStore('snapshotIndex').getAll()) as SnapshotMetadata[];
+ const stats:SnapshotStats={key:'snapshot-stats',bytes:rows.reduce((sum,row)=>sum+row.bytes,0),count:rows.length,pinnedBytes:rows.filter(row=>row.pinned).reduce((sum,row)=>sum+row.bytes,0)};
+ await request(meta.put(stats));return stats;
+}
+export async function saveSnapshot(userId:string,path:string,value:unknown):Promise<SnapshotSaveResult|undefined>{
+ if(!userId)return;
+ let encoded:string;
+ try{encoded=JSON.stringify(value);}catch{throw new Error('Datele primite nu pot fi serializate pentru folosire offline.');}
+ if(encoded===undefined)throw new Error('Datele primite nu pot fi păstrate offline.');
+ const bytes=encoded.length*2;
+ if(bytes>MAX_SNAPSHOT_BYTES)throw new OfflineSnapshotCapacityError('SNAPSHOT_TOO_LARGE','Setul de date este prea mare pentru stocarea offline într-o singură bucată.',bytes);
+ const pinned=isPinnedPath(path),key=userId+'|'+path,evicted:string[]=[];
+ const result=await transaction(['snapshots','snapshotIndex','meta'],'readwrite',async tx=>{
+  const snapshots=tx.objectStore('snapshots'),index=tx.objectStore('snapshotIndex'),meta=tx.objectStore('meta');
+  const previous=await request(index.get(key)) as SnapshotMetadata|undefined;
+  const stats=await statsFor(tx);
+  let projectedBytes=stats.bytes-(previous?.bytes||0)+bytes;
+  let projectedCount=stats.count-(previous?1:0)+1;
+  const projectedPinned=stats.pinnedBytes-(previous?.pinned?previous.bytes:0)+(pinned?bytes:0);
+  if(pinned){
+   const accountRows=await request(index.index('user').getAll(userId)) as SnapshotMetadata[];
+   const accountPinned=accountRows.filter(row=>row.pinned&&row.key!==key).reduce((sum,row)=>sum+row.bytes,0)+bytes;
+   if(accountPinned>MAX_PINNED_ACCOUNT_BYTES||projectedPinned>MAX_PINNED_TOTAL_BYTES)throw new OfflineSnapshotCapacityError('OFFLINE_CAPACITY','Datele minime de pornire depășesc bugetul offline sigur.',bytes);
+  }
+  const candidates=projectedBytes>MAX_TOTAL_BYTES||projectedCount>MAX_SNAPSHOTS?(await request(index.index('at').getAll()) as SnapshotMetadata[]).filter(row=>!row.pinned&&row.key!==key):[];
+  for(const row of candidates){
+   if(projectedBytes<=MAX_TOTAL_BYTES&&projectedCount<=MAX_SNAPSHOTS)break;
+   await request(snapshots.delete(row.key));await request(index.delete(row.key));
+   projectedBytes-=row.bytes;projectedCount--;evicted.push(row.key);
+  }
+  if(projectedBytes>MAX_TOTAL_BYTES||projectedCount>MAX_SNAPSHOTS)throw new OfflineSnapshotCapacityError('OFFLINE_CAPACITY','Spațiul offline sigur este ocupat de date esențiale. Setul nou nu a fost salvat.',bytes);
+  const at=Date.now();
+  await request(snapshots.put({key,userId,path,value,at,bytes}));
+  await request(index.put({key,userId,path,at,bytes,pinned}));
+  await request(meta.put({key:'snapshot-stats',bytes:projectedBytes,count:projectedCount,pinnedBytes:projectedPinned}));
+  return {saved:true as const,bytes,evicted};
+ });
+ if(evicted.length)notify();
+ return result;
+}
+export async function saveFragmentedSnapshot(userId:string,path:string,property:string,values:unknown[],chunkSize=250){
+ const stamp=crypto.randomUUID(),fragmentPaths:string[]=[];
+ for(let offset=0;offset<values.length;offset+=chunkSize){
+  const fragmentPath=path+'#'+stamp+'-'+fragmentPaths.length;
+  await saveSnapshot(userId,fragmentPath,values.slice(offset,offset+chunkSize));
+  fragmentPaths.push(fragmentPath);
+ }
+ await saveSnapshot(userId,path,{__mobiupFragments:fragmentPaths,property,count:values.length});
+ return {fragments:fragmentPaths,count:values.length};
+}
+export async function saveCoverageManifest(userId:string,manifest:CoverageManifest){
+ await saveWork(userId,'coverage','portfolio',manifest);
+}
+export async function readCoverageManifest(userId:string):Promise<CoverageManifest|null>{
+ const manifest=await readWork<CoverageManifest>(userId,'coverage','portfolio');
+ if(!manifest||manifest.version!==1)return null;
+ const missing:string[]=[];
+ for(const path of manifest.paths)if(!await snapshot(userId,path))missing.push(path);
+ if(!missing.length&&manifest.valid)return manifest;
+ const checked={...manifest,valid:missing.length===0,missing};
+ if(JSON.stringify(checked)!==JSON.stringify(manifest))await saveCoverageManifest(userId,checked);
+ return checked;
 }
 export async function rememberAccount(userId:string){await transaction(['meta'],'readwrite',tx=>request(tx.objectStore('meta').put({key:'active',value:userId})));}
 export async function lastAccount(){return transaction(['meta'],'readonly',async tx=>(await request(tx.objectStore('meta').get('active')))?.value as string||'');}
@@ -55,9 +203,56 @@ export async function enqueue(userId:string,path:string,method:string,body:unkno
 }
 export async function removeOperation(id:string){await transaction(['outbox'],'readwrite',tx=>request(tx.objectStore('outbox').delete(id)));notify();}
 async function updateOperation(op:PendingOperation){await transaction(['outbox'],'readwrite',tx=>request(tx.objectStore('outbox').put(op)));notify();}
+const invalidateReplayCache=(userId:string,prefixes:string[])=>{if(typeof window!=='undefined')window.dispatchEvent(new CustomEvent(OFFLINE_CACHE_INVALIDATED_EVENT,{detail:{userId,prefixes}}));};
 async function claimLease(userId:string){return transaction(['meta'],'readwrite',async tx=>{const s=tx.objectStore('meta'),key='lease|'+userId;const old=await request(s.get(key));if(old?.until>Date.now())return null;const token=crypto.randomUUID();await request(s.put({key,token,until:Date.now()+45000}));return token;});}
 async function releaseLease(userId:string,token:string){await transaction(['meta'],'readwrite',async tx=>{const s=tx.objectStore('meta'),key='lease|'+userId;if((await request(s.get(key)))?.token===token)await request(s.delete(key));});}
 function equalDesired(remote:Record<string,unknown>,body:Record<string,unknown>){return Object.entries(body).filter(([k])=>k!=='revision').every(([k,v])=>JSON.stringify(remote[k])===JSON.stringify(v));}
+const object=(value:unknown):value is Record<string,unknown>=>!!value&&typeof value==='object'&&!Array.isArray(value);
+function requireReplayContract(op:PendingOperation,result:unknown){
+ const value=object(result)?result:null;
+ let valid=true;
+ if(/^orders(?:\/[^/]+)?$/.test(op.path))valid=!!value&&object(value.order)&&typeof value.order.id==='string';
+ else if(/^partner\/portfolio\/[^/]+$/.test(op.path))valid=!!value&&object(value.partner)&&typeof value.partner.id==='string';
+ else if(/^partner\/portfolio\/[^/]+\/visits$/.test(op.path))valid=!!value&&object(value.visit)&&typeof value.visit.id==='string';
+ else if(op.path==='partner/planning')valid=!!value&&typeof value.date==='string'&&Array.isArray(value.stops);
+ if(!valid)throw Object.assign(new Error('Confirmarea serverului este incompletă. Operațiunea rămâne în coadă pentru verificare.'),{status:502});
+}
+async function reconcileReplaySnapshot(userId:string,op:PendingOperation,result:unknown){
+ requireReplayContract(op,result);
+ const prefixes=new Set<string>();
+ if(/^orders(?:\/[^/]+)?$/.test(op.path)){
+  const order=object(result)&&object(result.order)?result.order:null;
+  if(order&&typeof order.id==='string'){
+   await saveSnapshot(userId,'orders/'+order.id,{order});
+   const list=await snapshot<{user:unknown;orders:Record<string,unknown>[];weekKey:string}>(userId,'orders');
+   if(list&&Array.isArray(list.value.orders)&&typeof list.value.weekKey==='string'){
+    await saveSnapshot(userId,'orders',{...list.value,orders:[...list.value.orders.filter(row=>row.id!==order.id),order]});
+   }
+  }
+  prefixes.add('orders');
+ }else if(/^partner\/portfolio\/[^/]+$/.test(op.path)&&op.method==='PATCH'){
+  const cached=await snapshot<{partner:Record<string,unknown>;visits:unknown[]}>(userId,op.path);
+  const partner=object(result)&&object(result.partner)?result.partner:null;
+  if(cached&&object(cached.value.partner)&&Array.isArray(cached.value.visits)&&partner)await saveSnapshot(userId,op.path,{...cached.value,partner:{...cached.value.partner,...partner},visits:cached.value.visits});
+  prefixes.add(op.path);prefixes.add('partner/browse');prefixes.add('partner/summary');
+ }else if(/^partner\/portfolio\/[^/]+\/visits$/.test(op.path)&&op.method==='POST'){
+  const parent=op.path.replace(/\/visits$/,'');
+  const cached=await snapshot<{partner:Record<string,unknown>;visits:Record<string,unknown>[]}>(userId,parent);
+  if(cached&&Array.isArray(cached.value.visits)&&object(result)){
+   const visit=object(result.visit)?result.visit:null,partner=object(result.partner)?result.partner:null;
+   const visits=visit&&typeof visit.id==='string'?[...cached.value.visits.filter(row=>row.id!==visit.id),visit]:cached.value.visits;
+   await saveSnapshot(userId,parent,{...cached.value,partner:partner?{...cached.value.partner,...partner}:cached.value.partner,visits});
+  }
+  prefixes.add(parent);prefixes.add('partner/browse');prefixes.add('partner/summary');
+ }else if(op.path==='partner/planning'&&object(result)&&typeof result.date==='string'&&Array.isArray(result.stops)){
+  const day=new Date(result.date+'T12:00:00Z');day.setUTCDate(day.getUTCDate()-((day.getUTCDay()+6)%7));
+  const path='partner/planning?week='+day.toISOString().slice(0,10);
+  const cached=await snapshot<{week:string;plans:Record<string,unknown>[];visits:unknown[]}>(userId,path);
+  if(cached&&Array.isArray(cached.value.plans))await saveSnapshot(userId,path,{...cached.value,plans:[...cached.value.plans.filter(plan=>plan.date!==result.date),result]});
+  prefixes.add('partner/planning');
+ }
+ invalidateReplayCache(userId,[...prefixes]);
+}
 let running=false;
 export async function replay(userId:string,transport:(path:string,method:string,body:unknown,operationId?:string)=>Promise<unknown>,active:()=>string){
  if(running||!userId||active()!==userId||document.visibilityState==='hidden')return;
@@ -83,14 +278,7 @@ export async function replay(userId:string,transport:(path:string,method:string,
     result??=await transport(op.path,op.method,op.body,op.id);
     if(active()!==userId)break;
     // Leave recovery work until the UI has reconciled the confirmed server document.
-    await saveSnapshot(userId,op.path,result);
-    if(op.path==='partner/planning'){
-      const plan=result as {date:string;stops:string[];revision:number};
-      const day=new Date(plan.date+'T12:00:00Z');day.setUTCDate(day.getUTCDate()-((day.getUTCDay()+6)%7));
-      const path='partner/planning?week='+day.toISOString().slice(0,10);
-      const cached=await snapshot<{week:string;plans:{date:string;stops:string[];revision:number}[];visits:unknown[]}>(userId,path);
-      if(cached)await saveSnapshot(userId,path,{...cached.value,plans:[...cached.value.plans.filter(p=>p.date!==plan.date),plan]});
-    }
+    await reconcileReplaySnapshot(userId,op,result);
     await removeOperation(op.id);
     window.dispatchEvent(new CustomEvent('mobiup-sync-confirmed',{detail:{path:op.path,result,userId}}));
    }catch(e){const status=(e as {status?:number}).status;op.error=e instanceof Error?e.message:'Conexiune indisponibilă';

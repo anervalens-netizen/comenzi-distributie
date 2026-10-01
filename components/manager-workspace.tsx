@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ArrowRight, ClipboardCheck, RefreshCw, Store, TrendingUp, Bell, Users, Boxes, ScanBarcode } from 'lucide-react';
 import { api, errorMessage, money } from '@/lib/client-api';
 import type { PartnerRequestRecord, TeamActivityView, User } from '@/lib/types';
@@ -14,15 +14,21 @@ export const managerCurrentMonth = () => new Intl.DateTimeFormat('en-CA', {timeZ
 function useActivity(query: string, month: string, reload: number) {
   const [data, setData] = useState<{key: string; value: Activity} | null>(null);
   const [error, setError] = useState<{key: string; text: string} | null>(null);
-  const key = `${query}&month=${encodeURIComponent(month)}&reload=${reload}`;
+  const [loading,setLoading]=useState(true);
+  const lastReload=useRef(reload);
+  const key = `${query}&month=${encodeURIComponent(month)}`;
   useEffect(() => {
     const controller = new AbortController();
-    api<Activity>(`manager/activity?${key}`, 'GET', undefined, controller.signal)
+    const forceRefresh=lastReload.current!==reload;
+    lastReload.current=reload;
+    queueMicrotask(()=>{if(!controller.signal.aborted)setLoading(true);});
+    api<Activity>(`manager/activity?${key}`, 'GET', undefined, controller.signal,{preferCache:true,maxAgeMs:15000,forceRefresh})
       .then(value => {if (!controller.signal.aborted) {setData({key,value}); setError(null);}})
-      .catch(err => {if (!controller.signal.aborted) setError({key,text:errorMessage(err)});});
+      .catch(err => {if (!controller.signal.aborted) setError({key,text:errorMessage(err)});})
+      .finally(()=>{if(!controller.signal.aborted)setLoading(false);});
     return () => controller.abort();
-  }, [key]);
-  return {data: data?.key === key ? data.value : null, error: error?.key === key ? error.text : ''};
+  }, [key,reload]);
+  return {data: data?.key === key ? data.value : null, error: error?.key === key ? error.text : '',loading};
 }
 
 function MonthControl({month,onMonth,onRefresh}: {month:string;onMonth:(value:string)=>void;onRefresh:()=>void}) {
@@ -33,14 +39,16 @@ export function ManagerOverview({scope,users,month,onMonth,onRequests,onAgent}: 
   const {data,error} = useActivity(scope.query,month,reload);
   const [sales,setSales] = useState<{key:string;value:SalesView}|null>(null);
   const [salesError,setSalesError] = useState<{key:string;text:string}|null>(null);
-  const key = `${scope.query}&month=${encodeURIComponent(month)}&reload=${reload}`;
+  const key = new URLSearchParams([...new URLSearchParams(scope.query),['month',month]]).toString();
+  const salesReload=useRef(reload);
   useEffect(() => {
     const controller = new AbortController();
-    api<SalesView>(`sales?${key}`,'GET',undefined,controller.signal)
+    api<SalesView>(`sales?${key}`,'GET',undefined,controller.signal,{preferCache:true,maxAgeMs:15000,forceRefresh:salesReload.current!==reload})
       .then(value => {if (!controller.signal.aborted) {setSales({key,value});setSalesError(null);}})
       .catch(err => {if (!controller.signal.aborted) setSalesError({key,text:errorMessage(err)});});
+    salesReload.current=reload;
     return () => controller.abort();
-  },[key]);
+  },[key,reload]);
   useEffect(() => {const refresh=()=>setReload(value=>value+1);window.addEventListener('sales-imported',refresh);return()=>window.removeEventListener('sales-imported',refresh);},[]);
   const currentSales=sales?.key===key?sales.value:null;
   const currentSalesError=salesError?.key===key?salesError.text:'';

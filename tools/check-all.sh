@@ -39,6 +39,9 @@ node tools/test-sales-view-worker.mjs
 node tools/test-sales-view-consistency.mjs
 node tools/test-stock-worker.mjs
 node tools/test-exports.mjs
+node tools/test-interaction-backend.mjs
+node tools/test-interaction-pwa.mjs
+node tools/test-interaction-offline.mjs
 node tools/test-client-api.mjs
 node tools/test-partner-map-health.mjs
 node tools/test-local-work.mjs

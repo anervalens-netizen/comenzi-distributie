@@ -216,7 +216,7 @@ try {
   const client=await import(pathToFileURL(clientFile));
   const entries=new Map(),listeners=new Map();
   const storage={getItem:k=>entries.get(k)??null,setItem:(k,v)=>entries.set(k,v),removeItem:k=>entries.delete(k),key:i=>[...entries.keys()][i]??null,get length(){return entries.size;}};
-  globalThis.window={localStorage:storage,addEventListener:(type,fn)=>listeners.set(type,fn),removeEventListener:(type,fn)=>{if(listeners.get(type)===fn)listeners.delete(type);}};
+  globalThis.window={localStorage:storage,dispatchEvent:event=>{listeners.get(event.type)?.(event);return true;},addEventListener:(type,fn)=>listeners.set(type,fn),removeEventListener:(type,fn)=>{if(listeners.get(type)===fn)listeners.delete(type);}};
   client.setLocalWorkUserId(agent.id);
   const fetchBefore=globalThis.fetch;
   const calls=[];let dropResponse=false;

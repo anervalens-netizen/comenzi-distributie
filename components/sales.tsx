@@ -6,7 +6,7 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Check, Clock3, FileSpreadsheet, Filter, LoaderCircle, RefreshCw, Search, TrendingUp, Upload } from 'lucide-react';
 import type { User } from '@/lib/types';
 import type { SalesAggregate, SalesPreview, SalesView } from '@/lib/sales-types';
-import { errorMessage, money } from '@/lib/client-api';
+import { api, errorMessage, invalidateApiReadCache, money } from '@/lib/client-api';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import './sales.css';
 
@@ -45,6 +45,9 @@ export function SalesPanel({ user, users, scopeQuery, scopeLabel, initialMonth, 
   const [siteCode, setSiteCode] = useState('all');
   const [siteQuery, setSiteQuery] = useState('');
   const [snapshot, setSnapshot] = useState<SalesView | null>(null);
+  const [snapshotScope,setSnapshotScope]=useState('');
+  const [errorScope,setErrorScope]=useState('');
+  const lastReload=useRef(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [reload, setReload] = useState(0);
@@ -53,23 +56,27 @@ export function SalesPanel({ user, users, scopeQuery, scopeLabel, initialMonth, 
   const requestId = useRef(0);
   const [knownSites, setKnownSites] = useState<Array<{ siteCode: string; location: string }>>([]);
 
+  const params = new URLSearchParams(scopeQuery || '');
+  params.set('month',month);
+  if(view==='history'){params.set('fromMonth',fromMonth);params.set('toMonth',toMonth);}
+  if(manager&&scopeQuery===undefined&&siteCode!=='all')params.set(siteCode.startsWith('agent:')?'agentId':'siteCode',siteCode.startsWith('agent:')?siteCode.slice(6):siteCode);
+  const query=params.toString(),requestScope=user.id+'|'+query;
+  const activeError=errorScope===requestScope?error:'';
+  const visibleSnapshot=snapshotScope===requestScope?snapshot:null;
+  const waiting=loading||(!visibleSnapshot&&!activeError);
   useEffect(() => {
     const id = ++requestId.current;
+    const forceRefresh=lastReload.current!==reload;lastReload.current=reload;
     const controller = new AbortController();
     queueMicrotask(() => { if (id === requestId.current) { setLoading(true); setError(''); setSnapshot(null); } });
-    const params = new URLSearchParams(scopeQuery || '');
-    params.set('month', month);
-    if (view === 'history') { params.set('fromMonth', fromMonth); params.set('toMonth', toMonth); }
-    if (manager && scopeQuery === undefined && siteCode !== 'all') params.set(siteCode.startsWith('agent:') ? 'agentId' : 'siteCode', siteCode.startsWith('agent:') ? siteCode.slice(6) : siteCode);
-    fetch(`/api/sales?${params}`, { credentials: 'same-origin', signal: controller.signal })
-      .then(responseData<SalesView>)
-      .then(result => { if (id === requestId.current) { if (siteCode === 'all') setKnownSites(previous => { const merged = new Map(previous.map(site => [salesPairKey(site), site])); for (const site of result.sites) merged.set(salesPairKey(site), { siteCode: site.siteCode, location: site.location }); return [...merged.values()]; }); setSnapshot(result); } })
-      .catch(err => { if (id === requestId.current && (err as Error)?.name !== 'AbortError') setError(errorMessage(err)); })
+    api<SalesView>(`sales?${query}`,'GET',undefined,controller.signal,{preferCache:true,maxAgeMs:15000,forceRefresh})
+      .then(result => { if (id === requestId.current) { if (siteCode === 'all') setKnownSites(previous => { const merged = new Map(previous.map(site => [salesPairKey(site), site])); for (const site of result.sites) merged.set(salesPairKey(site), { siteCode: site.siteCode, location: site.location }); return [...merged.values()]; }); setSnapshot(result);setSnapshotScope(requestScope); } })
+      .catch(err => { if (id === requestId.current && (err as Error)?.name !== 'AbortError') {setError(errorMessage(err));setErrorScope(requestScope);} })
       .finally(() => { if (id === requestId.current) setLoading(false); });
     return () => controller.abort();
-  }, [fromMonth, manager, month, siteCode, reload, toMonth, view, scopeQuery]);
+  }, [query, requestScope, siteCode, reload]);
   useEffect(() => {
-    const refresh = () => setReload(value => value + 1);
+    const refresh = () => {invalidateApiReadCache('sales');setReload(value => value + 1);};
     window.addEventListener('sales-imported', refresh);
     return () => window.removeEventListener('sales-imported', refresh);
   }, []);
@@ -100,9 +107,9 @@ export function SalesPanel({ user, users, scopeQuery, scopeLabel, initialMonth, 
 
   const salesBody=<>
       {(view === 'history' || manager) && <div className="sales-toolbar">{view === 'history' && <label>Luna {snapshot?.months.length ? <select aria-label="Luna vânzărilor" value={month} onChange={event => selectMonth(event.target.value)}>{snapshot.months.map(item => <option key={item.month} value={item.month}>{monthLabel(item.month)} · {item.rowCount.toLocaleString('ro-RO')} rânduri</option>)}</select> : <input aria-label="Luna vânzărilor" type="month" value={month} max={currentMonth()} onChange={event => selectMonth(event.target.value || currentMonth())}/>}</label>}{manager && scopeQuery === undefined && <><label className="sales-filter-search"><span><Search size={14}/> Caută</span><input aria-label="Caută gestiune sau agent" placeholder="Agent sau SiteCode" value={siteQuery} onChange={event => setSiteQuery(event.target.value)}/></label><label className="sales-target"><span><Filter size={14}/> Gestiune / agent</span><select aria-label="Filtrează vânzările după gestiune sau agent" value={siteCode} onChange={event => setSiteCode(event.target.value)}><option value="all">Toată echipa</option>{filteredSiteOptions.map(agent => <option key={agent.id} value={agent.selection}>{agent.name} · {agent.siteCode}</option>)}</select></label></>}</div>}
-      {error && <p className="error-banner" role="alert">{error}</p>}
-      {manager && <div className="sales-freshness">{snapshot?.filename ? <><FileSpreadsheet size={15}/><span>Fișier: <strong>{snapshot.filename}</strong> · importat {formatDateTime(snapshot.importedAt)}</span></> : <><AlertTriangle size={15}/><span>Nu există un import pentru {monthLabel(month)}.</span></>}<span className="sales-scope">{scopeLabel || (siteCode === 'all' ? 'Toată echipa' : siteOptions.find(option => option.selection === siteCode)?.name || `SiteCode ${siteCode}`)}</span></div>}{manager && view === 'history' && <p className="muted">Codurile istorice fără agent activ rămân în totalul național. Filtrele pe echipa actuală le pot exclude; valorile sursă nu sunt realocate automat.</p>}
-      {loading ? <div className="sales-loading"><LoaderCircle className="spin" size={22}/> Se încarcă vânzările…</div> : error ? <div className="sales-empty sales-load-error"><AlertTriangle size={25}/><strong>Vânzările nu au putut fi încărcate.</strong><span>Verifică conexiunea și încearcă din nou.</span></div> : snapshot?.filename ? <SalesData view={snapshot} history={view === 'history'} showGlobalStats={user.role === 'manager' && user.managerScope === 'global'} showSites={manager} fromMonth={fromMonth} toMonth={toMonth} onFromMonth={setFromMonth} onToMonth={setToMonth}/> : <div className="sales-empty sales-no-import"><AlertTriangle size={25}/><strong>Datele pentru {monthLabel(month)} nu sunt disponibile.</strong><span>Managerul poate încărca datele cumulate ale lunii din caseta de import.</span></div>}
+      {activeError && <p className="error-banner" role="alert">{activeError}</p>}
+      {manager && !waiting && !activeError && <div className="sales-freshness">{snapshot?.filename ? <><FileSpreadsheet size={15}/><span>Fișier: <strong>{snapshot.filename}</strong> · importat {formatDateTime(snapshot.importedAt)}</span></> : <><AlertTriangle size={15}/><span>Nu există un import pentru {monthLabel(month)}.</span></>}<span className="sales-scope">{scopeLabel || (siteCode === 'all' ? 'Toată echipa' : siteOptions.find(option => option.selection === siteCode)?.name || `SiteCode ${siteCode}`)}</span></div>}{manager && view === 'history' && <p className="muted">Codurile istorice fără agent activ rămân în totalul național. Filtrele pe echipa actuală le pot exclude; valorile sursă nu sunt realocate automat.</p>}
+      {waiting ? <output className="sales-loading"><LoaderCircle className="spin" size={22}/> Se încarcă vânzările…</output> : activeError ? <div className="sales-empty sales-load-error"><AlertTriangle size={25}/><strong>Vânzările nu au putut fi încărcate.</strong><span>Verifică conexiunea și încearcă din nou.</span></div> : visibleSnapshot?.filename ? <SalesData view={visibleSnapshot} history={view === 'history'} showGlobalStats={user.role === 'manager' && user.managerScope === 'global'} showSites={manager} fromMonth={fromMonth} toMonth={toMonth} onFromMonth={setFromMonth} onToMonth={setToMonth}/> : <div className="sales-empty sales-no-import"><AlertTriangle size={25}/><strong>Datele pentru {monthLabel(month)} nu sunt disponibile.</strong><span>Managerul poate încărca datele cumulate ale lunii din caseta de import.</span></div>}
   </>;
   return <div className="sales-page">
     <div className="page-heading sales-heading"><div><span className="eyebrow">PERFORMANȚĂ COMERCIALĂ</span><h1>Vânzări</h1></div><div className="heading-controls"><button className="icon-button refresh" aria-label="Actualizează vânzările" title="Actualizează" disabled={loading} onClick={() => setReload(value => value + 1)}><RefreshCw size={19}/></button></div></div>

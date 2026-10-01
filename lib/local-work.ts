@@ -3,9 +3,12 @@ export type StorageLike = Pick<Storage,'getItem'|'setItem'|'removeItem'|'key'|'l
 export type LocalWorkRead<T> = { value: T | null; error: string };
 export type LocalWorkEntry<T> = { documentId: string; value: T };
 
+export const LOCAL_WORK_USER_EVENT='mobiup-local-work-user';
 const PREFIX='mobiup-work-v1';
 const USER_KEY='mobiup-work-user-v1';
 let memoryUserId='';
+let memoryGeneration=0;
+let memoryStorageError=false;
 const encode=(value:string)=>encodeURIComponent(value);
 const decode=(value:string)=>decodeURIComponent(value);
 const keyFor=(scope:string,userId:string,documentId:string)=>`${PREFIX}:${encode(scope)}:${encode(userId)}:${encode(documentId)}`;
@@ -22,13 +25,30 @@ function message(error: unknown) {
 }
 
 export function currentLocalWorkUserId(storage:StorageLike|null=browserStorage()) {
-  if(!storage)return memoryUserId;
-  try{return storage.getItem(USER_KEY)||memoryUserId;}catch{return memoryUserId;}
+  if(!storage||memoryStorageError)return memoryUserId;
+  try{return storage.getItem(USER_KEY)??(memoryStorageError?memoryUserId:'');}catch{return memoryUserId;}
 }
+export function currentLocalWorkGeneration() {
+  return memoryGeneration;
+}
+function notifyUserChange(){if(typeof window!=='undefined')window.dispatchEvent(new CustomEvent(LOCAL_WORK_USER_EVENT,{detail:{userId:memoryUserId,generation:memoryGeneration}}));}
+if(typeof window!=='undefined')window.addEventListener('storage',event=>{
+  if(event.key!==USER_KEY&&event.key!==null)return;
+  memoryUserId=event.newValue||'';memoryStorageError=false;memoryGeneration++;notifyUserChange();
+});
 export function setLocalWorkUserId(userId:string,storage:StorageLike|null=browserStorage()):string {
-  memoryUserId=userId;
-  if(!storage)return userId?'Browserul nu permite păstrarea locală a modificărilor neconfirmate.':'';
-  try{if(userId)storage.setItem(USER_KEY,userId);else storage.removeItem(USER_KEY);return '';}catch(error){return message(error);}
+  const changed=currentLocalWorkUserId(storage)!==userId;
+  memoryUserId=userId;if(changed)memoryGeneration++;
+  let warning='';memoryStorageError=false;
+  try{if(!storage){memoryStorageError=true;warning=userId?'Browserul nu permite păstrarea locală a modificărilor neconfirmate.':'';}else if(userId)storage.setItem(USER_KEY,userId);else storage.removeItem(USER_KEY);}
+  catch(error){memoryStorageError=true;warning=message(error);try{storage?.removeItem(USER_KEY);}catch{}}
+  if(changed)notifyUserChange();
+  return warning;
+}
+export function restoreLocalWorkUserId(userId:string,expectedGeneration:number,storage:StorageLike|null=browserStorage()) {
+  if(!userId||memoryGeneration!==expectedGeneration||currentLocalWorkUserId(storage)!=='')return false;
+  setLocalWorkUserId(userId,storage);
+  return true;
 }
 
 export function readLocalWork<T>(scope:string,userId:string,documentId:string,storage:StorageLike|null=browserStorage()):LocalWorkRead<T> {

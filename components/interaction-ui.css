@@ -1,0 +1,23 @@
+.bounded-pagination {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: .75rem;
+  justify-content: center;
+  margin-top: 1rem;
+}
+
+.bounded-pagination > span {
+  color: var(--muted, #64748b);
+  font-size: .875rem;
+  font-variant-numeric: tabular-nums;
+  min-width: 10rem;
+  text-align: center;
+}
+
+@media (max-width: 560px) {
+  .bounded-pagination > span {
+    order: -1;
+    width: 100%;
+  }
+}
