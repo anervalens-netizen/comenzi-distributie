@@ -1,14 +1,15 @@
-// Only the public offline page and brand assets are cached. Authenticated
-// requests, client portfolios, orders and exports are always network-only.
-const CACHE='mobiup-shell-v2';
-const PUBLIC_FILES=['/offline.html','/icons/icon-192.png','/icons/icon-512.png','/icons/maskable-512.png','/mobiup-logo.png'];
-self.addEventListener('install',event=>{event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(PUBLIC_FILES)));self.skipWaiting();});
-self.addEventListener('activate',event=>{event.waitUntil(Promise.all([caches.keys().then(keys=>Promise.all(keys.filter(k=>k.startsWith('mobiup-')&&k!==CACHE).map(k=>caches.delete(k)))),self.clients.claim()]));});
+// Generic, build-generated shell only. Private data live in per-account IndexedDB.
+const CACHE='mobiup-shell-v3-__SHELL_VERSION__';
+const PUBLIC_FILES=/*__SHELL_ASSETS__*/[];
+self.addEventListener('install',event=>{event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(PUBLIC_FILES)));});
+self.addEventListener('message',event=>{if(event.data?.type==='ACTIVATE_SAFE')self.skipWaiting();});
+self.addEventListener('activate',event=>{event.waitUntil(self.clients.claim());});
+// Old version assets are retained for open tabs; no forced reload or unsafe eviction.
 self.addEventListener('fetch',event=>{
-  const req=event.request,url=new URL(req.url);
-  if(req.method!=='GET'||url.origin!==self.location.origin||url.pathname.startsWith('/api/'))return;
-  if(req.mode==='navigate'){event.respondWith(fetch(req).catch(()=>caches.match('/offline.html')));return;}
-  if(PUBLIC_FILES.includes(url.pathname))event.respondWith(caches.match(req).then(cached=>cached||fetch(req)));
+ const req=event.request,url=new URL(req.url);
+ if(req.method!=='GET'||url.origin!==self.location.origin||url.pathname.startsWith('/api/'))return;
+ if(req.mode==='navigate'){event.respondWith(fetch(req).catch(async()=>await caches.open(CACHE).then(c=>c.match('/offline-app.html'))||await caches.match('/offline.html')));return;}
+ if(PUBLIC_FILES.includes(url.pathname))event.respondWith(caches.open(CACHE).then(async cache=>await cache.match(req)||fetch(req)));
 });
 
 self.addEventListener('push',event=>{

@@ -1,3 +1,4 @@
+import { snapshot, saveSnapshot, rememberAccount, lastAccount, migrateLegacy, replay } from './offline-work.ts';
 import { currentLocalWorkUserId, removeLocalWork, setLocalWorkUserId } from './local-work.ts';
 
 export const SESSION_EXPIRED_EVENT='mobiup-session-expired';
@@ -13,10 +14,13 @@ export class ApiError extends Error {
   }
 }
 
-export async function api<T=Record<string,unknown>>(path: string,method='GET',body?: unknown, signal?: AbortSignal): Promise<T> {
-  const options:RequestInit={method,credentials:'same-origin',signal};
-  if(body && method!=='GET' && method!=='HEAD'){options.headers={'Content-Type':'application/json'};options.body=JSON.stringify(body);}
-  const res=await fetch('/api/'+path,options);
+export async function networkApi<T=Record<string,unknown>>(path: string,method='GET',body?: unknown, signal?: AbortSignal, operationId?:string): Promise<T> {
+  const controller=new AbortController();
+  const cancel=()=>controller.abort(signal?.reason);signal?.addEventListener('abort',cancel,{once:true});if(signal?.aborted)cancel();
+  const timer=setTimeout(()=>controller.abort(new Error('Cererea a depășit timpul de așteptare.')),20000);
+  const options:RequestInit={method,credentials:'same-origin',signal:controller.signal};
+  if(body && method!=='GET' && method!=='HEAD'){options.headers={'Content-Type':'application/json',...(operationId?{'X-Operation-Id':operationId}:{})};options.body=JSON.stringify(body);}
+  let res:Response;try{res=await fetch('/api/'+path,options);}finally{clearTimeout(timer);signal?.removeEventListener('abort',cancel);}
   let data:unknown;
   try { data=await res.json(); }
   catch { data=null; }
@@ -27,7 +31,7 @@ export async function api<T=Record<string,unknown>>(path: string,method='GET',bo
     if(res.status===401&&path.split('/').at(-1)!=='login'&&typeof window!=='undefined')window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
     throw new ApiError(res.status,message,data);
   }
-  if(path==='bootstrap'&&data&&typeof data==='object'&&'user' in data) {
+  if((path==='bootstrap'||path==='auth/session')&&data&&typeof data==='object'&&'user' in data) {
     const user=(data as {user?:unknown}).user;
     setLocalWorkUserId(user&&typeof user==='object'&&'id' in user&&typeof (user as {id?:unknown}).id==='string'?(user as {id:string}).id:'');
   } else if(path==='auth/logout'&&method==='POST') {
@@ -38,6 +42,42 @@ export async function api<T=Record<string,unknown>>(path: string,method='GET',bo
     if(userId&&orderId)removeLocalWork('order',userId,orderId);
   }
   return data as T;
+}
+const cacheable=(path:string)=>path==='bootstrap'||path==='auth/session'||path==='orders'||/^orders\/[^/]+$/.test(path)||/^partner\/(browse|map|summary|portfolio|planning)([/?]|$)/.test(path)||/^clients[?]/.test(path)||/^stock[/?]/.test(path);
+export async function api<T=Record<string,unknown>>(path:string,method='GET',body?:unknown,signal?:AbortSignal):Promise<T>{
+ const owner=currentLocalWorkUserId();
+ try{
+  const result=await networkApi<T>(path,method,body,signal);
+  if(path==='auth/logout'){await rememberAccount('').catch(()=>{});return result;}
+  const user=(result as {user?:{id:string}|null})?.user;
+  if((path==='bootstrap'||path==='auth/session')&&user!==undefined){await rememberAccount(user?.id||'').catch(()=>{});if(user)await migrateLegacy(user.id).catch(()=>{});}
+  const account=user?.id||currentLocalWorkUserId();
+  if(typeof window!=='undefined'&&method==='GET'&&cacheable(path)&&account)await saveSnapshot(account,path,result).catch(()=>{window.dispatchEvent(new CustomEvent('mobiup-storage-error',{detail:'Datele primite nu au putut fi pregătite pentru offline.'}));});
+  return result;
+ }catch(e){
+  if(typeof window==='undefined'||method!=='GET'||signal?.aborted||(e instanceof ApiError&&e.status<500))throw e;
+  const account=owner||((path==='bootstrap'||path==='auth/session')?await lastAccount():'');
+  if(cacheable(path)&&account){const stored=await snapshot<T>(account,path);if(stored){setLocalWorkUserId(account);window.dispatchEvent(new CustomEvent('mobiup-offline-snapshot',{detail:{path,at:stored.at}}));return stored.value;}
+   if(path.startsWith('partner/browse?')){
+    const params=new URLSearchParams(path.split('?')[1]);
+    if(!params.get('salesPeriod')&&!params.get('managerId')&&!params.get('agentId')){
+     const prepared=await snapshot<{partners:import('./partner-map-types').PartnerSummary[]}>(account,'partner/summary');
+     if(prepared){const all=prepared.value.partners,q=normalize(params.get('q')||''),county=params.get('county')||'',city=normalize(params.get('city')||''),route=params.get('route')||'',position=params.get('position')||'',days=params.get('days')||'';
+      const selected=all.filter(p=>(!q||normalize([p.id,p.name,p.cui,p.address,p.city,p.county].join(' ')).includes(q))&&(!county||p.county===county)&&(!city||normalize(p.city||'').includes(city))&&(!route||p.route===route)&&(!position||(position==='yes'?p.latitude!==null:p.latitude===null))&&(!days||(days==='never'?!p.lastVisitedAt:!!p.lastVisitedAt&&Date.now()-Date.parse(p.lastVisitedAt)>=Number(days)*86400000)));
+      const offset=Number(params.get('offset')||0),limit=Number(params.get('limit')||100),inCounty=all.filter(p=>!county||p.county===county),unique=(items:string[])=>[...new Set(items.filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ro'));
+      window.dispatchEvent(new CustomEvent('mobiup-offline-snapshot',{detail:{path,at:prepared.at}}));
+      return {partners:selected.slice(offset,offset+limit),total:selected.length,located:selected.filter(p=>p.latitude!==null).length,geocoded:selected.filter(p=>p.positionSource==='geocoding').length,nextOffset:offset+limit<selected.length?offset+limit:null,bounds:null,facets:{counties:unique(all.map(p=>p.county)),cities:unique(inCounty.map(p=>p.city)),routes:unique(inCounty.map(p=>p.route))},styleUrl:'https://tiles.openfreemap.org/styles/positron',observedAt:new Date(prepared.at).toISOString()} as T;
+     }
+    }
+   }
+  }
+  throw e;
+ }
+}
+export function startOfflineSync(){
+ const sync=()=>{if(document.visibilityState!=='hidden')void replay(currentLocalWorkUserId(),(path,method,body,id)=>networkApi(path,method,body,undefined,id),currentLocalWorkUserId).catch(()=>{});};
+ window.addEventListener('online',sync);document.addEventListener('visibilitychange',sync);const timer=setInterval(sync,4000);sync();
+ return()=>{clearInterval(timer);window.removeEventListener('online',sync);document.removeEventListener('visibilitychange',sync);};
 }
 export function errorMessage(err: unknown) { return err instanceof Error?err.message:'Conexiunea a fost întreruptă. Încearcă din nou.'; }
 export function normalize(value: string) { return value.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase(); }

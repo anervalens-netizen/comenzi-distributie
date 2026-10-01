@@ -10,6 +10,7 @@ import {
   type OrderConflictChoice,
   type OrderConflictField,
 } from '@/lib/order-draft';
+import { enqueue, pendingOperations, readWork, saveWork, removeWork } from '@/lib/offline-work';
 import type { Order } from '@/lib/types';
 
 export type PendingOrderConflict = {
@@ -49,6 +50,8 @@ export function useOrderDraftSave({ initial, onSaved, storageOwnerId }: { initia
   const [conflict,setConflict]=useState<PendingOrderConflict|null>(initialState.conflict);
   const [remoteFinalized,setRemoteFinalized]=useState<Order|null>(null);
   const [remoteDeleted,setRemoteDeleted]=useState(false);
+  const original=useRef(initial);
+  const clearCallback=useRef(()=>{});
   const latest=useRef(initialState.order);
   const confirmed=useRef(initial);
   const revision=useRef(initial.revision);
@@ -63,13 +66,13 @@ export function useOrderDraftSave({ initial, onSaved, storageOwnerId }: { initia
     if(!owner) return '';
     let issue='';
     if(local.status!=='draft'||sameEditableOrder(local,base)) issue=removeLocalWork('order',owner,initial.id);
-    else issue=writeLocalWork<StoredOrderWork>('order',owner,initial.id,{base,local});
+    else {issue=writeLocalWork<StoredOrderWork>('order',owner,initial.id,{base,local});void saveWork(owner,'order',initial.id,{base,local}).catch(err=>{setStorageError(errorMessage(err));});}
     setStorageError(issue);
     return issue;
   }
   function clearStoredWork() {
     if(!owner)return '';
-    const issue=removeLocalWork('order',owner,initial.id);
+    const issue=removeLocalWork('order',owner,initial.id);void removeWork(owner,'order',initial.id).catch(err=>setStorageError(errorMessage(err)));
     setStorageError(issue);
     return issue;
   }
@@ -102,7 +105,7 @@ export function useOrderDraftSave({ initial, onSaved, storageOwnerId }: { initia
     if(remoteFinalizedRef.current||remoteDeletedRef.current) throw new Error('Alege cum recuperezi modificările locale înainte de a continua.');
     let forceRequest=force;
     for(let attempt=0;attempt<4;attempt++) {
-      if(!forceRequest && sameEditableOrder(latest.current,confirmed.current)) {
+      if(!forceRequest && sameEditableOrder(latest.current,confirmed.current)&&latest.current.number!=='Ciornă locală') {
         setSaveState('Salvat');
         clearStoredWork();
         return confirmed.current;
@@ -112,6 +115,12 @@ export function useOrderDraftSave({ initial, onSaved, storageOwnerId }: { initia
       setSaveState('Se salvează…');
       setSaveError('');
       try {
+        const queued=await pendingOperations(owner);
+        if(queued.some(op=>op.entity===`orders/${snapshot.id}`&&op.state==='blocked'))throw new ApiError(409,'Operațiune în conflict. Deschide coada locală pentru verificare.',null);
+        if(queued.some(op=>op.entity===`orders/${snapshot.id}`)){
+          await enqueue(owner,`orders/${snapshot.id}`,'PUT',orderSaveBody(snapshot,revision.current),{scope:'order',id:snapshot.id,value:{base,local:snapshot}});
+          setSaveState('Salvat pe telefon · În așteptare');throw new Error('Salvat pe telefon. Așteaptă sincronizarea înainte de finalizare.');
+        }
         const {order:saved}=await api<{order:Order}>(`orders/${snapshot.id}`,'PUT',orderSaveBody(snapshot,revision.current));
         revision.current=saved.revision;
         confirmed.current=saved;
@@ -182,9 +191,9 @@ export function useOrderDraftSave({ initial, onSaved, storageOwnerId }: { initia
           if(issue)setSaveError(issue);
           continue;
         }
-        setSaveState('Nesalvat');
-        const issue=persist();
-        setSaveError([errorMessage(err),issue].filter(Boolean).join(' '));
+        if(!(err instanceof ApiError)||err.status>=500){
+          try{await enqueue(owner,`orders/${snapshot.id}`,'PUT',orderSaveBody(latest.current,revision.current),{scope:'order',id:snapshot.id,value:{base,local:latest.current}});setSaveState('Salvat pe telefon · În așteptare');setSaveError('Salvarea pe server așteaptă sincronizarea.');}catch(storage){setSaveState('Nesalvat');setSaveError(errorMessage(storage));}
+        }else{setSaveState('Necesită verificare');const issue=persist();setSaveError([errorMessage(err),issue].filter(Boolean).join(' '));}
         throw err;
       }
     }
@@ -234,7 +243,15 @@ export function useOrderDraftSave({ initial, onSaved, storageOwnerId }: { initia
     setSaveError(issue);
   }
 
-  useEffect(()=>{onSavedRef.current=onSaved;saveCallback.current=save;});
+  // Editor is keyed by document/epoch; capture its initial recovery base once.
+  useEffect(()=>{
+    let alive=true;void readWork<StoredOrderWork>(owner,'order',original.current.id).then(stored=>{if(alive&&stored&&sameEditableOrder(latest.current,original.current)){const merged=mergeConcurrentOrders(stored.base,stored.local,original.current,'local');setLocal(merged.order);if(merged.conflicts.length){const remote=mergeConcurrentOrders(stored.base,stored.local,original.current,'remote');const pending={fields:merged.conflicts,local:merged.order,remote:remote.order};conflictRef.current=pending;setConflict(pending);}setSaveState('Modificări locale restaurate');}}).catch(err=>setStorageError(errorMessage(err)));
+    const retry=()=>{if(document.visibilityState==='visible')void saveCallback.current(false).catch(()=>{});};
+    const synced=(event:Event)=>{const d=(event as CustomEvent).detail;if(d.userId!==owner||d.path!==`orders/${original.current.id}`||!d.result?.order)return;const saved=d.result.order as Order;const merged=mergeConcurrentOrders(confirmed.current,latest.current,saved,'local');revision.current=saved.revision;confirmed.current=saved;onSavedRef.current(saved);setLocal(merged.order);if(merged.conflicts.length){const remote=mergeConcurrentOrders(confirmed.current,latest.current,saved,'remote');const pending={fields:merged.conflicts,local:merged.order,remote:remote.order};conflictRef.current=pending;setConflict(pending);setSaveState('Conflict de rezolvat');}else if(sameEditableOrder(merged.order,saved)){clearCallback.current();setSaveState('Sincronizat');setSaveError('');}};
+    window.addEventListener('online',retry);document.addEventListener('visibilitychange',retry);window.addEventListener('mobiup-sync-confirmed',synced);
+    return()=>{alive=false;window.removeEventListener('online',retry);document.removeEventListener('visibilitychange',retry);window.removeEventListener('mobiup-sync-confirmed',synced);};
+  },[owner]);
+  useEffect(()=>{onSavedRef.current=onSaved;saveCallback.current=save;clearCallback.current=clearStoredWork;});
   useEffect(()=>{
     if(conflictRef.current||sameEditableOrder(latest.current,confirmed.current)) return;
     const timer=setTimeout(()=>{void saveCallback.current(false).catch(()=>{});},1100);

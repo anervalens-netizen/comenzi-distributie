@@ -2,7 +2,9 @@
 // Custom combobox uses a rich result list with name and address on separate lines.
 /* oxlint-disable jsx-a11y/prefer-tag-over-role */
 import { useEffect, useState } from 'react';
-import { api } from '@/lib/client-api';
+import { currentLocalWorkUserId } from '@/lib/local-work';
+import { enqueue, readWork, saveWork, removeWork } from '@/lib/offline-work';
+import { api, ApiError } from '@/lib/client-api';
 import type { PartnerSummary as PortfolioPartner } from '@/lib/partner-map-types';
 type Plan = { date: string; stops: string[]; revision: number };
 type Visit = {
@@ -53,8 +55,8 @@ export function PartnerPlanning({
     [searchOpen, setSearchOpen] = useState(false),
     [activeChoice, setActiveChoice] = useState(-1);
   useEffect(() => {
-    let alive = true;
-    api<Week>('partner/planning?week=' + week)
+    let alive = true;const controller=new AbortController();void readWork<Record<string,string[]>>(currentLocalWorkUserId(),'plans',week).then(local=>{if(alive&&local)setDraft(local);}).catch(e=>setError(e.message));
+    api<Week>('partner/planning?week=' + week,'GET',undefined,controller.signal)
       .then((d) => {
         if (alive) {
           setData(d);
@@ -65,7 +67,7 @@ export function PartnerPlanning({
         if (alive) setError(e.message);
       });
     return () => {
-      alive = false;
+      alive = false;controller.abort();
     };
   }, [week, reload, refreshKey]);
   const dates = Array.from({ length: 5 }, (_, i) => shift(week, i));
@@ -74,7 +76,7 @@ export function PartnerPlanning({
   const stops = (date: string) =>
     draft[date] ?? data?.plans.find((p) => p.date === date)?.stops ?? [];
   const change = (date: string, value: string[]) => {
-    setDraft((d) => ({ ...d, [date]: value }));
+    setDraft((d) => {const next={...d,[date]:value};void saveWork(currentLocalWorkUserId(),'plans',week,next).catch(e=>setError(e.message));return next;});
     setNotice('');
   };
   const dirty = Object.keys(draft).length > 0;
@@ -93,6 +95,7 @@ export function PartnerPlanning({
     setBusy(true);
     setError('');
     setNotice('');
+    const payload={date,stops:stops(date),revision:data?.plans.find(p=>p.date===date)?.revision??0};
     try {
       const plan = await api<Plan>('partner/planning', 'PUT', {
         date,
@@ -109,9 +112,9 @@ export function PartnerPlanning({
         delete next[date];
         return next;
       });
-      setNotice('Planul zilei a fost salvat.');
+      await removeWork(currentLocalWorkUserId(),'plans',week);setNotice('Planul zilei a fost sincronizat.');
     } catch (e) {
-      setError((e as Error).message);
+      if(!(e instanceof ApiError)||e.status>=500){try{await enqueue(currentLocalWorkUserId(),'partner/planning','PUT',payload,{scope:'plans',id:week,value:draft});setNotice('Plan salvat pe telefon · În așteptare.');}catch(storage){setError((storage as Error).message);}}else setError((e as Error).message);
     } finally {
       setBusy(false);
     }

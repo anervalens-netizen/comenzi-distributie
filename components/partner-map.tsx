@@ -290,6 +290,7 @@ export default function PartnerMap({
             const p = e.features?.[0];
             if (!p || p.geometry.type !== 'Point') return;
             try {
+              if(p.properties.cluster===true&&p.properties.expansionZoom!==undefined){const zoom=Number(p.properties.expansionZoom);m.easeTo({center:p.geometry.coordinates as [number,number],zoom:Math.min(zoom,19)});return;}
               const zoom = await (
                 m.getSource(SOURCE) as GeoJSONSource
               ).getClusterExpansionZoom(Number(p.properties.cluster_id));
@@ -368,11 +369,11 @@ export default function PartnerMap({
       );
     else m.jumpTo({ center: [24.96, 45.94], zoom: 5.5 });
     captureView(m);
-    let loadedArea:MapBounds|undefined;
+    let loadedArea:MapBounds|undefined;let loadedZoom=-1;
     const fetchArea = async () => {
       if (!activeRef.current || !host.current?.clientWidth || !host.current.clientHeight) return;
       const visible=m.getBounds();
-      if (loadedArea && visible.getWest()>=loadedArea[0] && visible.getSouth()>=loadedArea[1] && visible.getEast()<=loadedArea[2] && visible.getNorth()<=loadedArea[3]) return;
+      if (loadedArea && loadedZoom===Math.floor(m.getZoom()) && visible.getWest()>=loadedArea[0] && visible.getSouth()>=loadedArea[1] && visible.getEast()<=loadedArea[2] && visible.getNorth()<=loadedArea[3]) return;
       controller?.abort();
       const request = new AbortController();
       controller = request;
@@ -390,27 +391,24 @@ export default function PartnerMap({
         .join(',');
       try {
         const data = await api<PartnerMapData>(
-          `partner/map?${filters}&bbox=${bbox}`,
+          `partner/map?${filters}&bbox=${bbox}&zoom=${Math.floor(m.getZoom())}`,
           'GET',
           undefined,
           request.signal,
         );
         if (cancelled || request.signal.aborted) return;
-        await source()?.setData(data);
+        const aggregated=data as PartnerMapData&{serverAggregated?:boolean};await source()?.setClusterOptions({cluster:!aggregated.serverAggregated});await source()?.setData(data);
         if (cancelled || request.signal.aborted) return;
-        loadedArea=bbox.split(',').map(Number) as MapBounds;
+        loadedZoom=Math.floor(m.getZoom());loadedArea=bbox.split(',').map(Number) as MapBounds;
         setDataError('');
         if (host.current)
           host.current.dataset.featureCount = String(data.features.length);
         setLoading(false);
       } catch (e) {
         if (cancelled || request.signal.aborted) return;
-        void source()
-          ?.setData(empty())
-          .catch(() => {});
-        if (host.current) host.current.dataset.featureCount = '0';
+        // Same filter/scope source remains visible and explicitly stale.
         setLoading(false);
-        setDataError((e as Error).message);
+        setDataError('Date neactualizate · '+(e as Error).message);
       }
     };
     const schedule = () => {

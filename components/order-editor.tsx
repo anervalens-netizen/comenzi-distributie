@@ -73,7 +73,7 @@ function EditableOrderEditor({initial,products,onClose,onSaved,onFinalized,onRec
     if(existing.size>1000){setScanError('Un aviz poate conține maximum 1.000 de serii.');return;}
     update({serials:[...current.serials,...batch]});setScanner('');setScanError('');setLastScan(batch.at(-1)!);scanInput.current?.focus();
   }
-  async function back() {setBusy(true);setActionError('');try{await save();onClose();}catch{setBusy(false);}}
+  async function back() {setBusy(true);setActionError('');try{await save();onClose();}catch{if(saveState.includes('Salvat pe telefon'))onClose();setBusy(false);}}
   async function recover(){setBusy(true);setActionError('');try{const recovered=await recoverToNewDraft();toast.success('Modificările au fost copiate într-o ciornă nouă.');onRecovered(recovered);}catch(err){setActionError(errorMessage(err));setBusy(false);}}
   function discardRecovery(){discardRemoteRecovery();onClose();}
   async function discardDraft() {if(busy||locked||!window.confirm('Renunți la această ciornă?'))return;setBusy(true);setActionError('');try{await api(`orders/${order.id}`,'DELETE',{revision:getRevision()});toast.success('Ciorna a fost ștearsă.');onClose();}catch(err){setActionError(errorMessage(err));setBusy(false);}}

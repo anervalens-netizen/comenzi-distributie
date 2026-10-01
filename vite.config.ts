@@ -1,3 +1,4 @@
+import {buildOfflineShell} from './tools/build-offline-shell.mjs';
 import { sites } from '@openai/sites-vite-plugin';
 import tailwindcss from '@tailwindcss/postcss';
 import vinext from 'vinext';
@@ -55,6 +56,7 @@ export default defineConfig(async () => {
       ? { watch: { useFsEvents: false, usePolling: true } }
       : undefined,
     plugins: [
+      {name:"offline-shell",apply:"build" as const,async closeBundle(){if(this.environment.name==="client")await buildOfflineShell();}},
       vinext(),
       ...(!nodeTarget ? [sites(), cloudflare({
         viteEnvironment: { name: 'rsc', childEnvironments: ['ssr'] },
