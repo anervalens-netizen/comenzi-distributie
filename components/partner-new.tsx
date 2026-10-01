@@ -4,11 +4,11 @@ import { Check, Download, LoaderCircle, Mail, Plus, RefreshCw, Store } from 'luc
 import { api, ApiError, dateLabel, errorMessage } from '@/lib/client-api';
 import { partnerPointKey } from '@/lib/partner-identity';
 import { readLocalWork, removeLocalWork, writeLocalWork } from '@/lib/local-work';
+import { bucharestReportingMonthKey } from '@/lib/bucharest-month';
 import type { PartnerLocation, PartnerMail, PartnerRequest, PartnerRequestRecord } from '@/lib/types';
 
 type PartnerResult = { partner: PartnerRequest; request: PartnerRequestRecord; mail: PartnerMail; eml: string };
-const monthFormatter=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Bucharest',year:'numeric',month:'2-digit'});
-const currentMonth=()=>monthFormatter.format(new Date());
+const currentMonth=()=>bucharestReportingMonthKey(new Date());
 const pointKey=(city:string,county:string,address:string)=>partnerPointKey(city,county,address);
 const formValues=(form:HTMLFormElement)=>Object.fromEntries([...new FormData(form)].map(([key,val])=>[key,typeof val==='string'?val:'']));
 const sameSubmission=(left:Record<string,string>,right:Record<string,string>)=>{const keys=new Set([...Object.keys(left),...Object.keys(right)]);for(const key of keys)if(key!=='revision'&&(left[key]||'')!==(right[key]||''))return false;return true;};

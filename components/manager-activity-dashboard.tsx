@@ -2,11 +2,12 @@
 import { useEffect, useState } from 'react';
 import { ArrowRight, ClipboardCheck, RefreshCw, Store, UserCheck } from 'lucide-react';
 import { api, errorMessage } from '@/lib/client-api';
+import { bucharestReportingMonthKey } from '@/lib/bucharest-month';
 import type { PartnerRequestRecord, TeamActivityView } from '@/lib/types';
 import { PartnerActivityDetail } from './partner-activity-detail';
 
 const monthFormatter=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Bucharest',year:'numeric',month:'2-digit'});
-const currentMonth=()=>monthFormatter.format(new Date());
+const currentMonth=()=>bucharestReportingMonthKey(new Date());
 
 export function ManagerActivityDashboard({focusRequestId,onRequestsChanged,canConfirm}:{focusRequestId?:string;onRequestsChanged?:()=>void;canConfirm?:(item:PartnerRequestRecord)=>boolean}) {
   const [month,setMonth]=useState(currentMonth),[view,setView]=useState<TeamActivityView|null>(null),[loading,setLoading]=useState(true),[error,setError]=useState(''),[reload,setReload]=useState(0),[detail,setDetail]=useState(false);

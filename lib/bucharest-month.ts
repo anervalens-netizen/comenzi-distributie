@@ -1,5 +1,6 @@
 const BUCHAREST_TIME_ZONE='Europe/Bucharest';
 const monthFormatter=new Intl.DateTimeFormat('en-CA',{timeZone:BUCHAREST_TIME_ZONE,year:'numeric',month:'2-digit'});
+const dateFormatter=new Intl.DateTimeFormat('en-CA',{timeZone:BUCHAREST_TIME_ZONE,year:'numeric',month:'2-digit',day:'2-digit'});
 const offsetFormatter=new Intl.DateTimeFormat('en-US',{timeZone:BUCHAREST_TIME_ZONE,timeZoneName:'longOffset',year:'numeric'});
 
 function offsetMinutes(at:Date) {
@@ -25,4 +26,18 @@ export function bucharestMonthUtcRange(month:string) {
 export function bucharestMonthKey(timestamp:string|Date) {
   const date=timestamp instanceof Date?timestamp:new Date(timestamp);
   return monthFormatter.format(date);
+}
+
+
+export function bucharestReportingMonthKey(timestamp:string|Date=new Date()) {
+  const date=timestamp instanceof Date?timestamp:new Date(timestamp);
+  const parts=dateFormatter.formatToParts(date);
+  const year=Number(parts.find(part=>part.type==='year')?.value);
+  const month=Number(parts.find(part=>part.type==='month')?.value);
+  const day=Number(parts.find(part=>part.type==='day')?.value);
+  if(!year||!month||!day)throw new Error('Data Europe/Bucharest este invalidă.');
+  if(day!==1)return `${year}-${String(month).padStart(2,'0')}`;
+  const previousMonth=month===1?12:month-1;
+  const previousYear=month===1?year-1:year;
+  return `${previousYear}-${String(previousMonth).padStart(2,'0')}`;
 }

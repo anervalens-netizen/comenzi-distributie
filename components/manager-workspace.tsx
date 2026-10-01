@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ArrowRight, ClipboardCheck, RefreshCw, Store, TrendingUp, Bell, Users, Boxes, ScanBarcode } from 'lucide-react';
 import { api, errorMessage, money } from '@/lib/client-api';
+import { bucharestReportingMonthKey } from '@/lib/bucharest-month';
 import type { PartnerRequestRecord, TeamActivityView, User } from '@/lib/types';
 import type { SalesView } from '@/lib/sales-types';
 import { PartnerActivityDetail } from './partner-activity-detail';
@@ -10,7 +11,7 @@ import './manager-workspace.css';
 
 export type ManagerDestination = 'partner' | 'sales' | 'stock' | 'inventory' | 'orders';
 type Activity = {activity: TeamActivityView; pending: number; confirmed: number; pendingByAgent: Record<string, number>; confirmedByAgent: Record<string, number>; finalizedOrders: number; finalizedNotices: number};
-export const managerCurrentMonth = () => new Intl.DateTimeFormat('en-CA', {timeZone:'Europe/Bucharest',year:'numeric',month:'2-digit'}).format(new Date());
+export const managerCurrentMonth = () => bucharestReportingMonthKey(new Date());
 function useActivity(query: string, month: string, reload: number) {
   const [data, setData] = useState<{key: string; value: Activity} | null>(null);
   const [error, setError] = useState<{key: string; text: string} | null>(null);

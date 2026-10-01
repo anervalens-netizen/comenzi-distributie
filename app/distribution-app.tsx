@@ -15,6 +15,7 @@ import { PushNotifications } from '@/components/push-notifications';
 import type { ManagerDestination } from '@/components/manager-workspace';
 import { ManagerScopeBar, useManagerScope } from '@/components/manager-scope';
 import { api, ApiError, dateLabel, errorMessage, normalize, kindLabels, orderDateKey, localDateKey, SESSION_EXPIRED_EVENT, startOfflineSync } from '@/lib/client-api';
+import { bucharestReportingMonthKey } from '@/lib/bucharest-month';
 import { enqueue, pendingOperations, readWork, OFFLINE_EVENT } from '@/lib/offline-work';
 import { readFinalizedOrderRecovery, readOrphanedOrderRecoveries, type OrderRecovery } from '@/lib/order-recovery';
 import type { User, Warehouse, Product, Order, Kind, Settings, OperationalMailSettings, ManagerMailSettings, ManagerRequestInbox } from '@/lib/types';
@@ -37,7 +38,7 @@ type Bootstrap={user:User|null;products?:Product[];warehouses?:Warehouse[];order
 type OrderRefresh={user:User;orders:Order[];weekKey:string};
 const defaultSettings:Settings={accessoriesEmail:'',standsEmail:'',simEmail:'',accessoriesCc:[],standsCc:[],simCc:[],partnerTo:[],partnerCc:[],weeklyLimit:2};
 const defaultManagerMail:ManagerMailSettings={accessories:'',stands:'',sim:'',partner:''};
-const managerCurrentMonth = () => new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Bucharest',year:'numeric',month:'2-digit'}).format(new Date());
+const managerCurrentMonth = () => bucharestReportingMonthKey(new Date());
 const freshnessDataset = (path:string) => path.split('?')[0];
 function Brand() {return <div className="brand"><Image unoptimized src="/mobiup-logo.webp" alt="Mobiup" width="200" height="58"/><span className="brand-label">DISTRIBUȚIE</span></div>;}
 function PasswordForm({onDone}:{onDone:()=>void}) {

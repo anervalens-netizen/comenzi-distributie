@@ -13,8 +13,7 @@ type InventoryDifference={delta:number;shortage:number;surplus:number;discrepant
 
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const monthPattern=/^\d{4}-(0[1-9]|1[0-2])$/;
-const monthFormatter=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Bucharest',year:'numeric',month:'2-digit'});
-export const currentPartnerMonth=()=>monthFormatter.format(new Date());
+export const currentPartnerMonth=()=>bucharestMonthKey(new Date());
 function monthValue(value:string|null){const month=value||currentPartnerMonth();if(!monthPattern.test(month))fail(400,'Luna este invalidă.');return month;}
 function customerFromRow(row:CustomerRow){return JSON.parse(row.data) as Client;}
 function location(row:CustomerRow):PartnerLocation{const client=customerFromRow(row);return {id:row.id,name:client.name,cui:client.cui,city:client.city,county:client.county,address:client.address,warehouseIds:client.warehouseIds||[row.warehouse_id]};}
