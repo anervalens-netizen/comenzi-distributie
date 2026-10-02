@@ -73,12 +73,12 @@ async function billingSelection<T extends {id:string;cui:string}>(partners:T[],p
   for(let i=0;i<partners.length;i++){const p=partners[i];if(billingPeriodMatches(snapshot.rows.get(p.id),period,snapshot.asOf))selected.push(p);if(i%128===0)await salesYield();}
   return selected;
 }
-export async function browsePartners(user:User,params:URLSearchParams):Promise<PartnerBrowse>{
-  const verify=params.get('salesPeriod')?await activityReadFence(user,params):undefined;
+export async function browsePartners(user:User,params:URLSearchParams,authenticatedUser:User=user):Promise<PartnerBrowse>{
+  const verify=params.get('salesPeriod')?await activityReadFence(user,params,authenticatedUser):undefined;
   const result=await browsePartnersRead(user,params);await verify?.();return result;
 }
-export async function mapPartners(user:User,params:URLSearchParams):Promise<PartnerMapData>{
-  const verify=params.get('salesPeriod')?await activityReadFence(user,params):undefined;
+export async function mapPartners(user:User,params:URLSearchParams,authenticatedUser:User=user):Promise<PartnerMapData>{
+  const verify=params.get('salesPeriod')?await activityReadFence(user,params,authenticatedUser):undefined;
   const result=await mapPartnersRead(user,params);await verify?.();return result;
 }
 /** Live scoped IDs on every request, in bounded batches; never cache membership. */

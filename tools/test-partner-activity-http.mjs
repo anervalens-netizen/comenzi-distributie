@@ -9,7 +9,7 @@ import {build} from 'esbuild';
 const root=resolve('work/qa'),historyDir=join(root,'client-history'),temp=mkdtempSync(join(tmpdir(),'activity-http-'));
 if(existsSync(historyDir))throw new Error('Test requires absent isolated history fixture.');
 const app=new DatabaseSync(join(root,'mobiup.sqlite')),sessions={};
-for(const id of ['qa-agent1','qa-agent2','qa-manager']){
+for(const id of ['qa-agent1','qa-agent2','qa-regional','qa-manager']){
  const token=randomUUID();sessions[id]='mobiup_session='+token;
  app.prepare('INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,?,?)').run(createHash('sha256').update(token).digest('hex'),id,Date.now()+3600000);
 }
@@ -38,6 +38,7 @@ try{
  const first=await call('qa-agent1');assert.equal(first.state,'ready');assert.equal(first.total,2);assert(!JSON.stringify(first).includes('activity-other'));
  const second=await call('qa-agent2');assert.equal(second.total,2);assert(second.partners.some(p=>p.partner.id==='activity-shared'));
  const manager=await call('qa-manager');assert.equal(manager.total,3);assert.equal(manager.counts.all,3,'national records not summed across shared agents');
+ const regional=await call('qa-regional');assert.equal(regional.total,3,'assigned manager is promoted to national read scope without failing the authenticated-scope fence');
  assert.deepEqual(manager.partners.map(r=>r.partner.id),['activity-other','activity-shared','activity-one'],'sales ranked across complete selection');
  assert.equal(manager.partners[0].metrics.valueCents,90000);assert.equal(manager.partners[0].metrics.documents,1);assert.equal(manager.partners[0].metrics.lastBilling,'2026-09-15');
  assert.deepEqual(manager.partners.find(r=>r.partner.id==='activity-shared').agents.map(a=>a.id).sort(),app.prepare("SELECT id FROM users WHERE role='agent' AND active=1 AND warehouse_id IN ('g-5','g-3')").all().map(a=>a.id).sort(),'all shared current owners shown');
@@ -56,8 +57,8 @@ try{
  edit.close();buildActivitySnapshot(root);
  const fingerprint=createHash('sha256').update(JSON.stringify(['Synthetic address','Test','Test'])).digest('hex');
  for(const id of ['activity-one','activity-shared','activity-other','activity-old','activity-unlinked'])app.prepare("INSERT INTO partner_profiles(customer_id,latitude,longitude,position_source,address_fingerprint,revision,updated_at) VALUES(?,44.4,26.1,'manual',?,1,'2026-09-30T00:00:00Z')").run(id,fingerprint);
- async function idsFor(path,period){
-   const r=await fetch('http://127.0.0.1:3000/api/partner/'+path+'?q=activity-&salesPeriod='+encodeURIComponent(period),{headers:{Cookie:sessions['qa-agent1']}});
+ async function idsFor(path,period,user='qa-agent1'){
+   const r=await fetch('http://127.0.0.1:3000/api/partner/'+path+'?q=activity-&salesPeriod='+encodeURIComponent(period),{headers:{Cookie:sessions[user]}});
    const data=await r.json();assert.equal(r.status,200,JSON.stringify(data));
    return (path==='map'?data.features.map(f=>f.id):data.partners.map(p=>p.id)).sort();
  }
@@ -66,6 +67,8 @@ try{
  for(const [period,expected] of [['year:2026',['activity-one','activity-shared']],['year:2023',['activity-old']],['unknown',['activity-unlinked']],['older365',['activity-old']]]){
    assert.deepEqual(await idsFor('browse',period),expected);assert.deepEqual(await idsFor('map',period),expected);
  }
+ const regional2026=['activity-one','activity-other','activity-shared'];
+ assert.deepEqual(await idsFor('browse','year:2026','qa-regional'),regional2026);assert.deepEqual(await idsFor('map','year:2026','qa-regional'),regional2026);
  const ranked=await call('qa-agent1','sort=value&direction=asc');
  assert.equal(ranked.partners.at(-1).partner.id,'activity-unlinked','unknown sales stay last in either direction');
  const oldYear=await call('qa-agent1','salesPeriod=year:2023');assert.equal(oldYear.partners[0].metrics.valueCents,15000);assert.equal(oldYear.partners[0].metrics.documents,1);

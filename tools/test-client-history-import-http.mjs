@@ -80,6 +80,10 @@ for name,records in [('daily',[row(Data='01.02.2024')]),('cumulative',[row(Data=
  const empty=await commit(ready,true);assert.equal(empty.result.rows,0);assert.equal(empty.result.valueCents,0);assert.equal(facts().length,1);
  assert.equal(c.prepare("SELECT COUNT(*) n FROM history_current WHERE date LIKE '2024-02-%'").get().n,0);
  assert.equal(c.prepare("SELECT row_count FROM history_imports WHERE state='active' AND period_start='2024-02-01'").get().row_count,0);
+ const emptyReportResponse=await fetch(origin+'/api/sales/clients?month=2024-02&q='+encodeURIComponent('Client sintetic import'),{headers:{Cookie:sessions['qa-manager']}});
+ const emptyReport=await emptyReportResponse.json();assert.equal(emptyReportResponse.status,200,JSON.stringify(emptyReport));assert.equal(emptyReport.state,'ready');
+ assert.equal(emptyReport.window.imported,true);assert.equal(emptyReport.window.covered,true);assert.equal(emptyReport.window.complete,true);assert.equal(emptyReport.source.observedEnd,'2024-02-29');
+ assert.equal(emptyReport.total,1);assert.equal(emptyReport.totals.valueCents,0);assert.equal(emptyReport.totals.billed,0);assert.equal(emptyReport.totals.documents,0);assert.equal(emptyReport.rows[0].metrics.valueCents,0);assert.equal(emptyReport.rows[0].metrics.documents,0);
  assert(existsSync(join(history,'client-sales-originals',empty.result.fileHash+'.xlsx')));
  for(let n=0;n<50&&existsSync(join(history,'import-jobs',ready.id,'input.xlsx'));n++)await sleep(20);
  assert(!existsSync(join(history,'import-jobs',ready.id,'input.xlsx')),'Terminal staging is cleaned after archiving/rebuild');

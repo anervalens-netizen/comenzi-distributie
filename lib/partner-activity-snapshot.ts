@@ -135,7 +135,7 @@ export function buildActivitySnapshot(directory:string,today=bucharestToday(),ou
     // Import-level coverage is national, never inferred from an agent's last sale.
     // A declared month end cannot extend observation past the actual export.
     const hasImportedAt=c.prepare('PRAGMA table_info(history_imports)').all().some(row=>row.name==='imported_at');
-    const coverage=c.prepare(`SELECT b.period_start start,b.period_end declaredEnd,MAX(r.date) observedEnd,${hasImportedAt?'b.imported_at':'NULL'} importedAt FROM history_imports b LEFT JOIN history_rows r ON r.import_id=b.id WHERE b.state='active' GROUP BY b.id ORDER BY b.period_start`).all();
+    const coverage=c.prepare(`SELECT b.period_start start,b.period_end declaredEnd,CASE WHEN b.row_count=0 THEN b.period_end ELSE MAX(r.date) END observedEnd,${hasImportedAt?'b.imported_at':'NULL'} importedAt FROM history_imports b LEFT JOIN history_rows r ON r.import_id=b.id WHERE b.state='active' GROUP BY b.id ORDER BY b.period_start`).all();
     out.exec('CREATE TABLE company_identity(company_id TEXT PRIMARY KEY,complete INTEGER NOT NULL)');
     const identityInsert=out.prepare('INSERT INTO company_identity VALUES(?,?)');
     for(const key of companyIndex.known)identityInsert.run(key,Number(!companyIndex.incomplete.has(key)));

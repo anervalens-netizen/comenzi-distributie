@@ -15,15 +15,17 @@ export type ActivityFilter=typeof activityFilters[number];
 const normalize=(s:string)=>s.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
 export type PartnerActivityOverview=Awaited<ReturnType<typeof partnerActivityOverview>>;
 /** Request-local fence; neither membership nor authorization is retained between calls. */
-export async function activityReadFence(user:User,params:URLSearchParams){
+export async function activityReadFence(readUser:User,params:URLSearchParams,authenticatedUser:User=readUser){
   const directory=process.env.MOBIUP_DATA_DIR||'./work/server-data',source=fileGeneration(directory);
   const access=async()=>{
-    const current=await db().prepare('SELECT role,warehouse_id,manager_scope,active FROM users WHERE id=?').bind(user.id).first<{role:string;warehouse_id:string|null;manager_scope:string|null;active:number}>();
-    if(!current?.active||current.role!==user.role||(current.warehouse_id||'')!==(user.warehouseId||'')||(current.role==='manager'&&current.manager_scope==='global'?'global':'assigned')!==user.managerScope)fail(403,'Permisiunile s-au modificat. Reîncearcă.');
+    const current=await db().prepare('SELECT role,warehouse_id,manager_scope,active FROM users WHERE id=?').bind(authenticatedUser.id).first<{role:string;warehouse_id:string|null;manager_scope:string|null;active:number}>();
+    const persistedScope=current?.role==='manager'&&current.manager_scope==='global'?'global':'assigned';
+    if(!current?.active||current.role!==authenticatedUser.role||(current.warehouse_id||'')!==(authenticatedUser.warehouseId||'')||persistedScope!==authenticatedUser.managerScope)fail(403,'Permisiunile s-au modificat. Reîncearcă.');
     const version=await clientPortfolioVersion();
     if(version!==null)return JSON.stringify([version,current]);
-    // Legacy adapters have no revision hook. Re-read their live scoped portfolio.
-    const scope=await managerFilter(user,params),partners=await portfolioSummary(user,undefined,scope?.warehouseIds),hash=createHash('sha256');
+    // Legacy adapters have no revision hook. Re-read the actual READ scope while
+    // authenticating against the unpromoted account identity.
+    const scope=await managerFilter(readUser,params),partners=await portfolioSummary(readUser,undefined,scope?.warehouseIds),hash=createHash('sha256');
     for(let i=0;i<partners.length;i++){hash.update(JSON.stringify(partners[i]));if(i%128===0)await salesYield();}
     return JSON.stringify([current,scope,hash.digest('hex')]);
   };
@@ -33,8 +35,8 @@ export async function activityReadFence(user:User,params:URLSearchParams){
     if(source!==fileGeneration(directory))fail(409,'Istoricul s-a modificat. Reîncearcă.');
   };
 }
-export async function partnerActivityOverview(user:User,params:URLSearchParams){
-  const verify=await activityReadFence(user,params);
+export async function partnerActivityOverview(user:User,params:URLSearchParams,authenticatedUser:User=user){
+  const verify=await activityReadFence(user,params,authenticatedUser);
   const result=await activityOverview(user,params);
   await verify();return result;
 }

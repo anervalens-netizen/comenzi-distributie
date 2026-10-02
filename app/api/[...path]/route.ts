@@ -220,9 +220,9 @@ async function dispatch(req: Request) {
   if(path.join('/')==='notifications/push'&&req.method==='DELETE')return response(await removePushSubscription(user,await jsonBody(req)));
   if(path.join('/')==='partner/planning'&&req.method==='GET')return response(await visitWeek(user,new URL(req.url).searchParams.get('week')||''));
   if(path.join('/')==='partner/planning'&&req.method==='PUT')return response(await saveDayPlan(user,await jsonBody(req)));
-  if(path.join('/')==='partner/activity'&&req.method==='GET')return response(await partnerActivityOverview(readUser,new URL(req.url).searchParams));
-  if(path.join('/')==='partner/browse'&&req.method==='GET')return response(await browsePartners(readUser,new URL(req.url).searchParams));
-  if(path.join('/')==='partner/map'&&req.method==='GET')return response(await mapPartners(readUser,new URL(req.url).searchParams));
+  if(path.join('/')==='partner/activity'&&req.method==='GET')return response(await partnerActivityOverview(readUser,new URL(req.url).searchParams,user));
+  if(path.join('/')==='partner/browse'&&req.method==='GET')return response(await browsePartners(readUser,new URL(req.url).searchParams,user));
+  if(path.join('/')==='partner/map'&&req.method==='GET')return response(await mapPartners(readUser,new URL(req.url).searchParams,user));
   if(path.join('/')==='partner/summary'&&req.method==='GET')return response({partners:await portfolioSummary(readUser)});
   if(path[0]==='partner'&&path[1]==='portfolio'&&path[2]&&path[3]==='sales'&&!path[4]&&req.method==='GET') {
     const version=await clientPortfolioVersion();
