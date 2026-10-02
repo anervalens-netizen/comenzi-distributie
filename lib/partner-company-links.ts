@@ -1,5 +1,5 @@
-import type {DatabaseSync} from 'node:sqlite';
-import {statSync} from 'node:fs';
+import {DatabaseSync} from 'node:sqlite';
+import {historyFileGeneration} from './history-source-generation';
 import {normalizedCui,companyIdentityIndex,type CompanyAlias} from './partner-company-identity';
 
 type ReferencePartner={id:string;cui?:string;historyFranchises?:string[];historyCatalog?:{franchiseCode?:string}};
@@ -54,16 +54,28 @@ function buildCompanyLinks(c:DatabaseSync,reference:string){
 
 // One immutable reference index, never cached authorization or mutable catalog membership.
 // Both file identity and WAL generation participate; same-reference corrections invalidate it.
-type CompanyLinks=ReturnType<typeof buildCompanyLinks>;
+export type CompanyLinks=ReturnType<typeof buildCompanyLinks>;
 let lastIndex:{key:string;value:CompanyLinks}|undefined;
 export const companyLinkCacheStats={hits:0,builds:0};
+const openedGenerations=new WeakMap<DatabaseSync,string>();
+/** Own the entire preopen -> open -> pinned read -> validation sequence. Unknown
+ * caller connections (including transactions opened before a replacement) never cache. */
+export function openCompanyLinkSource(file:string){
+  const before=historyFileGeneration(file),c=new DatabaseSync(file,{readOnly:true});
+  try {
+    c.exec('BEGIN');
+    c.prepare('SELECT name FROM sqlite_master LIMIT 1').get();
+    if(before&&before===historyFileGeneration(file))openedGenerations.set(c,before);
+    return c;
+  } catch(error){c.close();throw error;}
+}
 export function companyLinkGeneration(c:DatabaseSync):string|null{
   const file=String(c.prepare('PRAGMA database_list').all().find(row=>row.name==='main')?.file||'');
-  if(!file)return null;
-  try{return file+'|'+['','-wal'].map(suffix=>{try{const s=statSync(file+suffix,{bigint:true});return [s.dev,s.ino,s.size,s.mtimeNs,s.ctimeNs].join(':');}catch{if(!suffix)throw new Error('Source unavailable');return '-';}}).join('|');}catch{return null;}
+  return file?historyFileGeneration(file):null;
 }
-export function historyCompanyLinks(c:DatabaseSync,reference:string,expectedGeneration=companyLinkGeneration(c)):CompanyLinks{
-  const generation=companyLinkGeneration(c),key=expectedGeneration&&generation===expectedGeneration?generation+'|'+reference:null;
+export function historyCompanyLinks(c:DatabaseSync,reference:string,expectedGeneration?:string|null):CompanyLinks{
+  const proven=openedGenerations.get(c),generation=companyLinkGeneration(c);
+  const key=proven&&generation===proven&&(expectedGeneration===undefined||expectedGeneration===proven)?proven+'|'+reference:null;
   if(key&&lastIndex?.key===key){companyLinkCacheStats.hits++;return lastIndex.value;}
   companyLinkCacheStats.builds++;const result=buildCompanyLinks(c,reference);
   if(key&&generation===companyLinkGeneration(c)&&Object.keys(result.links).length<=200000)lastIndex={key,value:result};

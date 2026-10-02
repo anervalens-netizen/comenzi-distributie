@@ -6,7 +6,9 @@ import {partnerActivity,type PartnerActivity} from './partner-sales-health';
 import {normalizedCui,type CompanyAlias} from './partner-company-identity';
 export {normalizedCui} from './partner-company-identity';
 import {historyCompanyLinks} from './partner-company-links';
-export const activityVersion='6';
+import {historyFileGeneration} from './history-source-generation';
+import {buildDetailLinks} from './partner-detail-snapshot';
+export const activityVersion='7';
 export const bucharestToday=(now=new Date())=>new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Bucharest',year:'numeric',month:'2-digit',day:'2-digit'}).format(now);
 function completeHistoryStamp(c:DatabaseSync,reference:string,referenceDigest:string){
   const imports=c.prepare("SELECT id,sha256,period_start,period_end,row_count FROM history_imports WHERE state='active' ORDER BY period_start,id").all() as {id:number;sha256:string;period_start:string;period_end:string;row_count:number}[];
@@ -48,6 +50,7 @@ export type ActivitySnapshot=ReturnType<typeof readActivitySnapshot>;
 /** Batch rebuild outside the HTTP process. Source history and application DBs are read-only. */
 export function buildActivitySnapshot(directory:string,today=bucharestToday()) {
   const history=resolve(directory,'client-history','client-sales-history.sqlite'),target=resolve(directory,'client-history','partner-activity.sqlite');
+  const sourceGeneration=historyFileGeneration(history);
   const temp=target+'.tmp-'+randomUUID(),c=new DatabaseSync(history,{readOnly:true}),catalog=new DatabaseSync(resolve(directory,'mobiup.sqlite'),{readOnly:true});
   let out:DatabaseSync|undefined;
   try {
@@ -134,7 +137,9 @@ export function buildActivitySnapshot(directory:string,today=bucharestToday()) {
     out.exec('CREATE TABLE company_unresolved(identity_id INTEGER PRIMARY KEY,companies_json TEXT NOT NULL,reason TEXT NOT NULL)');
     const unresolvedInsert=out.prepare('INSERT INTO company_unresolved VALUES(?,?,?)');
     for(const row of companyIndex.unresolved)unresolvedInsert.run(row.identityId,JSON.stringify(row.companies),row.reason);
-    const metadata={...stamp,version:activityVersion,builtAt:new Date().toISOString(),asOf,recentStart,previousStart,rows:count,companies:companyIndex.known.size,unresolvedCompanyIdentities:companyIndex.unresolved.length,coverage};
+    buildDetailLinks(c,out,stamp.reference,companyIndex);
+    if(!sourceGeneration||sourceGeneration!==historyFileGeneration(history))throw new Error('History source changed during snapshot build');
+    const metadata={...stamp,sourceGeneration,version:activityVersion,builtAt:new Date().toISOString(),asOf,recentStart,previousStart,rows:count,companies:companyIndex.known.size,unresolvedCompanyIdentities:companyIndex.unresolved.length,coverage};
     out.prepare("INSERT INTO meta VALUES('snapshot',?)").run(JSON.stringify(metadata));out.exec('COMMIT');
     if(out.prepare('PRAGMA quick_check').get()?.quick_check!=='ok')throw new Error('Snapshot integrity failed');
     out.close();out=undefined;renameSync(temp,target);

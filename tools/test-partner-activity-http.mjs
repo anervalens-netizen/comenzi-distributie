@@ -79,6 +79,8 @@ try{
    const r=await fetch('http://127.0.0.1:3000/api/partner/portfolio/activity-company/sales',{headers:{Cookie:sessions[user]}});
    const data=await r.json();assert.equal(r.status,status,JSON.stringify(data));return data;
  }
+ assert.equal((await companySales('qa-agent1',200)).state,'unavailable','changed raw identities require a fresh derived snapshot');
+ buildActivitySnapshot(root);
  const own=await companySales('qa-agent1',200);assert.equal(own.state,'ready');assert.equal(own.scope,'company');assert.equal(own.totals.valueCents,12300);assert.equal(own.sellers[0].seller,'Former seller');
  await companySales('qa-agent2',404);
  const defaultRequest=await fetch('http://127.0.0.1:3000/api/partner/portfolio/activity-one/sales',{headers:{Cookie:sessions['qa-agent1']}});

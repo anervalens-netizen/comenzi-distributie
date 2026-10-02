@@ -1,6 +1,7 @@
 import {clientSalesOverview} from '@/lib/client-sales-api';
 import {partnerActivityOverview} from '@/lib/partner-activity-api';
-import { readPartnerSales, PartnerSalesInputError } from '@/lib/partner-sales-store';
+import { readPartnerSalesAsync, PartnerSalesInputError } from '@/lib/partner-sales-store';
+import { clientPortfolioVersion } from '@/lib/client-sales-portfolio';
 import { visitWeek, saveDayPlan } from '@/lib/partner-planning';
 import { portfolio, portfolioSummary, partnerDetail, updatePartner, recordVisit } from '@/lib/partner-portfolio';
 import { browsePartners, mapPartners } from '@/lib/partner-map-api';
@@ -223,8 +224,16 @@ async function dispatch(req: Request) {
   if(path.join('/')==='partner/map'&&req.method==='GET')return response(await mapPartners(readUser,new URL(req.url).searchParams));
   if(path.join('/')==='partner/summary'&&req.method==='GET')return response({partners:await portfolioSummary(readUser)});
   if(path[0]==='partner'&&path[1]==='portfolio'&&path[2]&&path[3]==='sales'&&!path[4]&&req.method==='GET') {
+    const version=await clientPortfolioVersion();
     const detail=await partnerDetail(readUser,path[2],null,user);
-    try { return response(readPartnerSales(path[2],detail.partner.cui,new URL(req.url).searchParams)); }
+    try {
+      const result=await readPartnerSalesAsync(path[2],detail.partner.cui,new URL(req.url).searchParams);
+      // Cooperative source reads yield: recheck the session and current card scope.
+      const currentUser=await requireUser(req);
+      const current=await partnerDetail(nationalReadScope(currentUser),path[2],null,currentUser);
+      if(current.partner.cui!==detail.partner.cui||version!==await clientPortfolioVersion())fail(503,'Portofoliul s-a actualizat. Reîncearcă fișa.');
+      return response(result);
+    }
     catch(error) { if(error instanceof PartnerSalesInputError) fail(400,error.message); throw error; }
   }
   if(path[0]==='partner'&&path[1]==='portfolio') {

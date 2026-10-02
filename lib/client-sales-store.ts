@@ -1,12 +1,15 @@
 import {DatabaseSync} from 'node:sqlite';
-import {existsSync,statSync} from 'node:fs';
+import {existsSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 import {salesYield} from './client-sales-cooperative';
 import {resolve} from 'node:path';
-import {activityVersion,bucharestToday,historyStamp,historyStampSteps} from './partner-activity-snapshot';
+import {activityVersion,bucharestToday,historyStamp} from './partner-activity-snapshot';
 import {normalizedCui} from './partner-company-identity';
 import type {PartnerSummary} from './partner-map-types';
 import type {ClientHealth,ClientMetrics,ClientSalesRow,MonthWindow,SourceCoverage} from './client-sales-types';
+
+import {cooperativeStamp,fileGeneration,clientSalesCacheStats} from './history-source-stamp';
+export {clientSalesCacheStats} from './history-source-stamp';
 
 const DAY=86400000;
 export const daysBetween=(a:string,b:string)=>Math.floor((Date.parse(b)-Date.parse(a))/DAY);
@@ -113,35 +116,6 @@ type Report=ReturnType<typeof readClientSales>;
 const reports=new Map<string,{report:Report;bytes:number}>(),flights=new Map<string,Promise<Report>>();
 const MAX_BYTES=64*1024*1024;
 let cacheBytes=0;
-export const clientSalesCacheStats={hits:0,builds:0,bytes:0,stampBuilds:0};
-function fileGeneration(directory:string){
-  return ['client-sales-history.sqlite','partner-activity.sqlite'].flatMap(name=>['','-wal'].map(suffix=>{
-    try{const s=statSync(resolve(directory,'client-history',name+suffix),{bigint:true});return [s.dev,s.ino,s.size,s.mtimeNs,s.ctimeNs].join(':');}catch{return 'missing';}
-  })).join('|');
-}
-type Stamp=ReturnType<typeof historyStamp>;
-let lastStamp:{key:string;value:Stamp}|undefined;
-const stampFlights=new Map<string,Promise<Stamp>>();
-async function cooperativeStamp(directory:string,generation:string):Promise<Stamp>{
-  const key=directory+'|'+generation;
-  if(lastStamp?.key===key)return lastStamp.value;
-  let flight=stampFlights.get(key);
-  if(!flight){
-    flight=(async()=>{
-      clientSalesCacheStats.stampBuilds++;
-      const c=new DatabaseSync(resolve(directory,'client-history','client-sales-history.sqlite'),{readOnly:true});
-      const steps=historyStampSteps(c);
-      try{
-        c.exec('BEGIN');let step;
-        do{step=steps.next();if(!step.done)await salesYield();}while(!step.done);
-        if(generation===fileGeneration(directory))lastStamp={key,value:step.value};
-        return step.value;
-      }finally{steps.return(undefined as never);c.close();}
-    })().finally(()=>{stampFlights.delete(key);});
-    stampFlights.set(key,flight);
-  }
-  return flight;
-}
 async function copyReport(report:Report,selection?:ReadonlySet<string>):Promise<Report>{
   if(report.state!=='ready')return {...report};
   const rows:ClientSalesRow[]=[],comparisonMetrics=new Map<string,ClientMetrics[]>();
