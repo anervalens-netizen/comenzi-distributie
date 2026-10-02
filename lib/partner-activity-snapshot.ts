@@ -8,14 +8,34 @@ export {normalizedCui} from './partner-company-identity';
 import {historyCompanyLinks} from './partner-company-links';
 export const activityVersion='6';
 export const bucharestToday=(now=new Date())=>new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Bucharest',year:'numeric',month:'2-digit',day:'2-digit'}).format(now);
-export function historyStamp(c:DatabaseSync) {
-  const reference=String(c.prepare("SELECT value FROM history_meta WHERE key='current_reference'").get()?.value||'');
-  const referenceContent=c.prepare('SELECT * FROM history_references WHERE id=?').get(reference);
-  const referenceDigest=createHash('sha256').update(String(referenceContent?.master_json||'')).update(String(referenceContent?.partners_json||'')).digest('hex');
+function completeHistoryStamp(c:DatabaseSync,reference:string,referenceDigest:string){
   const imports=c.prepare("SELECT id,sha256,period_start,period_end,row_count FROM history_imports WHERE state='active' ORDER BY period_start,id").all() as {id:number;sha256:string;period_start:string;period_end:string;row_count:number}[];
   let through='',complete=true;
   for(const row of imports){if(through&&Date.parse(row.period_start)-Date.parse(through)>86400000)complete=false;if(row.period_end>through)through=row.period_end;}
   return {reference,through,start:imports[0]?.period_start||'',complete,signature:createHash('sha256').update(JSON.stringify([activityVersion,reference,referenceDigest,imports])).digest('hex')};
+}
+export function historyStamp(c:DatabaseSync) {
+  const reference=String(c.prepare("SELECT value FROM history_meta WHERE key='current_reference'").get()?.value||'');
+  const referenceContent=c.prepare('SELECT * FROM history_references WHERE id=?').get(reference);
+  const referenceDigest=createHash('sha256').update(String(referenceContent?.master_json||'')).update(String(referenceContent?.partners_json||'')).digest('hex');
+  return completeHistoryStamp(c,reference,referenceDigest);
+}
+/** The same fingerprint without one reference-sized JS string/allocation. Yielding
+ * between bounded UTF-8 byte chunks keeps unrelated HTTP work responsive. */
+export function* historyStampSteps(c:DatabaseSync){
+  const reference=String(c.prepare("SELECT value FROM history_meta WHERE key='current_reference'").get()?.value||''),hash=createHash('sha256'),size=1024*1024;
+  const columns=new Set(c.prepare('PRAGMA table_info(history_references)').all().map(row=>String(row.name)));
+  for(const column of ['master_json','partners_json']){
+    if(!columns.has(column))continue;
+    const read=c.prepare(`SELECT substr(CAST(COALESCE(${column},'') AS BLOB),?,?) chunk FROM history_references WHERE id=?`);
+    for(let offset=1;;offset+=size){
+      const chunk=read.get(offset,size,reference)?.chunk as Uint8Array|undefined;
+      if(chunk)hash.update(chunk);
+      yield;
+      if(!chunk||chunk.length<size)break;
+    }
+  }
+  return completeHistoryStamp(c,reference,hash.digest('hex'));
 }
 export type ActivitySnapshotRow={id:string;cui:string;activity:PartnerActivity;billingYears:string[];recentCents:number;previousCents:number;missingValues:number;coverageComplete:boolean;scope?:'point'|'company';movementYears?:string[];lastMovement?:string};
 export type PartnerPeriodMetrics={valueCents:number|null;documents:number;lastBilling:string|null;missingValues:number};

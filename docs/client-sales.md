@@ -40,7 +40,7 @@ sort values remain last in either direction.
 
 The Node HTTP reader yields between bounded batches during cold calculation, current
 portfolio reads, copies and sorting. A process-local LRU holds at most four billing
-reports within a 48 MiB estimated allocation budget, plus at most 24 MiB of decoded
+reports within a 64 MiB estimated allocation budget, plus at most 24 MiB of decoded
 current card summaries. Identical in-flight billing calculations coalesce; failures
 are removed and at most four different calculations can run concurrently. File
 identity, nanosecond timestamps (including WAL), schema, calendar day, selected month
@@ -78,3 +78,5 @@ facts, an ephemeral loopback HTTP listener, and four simultaneous cold/warm quer
 It checks equivalence, single-flight behavior, a bounded cache and repeated light
 HTTP completions during reporting. Printed timings are measurements, not portable
 latency guarantees or evidence of production acceptance.
+
+The source fingerprint is computed in bounded UTF-8 byte chunks for HTTP cold reads and shared between concurrent months for the same filesystem generation. It remains identical to the batch fingerprint. Warm reports must demonstrate cache admission in tests, including wide synthetic company labels.

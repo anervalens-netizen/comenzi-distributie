@@ -3,7 +3,7 @@ import {existsSync,statSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 import {salesYield} from './client-sales-cooperative';
 import {resolve} from 'node:path';
-import {activityVersion,bucharestToday,historyStamp} from './partner-activity-snapshot';
+import {activityVersion,bucharestToday,historyStamp,historyStampSteps} from './partner-activity-snapshot';
 import {normalizedCui} from './partner-company-identity';
 import type {PartnerSummary} from './partner-map-types';
 import type {ClientHealth,ClientMetrics,ClientSalesRow,MonthWindow,SourceCoverage} from './client-sales-types';
@@ -55,7 +55,7 @@ function health(days:Daily[],cutoff:string|null,linked:boolean,identityComplete:
 }
 /** Only current authorized cards enter this reader. Source DBs are never writable.
  * All raw-history scans happen in the batch builder, not in HTTP requests. */
-function* calculateClientSales(partners:PartnerSummary[],month:string,directory=process.env.MOBIUP_DATA_DIR||'./work/server-data',today=bucharestToday()){
+function* calculateClientSales(partners:PartnerSummary[],month:string,directory=process.env.MOBIUP_DATA_DIR||'./work/server-data',today=bucharestToday(),knownStamp?:ReturnType<typeof historyStamp>){
   yield;
   let work=0;
   const base=resolve(directory,'client-history'),source=resolve(base,'client-sales-history.sqlite'),path=resolve(base,'partner-activity.sqlite');
@@ -66,7 +66,7 @@ function* calculateClientSales(partners:PartnerSummary[],month:string,directory=
     s=new DatabaseSync(path,{readOnly:true});
     c.exec('BEGIN');s.exec('BEGIN');
     if(Number(s.prepare("SELECT COUNT(*) n FROM sqlite_master WHERE type='table' AND name IN ('meta','company_identity','company_daily')").get()?.n)!==3)return unavailable;
-    const stamp=historyStamp(c),meta=JSON.parse(String(s.prepare("SELECT value FROM meta WHERE key='snapshot'").get()?.value||'null')) as {version:string;signature:string;builtAt:string;coverage:SourceCoverage[]}|null;
+    const stamp=knownStamp??historyStamp(c),meta=JSON.parse(String(s.prepare("SELECT value FROM meta WHERE key='snapshot'").get()?.value||'null')) as {version:string;signature:string;builtAt:string;coverage:SourceCoverage[]}|null;
     if(!meta||meta.version!==activityVersion||meta.signature!==stamp.signature||!meta.coverage)return unavailable;
     const intervals=coverageIntervals(meta.coverage,today),window=monthlyWindow(month,intervals);
     const effectiveCutoff=intervals.map(p=>p.to).sort().at(-1)||null;
@@ -111,13 +111,36 @@ type Report=ReturnType<typeof readClientSales>;
 // Only billing is cached. Current portfolio, actors and visits are read on every request.
 // Entries are private; every caller receives independently mutable records.
 const reports=new Map<string,{report:Report;bytes:number}>(),flights=new Map<string,Promise<Report>>();
-const MAX_BYTES=48*1024*1024;
+const MAX_BYTES=64*1024*1024;
 let cacheBytes=0;
-export const clientSalesCacheStats={hits:0,builds:0,bytes:0};
+export const clientSalesCacheStats={hits:0,builds:0,bytes:0,stampBuilds:0};
 function fileGeneration(directory:string){
   return ['client-sales-history.sqlite','partner-activity.sqlite'].flatMap(name=>['','-wal'].map(suffix=>{
     try{const s=statSync(resolve(directory,'client-history',name+suffix),{bigint:true});return [s.dev,s.ino,s.size,s.mtimeNs,s.ctimeNs].join(':');}catch{return 'missing';}
   })).join('|');
+}
+type Stamp=ReturnType<typeof historyStamp>;
+let lastStamp:{key:string;value:Stamp}|undefined;
+const stampFlights=new Map<string,Promise<Stamp>>();
+async function cooperativeStamp(directory:string,generation:string):Promise<Stamp>{
+  const key=directory+'|'+generation;
+  if(lastStamp?.key===key)return lastStamp.value;
+  let flight=stampFlights.get(key);
+  if(!flight){
+    flight=(async()=>{
+      clientSalesCacheStats.stampBuilds++;
+      const c=new DatabaseSync(resolve(directory,'client-history','client-sales-history.sqlite'),{readOnly:true});
+      const steps=historyStampSteps(c);
+      try{
+        c.exec('BEGIN');let step;
+        do{step=steps.next();if(!step.done)await salesYield();}while(!step.done);
+        if(generation===fileGeneration(directory))lastStamp={key,value:step.value};
+        return step.value;
+      }finally{steps.return(undefined as never);c.close();}
+    })().finally(()=>{stampFlights.delete(key);});
+    stampFlights.set(key,flight);
+  }
+  return flight;
 }
 async function copyReport(report:Report,selection?:ReadonlySet<string>):Promise<Report>{
   if(report.state!=='ready')return {...report};
@@ -152,7 +175,9 @@ export async function readClientSalesAsync(partners:PartnerSummary[],month:strin
     if(flights.size>=4)throw new Error('Prea multe rapoarte în calcul. Reîncearcă.');
     flight=(async()=>{
       clientSalesCacheStats.builds++;
-      const calculation=calculateClientSales(partners,month,directory,today);
+      const hasSource=existsSync(resolve(directory,'client-history','client-sales-history.sqlite'))&&existsSync(resolve(directory,'client-history','partner-activity.sqlite'));
+      const stamp=hasSource?await cooperativeStamp(directory,generation):undefined;
+      const calculation=calculateClientSales(partners,month,directory,today,stamp);
       let step;
       try{do{step=calculation.next();if(!step.done)await salesYield();}while(!step.done);}finally{calculation.return(undefined as never);}
       const report=step.value;

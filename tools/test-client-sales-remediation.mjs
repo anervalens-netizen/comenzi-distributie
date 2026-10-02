@@ -9,11 +9,12 @@ const get=(result,id)=>result.rows.find(r=>r.id===id);
 try{
  const c=new DatabaseSync(history);
  c.exec("ALTER TABLE history_references ADD COLUMN partners_json TEXT; ALTER TABLE history_allocations ADD COLUMN reason TEXT NOT NULL DEFAULT ''; ALTER TABLE history_identities ADD COLUMN franchise_code TEXT NOT NULL DEFAULT '';");
- c.prepare('UPDATE history_references SET partners_json=?').run(JSON.stringify({partners,historySourceIdentities:[{client_code:'400',franchise_code:'wrong-franchise'}]}));
+ c.prepare('UPDATE history_references SET partners_json=?').run(JSON.stringify({partners,historySourceIdentities:[{client_code:'400',franchise_code:'wrong-franchise'}],syntheticComment:'ș😀'.repeat(250000)}));
  c.exec(`INSERT INTO history_identities VALUES(20000,'400','wrong-franchise'),(20001,'100',''),(20002,'77777','');
  INSERT INTO history_allocations VALUES(20000,'ref','reconcile','[]','["monthly-repeat"]','Franchise/client mismatch'),(20001,'ref','reconcile','[]','["monthly-a","monthly-sibling"]','Multiple or incomplete known work-point addresses'),(20002,'ref','reconcile','[]','[]','Client absent from Partners');
  INSERT INTO history_rows VALUES(1,20000,'2026-09-27','site','disputed',900000,1000000,'Synthetic seller','x','Synthetic item',20000),(1,20001,'2026-09-10','shared-site','joint',700,1000000,'Synthetic seller','x','Synthetic item',20001),(1,20002,'2026-08-20','site','historic',3210,1000000,'Synthetic seller','x','Synthetic item',20002);
  UPDATE history_imports SET sha256='conflict-fixture';`);
+ const fingerprintSteps=m.historyStampSteps(c);let fingerprintStep;do{fingerprintStep=fingerprintSteps.next();}while(!fingerprintStep.done);assert.deepEqual(fingerprintStep.value,m.historyStamp(c),'chunked UTF-8 fingerprints equal batch hashes across multibyte boundaries');
  c.close();m.buildActivitySnapshot(root,'2026-09-30');
  // Eligible, fresh partial month: an undisputed control really would be overdue.
  const control=m.readClientSales(partners,'2026-09',root,'2026-09-30');

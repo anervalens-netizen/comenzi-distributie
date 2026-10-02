@@ -14,7 +14,7 @@ try{
  sql.exec('BEGIN');c.exec('BEGIN');
  for(let i=0;i<n;i++){
   const id='scale-'+String(i).padStart(5,'0'),cui=String(1000000+i),owner=i%10?'g-3':'g-5';
-  customer.run(id,owner,JSON.stringify({id,cui,warehouseId:owner,warehouseIds:[owner],name:'Synthetic company '+id,city:'Synthetic city',county:'Synthetic county',address:'Synthetic address',route:''}));identity.run(30000+i,cui);allocation.run(30000+i,JSON.stringify([id]));
+  customer.run(id,owner,JSON.stringify({id,cui,warehouseId:owner,warehouseIds:[owner],name:('Synthetic company '+id+' with a descriptive catalogue label').padEnd(95,'x'),city:'Synthetic city',county:'Synthetic county',address:'Synthetic address',route:''}));identity.run(30000+i,cui);allocation.run(30000+i,JSON.stringify([id]));
   for(let day=0;day<7;day++)row.run(30000+i,['2026-05-01','2026-06-05','2026-07-05','2026-08-01','2026-08-20','2026-09-05','2026-09-28'][day],'document-'+day,1000+i,day);
  }
  c.exec("UPDATE history_imports SET sha256='synthetic-scale',row_count=(SELECT COUNT(*) FROM history_rows);COMMIT;");sql.exec('COMMIT');c.close();
@@ -34,13 +34,14 @@ try{
   assert(max<duration*.7,'light request must not wait behind the entire report wave');
   console.log(JSON.stringify({wave:label,groups:reports[0].total,ms:Math.round(duration),healthSamples:latencies.length,maxHealthMs:Math.round(max),cache:{...m.clientSalesCacheStats}}));return reports[0];
  }
- const before=m.clientSalesCacheStats.builds;const cold=await wave('cold');assert.equal(m.clientSalesCacheStats.builds-before,1,'identical cold reads are single-flight');const admittedBuilds=m.clientSalesCacheStats.builds,admittedHits=m.clientSalesCacheStats.hits;assert(m.clientSalesCacheStats.bytes>0,'national report must actually fit the bounded cache');const warm=await wave('warm');assert.deepEqual(warm,cold);assert.equal(m.clientSalesCacheStats.builds,admittedBuilds,'warm wave must reuse the report, not rebuild it');assert.equal(m.clientSalesCacheStats.hits,admittedHits+4,'all four warm requests must hit the cache');
+ const before=m.clientSalesCacheStats.builds;const cold=await wave('cold');assert.equal(m.clientSalesCacheStats.builds-before,1,'identical cold reads are single-flight');const admittedBuilds=m.clientSalesCacheStats.builds,admittedHits=m.clientSalesCacheStats.hits;assert(m.clientSalesCacheStats.bytes>48*1024*1024,'wide valid company labels exercise cache headroom beyond the earlier budget');const warm=await wave('warm');assert.deepEqual(warm,cold);assert.equal(m.clientSalesCacheStats.builds,admittedBuilds,'warm wave must reuse the report, not rebuild it');assert.equal(m.clientSalesCacheStats.hits,admittedHits+4,'all four warm requests must hit the cache');
  for(const [label,query,actor,now] of [['national','','manager'],['search','q=scale-00001','manager'],['page2','page=1','manager'],['agent','','agent'],['missing','month=2026-10','manager','2026-10-02T12:00:00Z']]){
   const params=new URLSearchParams('month=2026-09');for(const [k,v] of new URLSearchParams(query))params.set(k,v);
   const start=performance.now();const result=await m.clientSalesOverview(t.user(actor),params,new Date(now||'2026-09-30T12:00:00Z'));
   assert.equal(result.state,'ready');if(label==='search')assert.equal(result.total,1);if(label==='page2')assert.deepEqual(result.totals,warm.totals);if(label==='missing'){assert.equal(result.window.imported,false);assert.equal(result.comparisons[0].valueCents,warm.totals.valueCents);}
   console.log(JSON.stringify({query:label,ms:Math.round(performance.now()-start),groups:result.total}));
  }
- assert(m.clientSalesCacheStats.bytes<=48*1024*1024,'cache remains bounded');
+ assert.equal(m.clientSalesCacheStats.stampBuilds,1,'different months and scopes reuse the same verified source fingerprint');
+ assert(m.clientSalesCacheStats.bytes<=64*1024*1024,'cache remains bounded');
  console.log('PASS: representative synthetic scale, single-flight cold/warm equivalence and independent HTTP responsiveness.');
 }finally{if(server)await new Promise(resolve=>server.close(resolve));t.cleanup();}
