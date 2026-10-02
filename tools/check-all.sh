@@ -34,6 +34,7 @@ node tools/test-cloudflare-module-graph.mjs
 node tools/test-stock-cloudflare.mjs
 npm run build:server
 node tools/test-client-sales-remediation.mjs
+node tools/test-source-guards.mjs
 node tools/test-partner-detail-remediation.mjs
 node tools/test-partner-detail-http.mjs
 node tools/test-client-sales-performance.mjs
@@ -96,6 +97,7 @@ node tools/test-inventory.mjs
 CHROME_BIN="${CHROME_BIN:-$(command -v google-chrome || command -v chromium || true)}"
 if [ -n "$CHROME_BIN" ]; then
   CHROME_BIN="$CHROME_BIN" node tools/test-offline-cross-tab-browser.mjs
+  CHROME_BIN="$CHROME_BIN" node tools/test-private-fence-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-pwa-cross-tab-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-offline-contract-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-portfolio-page-error-browser.mjs
