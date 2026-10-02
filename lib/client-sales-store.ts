@@ -1,5 +1,7 @@
 import {DatabaseSync} from 'node:sqlite';
-import {existsSync} from 'node:fs';
+import {existsSync,statSync} from 'node:fs';
+import {createHash} from 'node:crypto';
+import {salesYield} from './client-sales-cooperative';
 import {resolve} from 'node:path';
 import {activityVersion,bucharestToday,historyStamp} from './partner-activity-snapshot';
 import {normalizedCui} from './partner-company-identity';
@@ -41,10 +43,11 @@ function health(days:Daily[],cutoff:string|null,linked:boolean,identityComplete:
   const clean=identityComplete&&!days.some(d=>d.missing_values);
   // Historical signals are evaluated at their cutoff. Current signals also need fresh imports.
   const fresh=!!cutoff&&(window.complete||(window.month===today.slice(0,7)&&daysBetween(cutoff,today)<=3));
-  const recent=elapsed!==null&&elapsed<60,repeat=!!first&&!!last&&last>first;
+  const recent=identityComplete&&elapsed!==null&&elapsed<60,repeat=identityComplete&&!!first&&!!last&&last>first;
   const eligible=recent&&covered&&clean&&fresh&&window.covered;
   let status:ClientHealth['status']=!linked||!cutoff?'unknown':!recent?'established':repeat?'repeat':!eligible?'uncertain':elapsed!<30?'waiting':'overdue';
   if(!first&&linked&&cutoff)status='established';
+  if(linked&&cutoff&&!identityComplete)status='uncertain';
   // An actual earlier purchase and >=60 covered inactive days are required.
   const reactivated=clean&&fresh&&window.covered&&bills.some((d,i)=>i>0&&d.date>=window.from&&daysBetween(bills[i-1].date,d.date)>=60&&isCovered(bills[i-1].date,d.date,intervals));
   const reason=status==='unknown'?'Istoric neasociat sau lună neimportată.':status==='repeat'?'Facturare repetată într-o zi ulterioară primei facturări observate.':status==='waiting'?'Client recent; încă nu s-au împlinit 30 de zile de observație.':status==='overdue'?'Fără repetare după cel puțin 30 de zile acoperite; semnal de verificat, nu abandon dovedit.':status==='uncertain'?'Acoperire, asociere sau valori incomplete / sursă întârziată; alerta este suspendată.':first?'Prima facturare observată este în afara ferestrei recente de 60 de zile.':'Fără facturare pozitivă documentată în istoricul asociat.';
@@ -52,12 +55,15 @@ function health(days:Daily[],cutoff:string|null,linked:boolean,identityComplete:
 }
 /** Only current authorized cards enter this reader. Source DBs are never writable.
  * All raw-history scans happen in the batch builder, not in HTTP requests. */
-export function readClientSales(partners:PartnerSummary[],month:string,directory=process.env.MOBIUP_DATA_DIR||'./work/server-data',today=bucharestToday()){
+function* calculateClientSales(partners:PartnerSummary[],month:string,directory=process.env.MOBIUP_DATA_DIR||'./work/server-data',today=bucharestToday()){
+  yield;
+  let work=0;
   const base=resolve(directory,'client-history'),source=resolve(base,'client-sales-history.sqlite'),path=resolve(base,'partner-activity.sqlite');
   const unavailable={state:'unavailable' as const,message:'Centralizarea raportului pe clienți lipsește sau este învechită. Trebuie recalculată după import.'};
   if(!existsSync(source)||!existsSync(path))return unavailable;
-  const c=new DatabaseSync(source,{readOnly:true}),s=new DatabaseSync(path,{readOnly:true});
+  const c=new DatabaseSync(source,{readOnly:true});let s:DatabaseSync|undefined;
   try{
+    s=new DatabaseSync(path,{readOnly:true});
     c.exec('BEGIN');s.exec('BEGIN');
     if(Number(s.prepare("SELECT COUNT(*) n FROM sqlite_master WHERE type='table' AND name IN ('meta','company_identity','company_daily')").get()?.n)!==3)return unavailable;
     const stamp=historyStamp(c),meta=JSON.parse(String(s.prepare("SELECT value FROM meta WHERE key='snapshot'").get()?.value||'null')) as {version:string;signature:string;builtAt:string;coverage:SourceCoverage[]}|null;
@@ -67,14 +73,16 @@ export function readClientSales(partners:PartnerSummary[],month:string,directory
     const day=!window.complete&&window.to?Number(window.to.slice(8)):undefined;
     const comparisons=[1,2,3].map(i=>monthlyWindow(shiftMonth(month,-i),intervals,day));
     const groups=new Map<string,PartnerSummary[]>();
-    for(const p of partners){const cui=normalizedCui(p.cui),key=cui&&cui!=='CLIENTGEN'?'company:'+cui:'point:'+p.id;const group=groups.get(key)||[];group.push(p);groups.set(key,group);}
+    for(const p of partners){if(++work%256===0)yield;const cui=normalizedCui(p.cui),key=cui&&cui!=='CLIENTGEN'?'company:'+cui:'point:'+p.id;const group=groups.get(key)||[];group.push(p);groups.set(key,group);}
     const keys=JSON.stringify([...new Set(partners.map(p=>normalizedCui(p.cui)))]);
-    const identities=new Map((s.prepare('SELECT company_id,complete FROM company_identity WHERE company_id IN (SELECT value FROM json_each(?))').all(keys) as {company_id:string;complete:number}[]).map(r=>[r.company_id,!!r.complete]));
+    const identities=new Map<string,boolean>();
+    for(const r of s.prepare('SELECT company_id,complete FROM company_identity WHERE company_id IN (SELECT value FROM json_each(?))').iterate(keys)){identities.set(String(r.company_id),!!r.complete);if(++work%256===0)yield;}
     const byCompany=new Map<string,Daily[]>();
     // Bounded by the selected cutoff: future facts cannot influence first/repeat/quality.
-    for(const d of s.prepare('SELECT * FROM company_daily WHERE company_id IN (SELECT value FROM json_each(?)) AND date<=? ORDER BY company_id,date').iterate(keys,window.to||min(monthEnd(month),today)) as Iterable<Daily>){const days=byCompany.get(d.company_id)||[];days.push(d);byCompany.set(d.company_id,days);}
+    for(const d of s.prepare('SELECT * FROM company_daily WHERE company_id IN (SELECT value FROM json_each(?)) AND date<=? AND date>=? ORDER BY company_id,date').iterate(keys,window.to||min(monthEnd(month),today),window.to?'':comparisons.at(-1)!.from) as Iterable<Daily>){if(++work%256===0)yield;const days=byCompany.get(d.company_id)||[];days.push(d);byCompany.set(d.company_id,days);}
     const rows:ClientSalesRow[]=[],comparisonMetrics=new Map<string,ClientMetrics[]>();
     for(const [key,members] of groups){
+      if(++work%128===0)yield;
       members.sort((a,b)=>a.id.localeCompare(b.id));const p=members[0],cui=normalizedCui(p.cui),linked=identities.has(cui),identityComplete=identities.get(cui)===true,days=byCompany.get(cui)||[];
       const current=metrics(days,window,linked),prior=comparisons.map(w=>metrics(days,w,linked));comparisonMetrics.set(key,prior);
       const h=health(days.filter(d=>!!window.to&&d.date<=window.to),window.to,linked,identityComplete,intervals,today,window);
@@ -90,5 +98,76 @@ export function readClientSales(partners:PartnerSummary[],month:string,directory
       rows.push({key,id:p.id,name:p.name,cui:p.cui,city:p.city,counties:[...new Set(members.map(p=>p.county).filter(Boolean))].sort(),pointCount:members.length,points:members.map(p=>({id:p.id,name:p.name,city:p.city})),linked,identityComplete,metrics:current,previous:prior[0],health:h,visits:0,flags});
     }
     return {state:'ready' as const,rows,comparisonMetrics,window,comparisons,source:{label:'Raport pe clienți',builtAt:meta.builtAt,updatedAt:meta.coverage.map(p=>p.importedAt).filter((s):s is string=>!!s).sort().at(-1)||null,declaredEnd:stamp.through,observedEnd:meta.coverage.map(p=>p.observedEnd).filter((s):s is string=>!!s).sort().at(-1)||null,effectiveCutoff,latestMonth:effectiveCutoff?.slice(0,7)||null,coverage:meta.coverage}};
-  }finally{c.close();s.close();}
+  }finally{c.close();s?.close();}
+}
+
+/** Synchronous reader for batch tools/tests only. HTTP must use the cooperative reader. */
+export function readClientSales(...args:Parameters<typeof calculateClientSales>){
+  const calculation=calculateClientSales(...args);let step=calculation.next();
+  while(!step.done)step=calculation.next();return step.value;
+}
+type Report=ReturnType<typeof readClientSales>;
+// Only billing is cached. Current portfolio, actors and visits are read on every request.
+// Entries are private; every caller receives independently mutable records.
+const reports=new Map<string,{report:Report;bytes:number}>(),flights=new Map<string,Promise<Report>>();
+const MAX_BYTES=48*1024*1024;
+let cacheBytes=0;
+export const clientSalesCacheStats={hits:0,builds:0,bytes:0};
+function fileGeneration(directory:string){
+  return ['client-sales-history.sqlite','partner-activity.sqlite'].flatMap(name=>['','-wal'].map(suffix=>{
+    try{const s=statSync(resolve(directory,'client-history',name+suffix),{bigint:true});return [s.dev,s.ino,s.size,s.mtimeNs,s.ctimeNs].join(':');}catch{return 'missing';}
+  })).join('|');
+}
+async function copyReport(report:Report,selection?:ReadonlySet<string>):Promise<Report>{
+  if(report.state!=='ready')return {...report};
+  const rows:ClientSalesRow[]=[],comparisonMetrics=new Map<string,ClientMetrics[]>();
+  let visited=0;
+  for(const r of report.rows){
+    if(++visited%256===0)await salesYield();
+    if(selection&&!selection.has(r.key))continue;
+    rows.push({...r,metrics:{...r.metrics},previous:{...r.previous},health:{...r.health},flags:[...r.flags],counties:[...r.counties],points:r.points.map(p=>({...p}))});
+    comparisonMetrics.set(r.key,report.comparisonMetrics.get(r.key)!.map(m=>({...m})));
+  }
+  return {...report,rows,comparisonMetrics,window:{...report.window},comparisons:report.comparisons.map(w=>({...w})),source:{...report.source,coverage:report.source.coverage.map(c=>({...c}))}};
+}
+export async function readClientSalesAsync(partners:PartnerSummary[],month:string,directory=process.env.MOBIUP_DATA_DIR||'./work/server-data',today=bucharestToday(),selection?:ReadonlySet<string>):Promise<Report>{
+  directory=resolve(directory);
+  const generation=fileGeneration(directory),hash=createHash('sha256');
+  // Include every displayed identity field, so live CUI edits/merges/splits cannot reuse
+  // old group membership. Search and ACL selection always use the current input.
+  for(let i=0;i<partners.length;i++){
+    const p=partners[i];hash.update(JSON.stringify([p.id,p.cui,p.name,p.city,p.county]));
+    if(i%256===0)await salesYield();
+  }
+  const deliver=async(report:Report)=>{
+    const copy=await copyReport(report,selection);
+    return generation===fileGeneration(directory)?copy:{state:'unavailable' as const,message:'Sursa se actualizează. Reîncearcă raportul.'};
+  };
+  const key=JSON.stringify([activityVersion,directory,generation,month,today,hash.digest('hex')]);
+  const hit=reports.get(key);
+  if(hit){clientSalesCacheStats.hits++;reports.delete(key);reports.set(key,hit);return deliver(hit.report);}
+  let flight=flights.get(key);
+  if(!flight){
+    if(flights.size>=4)throw new Error('Prea multe rapoarte în calcul. Reîncearcă.');
+    flight=(async()=>{
+      clientSalesCacheStats.builds++;
+      const calculation=calculateClientSales(partners,month,directory,today);
+      let step;
+      try{do{step=calculation.next();if(!step.done)await salesYield();}while(!step.done);}finally{calculation.return(undefined as never);}
+      const report=step.value;
+      // A replacement/reimport while yielding must not publish or return stale facts.
+      if(generation!==fileGeneration(directory))return {state:'unavailable' as const,message:'Sursa se actualizează. Reîncearcă raportul.'};
+      if(report.state==='ready'){
+        let bytes=0;
+        for(let i=0;i<report.rows.length;i++){const r=report.rows[i];bytes+=2*(JSON.stringify(r).length+JSON.stringify(report.comparisonMetrics.get(r.key)).length)+256;if(i%256===0)await salesYield();}
+        if(bytes<=MAX_BYTES&&generation===fileGeneration(directory)){
+          while(reports.size&&(reports.size>=4||cacheBytes+bytes>MAX_BYTES)){const oldest=reports.keys().next().value!;cacheBytes-=reports.get(oldest)!.bytes;reports.delete(oldest);}
+          reports.set(key,{report,bytes});cacheBytes+=bytes;clientSalesCacheStats.bytes=cacheBytes;
+        }
+      }
+      return report;
+    })().finally(()=>{flights.delete(key);});
+    flights.set(key,flight);
+  }
+  return deliver(await flight);
 }

@@ -3,16 +3,19 @@ import {createHash,randomUUID} from 'node:crypto';
 import {existsSync,renameSync,rmSync,chmodSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {partnerActivity,type PartnerActivity} from './partner-sales-health';
-import {normalizedCui,companyIdentityIndex,type CompanyAlias} from './partner-company-identity';
+import {normalizedCui,type CompanyAlias} from './partner-company-identity';
 export {normalizedCui} from './partner-company-identity';
-export const activityVersion='5';
-export const bucharestToday=()=>new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Bucharest',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+import {historyCompanyLinks} from './partner-company-links';
+export const activityVersion='6';
+export const bucharestToday=(now=new Date())=>new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Bucharest',year:'numeric',month:'2-digit',day:'2-digit'}).format(now);
 export function historyStamp(c:DatabaseSync) {
   const reference=String(c.prepare("SELECT value FROM history_meta WHERE key='current_reference'").get()?.value||'');
+  const referenceContent=c.prepare('SELECT * FROM history_references WHERE id=?').get(reference);
+  const referenceDigest=createHash('sha256').update(String(referenceContent?.master_json||'')).update(String(referenceContent?.partners_json||'')).digest('hex');
   const imports=c.prepare("SELECT id,sha256,period_start,period_end,row_count FROM history_imports WHERE state='active' ORDER BY period_start,id").all() as {id:number;sha256:string;period_start:string;period_end:string;row_count:number}[];
   let through='',complete=true;
   for(const row of imports){if(through&&Date.parse(row.period_start)-Date.parse(through)>86400000)complete=false;if(row.period_end>through)through=row.period_end;}
-  return {reference,through,start:imports[0]?.period_start||'',complete,signature:createHash('sha256').update(JSON.stringify([activityVersion,reference,imports])).digest('hex')};
+  return {reference,through,start:imports[0]?.period_start||'',complete,signature:createHash('sha256').update(JSON.stringify([activityVersion,reference,referenceDigest,imports])).digest('hex')};
 }
 export type ActivitySnapshotRow={id:string;cui:string;activity:PartnerActivity;billingYears:string[];recentCents:number;previousCents:number;missingValues:number;coverageComplete:boolean;scope?:'point'|'company';movementYears?:string[];lastMovement?:string};
 export type PartnerPeriodMetrics={valueCents:number|null;documents:number;lastBilling:string|null;missingValues:number};
@@ -71,14 +74,8 @@ export function buildActivitySnapshot(directory:string,today=bucharestToday()) {
     }
     // Company totals are stored once per legal entity, separate from point facts.
     // The table groups authorized cards before displaying these totals.
-    const companyIndex=companyIdentityIndex(master,new Set(partners.map(p=>normalizedCui(p.cui||''))));
-    const companyByCode=new Map<string,string>();
-    for(const [key,codes] of companyIndex.codesByCompany)for(const code of codes)companyByCode.set(code,key);
-    const companyLinks:Record<string,string>={};
-    for(const row of c.prepare("SELECT i.id,i.client_code FROM history_identities i JOIN history_allocations a ON a.identity_id=i.id WHERE a.reference_id=? AND a.status<>'consumer'").iterate(stamp.reference)){
-      const company=companyByCode.get(normalizedCui(String(row.client_code)));
-      if(company)companyLinks[String(row.id)]=company;
-    }
+    const companyIndex=historyCompanyLinks(c,stamp.reference);
+    const companyLinks=companyIndex.links;
     const companyPrefix="WITH links AS (SELECT CAST(key AS INTEGER) identity_id,value company_id FROM json_each(?)), facts AS (SELECT l.company_id,r.* FROM links l JOIN history_rows r ON r.identity_id=l.identity_id JOIN history_imports b ON b.id=r.import_id AND b.state='active') ";
     const linkJson=JSON.stringify(companyLinks);
     out.exec('CREATE TABLE company_activity(company_id TEXT PRIMARY KEY,payload TEXT NOT NULL); CREATE TABLE company_daily(company_id TEXT NOT NULL,date TEXT NOT NULL,value_cents INTEGER,missing_values INTEGER NOT NULL,documents INTEGER NOT NULL,last_billing TEXT,PRIMARY KEY(company_id,date));');
@@ -101,8 +98,9 @@ export function buildActivitySnapshot(directory:string,today=bucharestToday()) {
       companyStats.set(key,stat);
     }
     const companyInsert=out.prepare('INSERT INTO company_activity VALUES(?,?)');
-    for(const [key,stat] of companyStats){
-      const days=companyBilling.get(key)||[],complete=stamp.complete&&!stat.missing&&!companyIndex.ambiguousCompanies.has(key);
+    for(const key of companyIndex.known){
+      const stat=companyStats.get(key)||{missing:0,recent:0,previous:0,years:new Set<string>(),last:''};
+      const days=companyBilling.get(key)||[],complete=stamp.complete&&!stat.missing&&!companyIndex.incomplete.has(key);
       const row:ActivitySnapshotRow={id:key,cui:key,scope:'company',movementYears:[...stat.years].sort(),lastMovement:stat.last,activity:partnerActivity(days,stamp.through,today,complete),billingYears:[...new Set(days.filter(d=>d.date<=asOf).map(d=>d.date.slice(0,4)))].sort(),recentCents:stat.recent,previousCents:stat.previous,missingValues:stat.missing,coverageComplete:complete};
       companyInsert.run(key,JSON.stringify(row));
     }
@@ -112,8 +110,11 @@ export function buildActivitySnapshot(directory:string,today=bucharestToday()) {
     const coverage=c.prepare(`SELECT b.period_start start,b.period_end declaredEnd,MAX(r.date) observedEnd,${hasImportedAt?'b.imported_at':'NULL'} importedAt FROM history_imports b LEFT JOIN history_rows r ON r.import_id=b.id WHERE b.state='active' GROUP BY b.id ORDER BY b.period_start`).all();
     out.exec('CREATE TABLE company_identity(company_id TEXT PRIMARY KEY,complete INTEGER NOT NULL)');
     const identityInsert=out.prepare('INSERT INTO company_identity VALUES(?,?)');
-    for(const key of new Set(Object.values(companyLinks)))identityInsert.run(key,Number(!companyIndex.ambiguousCompanies.has(key)));
-    const metadata={...stamp,version:activityVersion,builtAt:new Date().toISOString(),asOf,recentStart,previousStart,rows:count,companies:companyStats.size,coverage};
+    for(const key of companyIndex.known)identityInsert.run(key,Number(!companyIndex.incomplete.has(key)));
+    out.exec('CREATE TABLE company_unresolved(identity_id INTEGER PRIMARY KEY,companies_json TEXT NOT NULL,reason TEXT NOT NULL)');
+    const unresolvedInsert=out.prepare('INSERT INTO company_unresolved VALUES(?,?,?)');
+    for(const row of companyIndex.unresolved)unresolvedInsert.run(row.identityId,JSON.stringify(row.companies),row.reason);
+    const metadata={...stamp,version:activityVersion,builtAt:new Date().toISOString(),asOf,recentStart,previousStart,rows:count,companies:companyIndex.known.size,unresolvedCompanyIdentities:companyIndex.unresolved.length,coverage};
     out.prepare("INSERT INTO meta VALUES('snapshot',?)").run(JSON.stringify(metadata));out.exec('COMMIT');
     if(out.prepare('PRAGMA quick_check').get()?.quick_check!=='ok')throw new Error('Snapshot integrity failed');
     out.close();out=undefined;renameSync(temp,target);
@@ -147,6 +148,7 @@ export function readActivitySnapshot(partners:{id:string;cui:string}[],directory
       for(const id of rows.keys())if(!metrics.has(id))metrics.set(id,{valueCents:0,documents:0,lastBilling:null,missingValues:0});
     }
     if(options?.scope==='company'){
+      rows.clear();metrics.clear();
       const keys=[...new Set(allowed.values())];
       const companyRows=new Map<string,ActivitySnapshotRow>();
       for(const record of snapshot.prepare('SELECT company_id,payload FROM company_activity WHERE company_id IN (SELECT value FROM json_each(?))').all(JSON.stringify(keys))){

@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { partnerActivity } from './partner-sales-health';
 import {normalizedCui as cuiKey,companyIdentityIndex,type CompanyAlias} from './partner-company-identity';
+import {historyCompanyLinks} from './partner-company-links';
 export class PartnerSalesInputError extends Error {}
 export type PartnerSalesResult = ReturnType<typeof readPartnerSales>;
 function isoDate(value: string) {
@@ -33,11 +34,12 @@ export function readPartnerSales(partnerId: string, cui: string, params: URLSear
     const master=JSON.parse(String(referenceRow?.master_json||'[]')) as CompanyAlias[];
     const index=companyIdentityIndex(master,[companyKey]);
     const companyCodes=index.codesByCompany.get(companyKey)||new Set<string>();
-    const companyIdentityComplete=!index.ambiguousCompanies.has(companyKey);
-    const companyRows=c.prepare("SELECT DISTINCT i.id identity_id FROM history_identities i JOIN history_allocations a ON a.identity_id=i.id WHERE a.reference_id=? AND a.status<>'consumer' AND history_cui_key(i.client_code) IN (SELECT value FROM json_each(?))").all(String(reference),JSON.stringify([...companyCodes]));
+    const companyLinks=historyCompanyLinks(c,String(reference));
+    const companyIdentityComplete=!companyLinks.incomplete.has(companyKey);
+    const companyRows=Object.entries(companyLinks.links).filter(([,company])=>company===companyKey).map(([id])=>({identity_id:Number(id)}));
     const requestedScope=params.get('scope')||'auto';
     if(!['auto','point','company'].includes(requestedScope))throw new PartnerSalesInputError('Nivelul istoricului este invalid.');
-    const scope=requestedScope==='company'||(requestedScope==='auto'&&companyRows.length)?'company' as const:'point' as const;
+    const scope=requestedScope==='company'||(requestedScope==='auto'&&companyLinks.known.has(companyKey))?'company' as const:'point' as const;
     const selectedIdentities=scope==='company'?companyRows:identityRows;
     const identities=JSON.stringify(selectedIdentities.map(r=>r.identity_id));
     const unresolved=c.prepare("SELECT COUNT(*) n FROM history_allocations a JOIN history_identities i ON i.id=a.identity_id WHERE a.reference_id=? AND (a.status='reconcile' OR (a.status IN ('direct_code','single_partner') AND json_array_length(a.partner_ids_json)=0)) AND (history_cui_key(i.client_code) IN (SELECT value FROM json_each(?)) OR EXISTS(SELECT 1 FROM json_each(a.candidates_json) p WHERE p.value=?))").get(String(reference),JSON.stringify([...companyCodes]),partnerId) as {n:number};
@@ -69,11 +71,11 @@ export function readPartnerSales(partnerId: string, cui: string, params: URLSear
     const missingHistory=c.prepare("SELECT COUNT(*) n"+base+" AND r.value_cents IS NULL").get(identities) as {n:number};
     // Document grouping removes exact net cancellations; dates aggregate billing frequency.
     // Raw repeated product lines remain facts; Nr is never presented as a verified order count.
-    const billing=c.prepare("SELECT date,SUM(valueCents) valueCents FROM (SELECT date,site_id,document_number,SUM(r.value_cents) valueCents,SUM(r.value_cents IS NULL) missing"+base+" GROUP BY date,site_id,document_number HAVING SUM(r.value_cents)>0 AND SUM(CASE WHEN r.quantity_micros>0 AND r.value_cents>0 THEN 1 ELSE 0 END)>0 AND SUM(r.value_cents IS NULL)=0) GROUP BY date ORDER BY date").all(identities) as {date:string;valueCents:number}[];
+    const billing=c.prepare("SELECT date,SUM(valueCents) valueCents FROM (SELECT date,site_id,document_number,SUM(r.value_cents) valueCents,SUM(r.value_cents IS NULL) missing"+base+" AND TRIM(document_number)<>'' GROUP BY date,site_id,document_number HAVING SUM(r.value_cents)>0 AND SUM(CASE WHEN r.quantity_micros>0 AND r.value_cents>0 THEN 1 ELSE 0 END)>0 AND SUM(r.value_cents IS NULL)=0) GROUP BY date ORDER BY date").all(identities) as {date:string;valueCents:number}[];
     const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Bucharest',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
     const activity=partnerActivity(billing,through,today,coverageComplete&&companyIdentityComplete&&(scope==='company'||!unresolved.n)&&!missingHistory.n);
     const transactions=c.prepare("SELECT date,document_number document,site_id site,item_code itemCode,item_name itemName,r.quantity_micros quantityMicros,r.value_cents valueCents,tr seller"+range+" ORDER BY date DESC,import_id DESC,source_row DESC LIMIT 51 OFFSET ?").all(...args,page*50) as {date:string;document:string;site:string;itemCode:string;itemName:string;quantityMicros:number;valueCents:number|null;seller:string}[];
     return {state:'ready' as const,through,from,to,scope,pointHistoryAvailable:identityRows.length>0,companyHistoryAvailable:companyRows.length>0,activity,coverageComplete:coverageComplete&&companyIdentityComplete&&(scope==='company'||!unresolved.n)&&!missingHistory.n,
-      unresolvedCompanyIdentities:unresolved.n,totals,documents,latestDocuments,monthly,products,sellers,transactions:transactions.slice(0,50),page,hasMore:transactions.length>50};
+      unresolvedCompanyIdentities:scope==='company'?companyLinks.unresolved.filter(r=>r.companies.includes(companyKey)).length:unresolved.n,totals,documents,latestDocuments,monthly,products,sellers,transactions:transactions.slice(0,50),page,hasMore:transactions.length>50};
   } finally {c.close();}
 }
