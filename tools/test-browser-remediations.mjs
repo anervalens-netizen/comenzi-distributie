@@ -509,7 +509,10 @@ try {
   await waitFor(()=>cdp.evaluate("!!document.querySelector('.manager-partner-hub')&&!document.querySelector('.manager-requests')"),'back to manager portfolio');
   const expectedR4Month=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Bucharest',year:'numeric',month:'2-digit'}).format(new Date(previousMonthDate));
   await cdp.evaluate(`history.replaceState(null,'',${JSON.stringify('/?request='+r4Id)});location.reload();true`);
-  await waitFor(()=>cdp.evaluate(`!!document.getElementById(${JSON.stringify('partner-request-'+r4Id)})`),'historical partner deep-link');
+  // Pending requests are present in every month. Their row can render before
+  // the independent deep-link request resolves the historical month. Wait for
+  // both outcomes; merely seeing the row does not mean navigation has settled.
+  await waitFor(()=>cdp.evaluate(`!!document.getElementById(${JSON.stringify('partner-request-'+r4Id)})&&document.querySelector('.manager-requests .activity-toolbar input[type=month]')?.value===${JSON.stringify(expectedR4Month)}`),'historical partner deep-link and Bucharest month');
   check(await cdp.evaluate(`document.querySelector('.activity-toolbar input[type=month]')?.value===${JSON.stringify(expectedR4Month)}`),'Deep-link selects the request Bucharest month');
   check(await cdp.evaluate(`document.getElementById(${JSON.stringify('partner-request-'+r4Id)})?.classList.contains('request-focused')===true`),'Deep-link focuses the exact partner request');
   await cdp.evaluate("history.replaceState(null,'','/');true");
