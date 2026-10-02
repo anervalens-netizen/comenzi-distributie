@@ -1,6 +1,6 @@
 'use client';
 import {useEffect,useState} from 'react';
-import {pendingOperations,OFFLINE_EVENT} from '@/lib/offline-work';
+import {pendingOperationCount,withOutboxGate,OFFLINE_EVENT} from '@/lib/offline-work';
 import {currentLocalWorkGeneration,currentLocalWorkUserId} from '@/lib/local-work';
 type InstallEvent=Event&{prompt:()=>Promise<void>;userChoice:Promise<{outcome:string}>};
 export type OfflineShellPreparationDetail={state:'preparing'|'ready'|'error';completed:number;total:number;error?:string};
@@ -71,9 +71,10 @@ export function prepareOfflineShell():Promise<OfflineShellPreparationDetail>{
 export function PwaInstall(){
  const [install,setInstall]=useState<InstallEvent|null>(null),[waiting,setWaiting]=useState<ServiceWorker|null>(null),[error,setError]=useState(''),[pending,setPending]=useState(true),[activating,setActivating]=useState(false);
  useEffect(()=>{
-  let disposed=false,bootstrapReady=false,idleId:number|undefined,timerId:ReturnType<typeof setTimeout>|undefined;
+  let disposed=false,bootstrapReady=false,idleId:number|undefined,timerId:ReturnType<typeof setTimeout>|undefined,pendingRead=0;
   const offer=(event:Event)=>{event.preventDefault();setInstall(event as InstallEvent);};
-  const update=()=>void pendingOperations(currentLocalWorkUserId()).then(rows=>{if(!disposed)setPending(rows.length>0);}).catch(()=>{if(!disposed)setPending(true);});
+  const update=()=>{const sequence=++pendingRead;void pendingOperationCount().then(count=>{if(!disposed&&sequence===pendingRead)setPending(count>0);}).catch(()=>{if(!disposed&&sequence===pendingRead)setPending(true);});};
+  const focused=()=>{announceAssets();update();};
   const requestPreparation=()=>{void prepareOfflineShell().catch(()=>{});};
   const schedule=()=>{
    announceAssets();
@@ -83,7 +84,7 @@ export function PwaInstall(){
    timerId=setTimeout(()=>{if(disposed)return;if('requestIdleCallback'in window)idleId=window.requestIdleCallback(requestPreparation,{timeout:5000});else requestPreparation();},2000);
   };
   const fresh=(event:Event)=>{const detail=(event as CustomEvent<{path?:string;source?:string}>).detail;if(detail?.path==='bootstrap'&&detail.source==='network'){bootstrapReady=true;schedule();}};
-  window.addEventListener('beforeinstallprompt',offer);window.addEventListener(OFFLINE_EVENT,update);window.addEventListener('mobiup-prepare-shell',requestPreparation);window.addEventListener('mobiup-data-freshness',fresh);window.addEventListener('focus',announceAssets);update();
+  window.addEventListener('beforeinstallprompt',offer);window.addEventListener(OFFLINE_EVENT,update);window.addEventListener('mobiup-prepare-shell',requestPreparation);window.addEventListener('mobiup-data-freshness',fresh);window.addEventListener('focus',focused);update();
   const controllerChanged=()=>{publish({state:'preparing',completed:0,total:0});schedule();};
   navigator.serviceWorker?.addEventListener('controllerchange',controllerChanged);
   if('storage'in navigator)void navigator.storage.persist?.().catch(()=>{});
@@ -91,7 +92,7 @@ export function PwaInstall(){
    if(disposed)return;if(reg.waiting){setWaiting(reg.waiting);publish({state:'preparing',completed:0,total:0});}
    reg.addEventListener('updatefound',()=>{const worker=reg.installing;worker?.addEventListener('statechange',()=>{if(!disposed&&worker.state==='installed'&&navigator.serviceWorker.controller){setWaiting(worker);publish({state:'preparing',completed:0,total:0});schedule();}});});schedule();
   }).catch(()=>{if(!disposed)setError('Pregătirea offline nu a reușit. Reîncarcă atunci când ai conexiune.');});
-  return()=>{disposed=true;if(idleId!==undefined)window.cancelIdleCallback(idleId);if(timerId!==undefined)clearTimeout(timerId);window.removeEventListener('beforeinstallprompt',offer);window.removeEventListener(OFFLINE_EVENT,update);window.removeEventListener('mobiup-prepare-shell',requestPreparation);window.removeEventListener('mobiup-data-freshness',fresh);window.removeEventListener('focus',announceAssets);navigator.serviceWorker?.removeEventListener('controllerchange',controllerChanged);};
+  return()=>{disposed=true;if(idleId!==undefined)window.cancelIdleCallback(idleId);if(timerId!==undefined)clearTimeout(timerId);window.removeEventListener('beforeinstallprompt',offer);window.removeEventListener(OFFLINE_EVENT,update);window.removeEventListener('mobiup-prepare-shell',requestPreparation);window.removeEventListener('mobiup-data-freshness',fresh);window.removeEventListener('focus',focused);navigator.serviceWorker?.removeEventListener('controllerchange',controllerChanged);};
  },[]);
  useEffect(()=>{if(!waiting)return;const changed=()=>{if(waiting.state==='activated'||waiting.state==='redundant'){setWaiting(null);if(waiting.state==='redundant')publish({state:'preparing',completed:0,total:0});}};waiting.addEventListener('statechange',changed);return()=>waiting.removeEventListener('statechange',changed);},[waiting]);
  const activate=async()=>{
@@ -104,18 +105,23 @@ export function PwaInstall(){
    // Older active workers may not implement preparation. Activation needs proof
    // from the waiting worker itself, and still leaves the current document open.
    const prepared=await prepareWorker(worker,publish);
-   const rows=await pendingOperations(userId);
-   if(currentLocalWorkUserId()!==userId||currentLocalWorkGeneration()!==generation||rows.length){setPending(true);throw new Error('Lucrul local trebuie verificat înainte de actualizare.');}
-   if(reg.waiting!==worker||reg.installing||worker.state!=='installed')throw new Error('Versiunea disponibilă s-a schimbat. Reîncearcă.');
-   publish({state:'preparing',completed:0,total:0});
-   await new Promise<void>((resolve,reject)=>{
-    const changed=()=>{if(navigator.serviceWorker.controller===worker){cleanup();resolve();}};
-    const cleanup=()=>{clearTimeout(timer);navigator.serviceWorker.removeEventListener('controllerchange',changed);};
-    const timer=setTimeout(()=>{cleanup();reject(new Error('Activarea nu a fost confirmată. Reîncearcă.'));},15000);
-    navigator.serviceWorker.addEventListener('controllerchange',changed);
-    try{worker.postMessage({type:'ACTIVATE_SAFE'});changed();}catch(error){cleanup();reject(error);}
-   });
-   if(reg.active!==worker||reg.waiting||reg.installing||['redundant'].includes(worker.state))throw new Error('Versiunea disponibilă s-a schimbat. Reîncearcă pregătirea.');
+   await withOutboxGate(async()=>{
+    const count=await pendingOperationCount();
+    if(currentLocalWorkUserId()!==userId||currentLocalWorkGeneration()!==generation||count){setPending(true);throw new Error('Lucrul local din toate conturile trebuie sincronizat sau verificat înainte de actualizare.');}
+    if(reg.waiting!==worker||reg.installing||worker.state!=='installed')throw new Error('Versiunea disponibilă s-a schimbat. Reîncearcă.');
+    publish({state:'preparing',completed:0,total:0});
+    await new Promise<void>((resolve,reject)=>{
+     const cleanup=()=>{clearTimeout(timer);navigator.serviceWorker.removeEventListener('controllerchange',changed);worker.removeEventListener('statechange',changed);reg.removeEventListener('updatefound',changed);};
+     const changed=()=>{
+      if(worker.state==='redundant'||reg.installing||(reg.waiting&&reg.waiting!==worker)){cleanup();reject(new Error('Versiunea disponibilă s-a schimbat. Reîncearcă.'));}
+      else if(navigator.serviceWorker.controller===worker){cleanup();resolve();}
+     };
+     const timer=setTimeout(()=>{cleanup();reject(new Error('Activarea nu a fost confirmată. Reîncearcă.'));},15000);
+     navigator.serviceWorker.addEventListener('controllerchange',changed);worker.addEventListener('statechange',changed);reg.addEventListener('updatefound',changed);
+     try{worker.postMessage({type:'ACTIVATE_SAFE'});changed();}catch(error){cleanup();reject(error);}
+    });
+    if(reg.active!==worker||reg.waiting||reg.installing||['redundant'].includes(worker.state))throw new Error('Versiunea disponibilă s-a schimbat. Reîncearcă pregătirea.');
+   },true);
    publish(prepared);
   }catch(error){const message=error instanceof Error?error.message:String(error);setError(message);publish({state:'error',completed:0,total:0,error:message});}
   finally{setActivating(false);}

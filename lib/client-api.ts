@@ -1,4 +1,4 @@
-import { snapshot, saveSnapshot, rememberAccount, lastAccount, migrateLegacy, replay, pendingOperations, OFFLINE_CACHE_INVALIDATED_EVENT } from './offline-work.ts';
+import { snapshot, saveSnapshot, sessionFence, rejectSessionFence, acceptSessionFence, withSessionGate, rememberAccount, lastAccount, migrateLegacy, replay, pendingOperations, OFFLINE_CACHE_INVALIDATED_EVENT } from './offline-work.ts';
 import { currentLocalWorkGeneration, currentLocalWorkUserId, LOCAL_WORK_USER_EVENT, removeLocalWork, restoreLocalWorkUserId, setLocalWorkUserId } from './local-work.ts';
 
 export const SESSION_EXPIRED_EVENT='mobiup-session-expired';
@@ -19,9 +19,18 @@ export class ApiError extends Error {
 // A definitive session loss also fences requests started while already anonymous.
 let sessionEpoch=0,sessionRejected=false;
 async function rejectSession(){
- sessionEpoch++;sessionRejected=true;setLocalWorkUserId('');invalidateApiReadCache();
- const epoch=sessionEpoch,generation=currentLocalWorkGeneration();
- await rememberAccount('').catch(()=>{});
+ sessionEpoch++;sessionRejected=true;invalidateApiReadCache();
+ const epoch=sessionEpoch;let generation=currentLocalWorkGeneration();
+ const reject=async()=>{
+  // Commit the shared tombstone before publishing the empty binding. A newly
+  // opened tab sees it even while clearing the legacy remembered account waits.
+  // Without IndexedDB there is no cached authentication to restore.
+  if(typeof indexedDB!=='undefined')await rejectSessionFence();
+  setLocalWorkUserId('');generation=currentLocalWorkGeneration();
+  await rememberAccount('').catch(()=>{});
+ };
+ if(typeof navigator!=='undefined'&&navigator.locks)await withSessionGate(reject);
+ else await reject();
  if(epoch!==sessionEpoch)throw scopeError();
  assertScope('',generation);
 }
@@ -76,6 +85,9 @@ if(typeof window!=='undefined'){
 
 export async function networkApi<T=Record<string,unknown>>(path: string,method='GET',body?: unknown, signal?: AbortSignal, operationId?:string, operationUser?:string): Promise<T> {
   const requestEpoch=sessionEpoch;
+  const authentication=path==='bootstrap'||path==='auth/session';
+  const fencePromise=authentication?sessionFence():Promise.resolve(null);
+  const requestFetch=fetch;
   const requestOwner=currentLocalWorkUserId();
   const requestGeneration=currentLocalWorkGeneration();
   method=method.toUpperCase();
@@ -85,7 +97,14 @@ export async function networkApi<T=Record<string,unknown>>(path: string,method='
   const headers:Record<string,string>={};if(operationUser)headers['X-Operation-User']=operationUser;
   const options:RequestInit={method,credentials:'same-origin',signal:controller.signal,headers};
   if(body && method!=='GET' && method!=='HEAD'){headers['Content-Type']='application/json';if(operationId)headers['X-Operation-Id']=operationId;options.body=JSON.stringify(body);}
-  let res:Response;try{res=await fetch('/api/'+path,options);}catch(error){clearTimeout(timer);signal?.removeEventListener('abort',cancel);throw error;}
+  let res:Response;let requestFence:Awaited<typeof fencePromise>;
+  try{
+   // Capture authority before sending authentication requests, including on a
+   // newly opened tab whose IndexedDB connection is not ready yet.
+   requestFence=await fencePromise;
+   if(controller.signal.aborted)throw controller.signal.reason;
+   res=await requestFetch('/api/'+path,options);
+  }catch(error){clearTimeout(timer);signal?.removeEventListener('abort',cancel);throw error;}
   let data:unknown;
   try { data=await res.json(); }
   catch(error) {if(controller.signal.aborted)throw error;if(res.ok)throw new ApiError(502,'Serverul a trimis un răspuns care nu poate fi citit.',null);data=null;}finally{clearTimeout(timer);signal?.removeEventListener('abort',cancel);}
@@ -104,7 +123,14 @@ export async function networkApi<T=Record<string,unknown>>(path: string,method='
   if((path==='bootstrap'||path==='auth/session')&&data&&typeof data==='object'&&'user' in data) {
     const user=(data as {user?:unknown}).user;
     if(user===null)await rejectSession();
-    else if(record(user)&&typeof user.id==='string'){sessionRejected=false;setLocalWorkUserId(user.id);}
+    else if(record(user)&&typeof user.id==='string'){
+     const userId=user.id;
+     await withSessionGate(async()=>{
+      if(requestEpoch!==sessionEpoch||requestOwner!==currentLocalWorkUserId()||requestGeneration!==currentLocalWorkGeneration())throw scopeError();
+      if(!requestFence||!await acceptSessionFence(requestFence,userId))throw scopeError();
+      sessionRejected=false;setLocalWorkUserId(userId);
+     });
+    }
   } else if(path==='auth/logout'&&method==='POST') {
     await rejectSession();
   } else if(method==='DELETE'&&/^orders\/[^/]+$/.test(path)) {
@@ -132,7 +158,6 @@ export async function api<T=Record<string,unknown>>(path:string,method='GET',bod
   const user=(result as {user?:{id:string}|null})?.user;
   const responseOwner=currentLocalWorkUserId(),responseGeneration=currentLocalWorkGeneration();
   if((path==='bootstrap'||path==='auth/session')&&user!==undefined){
-   if(user)await rememberAccount(user.id).catch(()=>{});assertScope(responseOwner,responseGeneration);
    if(user)await migrateLegacy(user.id).catch(()=>{});assertScope(responseOwner,responseGeneration);
   }
   const account=user===null?'':user?.id||owner||currentLocalWorkUserId();
@@ -142,20 +167,24 @@ export async function api<T=Record<string,unknown>>(path:string,method='GET',bod
   if(method==='GET'&&account){rememberRead(account,responseGeneration,path,result);emitFreshness(account,path,'network',Date.now());}
   return result;
  }catch(e){
-  if(typeof window==='undefined'||method!=='GET'||signal?.aborted||(e instanceof ApiError&&e.status<500))throw e;
-  assertScope(owner,generation);
-  if(epoch!==sessionEpoch||sessionRejected)throw e;
+  if(typeof window==='undefined'||method!=='GET'||!cacheable(path)||signal?.aborted||(e instanceof ApiError&&e.status<500))throw e;
+  return withSessionGate(async()=>{
+  const assertOffline=()=>{assertScope(owner,generation);if(epoch!==sessionEpoch||sessionRejected)throw e;};
+  assertOffline();
+  if((await sessionFence()).rejected)throw e;
+  assertOffline();
+  // The shared gate keeps the persistent fence unchanged across every await.
   let account=owner;
   const authRestore=path==='bootstrap'||path==='auth/session';
   if(!account&&authRestore){
-   assertScope(owner,generation);
+   assertOffline();
    account=await lastAccount();
-   assertScope(owner,generation);
+   assertOffline();
   }
   if(cacheable(path)&&account){
-   assertScope(owner,generation);
+   assertOffline();
    const stored=await snapshot<T>(account,path);
-   assertScope(owner,generation);
+   assertOffline();
    if(stored&&validGetContract(path,stored.value)){
     if(authRestore&&record(stored.value)&&record(stored.value.user)&&stored.value.user.id!==account)throw scopeError();
     if(authRestore&&!owner){
@@ -170,9 +199,9 @@ export async function api<T=Record<string,unknown>>(path:string,method='GET',bod
    if(path.startsWith('partner/browse?')){
     const params=new URLSearchParams(path.split('?')[1]);
     if(!params.get('salesPeriod')&&!params.get('managerId')&&!params.get('agentId')){
-     assertScope(owner,generation);
+     assertOffline();
      const prepared=await snapshot<{partners:import('./partner-map-types').PartnerSummary[]}>(account,'partner/summary');
-     assertScope(owner,generation);
+     assertOffline();
      if(prepared&&record(prepared.value)&&Array.isArray(prepared.value.partners)){const all=prepared.value.partners,q=normalize(params.get('q')||''),county=params.get('county')||'',city=normalize(params.get('city')||''),route=params.get('route')||'',position=params.get('position')||'',days=params.get('days')||'';
       const selected=all.filter(p=>(!q||normalize([p.id,p.name,p.cui,p.address,p.city,p.county].join(' ')).includes(q))&&(!county||p.county===county)&&(!city||normalize(p.city||'').includes(city))&&(!route||p.route===route)&&(!position||(position==='yes'?p.latitude!==null:p.latitude===null))&&(!days||(days==='never'?!p.lastVisitedAt:!!p.lastVisitedAt&&Date.now()-Date.parse(p.lastVisitedAt)>=Number(days)*86400000)));
       const offset=Number(params.get('offset')||0),limit=Number(params.get('limit')||100),inCounty=all.filter(p=>!county||p.county===county),unique=(items:string[])=>[...new Set(items.filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ro'));
@@ -184,6 +213,7 @@ export async function api<T=Record<string,unknown>>(path:string,method='GET',bod
    }
   }
   throw e;
+  });
  }
 }
 export function startOfflineSync(accountChanged?:()=>void){

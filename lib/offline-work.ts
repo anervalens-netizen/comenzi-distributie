@@ -28,7 +28,10 @@ const MAX_SNAPSHOTS=650;
 const MAX_PINNED_ACCOUNT_BYTES=4*1024*1024;
 const MAX_PINNED_TOTAL_BYTES=12*1024*1024;
 const openings:Partial<Record<'cache'|'work',Promise<IDBDatabase>>>={};
-const notify=()=>{if(typeof window!=='undefined')window.dispatchEvent(new Event(OFFLINE_EVENT));};
+const workChannel=typeof window!=='undefined'&&window.BroadcastChannel?new BroadcastChannel('mobiup-outbox-changes'):null;
+const localNotify=()=>{if(typeof window!=='undefined')window.dispatchEvent(new Event(OFFLINE_EVENT));};
+if(workChannel)workChannel.onmessage=localNotify;
+const notify=()=>{localNotify();workChannel?.postMessage('changed');};
 const request=<T>(req:IDBRequest<T>)=>new Promise<T>((resolve,reject)=>{req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});
 const isPinnedPath=(path:string)=>path==='bootstrap'||path==='auth/session';
 const isFragmentMarker=(value:unknown):value is FragmentMarker=>!!value&&typeof value==='object'&&Array.isArray((value as FragmentMarker).__mobiupFragments)&&typeof (value as FragmentMarker).property==='string';
@@ -172,6 +175,33 @@ export async function readCoverageManifest(userId:string):Promise<CoverageManife
  if(JSON.stringify(checked)!==JSON.stringify(manifest))await saveCoverageManifest(userId,checked);
  return checked;
 }
+// Shared session epoch lives in the existing v1 metadata store, not credentials.
+export type SessionFence={epoch:string;rejected:boolean};
+export async function sessionFence():Promise<SessionFence>{return transaction(['meta'],'readonly',async tx=>(await request(tx.objectStore('meta').get('session-fence')))?.value??{epoch:'',rejected:false});}
+export async function rejectSessionFence(){
+ const value:SessionFence={epoch:crypto.randomUUID(),rejected:true};
+ await transaction(['meta'],'readwrite',tx=>request(tx.objectStore('meta').put({key:'session-fence',value})));
+}
+export async function acceptSessionFence(expected:SessionFence,userId:string){
+ return transaction(['meta'],'readwrite',async tx=>{
+  const store=tx.objectStore('meta'),current=(await request(store.get('session-fence')))?.value as SessionFence|undefined;
+  if((current?.epoch??'')!==expected.epoch)return false;
+  await request(store.put({key:'session-fence',value:{epoch:expected.epoch,rejected:false}}));
+  await request(store.put({key:'active',value:userId}));return true;
+ });
+}
+export function withSessionGate<T>(run:()=>Promise<T>):Promise<T>{
+ if(typeof navigator==='undefined'||!navigator.locks)return Promise.reject(new Error('Browserul nu permite verificarea sesiunii între file. Folosește un browser actualizat.'));
+ return navigator.locks.request('mobiup-session-binding',run);
+}
+// All cooperating tabs serialize queue additions with worker activation. Legacy
+// installed clients do not honor this lock; retaining their assets remains vital.
+export function withOutboxGate<T>(run:()=>Promise<T>,activation=false):Promise<T>{
+ if(typeof navigator!=='undefined'&&navigator.locks)return navigator.locks.request('mobiup-outbox-activation',run);
+ if(activation)return Promise.reject(new Error('Actualizarea sigură între file nu este disponibilă. Sincronizează lucrul și redeschide aplicația într-un browser actualizat.'));
+ return run(); // Saving remains available; this browser cannot offer activation.
+}
+export async function pendingOperationCount(){return transaction(['outbox'],'readonly',tx=>request(tx.objectStore('outbox').count()));}
 export async function rememberAccount(userId:string){await transaction(['meta'],'readwrite',tx=>request(tx.objectStore('meta').put({key:'active',value:userId})));}
 export async function lastAccount(){return transaction(['meta'],'readonly',async tx=>(await request(tx.objectStore('meta').get('active')))?.value as string||'');}
 export async function readWork<T>(userId:string,scope:string,id:string){return transaction(['work'],'readonly',async tx=>(await request(tx.objectStore('work').get(userId+'|'+scope+'|'+id)))?.value as T|undefined);}
@@ -191,7 +221,7 @@ export async function enqueue(userId:string,path:string,method:string,body:unkno
  if(!userId)throw new Error('Contul trebuie pregătit online înainte de lucru offline.');
  if(!((path==='orders'&&method==='POST')||(/^orders\/[^/]+$/.test(path)&&method==='PUT')||(/^partner\/portfolio\/[^/]+$/.test(path)&&method==='PATCH')||(/^partner\/portfolio\/[^/]+\/visits$/.test(path)&&method==='POST')||(path==='partner/planning'&&method==='PUT')))throw new Error('Această operațiune necesită conexiune și confirmare pe server.');
  const operation:PendingOperation={id:crypto.randomUUID(),userId,path,method,body,entity:entityFor(path,body),created:Date.now(),attempts:0,next:0,state:'pending'};
- await transaction(['work','outbox'],'readwrite',async tx=>{
+ await withOutboxGate(()=>transaction(['work','outbox'],'readwrite',async tx=>{
   if(local)await request(tx.objectStore('work').put({key:userId+'|'+local.scope+'|'+local.id,value:local.value}));
   const all=await request(tx.objectStore('outbox').index('user').getAll(userId)) as PendingOperation[];
   // One not-yet-sent edit per entity. Never replace an ambiguous/attempted request.
@@ -199,10 +229,10 @@ export async function enqueue(userId:string,path:string,method:string,body:unkno
   if(method==='POST'&&all.some(o=>o.path===path&&o.method===method&&JSON.stringify(o.body)===JSON.stringify(body)))return;
   if(previous&&method!=='POST'){operation.id=previous.id;operation.created=previous.created;}
   await request(tx.objectStore('outbox').put(operation));
- });notify();return operation;
+ }));notify();return operation;
 }
 export async function removeOperation(id:string){await transaction(['outbox'],'readwrite',tx=>request(tx.objectStore('outbox').delete(id)));notify();}
-async function updateOperation(op:PendingOperation){await transaction(['outbox'],'readwrite',tx=>request(tx.objectStore('outbox').put(op)));notify();}
+async function updateOperation(op:PendingOperation){await withOutboxGate(()=>transaction(['outbox'],'readwrite',tx=>request(tx.objectStore('outbox').put(op))));notify();}
 const invalidateReplayCache=(userId:string,prefixes:string[])=>{if(typeof window!=='undefined')window.dispatchEvent(new CustomEvent(OFFLINE_CACHE_INVALIDATED_EVENT,{detail:{userId,prefixes}}));};
 async function claimLease(userId:string){return transaction(['meta'],'readwrite',async tx=>{const s=tx.objectStore('meta'),key='lease|'+userId;const old=await request(s.get(key));if(old?.until>Date.now())return null;const token=crypto.randomUUID();await request(s.put({key,token,until:Date.now()+45000}));return token;});}
 async function releaseLease(userId:string,token:string){await transaction(['meta'],'readwrite',async tx=>{const s=tx.objectStore('meta'),key='lease|'+userId;if((await request(s.get(key)))?.token===token)await request(s.delete(key));});}
