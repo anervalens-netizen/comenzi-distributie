@@ -11,6 +11,7 @@ stop_last(){ local i=$((${#pids[@]}-1)); kill "${pids[$i]}" 2>/dev/null || true;
 
 python3 tools/test_crm_master_reconcile.py
 python3 tools/test_client_sales_history.py
+python3 tools/test_client_history_upload.py
 python3 tools/test_client_catalog_plan.py
 python3 tools/test_client_catalog_apply.py
 python3 tools/test_client_catalog_geography.py
@@ -77,6 +78,7 @@ node tools/test-audit-regressions.mjs
 node tools/test-partner-portfolio.mjs
 node tools/test-partner-activity-http.mjs
 node tools/test-client-sales-http.mjs
+node tools/test-client-history-import-http.mjs
 node tools/test-partner-map.mjs
 node tools/test-manager-workspace.mjs
 node tools/test-partner-planning.mjs
@@ -94,6 +96,7 @@ if [ -n "$CHROME_BIN" ]; then
   CHROME_BIN="$CHROME_BIN" node tools/test-offline-upgrade-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-list-pagination-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-client-sales-browser.mjs
+  CHROME_BIN="$CHROME_BIN" node tools/test-client-history-import-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-client-import-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-portfolio-navigation-performance.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-order-result-stock-browser.mjs

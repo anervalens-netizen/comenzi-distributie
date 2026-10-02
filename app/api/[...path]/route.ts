@@ -1,3 +1,4 @@
+import {historyImportStatus,historyImportPreview,historyImportCommit} from '@/lib/client-history-import-runtime';
 import {clientSalesOverview} from '@/lib/client-sales-api';
 import {partnerActivityOverview} from '@/lib/partner-activity-api';
 import { readPartnerSales, PartnerSalesInputError } from '@/lib/partner-sales-store';
@@ -254,6 +255,9 @@ async function dispatch(req: Request) {
   }
   if(path.join('/')==='sales/clients'&&req.method==='GET')return response(await clientSalesOverview(readUser,new URL(req.url).searchParams));
   if(path.join('/')==='sales'&&req.method==='GET')return salesView(req,readUser);
+  if(path.join('/')==='client-sales/import/status'&&req.method==='GET')return historyImportStatus(req,user);
+  if(path.join('/')==='client-sales/import/preview'&&req.method==='POST')return historyImportPreview(req,user);
+  if(path.join('/')==='client-sales/import'&&req.method==='POST')return historyImportCommit(req,user);
   if(path.join('/')==='sales/preview'&&req.method==='POST')return salesUpload(req,user,false);
   if(path.join('/')==='sales/import'&&req.method==='POST')return salesUpload(req,user,true);
   if(path.join('/')==='stock'&&req.method==='GET')return stockView(req,readUser);

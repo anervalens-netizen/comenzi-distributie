@@ -62,6 +62,7 @@ def xlsx_rows(z,path,formats=None):
    for c in e:
     ref=c.get('r','');letters=re.sub(r'\d','',ref);i=0
     for x in letters:i=i*26+ord(x)-64
+    if i>256:raise ValueError('Unexpected column count')
     if not i:continue
     ve=c.find('s:v',NS);v=ve.text if ve is not None and ve.text is not None else ''
     typ=c.get('t','n')
@@ -79,7 +80,7 @@ def xlsx_rows(z,path,formats=None):
     cells[i-1]=v
    yield int(e.get('r')), [cells.get(i,'') for i in range(max(cells,default=-1)+1)]
    e.clear();root.clear()
-def workbook(path):
+def workbook(path,allow_inferred_period=False):
  with zipfile.ZipFile(path) as z:
   if sum(x.file_size for x in z.infolist())>2_000_000_000:raise ValueError('Workbook uncompressed size limit')
   root=ET.fromstring(z.read('xl/workbook.xml'))
@@ -102,14 +103,14 @@ def workbook(path):
     elif r[0]=='Data Stop':end=iso(r[1],epoch)
     elif 'Cod Client' in r:
      if r!=HEADERS:raise ValueError('Unexpected or duplicate header; explicit mapping required')
-     if not start or not end or start>end:raise ValueError('Declared complete reporting period required')
+     if (start is None)!=(end is None) or (start and start>end) or (not start and not allow_inferred_period):raise ValueError('Declared complete reporting period required')
      header=r;yield 'metadata',{'sheet':sheet.get('name'),'start':start,'end':end,'header':r}
     elif rn>20:raise ValueError('Header not found')
     continue
    if len(r)>len(header) and any(r[len(header):]):raise ValueError('Unexpected extra columns')
    r=r+['']*(len(header)-len(r));v=dict(zip(header,r))
    date=iso(v['Data'],epoch)
-   if not start<=date<=end:raise ValueError('Transaction outside declared period at row '+str(rn))
+   if start and not start<=date<=end:raise ValueError('Transaction outside declared period at row '+str(rn))
    yield 'row',{'sheet':sheet.get('name'),'row':rn,'date':date,'raw':v,'quantity_micros':scaled(v['Cantitate'],1_000_000),'price_cents':scaled(v['Pret'],100) if v['Pret'].strip() else None,'value_cents':scaled(v['Valoare'],100) if v['Valoare'].strip() else None,'quality_issue':','.join(k+'_missing' for k in ('Pret','Valoare') if not v[k].strip())}
   if header is None:raise ValueError('Header not found')
 class Resolver:

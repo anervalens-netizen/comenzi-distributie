@@ -51,7 +51,7 @@ export default defineConfig(async () => {
 
   return {
     css: { postcss: { plugins: [tailwindcss()] } },
-    resolve: { alias: { '#mobiup-runtime': resolve(nodeTarget ? 'lib/runtime-node.ts' : 'lib/runtime-cloudflare.ts'), '#mobiup-sales-parser': resolve(nodeTarget ? 'lib/sales-parser-node.ts' : 'lib/sales-parser-cloudflare.ts'), '#mobiup-stock-parser': resolve(nodeTarget ? 'lib/stock-parser-node.ts' : 'lib/stock-parser-cloudflare.ts'), '#mobiup-sales-view': resolve(nodeTarget ? 'lib/sales-view-node.ts' : 'lib/sales-view-direct.ts') } },
+    resolve: { alias: { '#mobiup-client-history-import': resolve(nodeTarget ? 'lib/client-history-import-node.ts' : 'lib/client-history-import-cloudflare.ts'), '#mobiup-runtime': resolve(nodeTarget ? 'lib/runtime-node.ts' : 'lib/runtime-cloudflare.ts'), '#mobiup-sales-parser': resolve(nodeTarget ? 'lib/sales-parser-node.ts' : 'lib/sales-parser-cloudflare.ts'), '#mobiup-stock-parser': resolve(nodeTarget ? 'lib/stock-parser-node.ts' : 'lib/stock-parser-cloudflare.ts'), '#mobiup-sales-view': resolve(nodeTarget ? 'lib/sales-view-node.ts' : 'lib/sales-view-direct.ts') } },
     server: isCodexSeatbeltSandbox
       ? { watch: { useFsEvents: false, usePolling: true } }
       : undefined,
