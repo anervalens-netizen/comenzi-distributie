@@ -7,6 +7,9 @@ const originalWindow=globalThis.window;
 try {
   class MemoryStorage { map=new Map(); get length(){return this.map.size;} key(i){return Array.from(this.map.keys())[i]??null;} getItem(k){return this.map.has(k)?this.map.get(k):null;} setItem(k,v){this.map.set(k,String(v));} removeItem(k){this.map.delete(k);} }
   const events=new EventTarget(),storage=new MemoryStorage();events.localStorage=storage;globalThis.window=events;let expired=0;events.addEventListener(SESSION_EXPIRED_EVENT,()=>expired++);
+  // Private requests now require the same validated binding as the application.
+  const authenticate=async()=>{globalThis.fetch=async()=>Response.json({user:{id:'user-a'}});await api('auth/session');};
+  await authenticate();
   globalThis.fetch=async()=>new Response(JSON.stringify({error:'Conflict test'}),{status:409,headers:{'Content-Type':'application/json'}});
   await assert.rejects(()=>api('orders/o1','PUT',{}),error=>error instanceof ApiError && error.status===409 && error.message==='Conflict test');
 
@@ -19,6 +22,7 @@ try {
 
   globalThis.fetch=async()=>new Response(JSON.stringify({ok:true}),{status:200,headers:{'Content-Type':'application/json'}});
   assert.deepEqual(await api('health'),{ok:true});
+  await authenticate();
   setLocalWorkUserId('user-a',storage);writeLocalWork('order','user-a','o-final',{notes:'local recovery'},storage);
   globalThis.fetch=async()=>new Response(JSON.stringify({order:{id:'o-final',status:'finalized'}}),{status:200,headers:{'Content-Type':'application/json'}});
   await api('orders/o-final');

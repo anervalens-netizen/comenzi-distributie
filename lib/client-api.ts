@@ -53,6 +53,32 @@ function scopeError(){return new ApiError(409,'Contul s-a schimbat. Reîncarcă 
 function assertScope(owner:string,generation:number){
  if(currentLocalWorkUserId()!==owner||currentLocalWorkGeneration()!==generation)throw scopeError();
 }
+type Fence=Awaited<ReturnType<typeof sessionFence>>;
+let localAuthority:{owner:string;generation:number;fence:Fence}|undefined;
+const publicRequest=(path:string,method:string)=>method==='GET'&&['health','bootstrap','auth/session'].includes(path)||method==='POST'&&path==='auth/login';
+// Same-account auth refreshes share an admission. Logout or A -> B -> A does
+// not: a locally bound tab must explicitly rediscover authority in that case.
+function sameAuthority(current:Fence,expected:Fence,owner:string){
+ return !current.rejected&&(!current.userId||current.userId===owner)&&(current.epoch===expected.epoch||
+  current.userId===owner&&current.admissionEpoch!==undefined&&(
+   expected.userId===owner&&expected.admissionEpoch===current.admissionEpoch||
+   !expected.userId&&!expected.rejected&&current.admissionEpoch===expected.epoch));
+}
+function assertAuthority(fence:Fence,owner:string,generation:number,epoch:number,expected?:Fence){
+ assertScope(owner,generation);
+ const bound=localAuthority?.owner===owner&&localAuthority.generation===generation?localAuthority.fence:undefined;
+ if(!owner||sessionRejected||epoch!==sessionEpoch||fence.rejected||fence.userId&&fence.userId!==owner||
+  expected&&!sameAuthority(fence,expected,owner)||bound&&!sameAuthority(fence,bound,owner)){
+  invalidateApiReadCache();throw scopeError();
+ }
+ // Older installed clients have no userId in their unrejected fence. Keep an
+ // existing local account, never infer one from shared metadata. The server
+ // checks that captured account via X-Operation-User even for ordinary reads.
+ localAuthority={owner,generation,fence};
+}
+async function privateAuthority(owner:string,generation:number,epoch:number,expected?:Fence){
+ const fence=await sessionFence();assertAuthority(fence,owner,generation,epoch,expected);return fence;
+}
 type ReadCacheEntry={userId:string;generation:number;path:string;value:unknown;at:number;bytes:number};
 const readCache=new Map<string,ReadCacheEntry>();
 const READ_CACHE_MAX_ENTRIES=96,READ_CACHE_MAX_BYTES=4*1024*1024;
@@ -88,10 +114,11 @@ export async function networkApi<T=Record<string,unknown>>(path: string,method='
   const requestOwner=currentLocalWorkUserId();
   const requestGeneration=currentLocalWorkGeneration();
   method=method.toUpperCase();
+  const isPrivate=!publicRequest(path,method);
   const controller=new AbortController();
   const cancel=()=>controller.abort(signal?.reason);signal?.addEventListener('abort',cancel,{once:true});if(signal?.aborted)cancel();
   const timer=setTimeout(()=>controller.abort(new Error('Cererea a depășit timpul de așteptare.')),20000);
-  const headers:Record<string,string>={};if(operationUser)headers['X-Operation-User']=operationUser;
+  const headers:Record<string,string>={};if(isPrivate&&requestOwner)headers['X-Operation-User']=requestOwner;
   const options:RequestInit={method,credentials:'same-origin',signal:controller.signal,headers};
   if(body && method!=='GET' && method!=='HEAD'){headers['Content-Type']='application/json';if(operationId)headers['X-Operation-Id']=operationId;options.body=JSON.stringify(body);}
   let res:Response;let requestFence:Awaited<typeof fencePromise>;
@@ -99,6 +126,7 @@ export async function networkApi<T=Record<string,unknown>>(path: string,method='
    // Capture authority before dispatch (also for a possible 401), including on a
    // newly opened tab whose IndexedDB connection is not ready yet.
    requestFence=await fencePromise;
+   if(isPrivate){assertAuthority(requestFence,requestOwner,requestGeneration,requestEpoch);if(operationUser&&operationUser!==requestOwner)throw scopeError();}
    if(controller.signal.aborted)throw controller.signal.reason;
    res=await requestFetch('/api/'+path,options);
   }catch(error){clearTimeout(timer);signal?.removeEventListener('abort',cancel);throw error;}
@@ -115,6 +143,7 @@ export async function networkApi<T=Record<string,unknown>>(path: string,method='
     }
     throw new ApiError(res.status,message,data);
   }
+  if(isPrivate)await privateAuthority(requestOwner,requestGeneration,requestEpoch,requestFence);
   if(method==='GET'&&!validGetContract(path,data))throw new ApiError(502,'Serverul a trimis date incompatibile cu această pagină.',data);
   if(path==='auth/logout'&&(requestEpoch!==sessionEpoch||requestOwner!==currentLocalWorkUserId()||requestGeneration!==currentLocalWorkGeneration()))throw scopeError();
   if((path==='bootstrap'||path==='auth/session')&&data&&typeof data==='object'&&'user' in data) {
@@ -128,11 +157,14 @@ export async function networkApi<T=Record<string,unknown>>(path: string,method='
      await withSessionGate(async()=>{
       if(requestEpoch!==sessionEpoch||((requestOwner!==currentLocalWorkUserId()||requestGeneration!==currentLocalWorkGeneration())&&currentLocalWorkUserId()!==userId))throw scopeError();
       if(!requestFence||!await acceptSessionFence(requestFence,userId))throw scopeError();
-      sessionRejected=false;setLocalWorkUserId(userId);
+      const accepted=await sessionFence();
+      if(accepted.rejected||accepted.userId!==userId||!(accepted.admissionEpoch===requestFence.epoch||sameAuthority(accepted,requestFence,userId)))throw scopeError();
+      sessionRejected=false;setLocalWorkUserId(userId);invalidateApiReadCache();
+      localAuthority={owner:userId,generation:currentLocalWorkGeneration(),fence:accepted};
      },true);
     }
   } else if(path==='auth/logout'&&method==='POST') {
-    await rejectSession();
+    await rejectSession(requestFence);
   } else if(method==='DELETE'&&/^orders\/[^/]+$/.test(path)) {
     const userId=currentLocalWorkUserId();
     const orderId=path.slice('orders/'.length);
@@ -147,13 +179,18 @@ export async function api<T=Record<string,unknown>>(path:string,method='GET',bod
  const epoch=sessionEpoch;
  const owner=currentLocalWorkUserId();
  const generation=currentLocalWorkGeneration();
+ const isPrivate=!publicRequest(path,method);
+ const authority=isPrivate?await privateAuthority(owner,generation,epoch):undefined;
+ if(authority)assertAuthority(authority,owner,generation,epoch);
+ const confirmAuthority=async()=>{if(isPrivate)await privateAuthority(owner,generation,epoch,authority);};
  if(method==='GET'&&path!=='bootstrap'&&path!=='auth/session'&&options.preferCache&&!options.forceRefresh&&owner){
   const key=owner+'|'+generation+'|'+path,entry=readCache.get(key),maxAge=Math.max(0,options.maxAgeMs??30000);
-  if(entry&&Date.now()-entry.at<=maxAge){readCache.delete(key);readCache.set(key,entry);return clone(entry.value) as T;}
+  if(entry&&Date.now()-entry.at<=maxAge){if(signal?.aborted)throw signal.reason;readCache.delete(key);readCache.set(key,entry);return clone(entry.value) as T;}
  }
  try{
   const result=await networkApi<T>(path,method,body,signal);
   if(path==='auth/logout')return result;
+  await confirmAuthority();
   if(!path.startsWith('auth/')&&path!=='bootstrap')assertScope(owner,generation);
   const user=(result as {user?:{id:string}|null})?.user;
   const responseOwner=currentLocalWorkUserId(),responseGeneration=currentLocalWorkGeneration();
@@ -164,6 +201,7 @@ export async function api<T=Record<string,unknown>>(path:string,method='GET',bod
   if(method!=='GET')invalidateApiReadCache();
   if(typeof window!=='undefined'&&sessionStorageAvailable()&&method==='GET'&&cacheable(path)&&account)await saveSnapshot(account,path,result).catch(error=>{window.dispatchEvent(new CustomEvent('mobiup-storage-error',{detail:error instanceof Error?error.message:'Datele primite nu au putut fi pregătite pentru offline.'}));});
   assertScope(responseOwner,responseGeneration);
+  await confirmAuthority();
   if(method==='GET'&&account){rememberRead(account,responseGeneration,path,result);emitFreshness(account,path,'network',Date.now());}
   return result;
  }catch(e){
@@ -173,9 +211,10 @@ export async function api<T=Record<string,unknown>>(path:string,method='GET',bod
   assertOffline();
   const fence=await sessionFence();
   if(!sessionStorageAvailable()||fence.rejected)throw e;
+  if(isPrivate)assertAuthority(fence,owner,generation,epoch,authority);
   assertOffline();
   // Recheck after reads too: an online tab without Web Locks can still commit CAS.
-  const confirmFence=async()=>{const current=await sessionFence();assertOffline();if(!sessionStorageAvailable()||current.epoch!==fence.epoch)throw e;};
+  const confirmFence=async()=>{const current=await sessionFence();assertOffline();if(!sessionStorageAvailable()||!sameAuthority(current,fence,account))throw scopeError();if(isPrivate)assertAuthority(current,owner,generation,epoch,authority);};
   let account=owner;
   const authRestore=path==='bootstrap'||path==='auth/session';
   if(!account&&authRestore){
@@ -194,6 +233,7 @@ export async function api<T=Record<string,unknown>>(path:string,method='GET',bod
     if(authRestore&&!owner){
      const cachedUser=(stored.value as {user?:{id?:unknown}|null})?.user;
      if(!cachedUser||cachedUser.id!==account||!restoreLocalWorkUserId(account,generation))throw scopeError();
+     localAuthority={owner:account,generation:currentLocalWorkGeneration(),fence};
     }
     rememberRead(account,currentLocalWorkGeneration(),path,stored.value,stored.at);
     window.dispatchEvent(new CustomEvent('mobiup-offline-snapshot',{detail:{path,at:stored.at}}));
