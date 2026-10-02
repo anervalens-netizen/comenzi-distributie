@@ -587,7 +587,10 @@ try {
   await cdp.evaluate("[...document.querySelectorAll('.settings-tabs [role=tab]')].find(tab=>tab.textContent?.includes('Importuri')).click();true");
   await waitFor(()=>cdp.evaluate("!!document.querySelector('.sales-import')&&!!document.querySelector('.stock-import')"),'regional manager import tools');
   check(await cdp.evaluate("!!document.querySelector('.sales-import')&&!!document.querySelector('.stock-import')"),'Regional manager sees both sales and stock import tools');
-  await waitFor(()=>cdp.evaluate("document.querySelectorAll('.import-last-status').length===2&&[...document.querySelectorAll('.import-last-status')].every(node=>!node.textContent?.includes('se verifică'))"),'manager import timestamps');
+  // Customer history is a third independent import. Wait for each source's
+  // status rather than relying on the former two-panel layout.
+  await waitFor(()=>cdp.evaluate("document.querySelectorAll('.import-last-status').length===3&&[...document.querySelectorAll('.import-last-status')].every(node=>!/se verifică/i.test(node.textContent||''))"),'all three manager import statuses');
+  check(await cdp.evaluate("!!document.querySelector('[aria-label=\"Import vânzări pe clienți\"] .import-last-status')&&!!document.querySelector('[aria-label=\"Fișier vânzări pe clienți\"]')"),'Independent customer-history import and its status remain available');
   check(await cdp.evaluate("[...document.querySelectorAll('.import-last-status')].map(node=>node.textContent).some(text=>text?.startsWith('Ultimul import vânzări'))&&[...document.querySelectorAll('.import-last-status')].map(node=>node.textContent).some(text=>text?.startsWith('Ultimul import stoc'))"),'Both import sections show latest-import status');
   console.log(`PASS: ${checks} Chrome lifecycle/accessibility and audit regression checks.`);
 } finally {
