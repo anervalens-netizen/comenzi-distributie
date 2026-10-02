@@ -91,7 +91,7 @@ try{
   const click=selector=>evaluate('document.querySelector('+JSON.stringify(selector)+').click();true');
   const fill=(selector,value)=>evaluate('(()=>{const input=document.querySelector('+JSON.stringify(selector)+');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,"value").set.call(input,'+JSON.stringify(value)+');input.dispatchEvent(new Event("input",{bubbles:true}));return true})()');
   const select=(selector,value)=>evaluate('(()=>{const input=document.querySelector('+JSON.stringify(selector)+');input.value='+JSON.stringify(value)+';input.dispatchEvent(new Event("change",{bubbles:true}));return true})()');
-  const resolveMail=(index,id)=>evaluate('fixture.calls['+index+'].resolve(fixture.mail('+JSON.stringify(id)+'));true');
+  const resolveMail=(index,id)=>evaluate('fixture.calls.slice('+index+').find(call=>call.path==="/api/orders/"+'+JSON.stringify(id)+'+"/mail").resolve(fixture.mail('+JSON.stringify(id)+'));true');
   const reset=async()=>{await evaluate('fixture.close();true');await delay(40);await evaluate('fixture.calls=[];fixture.downloads=[];fixture.shared=[];fixture.created=[];fixture.revoked=[];fixture.ignoreAbort=false;fixture.shareError="";true');};
   await send('Runtime.enable');await send('Page.enable');await send('Page.navigate',{url:'http://127.0.0.1:'+server.address().port});
   await waitFor('!!window.fixture?.show');
@@ -111,10 +111,10 @@ try{
   check(await evaluate('fixture.created.length===0&&fixture.downloads.length===0'),'Ordinary consultation allocates no blob URL and causes no download');
 
   await reset();await evaluate('fixture.show("auto","sim","finalized",true);true');await waitFor('fixture.calls.length===2');
-  check(await evaluate('fixture.calls[0].path.endsWith("/mail")&&fixture.calls[1].path.endsWith("/excel")'),'Autodownload starts independent mail/Excel concurrently before either resolves');
+  check(await evaluate('fixture.calls.some(call=>call.path.endsWith("/mail"))&&fixture.calls.some(call=>call.path.endsWith("/excel"))'),'Autodownload starts independent mail/Excel concurrently before either resolves');
   await resolveMail(0,'auto');await waitFor('!document.querySelector(".result-buttons button").disabled');
   check(await evaluate('fixture.downloads.length===0'),'Mail readiness never downloads before file readiness');
-  await evaluate('fixture.calls[1].resolve("synthetic-excel-auto");true');await waitFor('fixture.downloads.length===1');
+  await evaluate('fixture.calls.find(call=>call.path==="/api/orders/auto/excel").resolve("synthetic-excel-auto");true');await waitFor('fixture.downloads.length===1');
   check(await evaluate('fixture.downloads[0].name==="synthetic-auto.xlsx"&&fixture.downloads[0].url.startsWith("blob:")'),'Autodownload preserves mail-derived filename and generated file');
   await click('.result-buttons a');
   check(await evaluate('fixture.calls.length===2&&fixture.downloads.length===2&&fixture.downloads[0].url===fixture.downloads[1].url'),'Manual redownload reuses prepared bytes rather than another Excel GET');
@@ -122,7 +122,7 @@ try{
   check(await evaluate('fixture.revoked[0]===fixture.created[0]'),'Prepared object URL is revoked when result unmounts');
 
   await reset();await evaluate('fixture.show("native","sim","finalized",false,true);true');await waitFor('fixture.calls.length===2');
-  await evaluate('fixture.calls[1].resolve("synthetic-excel-native");true');await delay(40);
+  await evaluate('fixture.calls.find(call=>call.path==="/api/orders/native/excel").resolve("synthetic-excel-native");true');await delay(40);
   check(await evaluate('fixture.created.length===0'),'File waits for correct mail-derived filename even if Excel finishes first');
   await resolveMail(0,'native');await waitFor('!![...document.querySelectorAll("button")].find(button=>button.textContent.includes("Distribuie Excelul"))');
   check(await evaluate('fixture.downloads.length===0'),'Native share preparation does not auto-download history');
@@ -137,7 +137,7 @@ try{
   check(await evaluate('fixture.calls.length===2&&document.querySelector(".result-buttons a").href.startsWith("blob:")'),'Failed native share preserves prepared download and manual email fallback');
 
   await reset();await evaluate('fixture.show("failure","sim","finalized",true);true');await waitFor('fixture.calls.length===2');
-  await resolveMail(0,'failure');await evaluate('fixture.calls[1].resolve("synthetic failure",503);true');
+  await resolveMail(0,'failure');await evaluate('fixture.calls.find(call=>call.path==="/api/orders/failure/excel").resolve("synthetic failure",503);true');
   await waitFor('!!document.querySelector("[role=alert]")');
   check(await evaluate('!document.querySelector(".result-buttons button").disabled&&fixture.downloads.length===0'),'Excel failure preserves available mail and never auto-downloads');
 
@@ -145,14 +145,14 @@ try{
   await evaluate('fixture.show("new","sim","finalized",true);true');await waitFor('fixture.calls.length===4');
   check(await evaluate('fixture.calls[0].aborted&&fixture.calls[1].aborted'),'Changing document aborts both stale requests');
   check(await evaluate('document.querySelector(".result-buttons button").disabled'),'New document never exposes prior mail/file readiness');
-  await resolveMail(0,'old');await evaluate('fixture.calls[1].resolve("old excel");true');await delay(40);
+  await resolveMail(0,'old');await evaluate('fixture.calls.find(call=>call.path==="/api/orders/old/excel").resolve("old excel");true');await delay(40);
   check(await evaluate('fixture.created.length===0&&fixture.downloads.length===0'),'Late cancelled response cannot create or download an old document');
-  await resolveMail(2,'new');await evaluate('fixture.calls[3].resolve("new excel");true');await waitFor('fixture.downloads.length===1');
+  await resolveMail(2,'new');await evaluate('fixture.calls.find(call=>call.path==="/api/orders/new/excel").resolve("new excel");true');await waitFor('fixture.downloads.length===1');
   check(await evaluate('fixture.downloads[0].name==="synthetic-new.xlsx"'),'Only active document can auto-download after a response race');
 
   await reset();await evaluate('fixture.ignoreAbort=true;fixture.show("closed","sim","finalized",true);true');await waitFor('fixture.calls.length===2');
   await evaluate('fixture.close();true');await waitFor('fixture.calls.every(call=>call.aborted)');
-  await resolveMail(0,'closed');await evaluate('fixture.calls[1].resolve("closed excel");true');await delay(40);
+  await resolveMail(0,'closed');await evaluate('fixture.calls.find(call=>call.path==="/api/orders/closed/excel").resolve("closed excel");true');await delay(40);
   check(await evaluate('fixture.created.length===0&&fixture.downloads.length===0'),'Unmount cancellation suppresses late automatic download');
 
   const stock={warehouseId:'w-a',importedAt:'2026-09-30T10:00:00Z',depotImportedAt:null,depot:{},filename:'synthetic-stock.xlsx',rows:[{code:'B2',name:'Încărcător',category:'B',quantity:3},{code:'A1',name:'Cablu',category:'A',quantity:2},{code:'B1',name:'Telefon',category:'B',quantity:4},{code:'N1',name:'Produs fără grup',category:null,quantity:5},{code:'A2',name:'Cablu USB',category:'A',quantity:7}]};

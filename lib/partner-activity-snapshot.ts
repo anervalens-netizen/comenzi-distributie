@@ -48,8 +48,9 @@ export function activityRange(period:string,start:string,asOf:string){
 }
 export type ActivitySnapshot=ReturnType<typeof readActivitySnapshot>;
 /** Batch rebuild outside the HTTP process. Source history and application DBs are read-only. */
-export function buildActivitySnapshot(directory:string,today=bucharestToday()) {
-  const history=resolve(directory,'client-history','client-sales-history.sqlite'),target=resolve(directory,'client-history','partner-activity.sqlite');
+export function buildActivitySnapshot(directory:string,today=bucharestToday(),outputTarget?:string) {
+  const history=resolve(directory,'client-history','client-sales-history.sqlite'),target=outputTarget?resolve(outputTarget):resolve(directory,'client-history','partner-activity.sqlite');
+  if(target===history||target===resolve(directory,'mobiup.sqlite')||target===resolve(directory,'sales.sqlite'))throw new Error('Derived output cannot replace a source database');
   const sourceGeneration=historyFileGeneration(history);
   const temp=target+'.tmp-'+randomUUID(),c=new DatabaseSync(history,{readOnly:true}),catalog=new DatabaseSync(resolve(directory,'mobiup.sqlite'),{readOnly:true});
   let out:DatabaseSync|undefined;

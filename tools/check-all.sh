@@ -34,6 +34,8 @@ node tools/test-cloudflare-module-graph.mjs
 node tools/test-stock-cloudflare.mjs
 npm run build:server
 node tools/test-client-sales-remediation.mjs
+node tools/test-partner-detail-remediation.mjs
+node tools/test-partner-detail-http.mjs
 node tools/test-client-sales-performance.mjs
 node tools/test-pwa-preparation.mjs
 node tools/test-runtime-init.mjs

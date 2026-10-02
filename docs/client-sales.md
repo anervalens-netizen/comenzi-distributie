@@ -80,3 +80,5 @@ HTTP completions during reporting. Printed timings are measurements, not portabl
 latency guarantees or evidence of production acceptance.
 
 The source fingerprint is computed in bounded UTF-8 byte chunks for HTTP cold reads and shared between concurrent months for the same filesystem generation. It remains identical to the batch fingerprint. Warm reports must demonstrate cache admission in tests, including wide synthetic company labels.
+
+The schema 7 snapshot also contains indexed company and point identity lookups for cold detail reads. Batch staging can pass an explicit output path as the third `buildActivitySnapshot` argument while reading the canonical source directory. Deployment moves only the derived output; a copied or replaced raw database requires rebuilding its derived snapshot. Source databases cannot be specified as derived output. The HTTP adapter uses cooperative source validation and rechecks the current authorized card after yielding.

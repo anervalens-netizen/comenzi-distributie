@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
-import {copyFileSync,renameSync} from 'node:fs';
+import {copyFileSync,renameSync,mkdirSync} from 'node:fs';
 import {join} from 'node:path';
 import {createServer} from 'node:http';
 import {performance} from 'node:perf_hooks';
@@ -15,6 +15,13 @@ try {
  // Legacy reference without partners_json is supported by the same batch resolver.
  assert.equal((await detail()).state,'unavailable');
  m.buildActivitySnapshot(root,'2026-09-30');assert.deepEqual(await detail(),sync());
+ // Deployment stages derived output elsewhere while reading the canonical live
+ // source path. Persisted source identity is not stamped with a staging alias.
+ const stage=join(root,'isolated-derived-stage');mkdirSync(stage);
+ m.buildActivitySnapshot(root,'2026-09-30',join(stage,'candidate.sqlite'));
+ renameSync(join(stage,'candidate.sqlite'),snapshot);assert.deepEqual(await detail(),sync());
+ assert.throws(()=>m.buildActivitySnapshot(root,'2026-09-30',history),/cannot replace a source/);
+
  // A caller-owned connection can predate the pathname generation, even when it
  // supplies that generation explicitly. It may neither hit nor populate the cache.
  const old=new DatabaseSync(history,{readOnly:true});old.exec('BEGIN');old.prepare('SELECT * FROM history_meta').get();
