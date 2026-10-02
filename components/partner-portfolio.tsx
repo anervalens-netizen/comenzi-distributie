@@ -340,7 +340,7 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='', active=
           <PartnerMap
             getView={getMapView}
             onView={saveMapView}
-            active={current}
+            active={settled}
             filters={requestKey}
             bounds={current ? data.bounds : undefined}
             styleUrl={data.styleUrl}

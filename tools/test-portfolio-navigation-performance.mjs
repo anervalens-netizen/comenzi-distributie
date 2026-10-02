@@ -78,7 +78,7 @@ try{
  check(since(typed,'/api/partner/map').every(r=>r.params.q==='Synthetic partner 02'),'Map never fetches intermediate typed filters');
  evidence.scenarios.debounceAfterPagination={browseRequests:typedBrowse.map(r=>r.params),mapRequests:since(typed,'/api/partner/map').map(r=>r.params)};
  await fill('slow');check(await evaluate("document.querySelectorAll('.partner-card').length===10"),'Previous successful results remain during the delayed search');for(let i=0;i<30&&!requests.some(r=>r.params.q==='slow');i++)await delay(50);
- check(requests.some(r=>r.path==='/api/partner/browse'&&r.params.q==='slow'),'Delayed old request starts');await fill('fresh');await waitFor("document.querySelector('.partner-card strong')?.textContent==='Fresh synthetic response'");await delay(1100);
+ check(requests.some(r=>r.path==='/api/partner/browse'&&r.params.q==='slow'),'Delayed old request starts');await delay(100);check(!requests.some(r=>r.path==='/api/partner/map'&&r.params.q==='slow'),'Map waits for matching filter bounds instead of saving the old viewport under the new filter');await fill('fresh');await waitFor("document.querySelector('.partner-card strong')?.textContent==='Fresh synthetic response'");await delay(1100);
  check(await evaluate("document.querySelector('.partner-card strong')?.textContent==='Fresh synthetic response'"),'Delayed stale response cannot overwrite newer filter results');
  evidence.scenarios.staleResponse={visible:'Fresh synthetic response'};
  await mapSettled();const contained=mark();await evaluate("document.querySelector('.maplibregl-ctrl-zoom-in').click();true");await delay(800);
