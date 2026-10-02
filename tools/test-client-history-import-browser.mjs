@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import {build} from 'esbuild';
-import {mkdtempSync,readFileSync,rmSync,existsSync} from 'node:fs';
+import {mkdtempSync,readFileSync,rmSync,existsSync,writeFileSync,mkdirSync} from 'node:fs';
 import {join,resolve} from 'node:path';
 import {tmpdir} from 'node:os';
 import {spawn} from 'node:child_process';
 import {createServer} from 'node:http';
 const root=resolve('.'),temp=mkdtempSync(join(tmpdir(),'history-import-browser-')),delay=ms=>new Promise(r=>setTimeout(r,ms));
-await build({stdin:{contents:"import React from 'react';import{createRoot}from'react-dom/client';import{ClientHistoryImport}from'./components/client-history-import';createRoot(document.getElementById('root')).render(<main className='main-content'><ClientHistoryImport/></main>);",resolveDir:root,loader:'tsx'},outfile:join(temp,'ui.js'),bundle:true,platform:'browser',jsx:'automatic',define:{'process.env.NODE_ENV':'"production"'},logLevel:'silent'});
+await build({stdin:{contents:"import React from 'react';import{createRoot}from'react-dom/client';import{ClientHistoryImport}from'./components/client-history-import';import{SalesImport}from'./components/sales';import{StockImport}from'./components/stock-import';createRoot(document.getElementById('root')).render(<main className='main-content'><h1>Importuri</h1><div className='settings-form panel'><div className='settings-imports'><SalesImport lastImportText='Ultimul import vânzări: raport-zilnic.xlsx · 2 rânduri'/><ClientHistoryImport/><StockImport lastImportText='Ultimul import stoc: stoc.xlsx · 100 rânduri'/></div></div></main>);",resolveDir:root,loader:'tsx'},outfile:join(temp,'ui.js'),bundle:true,platform:'browser',jsx:'automatic',define:{'process.env.NODE_ENV':'"production"'},logLevel:'silent'});
 const preview={month:'2024-02',from:'2024-02-01',through:'2024-02-02',rows:2,valueCents:3800,quantityMicros:4000000,previous:{rows:3,valueCents:6000,lastDate:'2024-02-03'},requiresAcknowledgement:true,removedOccurrences:2,coverageShorter:true,inferredPeriod:true};
 let job=null,failedPoll=false,commits=0,uploadName='';
 const server=createServer(async(req,res)=>{
@@ -18,11 +18,12 @@ const server=createServer(async(req,res)=>{
   else if(url.searchParams.has('job')){
    if(!failedPoll){failedPoll=true;res.statusCode=503;res.end('{}');return;}job={...job,state:'ready'};
   }
-  res.end(JSON.stringify({job,latest:null}));return;
+  res.end(JSON.stringify({job,latest:{filename:'Raport_cumulativ_vanzari_pe_clienti_export_complet.xlsx',from:'2024-02-01',through:'2024-02-02',rows:2,importedAt:'2024-02-03T08:00:00Z'}}));return;
  }
  if(url.pathname==='/ui.js'){res.setHeader('Content-Type','text/javascript');res.end(readFileSync(join(temp,'ui.js')));return;}
+ if(url.pathname==='/ui.css'){res.setHeader('Content-Type','text/css');res.end(readFileSync(join(temp,'ui.css')));return;}
  if(url.pathname==='/base.css'){res.setHeader('Content-Type','text/css');res.end(readFileSync('app/globals.css','utf8').replace(/^@import .*;$/gm,''));return;}
- res.setHeader('Content-Type','text/html');res.end('<html><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/base.css"></head><body><div id="root"></div><script src="/ui.js"></script></body></html>');
+ res.setHeader('Content-Type','text/html');res.end('<html><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/base.css"><link rel="stylesheet" href="/ui.css"></head><body style="--font-geist-sans:Arial"><div id="root"></div><script src="/ui.js"></script></body></html>');
 });
 await new Promise(r=>server.listen(0,'127.0.0.1',r));
 const origin='http://127.0.0.1:'+server.address().port,profile=join(temp,'chrome');
@@ -39,8 +40,8 @@ try{
  const run=async expression=>{const r=await send('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true});if(r.exceptionDetails)throw Error(JSON.stringify(r.exceptionDetails));return r.result.value;};
  const wait=async expression=>{for(let i=0;i<150;i++){if(await run(expression))return;await delay(100);}throw Error('Not ready: '+expression);};
  await send('Page.enable');await send('Runtime.enable');await send('Emulation.setDeviceMetricsOverride',{width:360,height:800,deviceScaleFactor:1,mobile:true});
- await send('Page.navigate',{url:origin});await wait("document.querySelector('input[type=file]')!==null");
- await run("(()=>{const input=document.querySelector('input[type=file]'),dt=new DataTransfer();dt.items.add(new File(['synthetic'],'cumulative.xlsx'));input.files=dt.files;input.dispatchEvent(new Event('change',{bubbles:true}));})()");
+ await send('Page.navigate',{url:origin});await wait("document.querySelector('.client-history-import input[type=file]')!==null");
+ await run("(()=>{const input=document.querySelector('.client-history-import input[type=file]'),dt=new DataTransfer();dt.items.add(new File(['synthetic'],'cumulative.xlsx'));input.files=dt.files;input.dispatchEvent(new Event('change',{bubbles:true}));})()");
  await wait("document.body.textContent.includes('Conexiunea a fost întreruptă')");
  await wait("document.querySelector('.sales-preview')!==null");
  assert.equal(uploadName,'cumulative.xlsx');assert(await run("document.querySelector('.sales-preview-actions button').disabled"));
@@ -50,8 +51,14 @@ try{
  await run("document.querySelector('input[type=checkbox]').click();document.querySelector('.sales-preview-actions button').click()");
  await wait("document.body.textContent.includes('centralizările au fost actualizate')");
  assert.equal(commits,1);assert(await run("document.querySelector('output')!==null"));
+ assert(await run("getComputedStyle(document.querySelector('.history-import-status')).display==='flex'"),'Status uses a block layout');
+ assert(await run("(()=>{const card=document.querySelector('.client-history-import').getBoundingClientRect(),status=document.querySelector('.history-import-status').getBoundingClientRect();return status.left>=card.left+12&&status.right<=card.right-12&&status.bottom<=card.bottom-12})()"),'Success fits inside card with padding');
+ const output=process.env.BROWSER_PROOF_DIR;
+ async function screenshot(name){if(output){mkdirSync(output,{recursive:true});const metrics=await send('Page.getLayoutMetrics');const result=await send('Page.captureScreenshot',{format:'png',captureBeyondViewport:true,clip:{x:0,y:0,width:metrics.cssContentSize.width,height:metrics.cssContentSize.height,scale:1}});writeFileSync(join(output,name),Buffer.from(result.data,'base64'));}}
+ await screenshot('imports-mobile.png');
  await send('Emulation.setDeviceMetricsOverride',{width:1280,height:900,deviceScaleFactor:1,mobile:false});
  assert(await run('document.documentElement.scrollWidth<=1280'));
+ await screenshot('imports-desktop.png');
  console.log('PASS: real import panel upload, connection recovery, persisted preview, correction acknowledgement, completion and mobile/desktop layout.');
  await send('Browser.close').catch(()=>{});
 }finally{socket?.close();child.kill();await new Promise(r=>server.close(r));await delay(300);rmSync(temp,{recursive:true,force:true});}

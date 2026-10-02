@@ -1,0 +1,117 @@
+/* Import cards share a readable layout independent of the global compact tables. */
+.settings-imports {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+.settings-imports > .panel {
+  min-width: 0;
+  margin: 0;
+  padding: 20px;
+  border-radius: 12px;
+}
+.settings-imports > .panel > .panel-heading {
+  padding: 0;
+  margin: 0 0 16px;
+}
+.settings-imports > .panel > .panel-heading > div {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+.settings-imports > .panel > .panel-heading h2 {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.4;
+  font-weight: 650;
+}
+.settings-imports > .panel > .panel-heading h2 svg { flex: 0 0 auto; color: #d92334; }
+.settings-imports > .panel > .panel-heading p {
+  margin: 0;
+  color: #687383;
+  font-size: 13px;
+  line-height: 1.55;
+}
+.settings-imports > .panel > .import-last-status {
+  margin: 0 0 16px;
+  padding: 11px 13px;
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.settings-imports .sales-import-controls { padding: 0; gap: 14px; }
+.settings-imports .sales-upload,
+.settings-imports .stock-upload {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  min-height: 44px;
+  width: fit-content;
+  max-width: 100%;
+  padding: 10px 14px;
+  border: 1px dashed #df9ca4;
+  border-radius: 8px;
+  background: #fff8f8;
+  color: #b52431;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.45;
+}
+.settings-imports .sales-upload svg,
+.settings-imports .stock-upload svg { flex: 0 0 auto; }
+.settings-imports .sales-upload span,
+.settings-imports .stock-upload span { min-width: 0; overflow-wrap: anywhere; white-space: normal; }
+.settings-imports .sales-upload:focus-within,
+.settings-imports .stock-upload:focus-within { outline: 2px solid #d92334; outline-offset: 3px; }
+.settings-imports .sales-upload:has(input:disabled),
+.settings-imports .stock-upload:has(input:disabled) { opacity: .6; cursor: wait; }
+.settings-imports > .panel > .notice,
+.settings-imports > .panel > .error-banner { margin: 16px 0 0; }
+.settings-imports > .panel > .sales-preview {
+  margin: 18px -20px -20px;
+  padding: 18px 20px 20px;
+  gap: 14px;
+}
+.settings-imports .sales-preview p { margin: 0; font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.settings-imports .sales-preview-actions { align-items: flex-start; flex-direction: column; }
+.settings-imports .sales-preview-actions .primary { align-self: flex-end; max-width: 100%; white-space: normal; }
+.client-history-import .history-file { display: grid; gap: 4px; }
+.client-history-import .history-file > strong { color: #536070; font-size: 11px; font-weight: 650; }
+.client-history-import .history-file-name { color: #364152; font-size: 12px; font-weight: 550; overflow-wrap: anywhere; }
+.client-history-import .history-file-meta { display: flex; flex-wrap: wrap; gap: 4px 16px; color: #687383; font-size: 12px; }
+.client-history-import .history-file-date { color: #7c8795; font-size: 11px; }
+.client-history-import .history-import-status {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  margin: 16px 0 0;
+  padding: 12px 14px;
+  border: 1px solid #dce5f0;
+  border-radius: 8px;
+  background: #f4f7fb;
+  color: #4b607b;
+  font-size: 13px;
+  line-height: 1.55;
+}
+.client-history-import .history-import-status > svg { flex: 0 0 auto; margin-top: 2px; }
+.client-history-import .history-import-status > span { display: grid; gap: 3px; min-width: 0; overflow-wrap: anywhere; }
+.client-history-import .history-import-status strong { font-weight: 650; }
+.client-history-import .history-import-status small { font-size: 12px; line-height: 1.5; }
+.client-history-import .history-import-status.success { background: #f0f9f3; border-color: #cfe7d7; color: #287047; }
+@media (max-width: 640px) {
+  .settings-imports { gap: 12px; }
+  .settings-imports > .panel { padding: 16px; }
+  .settings-imports > .panel > .panel-heading h2 { font-size: 15px; }
+  .settings-imports .sales-import-controls { display: grid; grid-template-columns: minmax(0,1fr); }
+  .settings-imports .sales-upload,
+  .settings-imports .stock-upload { width: 100%; min-width: 0 !important; }
+  .settings-imports .sales-upload span { overflow: visible; text-overflow: clip; }
+  .settings-imports > .panel > .sales-preview { margin: 16px -16px -16px; padding: 16px; }
+  .settings-imports .sales-preview-actions .primary { width: 100%; }
+  .client-history-import .history-file-meta { display: grid; gap: 2px; }
+}
