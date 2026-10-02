@@ -93,6 +93,8 @@ node tools/test-stock.mjs --api
 node tools/test-inventory.mjs
 CHROME_BIN="${CHROME_BIN:-$(command -v google-chrome || command -v chromium || true)}"
 if [ -n "$CHROME_BIN" ]; then
+  CHROME_BIN="$CHROME_BIN" node tools/test-offline-cross-tab-browser.mjs
+  CHROME_BIN="$CHROME_BIN" node tools/test-pwa-cross-tab-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-offline-contract-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-portfolio-page-error-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-pwa-waiting-browser.mjs
