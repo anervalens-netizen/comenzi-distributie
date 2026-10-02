@@ -52,7 +52,7 @@ try{
  holdPage=false;releasePage();releasePage=null;await wait("document.querySelectorAll('.partner-card').length===3");
  check(await evaluate("document.querySelector('.partner-card strong').textContent==='fresh  row 0'&&!document.querySelector('.bounded-pagination')"),'late old page cannot overwrite fresh scope');
  assert.deepEqual(calls.at(-1),{offset:0,scope:'fresh',q:''});
- await fill('slow');await waitFor(()=>calls.some(c=>c.q==='slow'),'slow search started');await fill('latest');await wait("document.querySelector('.partner-card strong')?.textContent==='fresh latest row 0'");await delay(750);
+ await fill('slow');await delay(30);check(await evaluate("document.querySelectorAll('.partner-card').length===3&&[...document.querySelectorAll('.partner-card')].every(b=>b.disabled)&&!!document.querySelector('.partner-stale-results')"),'same-scope previous results stay visible, labeled and non-actionable while filters debounce');await waitFor(()=>calls.some(c=>c.q==='slow'),'slow search started');await fill('latest');await wait("document.querySelector('.partner-card strong')?.textContent==='fresh latest row 0'");await delay(750);
  check(await evaluate("document.querySelector('.partner-card strong').textContent==='fresh latest row 0'"),'rapid search transitions ignore late replies');
  check(calls.filter(c=>c.q).every(c=>c.offset===0),'search resets successful pagination to zero');
  console.log(`PASS: ${checks} portfolio page failure, retry, loading, backwards, scope and rapid-search browser checks.`);

@@ -74,7 +74,7 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='', active=
   );
   const [request, setRequest] = useState({key:filterKey,offset:0});
   const {key:requestKey,offset}=request;
-  const [dataRequest, setDataRequest] = useState<{key:string;offset:number}|null>(null);
+  const [dataRequest, setDataRequest] = useState<{key:string;offset:number;scope:string}|null>(null);
   const refreshSeen=useRef(refreshIndex);
   const browseActive=active&&!planning&&!adding&&!activityOpen;
   useEffect(() => {
@@ -107,7 +107,7 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='', active=
       .then((result) => {
         if (controller.signal.aborted) return;
         setData(result);
-        setDataRequest({key:requestKey,offset});
+        setDataRequest({key:requestKey,offset,scope:stateKey});
         setError('');
         setLoading(false);
       })
@@ -118,7 +118,7 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='', active=
         }
       });
     return () => controller.abort();
-  }, [browseActive, filterKey, requestKey, offset, refreshIndex]);
+  }, [browseActive, filterKey, requestKey, offset, refreshIndex, stateKey]);
   useEffect(() => {
     if (!active || !planning) return;
     const controller = new AbortController();
@@ -145,12 +145,13 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='', active=
       });
     return () => controller.abort();
   }, [active, planning, planRefresh, refreshIndex, catalogReload]);
-  const current = dataRequest?.key === filterKey && requestKey === filterKey;
+  const current=dataRequest?.scope===stateKey;
+  const settled=current&&dataRequest?.key===filterKey&&requestKey===filterKey;
   const displayedOffset=dataRequest?.offset??0;
   const filtered = current ? data?.partners || [] : [];
-  const counties = data?.facets.counties || [],
-    cities = data?.facets.cities || [],
-    routes = data?.facets.routes || [];
+  const counties = current?data?.facets.counties||[]:[],
+    cities = current?data?.facets.cities||[]:[],
+    routes = current?data?.facets.routes||[]:[];
   if (!active) return null;
   if (planning)
     return (
@@ -344,7 +345,7 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='', active=
             bounds={current ? data.bounds : undefined}
             styleUrl={data.styleUrl}
             refreshKey={refreshIndex}
-            onSelect={openPartner}
+            onSelect={settled?openPartner:()=>{}}
             selectedId={manager?highlighted:undefined}
             focusPoint={manager?filtered.find(partner=>partner.id===highlighted):undefined}
           />
@@ -376,12 +377,14 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='', active=
       )}
       </div>
       <div className={manager?'manager-partner-list-pane':undefined}>
-      <div className="partner-list">
+      {current&&!settled&&<output className="muted partner-stale-results">Rezultatele filtrului anterior sunt afișate până la actualizare.</output>}
+      <div className="partner-list" aria-busy={loading||!settled}>
         {filtered.map((p) => (
           <button
             type="button"
             className={'partner-card'+(manager&&highlighted===p.id?' partner-card-selected':'')}
             key={p.id}
+            disabled={!settled}
             onClick={() => openPartner(p.id)}
           >
             <strong>{p.name}</strong>
@@ -412,7 +415,7 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='', active=
         <nav className="bounded-pagination" aria-label="Pagini parteneri">
           <button
             className="secondary"
-            disabled={loading||displayedOffset===0}
+            disabled={loading||!settled||displayedOffset===0}
             onClick={() => {
               setLoading(true);setError('');
               setRequest({key:requestKey,offset:Math.max(0,displayedOffset-100)});
@@ -424,7 +427,7 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='', active=
           <span>{displayedOffset+1}–{Math.min(displayedOffset+filtered.length,data.total)} din {data.total}</span>
           <button
             className="secondary"
-            disabled={loading||data.nextOffset==null}
+            disabled={loading||!settled||data.nextOffset==null}
             onClick={() => {
               if(data.nextOffset==null)return;
               setLoading(true);setError('');
