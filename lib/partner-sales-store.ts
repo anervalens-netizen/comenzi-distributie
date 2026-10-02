@@ -93,12 +93,12 @@ export async function readPartnerSalesAsync(partnerId:string,cui:string,params:U
   const generation=fileGeneration(directory);
   const stamp=await cooperativeStamp(directory,generation);
   // Validate again after every yielding stage and before opening either DB.
-  if(generation!==fileGeneration(directory))return unavailable();
+  if(!stamp||generation!==fileGeneration(directory))return unavailable();
   const c=openCompanyLinkSource(history);let s:DatabaseSync|undefined;
   try{
     s=new DatabaseSync(snapshot,{readOnly:true});s.exec('BEGIN');
     const meta=JSON.parse(String(s.prepare("SELECT value FROM meta WHERE key='snapshot'").get()?.value||'null')) as {version:string;reference:string;signature:string;sourceGeneration?:string}|null;
-    if(!meta||meta.version!==activityVersion||meta.reference!==stamp.reference||meta.signature!==stamp.signature||meta.sourceGeneration!==historyFileGeneration(history)||generation!==fileGeneration(directory))return unavailable();
+    if(!meta||meta.version!==activityVersion||meta.reference!==stamp.reference||meta.signature!==stamp.signature||meta.sourceGeneration!==stamp.sourceGeneration||stamp.sourceGeneration!==historyFileGeneration(history)||generation!==fileGeneration(directory))return unavailable();
     if(String(c.prepare("SELECT value FROM history_meta WHERE key='current_reference'").get()?.value||'')!==stamp.reference)return unavailable();
     const result=readDetail(c,partnerId,cui,params,readDetailLinks(s,cuiKey(cui),partnerId));
     return generation===fileGeneration(directory)?result:unavailable();

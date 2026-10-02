@@ -121,7 +121,8 @@ explicit calendar year, the latest 90/365 days, last billing at least 365 days
 ago, and unlinked/incomplete history. The default includes every catalog record.
 The filter follows commercial billing, excluding zero-value movements and net
 cancelled documents, using the same definition as cadence. Years are stored in
-the derived snapshot (version 2); rebuild older snapshots before serving filters.
+the current derived snapshot (schema 7); rebuild every older schema, including 6,
+before serving filters. See [rebuild and staging instructions](client-sales.md).
 
 Period selection changes which partners are visible, not their current portfolio
 assignment. Cadence and 30-day financial comparisons remain evaluated at source
@@ -145,8 +146,8 @@ search and optional activity filters sit above it. The existing manager region
 and agent controls scope the same table. Current shared owners are displayed;
 unassigned counties remain visible to managers without an agent filter.
 
-Snapshot version 4 retains point daily data and adds separate company activity
-and daily tables. The client table groups authorized cards once per company and
+The current schema 7 snapshot retains point daily data, separate company activity
+and daily tables, and indexed detail identities. The client table groups authorized cards once per company and
 uses complete company totals, including unresolved point rows. Selected-period sales include
 returns and preserve missing amounts. Positive document groups are counted once
 per company/date/site/number, excluding blank numbers, net cancellations and free
@@ -156,7 +157,9 @@ records display a dash, never a false zero; partial associations are marked.
 All sorting occurs before pagination, with unknown values last in both directions.
 No national total is calculated by summing potentially shared/legacy aliases.
 
-After deployment, rebuild the derived snapshot using the matching current builder;
+Keep code rollout and snapshot promotion separate: use the matching schema 7 builder
+to rebuild every older snapshot (including 6), validate it against the same authoritative
+source database, then promote only the derived output through the supported release path;
 source history, original seller attribution and existing TR reports stay intact.
 
 ## Sales-first partner sheet
@@ -206,7 +209,7 @@ and moves keyboard focus to its button. Opening the shortcut does not request
 geolocation or write data; GPS capture and the existing save confirmation remain
 explicit. Sales still opens by default and contact editing starts collapsed.
 
-## Monthly client report (snapshot version 5)
+## Monthly client report (snapshot schema 7)
 
 Navigation: **Vânzări → Pe clienți**, or **Echipă → Agenți → Vânzări pe
 clienți**. This is a separate, lazy subtab in the existing sales screen. Its
@@ -222,8 +225,9 @@ currently authorized point, retaining their full legal-company history.
 Totals and chip counts apply before status filtering and pagination. Null
 amounts sort last in both directions. Unlinked histories stay unknown.
 
-Version 5 retains the version 4 tables and adds company identity quality plus
-import-level coverage metadata. Rebuild with the same explicitly configured
+Schema 7 contains point/company daily tables, company identity quality, import-level
+coverage and indexed detail identities. Rebuild every older schema, including 6,
+with the same explicitly configured
 `MOBIUP_DATA_DIR` and `node tools/build-partner-activity.mjs`. Older snapshots
 return an explicit rebuild message in all readers. Raw source aggregation only
 runs during that batch build; HTTP reads the derived daily company aggregates.

@@ -2,7 +2,7 @@
 
 `MOBIUP_DATA_DIR=/explicit/data/directory node tools/build-partner-activity.mjs`
 rebuilds the derived `client-history/partner-activity.sqlite` outside HTTP requests.
-Schema **6** requires a rebuild after upgrading from schema 5. The builder opens
+Schema **7** requires rebuilding **every older snapshot**, including schema 6. The builder opens
 history and application databases read-only, checks the temporary derived database
 and atomically replaces the snapshot. No authoritative database migration is needed.
 The source CLI and private server build bundle the helpers through normal imports;
@@ -12,7 +12,8 @@ Company identities come from the historical reference and source identity univer
 independent of today's cards. Adding a card with an existing historical CUI therefore
 works without rebuilding. Changing, merging or splitting current CUIs changes the
 report grouping immediately; historical allocations are never reassigned by a card
-edit. Changed import/reference content requires a new derived snapshot. A genuinely
+edit. Any raw history generation change, including row amounts, identities, allocations,
+import/reference content, WAL writes or atomic replacement, requires a new derived snapshot. A genuinely
 unknown CUI is explicitly unlinked, with unknown amounts rather than zero sales.
 
 Client codes, master aliases, reference cards and franchise ownership are considered
@@ -45,7 +46,9 @@ current card summaries. Identical in-flight billing calculations coalesce; failu
 are removed and at most four different calculations can run concurrently. File
 identity, nanosecond timestamps (including WAL), schema, calendar day, selected month
 and displayed card identity fields fence billing cache reuse. Import/reference
-signatures are validated on calculation. Replacement during calculation/copy returns
+signatures and the snapshot's `sourceGeneration` are validated on calculation.
+The raw generation is captured before opening SQLite, checked after pinning the read
+transaction and checked again before returning or admitting cached results. Replacement during calculation/copy returns
 an unavailable response rather than a stale result.
 
 Cached records never escape directly to callers. Visits and visit flags are never
@@ -65,6 +68,7 @@ cutoff. No recorded visit is not evidence of physical absence.
 Focused synthetic checks (no shared full-gate ports):
 
 ```sh
+node tools/test-source-guards.mjs
 node tools/test-client-sales.mjs
 node tools/test-client-sales-remediation.mjs
 node tools/test-client-sales-performance.mjs
@@ -81,4 +85,34 @@ latency guarantees or evidence of production acceptance.
 
 The source fingerprint is computed in bounded UTF-8 byte chunks for HTTP cold reads and shared between concurrent months for the same filesystem generation. It remains identical to the batch fingerprint. Warm reports must demonstrate cache admission in tests, including wide synthetic company labels.
 
-The schema 7 snapshot also contains indexed company and point identity lookups for cold detail reads. Batch staging can pass an explicit output path as the third `buildActivitySnapshot` argument while reading the canonical source directory. Deployment moves only the derived output; a copied or replaced raw database requires rebuilding its derived snapshot. Source databases cannot be specified as derived output. The HTTP adapter uses cooperative source validation and rechecks the current authorized card after yielding.
+The schema 7 snapshot also contains indexed company and point identity lookups for
+cold detail reads. Code rollout and derived rebuild are separate steps: prepare the
+matching code release, rebuild with that release's builder, verify its output, then
+promote it through the deployment's supported procedure. Older or stale snapshots
+remain explicitly unavailable until rebuilt; no raw schema migration is required.
+
+For a direct rebuild, use the command above. For staged output, first create a
+private staging directory on the destination filesystem, then run:
+
+```sh
+MOBIUP_DATA_DIR=/explicit/authoritative/data node tools/build-partner-activity.mjs --output /explicit/staging/partner-activity.sqlite
+```
+
+The API also accepts this output path as the third `buildActivitySnapshot` argument.
+The source directory must identify the **same authoritative source database** used
+by the serving reader. Staging changes only the output location; it must not use a
+copied raw database or a symlink wrapper to claim a distinct source generation.
+Physical source provenance is shared across symlink aliases, including a symlinked
+root directory. A copied/replaced raw database requires its own derived rebuild;
+do not edit `sourceGeneration` metadata to bypass validation.
+
+Only the verified derived output is promoted to `client-history/partner-activity.sqlite`;
+preserve the deployment's private recovery procedure and authoritative data. Destination
+parents must exist. The builder resolves their physical paths before any output write,
+rejects source aliases (including hardlinks and final symlinks), writes to the captured
+canonical staging location and checks the destination again immediately before rename.
+Coordinate source writes and checkpointing with the rebuild: any physical generation
+change conservatively invalidates the result. Application filesystem directories must
+remain under the operator's control during build and promotion.
+The HTTP adapter uses cooperative source validation and rechecks the current authorized
+card after yielding.

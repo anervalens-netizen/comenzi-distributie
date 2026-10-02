@@ -1,11 +1,12 @@
-import {statSync} from 'node:fs';
+import {realpathSync,statSync} from 'node:fs';
 import {resolve} from 'node:path';
 
 /** Capture BEFORE opening SQLite, then compare after pinning/reading its snapshot.
  * A pathname stat after open alone says nothing about the opened inode. */
 export function historyFileGeneration(file:string):string|null {
   try {
-    return resolve(file)+'|'+['','-wal'].map(suffix=>{
+    file=realpathSync(file);
+    return file+'|'+['','-wal'].map(suffix=>{
       try {
         const s=statSync(file+suffix,{bigint:true});
         // A read-only WAL open may create an empty file; it has no frames.

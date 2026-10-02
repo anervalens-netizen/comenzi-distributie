@@ -6,7 +6,8 @@ import {partnerActivity,type PartnerActivity} from './partner-sales-health';
 import {normalizedCui,type CompanyAlias} from './partner-company-identity';
 export {normalizedCui} from './partner-company-identity';
 import {historyCompanyLinks} from './partner-company-links';
-import {historyFileGeneration} from './history-source-generation';
+import {derivedOutputTarget} from './derived-output-target';
+import {fileGeneration,historyFileGeneration} from './history-source-generation';
 import {buildDetailLinks} from './partner-detail-snapshot';
 export const activityVersion='7';
 export const bucharestToday=(now=new Date())=>new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Bucharest',year:'numeric',month:'2-digit',day:'2-digit'}).format(now);
@@ -49,8 +50,9 @@ export function activityRange(period:string,start:string,asOf:string){
 export type ActivitySnapshot=ReturnType<typeof readActivitySnapshot>;
 /** Batch rebuild outside the HTTP process. Source history and application DBs are read-only. */
 export function buildActivitySnapshot(directory:string,today=bucharestToday(),outputTarget?:string) {
-  const history=resolve(directory,'client-history','client-sales-history.sqlite'),target=outputTarget?resolve(outputTarget):resolve(directory,'client-history','partner-activity.sqlite');
-  if(target===history||target===resolve(directory,'mobiup.sqlite')||target===resolve(directory,'sales.sqlite'))throw new Error('Derived output cannot replace a source database');
+  const history=resolve(directory,'client-history','client-sales-history.sqlite');
+  const output=derivedOutputTarget(outputTarget?resolve(outputTarget):resolve(directory,'client-history','partner-activity.sqlite'),[history,resolve(directory,'mobiup.sqlite'),resolve(directory,'sales.sqlite')]);
+  const {target}=output;
   const sourceGeneration=historyFileGeneration(history);
   const temp=target+'.tmp-'+randomUUID(),c=new DatabaseSync(history,{readOnly:true}),catalog=new DatabaseSync(resolve(directory,'mobiup.sqlite'),{readOnly:true});
   let out:DatabaseSync|undefined;
@@ -143,7 +145,9 @@ export function buildActivitySnapshot(directory:string,today=bucharestToday(),ou
     const metadata={...stamp,sourceGeneration,version:activityVersion,builtAt:new Date().toISOString(),asOf,recentStart,previousStart,rows:count,companies:companyIndex.known.size,unresolvedCompanyIdentities:companyIndex.unresolved.length,coverage};
     out.prepare("INSERT INTO meta VALUES('snapshot',?)").run(JSON.stringify(metadata));out.exec('COMMIT');
     if(out.prepare('PRAGMA quick_check').get()?.quick_check!=='ok')throw new Error('Snapshot integrity failed');
-    out.close();out=undefined;renameSync(temp,target);
+    out.close();out=undefined;output.check();
+    if(sourceGeneration!==historyFileGeneration(history))throw new Error('History source changed during snapshot build');
+    renameSync(temp,target);
     return metadata;
   } finally {out?.close();c.close();catalog.close();rmSync(temp,{force:true});}
 }
@@ -151,11 +155,13 @@ export function buildActivitySnapshot(directory:string,today=bucharestToday(),ou
 export function readActivitySnapshot(partners:{id:string;cui:string}[],directory=process.env.MOBIUP_DATA_DIR||'./work/server-data',today=bucharestToday(),options?:{period:string;scope?:'company'|'point'}) {
   const base=resolve(directory,'client-history'),history=resolve(base,'client-sales-history.sqlite'),path=resolve(base,'partner-activity.sqlite');
   if(!existsSync(history)||!existsSync(path))return {state:'unavailable' as const,message:'Centralizarea activității nu este încă pregătită.'};
+  const generation=fileGeneration(directory),sourceGeneration=historyFileGeneration(history);
+  const stale=()=>({state:'unavailable' as const,message:'Istoricul a fost actualizat; centralizarea activității trebuie recalculată.'});
   const c=new DatabaseSync(history,{readOnly:true}),snapshot=new DatabaseSync(path,{readOnly:true});
   try{
     c.exec('BEGIN');snapshot.exec('BEGIN');
-    const stamp=historyStamp(c),meta=JSON.parse(String(snapshot.prepare("SELECT value FROM meta WHERE key='snapshot'").get()?.value||'null')) as {signature:string;version:string;builtAt:string;asOf:string;recentStart:string;previousStart:string}|null;
-    if(!meta||meta.version!==activityVersion||meta.signature!==stamp.signature||meta.asOf!==(today<stamp.through?today:stamp.through))return {state:'unavailable' as const,message:'Istoricul a fost actualizat; centralizarea activității trebuie recalculată.'};
+    const stamp=historyStamp(c),meta=JSON.parse(String(snapshot.prepare("SELECT value FROM meta WHERE key='snapshot'").get()?.value||'null')) as {signature:string;version:string;sourceGeneration?:string;builtAt:string;asOf:string;recentStart:string;previousStart:string}|null;
+    if(!sourceGeneration||generation!==fileGeneration(directory)||!meta||meta.sourceGeneration!==sourceGeneration||meta.version!==activityVersion||meta.signature!==stamp.signature||meta.asOf!==(today<stamp.through?today:stamp.through))return stale();
     const allowed=new Map(partners.map(p=>[p.id,normalizedCui(p.cui)]));
     const rows=new Map<string,ActivitySnapshotRow>();
     const lag=Math.max(0,Math.floor((Date.parse(today)-Date.parse(stamp.through))/86400000));
@@ -192,6 +198,7 @@ export function readActivitySnapshot(partners:{id:string;cui:string}[],directory
         if(company){rows.set(id,{...company,id});metrics.set(id,companyMetrics.get(key)||{valueCents:0,documents:0,lastBilling:null,missingValues:0});}
       }
     }
+    if(generation!==fileGeneration(directory))return stale();
     return {state:'ready' as const,range,metrics,through:stamp.through,builtAt:meta.builtAt,asOf:meta.asOf,recentStart:meta.recentStart,previousStart:meta.previousStart,stale:lag>3,rows};
   }finally{c.close();snapshot.close();}
 }

@@ -8,7 +8,8 @@ import {normalizedCui} from './partner-company-identity';
 import type {PartnerSummary} from './partner-map-types';
 import type {ClientHealth,ClientMetrics,ClientSalesRow,MonthWindow,SourceCoverage} from './client-sales-types';
 
-import {cooperativeStamp,fileGeneration,clientSalesCacheStats} from './history-source-stamp';
+import {historyFileGeneration} from './history-source-generation';
+import {cooperativeStamp,fileGeneration,clientSalesCacheStats,type VerifiedHistoryStamp} from './history-source-stamp';
 export {clientSalesCacheStats} from './history-source-stamp';
 
 const DAY=86400000;
@@ -58,19 +59,24 @@ function health(days:Daily[],cutoff:string|null,linked:boolean,identityComplete:
 }
 /** Only current authorized cards enter this reader. Source DBs are never writable.
  * All raw-history scans happen in the batch builder, not in HTTP requests. */
-function* calculateClientSales(partners:PartnerSummary[],month:string,directory=process.env.MOBIUP_DATA_DIR||'./work/server-data',today=bucharestToday(),knownStamp?:ReturnType<typeof historyStamp>){
+function* calculateClientSales(partners:PartnerSummary[],month:string,directory=process.env.MOBIUP_DATA_DIR||'./work/server-data',today=bucharestToday(),knownStamp?:VerifiedHistoryStamp){
   yield;
   let work=0;
   const base=resolve(directory,'client-history'),source=resolve(base,'client-sales-history.sqlite'),path=resolve(base,'partner-activity.sqlite');
   const unavailable={state:'unavailable' as const,message:'Centralizarea raportului pe clienți lipsește sau este învechită. Trebuie recalculată după import.'};
   if(!existsSync(source)||!existsSync(path))return unavailable;
+  const generation=fileGeneration(directory),sourceGeneration=historyFileGeneration(source);
+  if(!sourceGeneration||(knownStamp&&(knownStamp.generation!==generation||knownStamp.sourceGeneration!==sourceGeneration)))return unavailable;
   const c=new DatabaseSync(source,{readOnly:true});let s:DatabaseSync|undefined;
   try{
     s=new DatabaseSync(path,{readOnly:true});
     c.exec('BEGIN');s.exec('BEGIN');
+    // BEGIN alone does not pin SQLite's read snapshot. Pin before trusting a
+    // shared stamp, then verify the pre-open generation against the pathname.
+    c.prepare('SELECT name FROM sqlite_master LIMIT 1').get();
     if(Number(s.prepare("SELECT COUNT(*) n FROM sqlite_master WHERE type='table' AND name IN ('meta','company_identity','company_daily')").get()?.n)!==3)return unavailable;
-    const stamp=knownStamp??historyStamp(c),meta=JSON.parse(String(s.prepare("SELECT value FROM meta WHERE key='snapshot'").get()?.value||'null')) as {version:string;signature:string;builtAt:string;coverage:SourceCoverage[]}|null;
-    if(!meta||meta.version!==activityVersion||meta.signature!==stamp.signature||!meta.coverage)return unavailable;
+    const stamp=knownStamp??historyStamp(c),meta=JSON.parse(String(s.prepare("SELECT value FROM meta WHERE key='snapshot'").get()?.value||'null')) as {version:string;signature:string;reference:string;sourceGeneration?:string;builtAt:string;coverage:SourceCoverage[]}|null;
+    if(generation!==fileGeneration(directory)||!meta||meta.sourceGeneration!==sourceGeneration||meta.version!==activityVersion||meta.reference!==stamp.reference||meta.signature!==stamp.signature||!meta.coverage)return unavailable;
     const intervals=coverageIntervals(meta.coverage,today),window=monthlyWindow(month,intervals);
     const effectiveCutoff=intervals.map(p=>p.to).sort().at(-1)||null;
     const day=!window.complete&&window.to?Number(window.to.slice(8)):undefined;
@@ -101,6 +107,7 @@ function* calculateClientSales(partners:PartnerSummary[],month:string,directory=
       if(h.status==='waiting')flags.push('waiting');if(h.status==='overdue')flags.push('overdue');if(h.reactivated)flags.push('reactivated');
       rows.push({key,id:p.id,name:p.name,cui:p.cui,city:p.city,counties:[...new Set(members.map(p=>p.county).filter(Boolean))].sort(),pointCount:members.length,points:members.map(p=>({id:p.id,name:p.name,city:p.city})),linked,identityComplete,metrics:current,previous:prior[0],health:h,visits:0,flags});
     }
+    if(generation!==fileGeneration(directory))return unavailable;
     return {state:'ready' as const,rows,comparisonMetrics,window,comparisons,source:{label:'Raport pe clienți',builtAt:meta.builtAt,updatedAt:meta.coverage.map(p=>p.importedAt).filter((s):s is string=>!!s).sort().at(-1)||null,declaredEnd:stamp.through,observedEnd:meta.coverage.map(p=>p.observedEnd).filter((s):s is string=>!!s).sort().at(-1)||null,effectiveCutoff,latestMonth:effectiveCutoff?.slice(0,7)||null,coverage:meta.coverage}};
   }finally{c.close();s?.close();}
 }
@@ -151,6 +158,7 @@ export async function readClientSalesAsync(partners:PartnerSummary[],month:strin
       clientSalesCacheStats.builds++;
       const hasSource=existsSync(resolve(directory,'client-history','client-sales-history.sqlite'))&&existsSync(resolve(directory,'client-history','partner-activity.sqlite'));
       const stamp=hasSource?await cooperativeStamp(directory,generation):undefined;
+      if(!stamp)return {state:'unavailable' as const,message:'Centralizarea raportului lipsește sau sursa se actualizează. Reîncearcă după recalculare.'};
       const calculation=calculateClientSales(partners,month,directory,today,stamp);
       let step;
       try{do{step=calculation.next();if(!step.done)await salesYield();}while(!step.done);}finally{calculation.return(undefined as never);}
