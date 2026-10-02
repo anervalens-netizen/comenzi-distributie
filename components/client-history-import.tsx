@@ -3,6 +3,7 @@ import {useEffect,useRef,useState} from 'react';
 import {Upload,FileSpreadsheet,LoaderCircle,Check,AlertTriangle} from 'lucide-react';
 import {errorMessage} from '@/lib/client-api';
 import type {HistoryJob,HistoryImportStatus} from '@/lib/client-history-import-types';
+import './client-history-import.css';
 const endpoint='/api/client-sales/import';
 const date=(value:string)=>new Date(value+'T12:00:00').toLocaleDateString('ro-RO');
 const money=(cents:number)=>new Intl.NumberFormat('ro-RO',{style:'currency',currency:'RON'}).format(cents/100);
@@ -34,14 +35,14 @@ export function ClientHistoryImport(){
   catch(e){if(alive.current)setError(errorMessage(e));}finally{if(alive.current)setSending(false);}
  }
  const busy=sending||job?.state==='running',preview=job?.state==='ready'?job.preview:null;
- return <section className="panel sales-import" aria-label="Import vânzări pe clienți">
+ return <section className="panel sales-import client-history-import" aria-label="Import vânzări pe clienți">
   <div className="panel-heading"><div><h2><Upload size={18}/> Vânzări pe clienți</h2><p>Încarcă raportul cumulativ de la începutul lunii. Zilele deja încărcate se actualizează fără dublare.</p></div></div>
-  <p className="import-last-status">{!loaded?'Se verifică ultimul import…':latest?`Ultimul import: ${latest.filename} · ${date(latest.from)} – ${date(latest.through)} · ${latest.rows.toLocaleString('ro-RO')} rânduri · ${new Date(latest.importedAt).toLocaleString('ro-RO')}`:'Nu există încă un import verificat.'}</p>
+  <div className="import-last-status history-file">{!loaded?'Se verifică ultimul import…':latest?<><strong>Ultimul import</strong><span className="history-file-name">{latest.filename}</span><div className="history-file-meta"><span>{date(latest.from)} – {date(latest.through)}</span><span>{latest.rows.toLocaleString('ro-RO')} rânduri</span></div><span className="history-file-date">Încărcat la {new Date(latest.importedAt).toLocaleString('ro-RO')}</span></>:'Nu există încă un import verificat.'}</div>
   <div className="sales-import-controls"><label className="sales-upload"><FileSpreadsheet size={19}/><span>{sending?'Se încarcă…':'Alege raportul pe clienți (.xlsx)'}</span><input aria-label="Fișier vânzări pe clienți" disabled={!!busy} type="file" accept=".xlsx" onChange={event=>{void choose(event.target.files?.[0]);event.target.value='';}}/></label></div>
-  {busy&&<output className="notice"><LoaderCircle className="spin" size={17}/>{sending?'Se transmite fișierul…':job?.message} Poți reveni aici pentru progres.</output>}
+  {busy&&<output className="history-import-status"><LoaderCircle className="spin" size={18}/><span><strong>{sending?'Se transmite fișierul…':job?.message}</strong><small>Poți reveni aici pentru progres.</small></span></output>}
   {error&&<p className="error-banner" role="alert">{error}</p>}
   {job?.state==='failed'&&<p className="error-banner" role="alert">{job.error}{job.result?' Datele au fost aplicate; reîncarcă același fișier pentru a relua centralizarea.':''}</p>}
-  {job?.state==='completed'&&<output className="notice"><Check size={17}/>{job.message} {job.result?.rows.toLocaleString('ro-RO')} rânduri · {money(job.result?.valueCents||0)}.</output>}
+  {job?.state==='completed'&&<output className="history-import-status success"><Check size={18}/><span><strong>Import finalizat</strong><span>{job.result?.rows.toLocaleString('ro-RO')} rânduri · {money(job.result?.valueCents||0)}</span><small>{job.message}</small></span></output>}
   {preview&&<div className="sales-preview">
    <div className="sales-preview-summary"><strong>{preview.rows.toLocaleString('ro-RO')} rânduri</strong><span>{money(preview.valueCents)}</span><span>{(preview.quantityMicros/1000000).toLocaleString('ro-RO')} buc.</span><span>{date(preview.from)} – {date(preview.through)}</span></div>
    <p>{job?.filename}. {preview.alreadyImported?'Acest fișier este deja importat. Îl poți verifica din nou fără să dublezi datele.':`În această lună: ${preview.previous.rows.toLocaleString('ro-RO')} → ${preview.rows.toLocaleString('ro-RO')} rânduri; ${money(preview.previous.valueCents)} → ${money(preview.valueCents)}.`}</p>
