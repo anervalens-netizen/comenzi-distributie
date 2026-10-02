@@ -1,8 +1,12 @@
-import {validBillingPeriod,selectBillingPeriod} from './partner-billing-period';
+import {validBillingPeriod,billingPeriodMatches} from './partner-billing-period';
 import {portfolioSummary} from './partner-portfolio';
+import {createHash} from 'node:crypto';
+import {clientSalesPortfolio,clientPortfolioVersion} from './client-sales-portfolio';
+import {fileGeneration} from './history-source-generation';
+import {salesYield,salesSort} from './client-sales-cooperative';
 import {managerFilter} from './manager-scope';
 import {db,fail} from './server';
-import {readActivitySnapshot,normalizedCui} from './partner-activity-snapshot';
+import {readActivitySnapshotAsync,normalizedCui,type ActivitySnapshotRow,type PartnerPeriodMetrics} from './partner-activity-snapshot';
 import type {User} from './types';
 export const activityFilters=['all','attention','regular','overdue','inactive','reactivated','new','occasional','incomplete'] as const;
 export const activitySorts=['value','documents','lastBilling','name','county','agent'] as const;
@@ -10,7 +14,31 @@ export type ActivitySort=typeof activitySorts[number];
 export type ActivityFilter=typeof activityFilters[number];
 const normalize=(s:string)=>s.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
 export type PartnerActivityOverview=Awaited<ReturnType<typeof partnerActivityOverview>>;
+/** Request-local fence; neither membership nor authorization is retained between calls. */
+export async function activityReadFence(user:User,params:URLSearchParams){
+  const directory=process.env.MOBIUP_DATA_DIR||'./work/server-data',source=fileGeneration(directory);
+  const access=async()=>{
+    const current=await db().prepare('SELECT role,warehouse_id,manager_scope,active FROM users WHERE id=?').bind(user.id).first<{role:string;warehouse_id:string|null;manager_scope:string|null;active:number}>();
+    if(!current?.active||current.role!==user.role||(current.warehouse_id||'')!==(user.warehouseId||'')||(current.role==='manager'&&current.manager_scope==='global'?'global':'assigned')!==user.managerScope)fail(403,'Permisiunile s-au modificat. Reîncearcă.');
+    const version=await clientPortfolioVersion();
+    if(version!==null)return JSON.stringify([version,current]);
+    // Legacy adapters have no revision hook. Re-read their live scoped portfolio.
+    const scope=await managerFilter(user,params),partners=await portfolioSummary(user,undefined,scope?.warehouseIds),hash=createHash('sha256');
+    for(let i=0;i<partners.length;i++){hash.update(JSON.stringify(partners[i]));if(i%128===0)await salesYield();}
+    return JSON.stringify([current,scope,hash.digest('hex')]);
+  };
+  const before=await access();
+  return async()=>{
+    if(before!==await access())fail(503,'Portofoliul sau permisiunile s-au modificat. Reîncearcă.');
+    if(source!==fileGeneration(directory))fail(409,'Istoricul s-a modificat. Reîncearcă.');
+  };
+}
 export async function partnerActivityOverview(user:User,params:URLSearchParams){
+  const verify=await activityReadFence(user,params);
+  const result=await activityOverview(user,params);
+  await verify();return result;
+}
+async function activityOverview(user:User,params:URLSearchParams){
   const period=params.get('salesPeriod')||'';
   if(!validBillingPeriod(period))fail(400,'Perioada de facturare este invalidă.');
   const filter=params.get('activity')||'all',rawPage=params.get('page')||'0';
@@ -18,26 +46,32 @@ export async function partnerActivityOverview(user:User,params:URLSearchParams){
   for(const key of ['q','county'])if((params.get(key)?.length||0)>300)fail(400,'Filtrul este prea lung.');
   const sort=params.get('sort')||'value',direction=params.get('direction')||'desc';
   if(!activitySorts.includes(sort as ActivitySort)||!['asc','desc'].includes(direction))fail(400,'Sortarea este invalidă.');
-  const scope=await managerFilter(user,params),partners=await portfolioSummary(user,undefined,scope?.warehouseIds);
+  const scope=await managerFilter(user,params),partners=await clientSalesPortfolio(user,scope?.warehouseIds);
   const counties=[...new Set(partners.map(p=>p.county).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ro'));
   const q=normalize(params.get('q')||''),county=params.get('county')||'';
-  const selected=partners.filter(p=>(!county||p.county===county)&&(!q||normalize([p.name,p.cui,p.address,p.city].join(' ')).includes(q)));
-  const snapshot=readActivitySnapshot(selected,undefined,undefined,{period,scope:'company'});
+  const selected:typeof partners=[];
+  for(let i=0;i<partners.length;i++){const p=partners[i];if((!county||p.county===county)&&(!q||normalize([p.name,p.cui,p.address,p.city].join(' ')).includes(q)))selected.push(p);if(i%128===0)await salesYield();}
+  const snapshot=await readActivitySnapshotAsync(selected,undefined,undefined,{period,scope:'company'});
   if(snapshot.state!=='ready')return snapshot;
   const agents=(await db().prepare("SELECT id,name,warehouse_id FROM users WHERE role='agent' AND active=1 ORDER BY name,id").all<{id:string;name:string;warehouse_id:string}>()).results;
   const groups=new Map<string,typeof selected>();
-  for(const partner of selectBillingPeriod(selected,snapshot,period)){
+  let work=0;
+  for(const partner of selected){
+    if(++work%128===0)await salesYield();
+    if(!billingPeriodMatches(snapshot.rows.get(partner.id),period,snapshot.asOf))continue;
     const key=normalizedCui(partner.cui),groupKey=snapshot.rows.get(partner.id)?.scope==='company'?'company:'+key:'point:'+partner.id;
     const members=groups.get(groupKey)||[];members.push(partner);groups.set(groupKey,members);
   }
-  const all=[...groups.values()].map(members=>{
+  const all:{partner:typeof selected[number];sales:ActivitySnapshotRow|null;metrics:PartnerPeriodMetrics|null;pointCount:number;counties:string[];scope:'company'|'point';agents:{id:string;name:string}[]}[]=[];
+  for(const members of groups.values()){
+    if(++work%128===0)await salesYield();
     // Choose a visible card with company history; never expose an out-of-portfolio card.
-    members.sort((a,b)=>(Number(snapshot.rows.get(b.id)?.scope==='company')-Number(snapshot.rows.get(a.id)?.scope==='company'))||a.id.localeCompare(b.id));
-    const partner=members[0],sales=snapshot.rows.get(partner.id)||null;
+    const sorted=await salesSort(members,(a,b)=>(Number(snapshot.rows.get(b.id)?.scope==='company')-Number(snapshot.rows.get(a.id)?.scope==='company'))||a.id.localeCompare(b.id));
+    const partner=sorted[0],sales=snapshot.rows.get(partner.id)||null;
     const warehouseIds=new Set(members.flatMap(p=>p.warehouseIds||[]));
     const counties=[...new Set(members.map(p=>p.county).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ro'));
-    return {partner,sales,metrics:snapshot.metrics.get(partner.id)||null,pointCount:members.length,counties,scope:sales?.scope||'point' as const,agents:agents.filter(a=>warehouseIds.has(a.warehouse_id)).map(a=>({id:a.id,name:a.name}))};
-  });
+    all.push({partner,sales,metrics:snapshot.metrics.get(partner.id)||null,pointCount:members.length,counties,scope:sales?.scope||'point' as const,agents:agents.filter(a=>warehouseIds.has(a.warehouse_id)).map(a=>({id:a.id,name:a.name}))});
+  }
   const matches=(r:typeof all[number],kind:string)=>{
     const a=r.sales?.activity;
     if(kind==='all')return true;
@@ -49,7 +83,7 @@ export async function partnerActivityOverview(user:User,params:URLSearchParams){
     return a.status===kind;
   };
   const counts=Object.fromEntries(activityFilters.map(kind=>[kind,all.filter(r=>matches(r,kind)).length])) as Record<ActivityFilter,number>;
-  const filtered=all.filter(r=>matches(r,filter)).sort((a,b)=>{
+  const filtered=await salesSort(all.filter(r=>matches(r,filter)),(a,b)=>{
     const value=(r:typeof a):number|string|null=>sort==='value'?r.metrics?.valueCents??null:sort==='documents'?r.metrics?.documents??null:sort==='lastBilling'?r.metrics?.lastBilling??null:sort==='name'?r.partner.name:sort==='county'?r.counties.join(', ')||null:r.agents.map(a=>a.name).join(', ')||null;
     const aa=value(a),bb=value(b);
     if(aa===null&&bb!==null)return 1;if(bb===null&&aa!==null)return -1;

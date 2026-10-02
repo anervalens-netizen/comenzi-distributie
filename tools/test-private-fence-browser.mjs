@@ -151,6 +151,24 @@ try{
  check(await a.evaluate("await denied(()=>m.api('partner/summary'))&&(await m.snapshot('account-A','partner/summary')).at===cachedAt"),'explicit HTTP 409 cannot fall back to an A snapshot');
  await cookie('account-A');await db.prepare('DELETE FROM sessions WHERE token_hash=?').bind(hash(tokens.get('account-A'))).run();
  check(await a.evaluate("let status;try{await m.api('partner/summary')}catch(e){status=e.status}status===401&&m.currentLocalWorkUserId()===''&&(await m.snapshot('account-A','partner/summary')).at===cachedAt"),'explicit HTTP 401 rejects cached fallback and clears only current authority');
+ // No durable browser storage means no cross-tab authority channel. Private
+ // preferCache reads must use actual HTTP, including after a cookie changes.
+ const restoredToken=randomUUID();tokens.set('account-A',restoredToken);
+ await db.prepare('INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,?,?)').bind(hash(restoredToken),'account-A',Date.now()+3600000).run();
+ const onlineA=await browser.newTab(),onlineB=await browser.newTab();
+ for(const tab of [onlineA,onlineB])await tab.evaluate(`for(const name of ['localStorage','indexedDB'])Object.defineProperty(window,name,{configurable:true,get(){throw new DOMException('Synthetic unavailable','SecurityError')}});Object.defineProperty(navigator,'locks',{configurable:true,value:undefined});window.m=await import('/fixture.mjs');window.nativeFetch=fetch;window.calls=0;window.fetch=(...args)=>{calls++;return nativeFetch(...args)};window.denied=async(run)=>{try{await run();return false}catch(e){return e.status===409}};`);
+ await authenticate(onlineA,'account-A');
+ check(await onlineA.evaluate("!m.sessionStorageAvailable()"),'blocked IndexedDB selects online-only authority');
+ await onlineA.evaluate("await m.api('partner/summary')");
+ const beforeOnline=requests.length;
+ check(await onlineA.evaluate("window.before=calls;Array.isArray((await m.api('partner/summary','GET',undefined,undefined,{preferCache:true})).partners)&&calls===before+1"),'online-only same-owner cached preference revalidates over HTTP');
+ check(requests.length===beforeOnline+1&&requests.at(-1).owner==='account-A','online-only GET carries server-enforced owner');
+ await authenticate(onlineB,'account-B');
+ check(await onlineA.evaluate("m.currentLocalWorkUserId()==='account-A'"),'isolated memory cannot observe the other tab cookie switch');
+ check(await onlineA.evaluate("window.before=calls;await denied(()=>m.api('partner/summary','GET',undefined,undefined,{preferCache:true}))&&calls===before+1"),'online-only stale cached preference reaches server and rejects changed cookie');
+ check(requests.at(-1).status===409&&requests.at(-1).owner==='account-A','changed-cookie response is not accepted or cached under former account');
+ await onlineB.evaluate("await m.api('auth/logout','POST')");
+ check(await onlineA.evaluate("let status;try{await m.api('partner/summary','GET',undefined,undefined,{preferCache:true})}catch(e){status=e.status}status===401"),'online-only cache cannot survive another tab logout');
  console.log(`PASS: ${checks} private session fence checks, two tabs and actual HTTP writes.`);
 }finally{
  releaseRead?.();await browser?.close();if(server){server.closeAllConnections();await new Promise(r=>server.close(r));}

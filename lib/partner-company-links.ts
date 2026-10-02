@@ -23,6 +23,7 @@ function buildCompanyLinks(c:DatabaseSync,reference:string){
   for(const row of master){const code=normalizedCui(String(row.PartnerCode||'')),company=normalizedCui(String(row.CIF||''));if(!code||!company||code==='CLIENTGEN')continue;const set=owners.get(code)||new Set<string>();set.add(company);owners.set(code,set);}
   const legalCompanies=new Set([...master.map(p=>normalizedCui(String(p.CIF||''))),...partners.map(p=>normalizedCui(String(p.cui||'')))]);
   for(const company of legalCompanies){if(!company||company==='CLIENTGEN')continue;const set=owners.get(company)||new Set<string>();set.add(company);owners.set(company,set);}
+  const explicitCodes=new Set([...legalCompanies,...master.map(p=>normalizedCui(String(p.PartnerCode||'')))]);
   const points=new Map<string,Set<string>>();
   const add=(id:string,company:string)=>{if(!id||!company||company==='CLIENTGEN')return;const set=points.get(id)||new Set<string>();set.add(company);points.set(id,set);};
   for(const p of partners){const company=normalizedCui(String(p.cui||''));add(p.id,company);for(const code of [...p.historyFranchises||[],p.historyCatalog?.franchiseCode||''])add(codeKey(String(code)),company);}
@@ -32,14 +33,19 @@ function buildCompanyLinks(c:DatabaseSync,reference:string){
   for(const row of allocations){
     if(row.status==='consumer')continue;
     const client=normalizedCui(String(row.client_code||'')),candidates=new Set(owners.get(client)||[]);
-    const evidence=new Set(candidates);
     const ids=[...JSON.parse(String(row.partner_ids_json||'[]')),...JSON.parse(String(row.candidates_json||'[]')),String(row.franchise_code||'')];
-    for(const id of ids)for(const company of points.get(String(id))||points.get(codeKey(String(id)))||[])evidence.add(company);
+    const pointEvidence=new Set<string>();
+    for(const id of ids)for(const company of points.get(String(id))||points.get(codeKey(String(id)))||[])pointEvidence.add(company);
+    const resolvedPoint=row.status==='direct_code'||row.status==='single_partner';
+    // The immutable resolver can identify a point even without a client-code
+    // alias. An otherwise unknown code is not evidence for a competing firm.
+    if(resolvedPoint&&pointEvidence.size===1&&!explicitCodes.has(client))candidates.clear();
+    const evidence=new Set([...candidates,...pointEvidence]);
     const reason=String(row.reason||'');
     // Explicit mismatch with missing candidate evidence is still unresolved. Multiple
     // master addresses of the SAME firm are not a cross-company conflict.
     const conflict=evidence.size>1||(/conflict|mismatch|ambiguous client/i.test(reason)&&!(reason==='Conflicting master entries for franchise'&&evidence.size===1&&ids.filter(Boolean).every(id=>points.has(String(id))||points.has(codeKey(String(id))))));
-    const sole=candidates.size===1?[...candidates][0]:undefined;
+    const sole=candidates.size===1?[...candidates][0]:resolvedPoint&&evidence.size===1?[...evidence][0]:undefined;
     const missingCandidate=row.status==='reconcile'&&ids.filter(Boolean).some(id=>!points.has(String(id))&&!points.has(codeKey(String(id))));
     const unsafe=conflict||!sole||missingCandidate;
     for(const company of evidence)known.add(company);

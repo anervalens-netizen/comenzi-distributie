@@ -8,6 +8,8 @@ export {normalizedCui} from './partner-company-identity';
 import {historyCompanyLinks} from './partner-company-links';
 import {derivedOutputTarget} from './derived-output-target';
 import {fileGeneration,historyFileGeneration} from './history-source-generation';
+import {cooperativeStamp,type VerifiedHistoryStamp} from './history-source-stamp';
+import {salesYield} from './client-sales-cooperative';
 import {buildDetailLinks} from './partner-detail-snapshot';
 export const activityVersion='7';
 export const bucharestToday=(now=new Date())=>new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Bucharest',year:'numeric',month:'2-digit',day:'2-digit'}).format(now);
@@ -201,4 +203,67 @@ export function readActivitySnapshot(partners:{id:string;cui:string}[],directory
     if(generation!==fileGeneration(directory))return stale();
     return {state:'ready' as const,range,metrics,through:stamp.through,builtAt:meta.builtAt,asOf:meta.asOf,recentStart:meta.recentStart,previousStart:meta.previousStart,stale:lag>3,rows};
   }finally{c.close();snapshot.close();}
+}
+
+const activityUnavailable=()=>({state:'unavailable' as const,message:'Istoricul a fost actualizat; centralizarea activității trebuie recalculată.'});
+/** HTTP reader: fingerprint flights cache source content only, never scoped results.
+ * Capture the pathname generation before opening, pin derived7, and discard every
+ * partial result if either source changes at any cooperative boundary. */
+export async function readActivitySnapshotAsync(partners:{id:string;cui:string}[],directory=process.env.MOBIUP_DATA_DIR||'./work/server-data',today=bucharestToday(),options?:{period:string;scope?:'company'|'point'}):Promise<ActivitySnapshot>{
+  const base=resolve(directory,'client-history'),history=resolve(base,'client-sales-history.sqlite'),snapshot=resolve(base,'partner-activity.sqlite');
+  if(!existsSync(history)||!existsSync(snapshot))return {state:'unavailable',message:'Centralizarea activității nu este încă pregătită.'};
+  const generation=fileGeneration(directory);
+  try{
+    const stamp=await cooperativeStamp(directory,generation);
+    if(!stamp||generation!==fileGeneration(directory))return activityUnavailable();
+    const steps=activitySnapshotSteps(partners,directory,today,options,stamp);
+    try{
+      for(;;){
+        if(generation!==fileGeneration(directory))return activityUnavailable();
+        const step=steps.next();
+        if(step.done)return generation===fileGeneration(directory)?step.value:activityUnavailable();
+        await salesYield();
+      }
+    }finally{steps.return(activityUnavailable());}
+  }catch{return activityUnavailable();}
+}
+function* activitySnapshotSteps(partners:{id:string;cui:string}[],directory:string,today:string,options:{period:string;scope?:'company'|'point'}|undefined,stamp:VerifiedHistoryStamp):Generator<void,ActivitySnapshot,unknown>{
+  const snapshot=new DatabaseSync(resolve(directory,'client-history','partner-activity.sqlite'),{readOnly:true});
+  try{
+    snapshot.exec('BEGIN');
+    const meta=JSON.parse(String(snapshot.prepare("SELECT value FROM meta WHERE key='snapshot'").get()?.value||'null'));
+    if(stamp.generation!==fileGeneration(directory)||!meta||meta.sourceGeneration!==stamp.sourceGeneration||meta.reference!==stamp.reference||meta.version!==activityVersion||meta.signature!==stamp.signature||meta.asOf!==(today<stamp.through?today:stamp.through))return activityUnavailable();
+    const lag=Math.max(0,Math.floor((Date.parse(today)-Date.parse(stamp.through))/86400000));
+    const range=activityRange(options?.period||'',stamp.start,meta.asOf),rows=new Map<string,ActivitySnapshotRow>(),metrics=new Map<string,PartnerPeriodMetrics>();
+    const company=options?.scope==='company',column=company?'company_id':'partner_id',table=company?'company_activity':'activity',daily=company?'company_daily':'daily';
+    const read=snapshot.prepare(`SELECT ${column} key,payload FROM ${table} WHERE ${column} IN (SELECT value FROM json_each(?))`);
+    const totals=options?snapshot.prepare(`SELECT ${column} key,SUM(value_cents) valueCents,SUM(documents) documents,MAX(last_billing) lastBilling,SUM(missing_values) missingValues FROM ${daily} WHERE ${column} IN (SELECT value FROM json_each(?)) AND date>=? AND date<=? GROUP BY ${column}`):undefined;
+    // Bounded SQL input/results, including a national manager selection. No .all()
+    // over the immutable national reference or activity tables on the HTTP thread.
+    for(let offset=0;offset<partners.length;offset+=128){
+      const batch=partners.slice(offset,offset+128),allowed=new Map(batch.map(p=>[p.id,normalizedCui(p.cui)]));
+      const keys=JSON.stringify([...new Set(company?allowed.values():allowed.keys())]),found=new Map<string,ActivitySnapshotRow>();
+      for(const record of read.iterate(keys)){
+        const row=JSON.parse(String(record.payload)) as ActivitySnapshotRow;
+        if(!company&&row.cui!==allowed.get(row.id))continue;
+        if(lag>3&&!row.activity.stale)row.activity.reason+=' Datele sunt întârziate; alerta curentă este suspendată.';
+        row.activity.stale=lag>3;row.activity.sourceLagDays=lag;row.activity.alertEligible=row.activity.alertEligible&&lag<=3;
+        found.set(String(record.key),row);
+      }
+      yield;
+      const values=new Map<string,PartnerPeriodMetrics>();
+      let count=0;
+      if(totals)for(const row of totals.iterate(keys,range.from,range.to)){
+        values.set(String(row.key),{valueCents:row.valueCents===null?null:Number(row.valueCents),documents:Number(row.documents),lastBilling:row.lastBilling===null?null:String(row.lastBilling),missingValues:Number(row.missingValues)});
+        // A company may have years of daily facts; yield within the SQL iterator.
+        if(++count%16===0)yield;
+      }
+      for(const [id,cui] of allowed){
+        const key=company?cui:id,row=found.get(key);
+        if(row){rows.set(id,company?{...row,id}:row);if(options)metrics.set(id,values.get(key)||{valueCents:0,documents:0,lastBilling:null,missingValues:0});}
+      }
+      yield;
+    }
+    return {state:'ready',range,metrics,through:stamp.through,builtAt:meta.builtAt,asOf:meta.asOf,recentStart:meta.recentStart,previousStart:meta.previousStart,stale:lag>3,rows};
+  }finally{snapshot.close();}
 }

@@ -24,8 +24,9 @@ p.write_text(json.dumps({'partners':[{'id':'history-upload-test','cui':'123','co
 m.write_text(json.dumps([{'CIF':'123','PartnerCode':'123','Cod_Franciza':'F001','Judet':'County','Oras':'City','Street':'Street 1'}]))
 c=h.connect(folder/'client-sales-history.sqlite')
 initial=folder/'initial.xlsx';fixture(initial,[row(Data='01.01.2024')],'2024-01-01','2024-01-31');h.import_file(c,initial,p,m);c.close()
-for name,records in [('daily',[row(Data='01.02.2024')]),('cumulative',[row(Data='01.02.2024'),row(Data='02.02.2024')]),('corrected',[row(Data='01.02.2024',Valoare='18',Pret='9')])]:
+for name,records in [('daily',[row(Data='01.02.2024')]),('cumulative',[row(Data='01.02.2024'),row(Data='02.02.2024')]),('corrected',[row(Data='01.02.2024',Valoare='18',Pret='9')]),('empty',[])]:
  path=folder/(name+'.xlsx');fixture(path,records,'2024-02-01','2024-02-29')
+ if name=='empty':continue
  with zipfile.ZipFile(path) as z:files={n:z.read(n) for n in z.namelist()}
  key='xl/worksheets/sheet1.xml';files[key]=re.sub(rb'<row r="[1-4]">.*?</row>',b'',files[key])
  with zipfile.ZipFile(path,'w') as z:
@@ -72,9 +73,19 @@ for name,records in [('daily',[row(Data='01.02.2024')]),('cumulative',[row(Data=
  await commit(ready,true);assert.equal(facts().length,2);assert.equal(facts()[1].value_cents,1800);
  const activity=new DatabaseSync(join(history,'partner-activity.sqlite'),{readOnly:true});
  assert.equal(JSON.parse(activity.prepare("SELECT value FROM meta WHERE key='snapshot'").get().value).signature.length,64);
- activity.close();assert.equal(c.prepare('PRAGMA integrity_check').get().integrity_check,'ok');c.close();
+ activity.close();assert.equal(c.prepare('PRAGMA integrity_check').get().integrity_check,'ok');
  assert.equal((await call('/status')).latest.filename,'corrected.xlsx');
- console.log('PASS: authenticated HTTP upload, persisted progress, ownership, CSRF, malformed file, preview, cumulative import, repeated commit/source, explicit corrections and rebuilt snapshot.');
+ ready=await upload('empty');assert.equal(ready.preview.rows,0);assert.equal(ready.preview.removedOccurrences,1);assert(ready.preview.requiresAcknowledgement);
+ await call('',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jobId:ready.id})},409);
+ const empty=await commit(ready,true);assert.equal(empty.result.rows,0);assert.equal(empty.result.valueCents,0);assert.equal(facts().length,1);
+ assert.equal(c.prepare("SELECT COUNT(*) n FROM history_current WHERE date LIKE '2024-02-%'").get().n,0);
+ assert.equal(c.prepare("SELECT row_count FROM history_imports WHERE state='active' AND period_start='2024-02-01'").get().row_count,0);
+ assert(existsSync(join(history,'client-sales-originals',empty.result.fileHash+'.xlsx')));
+ for(let n=0;n<50&&existsSync(join(history,'import-jobs',ready.id,'input.xlsx'));n++)await sleep(20);
+ assert(!existsSync(join(history,'import-jobs',ready.id,'input.xlsx')),'Terminal staging is cleaned after archiving/rebuild');
+ assert(existsSync(join(history,'import-jobs',ready.id,'status.json')),'Completed status remains idempotent');
+ assert.equal((await call('/status')).latest.filename,'empty.xlsx');c.close();
+ console.log('PASS: authenticated HTTP upload, persisted progress, ownership, CSRF, malformed file, preview, cumulative import, repeated commit/source, explicit corrections, declared empty month, retained completion, cleaned staging and rebuilt snapshot.');
 }finally{
  app.prepare("DELETE FROM customers WHERE id='history-upload-test'").run();
  for(const hash of hashes)app.prepare('DELETE FROM sessions WHERE token_hash=?').run(hash);

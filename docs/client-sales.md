@@ -116,3 +116,5 @@ change conservatively invalidates the result. Application filesystem directories
 remain under the operator's control during build and promotion.
 The HTTP adapter uses cooperative source validation and rechecks the current authorized
 card after yielding.
+
+Resolved company ownership may come from a unique immutable reference point or franchise when an allocation is explicitly `direct_code` or `single_partner`, even when its client-code alias is absent. This does not turn unresolved reconciliation or contradictory company evidence into confirmed ownership. Online-only authentication without durable storage always sends private reads to the server; an in-memory cache is not an authority substitute.

@@ -1,8 +1,10 @@
 import {portfolioSummary} from './partner-portfolio';
-import {pagedBrowse,portfolioVersion,readyReadModel,selectedSql,selectedBillingCandidates} from './portfolio-read-model';
+import {pagedBrowse,portfolioVersion,readyReadModel,selectedSql} from './portfolio-read-model';
 import {aggregateMapPoints} from './partner-map-aggregation';
-import {readActivitySnapshot} from './partner-activity-snapshot';
-import {validBillingPeriod,selectBillingPeriod} from './partner-billing-period';
+import {activityReadFence} from './partner-activity-api';
+import {salesYield} from './client-sales-cooperative';
+import {readActivitySnapshotAsync} from './partner-activity-snapshot';
+import {validBillingPeriod,billingPeriodMatches} from './partner-billing-period';
 import { db, fail } from './server';
 import { managerFilter } from './manager-scope';
 import type { User } from './types';
@@ -61,15 +63,36 @@ export function partnerBounds(partners: PartnerSummary[]): MapBounds | null {
     }
   return Number.isFinite(west) ? [west, south, east, north] : null;
 }
-function billingSelection<T extends {id:string;cui:string}>(partners:T[],params:URLSearchParams) {
+async function billingSelection<T extends {id:string;cui:string}>(partners:T[],params:URLSearchParams) {
   const period=params.get('salesPeriod')||'';
   if(!validBillingPeriod(period))fail(400,'Perioada de facturare este invalidă.');
   if(!period)return partners;
-  const snapshot=readActivitySnapshot(partners,undefined,undefined,{period,scope:'company'});
+  const snapshot=await readActivitySnapshotAsync(partners,undefined,undefined,{period,scope:'company'});
   if(snapshot.state!=='ready')fail(409,snapshot.message);
-  return selectBillingPeriod(partners,snapshot,period);
+  const selected:T[]=[];
+  for(let i=0;i<partners.length;i++){const p=partners[i];if(billingPeriodMatches(snapshot.rows.get(p.id),period,snapshot.asOf))selected.push(p);if(i%128===0)await salesYield();}
+  return selected;
 }
-export async function browsePartners(
+export async function browsePartners(user:User,params:URLSearchParams):Promise<PartnerBrowse>{
+  const verify=params.get('salesPeriod')?await activityReadFence(user,params):undefined;
+  const result=await browsePartnersRead(user,params);await verify?.();return result;
+}
+export async function mapPartners(user:User,params:URLSearchParams):Promise<PartnerMapData>{
+  const verify=params.get('salesPeriod')?await activityReadFence(user,params):undefined;
+  const result=await mapPartnersRead(user,params);await verify?.();return result;
+}
+/** Live scoped IDs on every request, in bounded batches; never cache membership. */
+async function selectedBillingCandidates(user:User,params:URLSearchParams,warehouseIds?:string[],bbox?:MapBounds){
+  const q=selectedSql(user,params,warehouseIds,bbox),result:{id:string;cui:string}[]=[];
+  let cursor='';
+  for(;;){
+    const rows=(await db().prepare(`SELECT m.id,COALESCE(json_extract(m.summary,'$.cui'),'') cui FROM ${q.from} WHERE ${q.where} AND m.id>? ORDER BY m.id LIMIT 256`).bind(...q.args,cursor).all<{id:string;cui:string}>()).results;
+    for(const row of rows)result.push(row);
+    if(rows.length<256)return result;
+    cursor=rows.at(-1)!.id;await salesYield();
+  }
+}
+async function browsePartnersRead(
   user: User,
   params: URLSearchParams,
 ): Promise<PartnerBrowse> {
@@ -81,15 +104,15 @@ export async function browsePartners(
     const scope=await managerFilter(user,params);
     if(!period)return pagedBrowse(user,params,scope?.warehouseIds,offset,limit);
     await readyReadModel();const version=await portfolioVersion();
-    // readActivitySnapshot still validates its authoritative history signature on every request.
-    const ids=billingSelection(await selectedBillingCandidates(user,params,scope?.warehouseIds),params).map(p=>p.id);
+    // Share only the verified source fingerprint, then select current scoped IDs.
+    const ids=(await billingSelection(await selectedBillingCandidates(user,params,scope?.warehouseIds),params)).map(p=>p.id);
     const result=await pagedBrowse(user,params,scope?.warehouseIds,offset,limit,ids);
     if(version===await portfolioVersion())return result;
   }
   return fail(503,'Portofoliul se modifică. Reîncearcă.');
 }
 
-export async function mapPartners(
+async function mapPartnersRead(
   user: User,
   params: URLSearchParams,
   attempt=0,
@@ -100,11 +123,11 @@ export async function mapPartners(
   const rawZoom=params.get('zoom');const zoom=rawZoom===null?undefined:integer(params,'zoom',0,0,22);
   const period=params.get('salesPeriod')||'';if(!validBillingPeriod(period))fail(400,'Perioada de facturare este invalidă.');
   await readyReadModel();const version=await portfolioVersion();const query=selectedSql(user,params,scope?.warehouseIds,bbox);query.where+=' AND m.latitude IS NOT NULL AND m.longitude IS NOT NULL';
-  if(period){const ids=billingSelection(await selectedBillingCandidates(user,params,scope?.warehouseIds,bbox),params).map(p=>p.id);query.where+=' AND m.id IN (SELECT value FROM json_each(?))';query.args.push(JSON.stringify(ids));}
+  if(period){const ids=(await billingSelection(await selectedBillingCandidates(user,params,scope?.warehouseIds,bbox),params)).map(p=>p.id);query.where+=' AND m.id IN (SELECT value FROM json_each(?))';query.args.push(JSON.stringify(ids));}
   const points=(await db().prepare(`SELECT m.id,m.name,m.latitude,m.longitude,json_extract(m.summary,'$.positionQuality') quality FROM ${query.from} WHERE ${query.where} ORDER BY m.id`).bind(...query.args).all<{id:string;name:string;latitude:number;longitude:number;quality:string|null}>()).results;
   if(zoom===undefined&&points.length>50000)fail(413,'Prea multe puncte în această zonă. Mărește harta sau restrânge filtrele.');
   const data:PartnerMapData={type:'FeatureCollection',features:points.map(p=>({type:'Feature',id:p.id,geometry:{type:'Point',coordinates:[p.longitude,p.latitude]},properties:{id:p.id,name:p.name,approximate:!!p.quality?.endsWith('_approximate')}}))};
-  if(version!==await portfolioVersion()){if(attempt>=2)fail(503,'Portofoliul se modifică. Reîncearcă.');return mapPartners(user,params,attempt+1);}
+  if(version!==await portfolioVersion()){if(attempt>=2)fail(503,'Portofoliul se modifică. Reîncearcă.');return mapPartnersRead(user,params,attempt+1);}
   return zoom===undefined?data:aggregateMapPoints(data,zoom);
 }
 
@@ -153,7 +176,7 @@ async function legacyBrowse(
     offset = integer(params, 'offset', 0, 0, 10000000);
   const scope = await managerFilter(user, params);
   const all = await portfolioSummary(user, undefined, scope?.warehouseIds),
-    selected = billingSelection(all.filter(match),params);
+    selected = await billingSelection(all.filter(match),params);
   const inCounty = all.filter(
     (p) => !params.get('county') || p.county === params.get('county'),
   );
@@ -187,7 +210,7 @@ async function legacyMap(
   const match = legacyFilters(params),
     bbox = parseBounds(params.get('bbox'));
   const scope = await managerFilter(user, params);
-  const partners = billingSelection((await portfolioSummary(user, bbox, scope?.warehouseIds)).filter(
+  const partners = await billingSelection((await portfolioSummary(user, bbox, scope?.warehouseIds)).filter(
     (p) => p.latitude !== null && p.longitude !== null && match(p),
   ),params);
   // Do not silently truncate or mislabel cluster totals. Above this measured tier,
