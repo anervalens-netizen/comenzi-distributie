@@ -99,6 +99,11 @@ assert.deepEqual(fetched,optional,'only optional public shell assets are fetched
 openClients=[{id:'current'},{id:'unknown-legacy'}];
 await dispatchWait('message',{data:{type:'CLIENT_SHELL_ASSETS',paths:[essential[2]]},source:{id:'current'}});
 assert(stores.has('mobiup-shell-v2-retained'),'unknown older tab protects its assets');
+self.registration.waiting={state:'installed'};
+openClients=[{id:'current'}];
+await dispatchWait('message',{data:{type:'CLIENT_SHELL_ASSETS',paths:[essential[2]]},source:{id:'current'}});
+assert(stores.has('mobiup-shell-v2-retained'),'waiting version prevents active-worker cleanup');
+self.registration.waiting=null;
 openClients=[{id:'current'}];
 await dispatchWait('message',{data:{type:'CLIENT_SHELL_ASSETS',paths:[essential[2]]},source:{id:'current'}});
 assert(!stores.has('mobiup-shell-v2-retained'),'only caches unused by every verified client are retired');

@@ -16,10 +16,19 @@ export class ApiError extends Error {
   }
 }
 
+// A definitive session loss also fences requests started while already anonymous.
+let sessionEpoch=0,sessionRejected=false;
+async function rejectSession(){
+ sessionEpoch++;sessionRejected=true;setLocalWorkUserId('');invalidateApiReadCache();
+ const epoch=sessionEpoch,generation=currentLocalWorkGeneration();
+ await rememberAccount('').catch(()=>{});
+ if(epoch!==sessionEpoch)throw scopeError();
+ assertScope('',generation);
+}
 const record=(value:unknown):value is Record<string,unknown>=>!!value&&typeof value==='object'&&!Array.isArray(value);
 const array=(value:unknown)=>Array.isArray(value);
 function validGetContract(path:string,data:unknown){
- if(path==='bootstrap')return record(data)&&record(data.user)&&typeof data.user.id==='string';
+ if(path==='bootstrap')return record(data)&&(data.user===null||(record(data.user)&&typeof data.user.id==='string'));
  if(path==='auth/session')return record(data)&&(data.user===null||(record(data.user)&&typeof data.user.id==='string'));
  if(path==='orders')return record(data)&&record(data.user)&&array(data.orders)&&typeof data.weekKey==='string';
  if(/^orders\/[^/?]+$/.test(path))return record(data)&&record(data.order)&&typeof data.order.id==='string';
@@ -66,6 +75,7 @@ if(typeof window!=='undefined'){
 }
 
 export async function networkApi<T=Record<string,unknown>>(path: string,method='GET',body?: unknown, signal?: AbortSignal, operationId?:string, operationUser?:string): Promise<T> {
+  const requestEpoch=sessionEpoch;
   const requestOwner=currentLocalWorkUserId();
   const requestGeneration=currentLocalWorkGeneration();
   method=method.toUpperCase();
@@ -83,16 +93,20 @@ export async function networkApi<T=Record<string,unknown>>(path: string,method='
     const message=data && typeof data==='object' && 'error' in data && typeof (data as {error?:unknown}).error==='string'
       ? (data as {error:string}).error
       : 'Operațiunea nu a reușit.';
-    if(res.status===401&&path.split('/').at(-1)!=='login'&&typeof window!=='undefined')window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
+    if(res.status===401&&path.split('/').at(-1)!=='login'&&requestEpoch===sessionEpoch&&requestOwner===currentLocalWorkUserId()&&requestGeneration===currentLocalWorkGeneration()){
+      await rejectSession();
+      if(typeof window!=='undefined')window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
+    }
     throw new ApiError(res.status,message,data);
   }
   if(method==='GET'&&!validGetContract(path,data))throw new ApiError(502,'Serverul a trimis date incompatibile cu această pagină.',data);
-  if((path==='bootstrap'||path==='auth/session')&&(requestOwner!==currentLocalWorkUserId()||requestGeneration!==currentLocalWorkGeneration()))throw scopeError();
+  if((path==='bootstrap'||path==='auth/session'||path==='auth/logout')&&(requestEpoch!==sessionEpoch||requestOwner!==currentLocalWorkUserId()||requestGeneration!==currentLocalWorkGeneration()))throw scopeError();
   if((path==='bootstrap'||path==='auth/session')&&data&&typeof data==='object'&&'user' in data) {
     const user=(data as {user?:unknown}).user;
-    setLocalWorkUserId(user&&typeof user==='object'&&'id' in user&&typeof (user as {id?:unknown}).id==='string'?(user as {id:string}).id:'');
+    if(user===null)await rejectSession();
+    else if(record(user)&&typeof user.id==='string'){sessionRejected=false;setLocalWorkUserId(user.id);}
   } else if(path==='auth/logout'&&method==='POST') {
-    if(requestOwner===currentLocalWorkUserId())setLocalWorkUserId('');
+    await rejectSession();
   } else if(method==='DELETE'&&/^orders\/[^/]+$/.test(path)) {
     const userId=currentLocalWorkUserId();
     const orderId=path.slice('orders/'.length);
@@ -104,23 +118,24 @@ const cacheable=(path:string)=>path==='bootstrap'||path==='auth/session'||path==
 export async function api<T=Record<string,unknown>>(path:string,method='GET',body?:unknown,signal?:AbortSignal,options:ApiReadOptions={}):Promise<T>{
  method=method.toUpperCase();synchronizeReadCache();
  if(signal?.aborted)throw signal.reason??new DOMException('Cerere anulată.','AbortError');
+ const epoch=sessionEpoch;
  const owner=currentLocalWorkUserId();
  const generation=currentLocalWorkGeneration();
- if(method==='GET'&&options.preferCache&&!options.forceRefresh&&owner){
+ if(method==='GET'&&path!=='bootstrap'&&path!=='auth/session'&&options.preferCache&&!options.forceRefresh&&owner){
   const key=owner+'|'+generation+'|'+path,entry=readCache.get(key),maxAge=Math.max(0,options.maxAgeMs??30000);
   if(entry&&Date.now()-entry.at<=maxAge){readCache.delete(key);readCache.set(key,entry);return clone(entry.value) as T;}
  }
  try{
   const result=await networkApi<T>(path,method,body,signal);
-  if(path==='auth/logout'){invalidateApiReadCache();await rememberAccount('').catch(()=>{});return result;}
+  if(path==='auth/logout')return result;
   if(!path.startsWith('auth/')&&path!=='bootstrap')assertScope(owner,generation);
   const user=(result as {user?:{id:string}|null})?.user;
   const responseOwner=currentLocalWorkUserId(),responseGeneration=currentLocalWorkGeneration();
   if((path==='bootstrap'||path==='auth/session')&&user!==undefined){
-   await rememberAccount(user?.id||'').catch(()=>{});assertScope(responseOwner,responseGeneration);
+   if(user)await rememberAccount(user.id).catch(()=>{});assertScope(responseOwner,responseGeneration);
    if(user)await migrateLegacy(user.id).catch(()=>{});assertScope(responseOwner,responseGeneration);
   }
-  const account=user?.id||owner||currentLocalWorkUserId();
+  const account=user===null?'':user?.id||owner||currentLocalWorkUserId();
   if(method!=='GET')invalidateApiReadCache();
   if(typeof window!=='undefined'&&method==='GET'&&cacheable(path)&&account)await saveSnapshot(account,path,result).catch(error=>{window.dispatchEvent(new CustomEvent('mobiup-storage-error',{detail:error instanceof Error?error.message:'Datele primite nu au putut fi pregătite pentru offline.'}));});
   assertScope(responseOwner,responseGeneration);
@@ -129,6 +144,7 @@ export async function api<T=Record<string,unknown>>(path:string,method='GET',bod
  }catch(e){
   if(typeof window==='undefined'||method!=='GET'||signal?.aborted||(e instanceof ApiError&&e.status<500))throw e;
   assertScope(owner,generation);
+  if(epoch!==sessionEpoch||sessionRejected)throw e;
   let account=owner;
   const authRestore=path==='bootstrap'||path==='auth/session';
   if(!account&&authRestore){

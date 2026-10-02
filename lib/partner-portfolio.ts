@@ -270,17 +270,18 @@ export async function recordVisit(
     .bind(visitId, user.id, user.name, now, notes, now, id, ...s.args)
     .run();
   const saved = await db()
-    .prepare('SELECT customer_id,agent_id,notes FROM partner_visits WHERE id=?')
+    .prepare('SELECT id,customer_id customerId,agent_id agentId,agent_name agentName,visited_at visitedAt,notes,created_at createdAt FROM partner_visits WHERE id=?')
     .bind(visitId)
-    .first<{ customer_id: string; agent_id: string; notes: string }>();
+    .first<PartnerVisit>();
   if (
     !saved ||
-    saved.customer_id !== id ||
-    saved.agent_id !== user.id ||
+    saved.customerId !== id ||
+    saved.agentId !== user.id ||
     saved.notes !== notes
   )
     fail(409, 'Vizita nu a putut fi salvată cu acest identificator.');
-  return partnerDetail(user, id, null);
+  // Confirm the exact idempotent write even when it is outside the first history page.
+  return { ...await partnerDetail(user, id, null), visit: saved };
 }
 
 export async function portfolioSummary(user:User,bbox?:import('./partner-map-types').MapBounds,warehouseIds?:string[]){

@@ -10,12 +10,17 @@ let preparation=null;
 let preparationState={state:'preparing',completed:0,total:PUBLIC_FILES.size};
 const verifiedClients=new Set();
 async function retireUnusedShells(){
+ // A waiting version owns its own prepared shell even before it controls a tab.
+ if(self.registration.waiting||self.registration.installing)return;
  const clients=await self.clients.matchAll({type:'window',includeUncontrolled:true});
  // Unknown/legacy documents retain every old asset. Only verified current documents permit collection.
  if(!clients.length||clients.some(client=>!verifiedClients.has(client.id)))return;
  const current=await caches.open(CACHE);
  for(const path of PUBLIC_FILES)if(!await current.match(path))return;
- for(const key of await caches.keys())if(key.startsWith('mobiup-shell-')&&key!==CACHE)await caches.delete(key);
+ for(const key of await caches.keys())if(key.startsWith('mobiup-shell-')&&key!==CACHE){
+  if(self.registration.waiting||self.registration.installing)return;
+  await caches.delete(key);
+ }
 }
 const preparationListeners=new Set();
 const publishPreparation=detail=>{

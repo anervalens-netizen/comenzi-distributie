@@ -208,12 +208,23 @@ async function claimLease(userId:string){return transaction(['meta'],'readwrite'
 async function releaseLease(userId:string,token:string){await transaction(['meta'],'readwrite',async tx=>{const s=tx.objectStore('meta'),key='lease|'+userId;if((await request(s.get(key)))?.token===token)await request(s.delete(key));});}
 function equalDesired(remote:Record<string,unknown>,body:Record<string,unknown>){return Object.entries(body).filter(([k])=>k!=='revision').every(([k,v])=>JSON.stringify(remote[k])===JSON.stringify(v));}
 const object=(value:unknown):value is Record<string,unknown>=>!!value&&typeof value==='object'&&!Array.isArray(value);
+function visitRecord(value:unknown):value is Record<string,unknown>{
+ return object(value)&&['id','customerId','agentId','agentName','notes','visitedAt','createdAt'].every(key=>typeof value[key]==='string')&&Number.isFinite(Date.parse(value.visitedAt as string))&&Number.isFinite(Date.parse(value.createdAt as string));
+}
+function confirmedVisit(op:PendingOperation,result:unknown){
+ if(!object(result)||!object(op.body)||typeof op.body.id!=='string')return null;
+ const body=op.body;
+ const customerId=decodeURIComponent(op.path.split('/')[2]);
+ const matches=(visit:unknown)=>visitRecord(visit)&&visit.id===body.id&&visit.customerId===customerId&&visit.agentId===op.userId&&visit.notes===(typeof body.notes==='string'?body.notes.trim().slice(0,2000):'');
+ // Older servers confirm through the history page; never assume its first row is ours.
+ return matches(result.visit)?result.visit:Array.isArray(result.visits)?result.visits.find(matches)??null:null;
+}
 function requireReplayContract(op:PendingOperation,result:unknown){
  const value=object(result)?result:null;
  let valid=true;
  if(/^orders(?:\/[^/]+)?$/.test(op.path))valid=!!value&&object(value.order)&&typeof value.order.id==='string';
  else if(/^partner\/portfolio\/[^/]+$/.test(op.path))valid=!!value&&object(value.partner)&&typeof value.partner.id==='string';
- else if(/^partner\/portfolio\/[^/]+\/visits$/.test(op.path))valid=!!value&&object(value.visit)&&typeof value.visit.id==='string';
+ else if(/^partner\/portfolio\/[^/]+\/visits$/.test(op.path))valid=!!value&&object(value.partner)&&value.partner.id===decodeURIComponent(op.path.split('/')[2])&&Array.isArray(value.visits)&&value.visits.every(v=>visitRecord(v)&&v.customerId===decodeURIComponent(op.path.split('/')[2]))&&Number.isInteger(value.visitCount)&&(value.visitCount as number)>0&&(value.visitCount as number)>=value.visits.length&&(value.nextCursor===null||typeof value.nextCursor==='string')&&!!confirmedVisit(op,value);
  else if(op.path==='partner/planning')valid=!!value&&typeof value.date==='string'&&Array.isArray(value.stops);
  if(!valid)throw Object.assign(new Error('Confirmarea serverului este incompletă. Operațiunea rămâne în coadă pentru verificare.'),{status:502});
 }
@@ -237,11 +248,11 @@ async function reconcileReplaySnapshot(userId:string,op:PendingOperation,result:
   prefixes.add(op.path);prefixes.add('partner/browse');prefixes.add('partner/summary');
  }else if(/^partner\/portfolio\/[^/]+\/visits$/.test(op.path)&&op.method==='POST'){
   const parent=op.path.replace(/\/visits$/,'');
-  const cached=await snapshot<{partner:Record<string,unknown>;visits:Record<string,unknown>[]}>(userId,parent);
-  if(cached&&Array.isArray(cached.value.visits)&&object(result)){
-   const visit=object(result.visit)?result.visit:null,partner=object(result.partner)?result.partner:null;
-   const visits=visit&&typeof visit.id==='string'?[...cached.value.visits.filter(row=>row.id!==visit.id),visit]:cached.value.visits;
-   await saveSnapshot(userId,parent,{...cached.value,partner:partner?{...cached.value.partner,...partner}:cached.value.partner,visits});
+  if(object(result)){
+   // Keep the authoritative first page, count and cursor together. The explicit
+   // confirmation can be older than that page and must not corrupt pagination.
+   const {partner,visits,visitCount,nextCursor}=result;
+   await saveSnapshot(userId,parent,{partner,visits,visitCount,nextCursor});
   }
   prefixes.add(parent);prefixes.add('partner/browse');prefixes.add('partner/summary');
  }else if(op.path==='partner/planning'&&object(result)&&typeof result.date==='string'&&Array.isArray(result.stops)){

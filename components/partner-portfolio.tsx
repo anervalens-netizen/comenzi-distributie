@@ -74,20 +74,20 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='', active=
   );
   const [request, setRequest] = useState({key:filterKey,offset:0});
   const {key:requestKey,offset}=request;
-  const [dataKey, setDataKey] = useState('');
+  const [dataRequest, setDataRequest] = useState<{key:string;offset:number}|null>(null);
   const refreshSeen=useRef(refreshIndex);
   const browseActive=active&&!planning&&!adding&&!activityOpen;
   useEffect(() => {
     const timer = setTimeout(() => {
       if (filterKey !== requestKey) {
-        setLoading(true);
+        setLoading(true);setError('');
         setRequest({key:filterKey,offset:0});
       }
     }, 200);
     return () => clearTimeout(timer);
   }, [filterKey, requestKey]);
   const refresh = useCallback(() => {
-    setLoading(true);
+    setLoading(true);setError('');
     setRequest({key:filterKey,offset:0});
     setRefreshIndex((n) => n + 1);
   }, [filterKey]);
@@ -107,7 +107,7 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='', active=
       .then((result) => {
         if (controller.signal.aborted) return;
         setData(result);
-        setDataKey(requestKey);
+        setDataRequest({key:requestKey,offset});
         setError('');
         setLoading(false);
       })
@@ -145,8 +145,9 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='', active=
       });
     return () => controller.abort();
   }, [active, planning, planRefresh, refreshIndex, catalogReload]);
-  const current = dataKey === filterKey && requestKey === filterKey;
-  const filtered = data?.partners || [];
+  const current = dataRequest?.key === filterKey && requestKey === filterKey;
+  const displayedOffset=dataRequest?.offset??0;
+  const filtered = current ? data?.partners || [] : [];
   const counties = data?.facets.counties || [],
     cities = data?.facets.cities || [],
     routes = data?.facets.routes || [];
@@ -228,7 +229,7 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='', active=
       </div>
       {error && (
         <div className="error-banner" role="alert">
-          {error} <button onClick={() => refresh()}>Reîncearcă</button>
+          {error} <button onClick={() => {setLoading(true);setError('');setRefreshIndex(n=>n+1);}}>Reîncearcă</button>
         </div>
       )}
       <div className="partner-filters">
@@ -407,26 +408,28 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='', active=
       {!loading && current && !filtered.length && !error && (
         <p>Nu există parteneri pentru filtrele alese.</p>
       )}
-      {current && data && (offset>0 || data.nextOffset != null) && (
+      {current && data && (displayedOffset>0 || data.nextOffset != null) && (
         <nav className="bounded-pagination" aria-label="Pagini parteneri">
           <button
             className="secondary"
-            disabled={loading||offset===0}
+            disabled={loading||displayedOffset===0}
             onClick={() => {
-              setLoading(true);
-              setRequest({key:requestKey,offset:Math.max(0,offset-100)});
+              setLoading(true);setError('');
+              setRequest({key:requestKey,offset:Math.max(0,displayedOffset-100)});
+              if(offset===Math.max(0,displayedOffset-100))setRefreshIndex(n=>n+1);
             }}
           >
             Pagina anterioară
           </button>
-          <span>{offset+1}–{Math.min(offset+filtered.length,data.total)} din {data.total}</span>
+          <span>{displayedOffset+1}–{Math.min(displayedOffset+filtered.length,data.total)} din {data.total}</span>
           <button
             className="secondary"
             disabled={loading||data.nextOffset==null}
             onClick={() => {
               if(data.nextOffset==null)return;
-              setLoading(true);
+              setLoading(true);setError('');
               setRequest({key:requestKey,offset:data.nextOffset});
+              if(offset===data.nextOffset)setRefreshIndex(n=>n+1);
             }}
           >
             Pagina următoare
