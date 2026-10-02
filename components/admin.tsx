@@ -10,6 +10,7 @@ import { writePermissions } from '@/lib/types';
 import { AgentPortfolio } from './agent-portfolio';
 import { ManagerAccess } from './manager-access';
 import { StockImport } from './stock-import';
+import { ClientHistoryImport } from './client-history-import';
 import { api, errorMessage, normalize } from '@/lib/client-api';
 import { readClients, type ImportClient } from '@/lib/import-clients';
 import type { ClientImportPreview } from '@/lib/client-import-server';
@@ -29,7 +30,7 @@ function importStatusText(label:string,item:ImportStatusItem|null,ready:boolean,
 function ManagerImports() {
   const [status,setStatus]=useState<ImportStatus>({sales:null,stock:null}),[ready,setReady]=useState(false),[unavailable,setUnavailable]=useState(false);
   useEffect(()=>{let active=true;const refresh=async()=>{try{const next=await api<ImportStatus>('admin/imports/status');if(active){setStatus(next);setUnavailable(false);setReady(true);}}catch{if(active){setUnavailable(true);setReady(true);}}};const onImport=()=>void refresh();void refresh();window.addEventListener('sales-imported',onImport);window.addEventListener('stock-imported',onImport);return()=>{active=false;window.removeEventListener('sales-imported',onImport);window.removeEventListener('stock-imported',onImport);};},[]);
-  return <div className="settings-imports"><Suspense fallback={<div className="sales-loading">Se încarcă importul de vânzări…</div>}><SalesImport lastImportText={importStatusText('Ultimul import vânzări',status.sales,ready,unavailable)}/></Suspense><StockImport lastImportText={importStatusText('Ultimul import stoc',status.stock,ready,unavailable)}/></div>;
+  return <div className="settings-imports"><Suspense fallback={<div className="sales-loading">Se încarcă importul de vânzări…</div>}><SalesImport lastImportText={importStatusText('Ultimul import vânzări',status.sales,ready,unavailable)}/></Suspense><ClientHistoryImport/><StockImport lastImportText={importStatusText('Ultimul import stoc',status.stock,ready,unavailable)}/></div>;
 }
 
 export function Team({user,users,warehouses,onUsers,warnings,canCreateAgents}:{user?:User;users:User[];warehouses:Warehouse[];onUsers:(u:User[])=>void;warnings:{row:number;name:string;reason:string}[];canCreateAgents:boolean}) {
