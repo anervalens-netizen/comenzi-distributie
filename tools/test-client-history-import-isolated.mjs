@@ -68,8 +68,10 @@ fixture(root/'empty.xlsx',[],'2024-02-01','2024-02-29')
   writeFileSync(job.source,'synthetic');writeFileSync(join(dir,'status.json'),JSON.stringify(job));return job;
  }
  const save=job=>writeFileSync(join(base,job.id,'status.json'),JSON.stringify(job));
- const retainedReady=makeJob('ready'),retainedRunning=makeJob('running'),liveTerminal=makeJob('completed',{pid:process.pid,processIdentity:jobs.processIdentity(process.pid)}),oldFailed=makeJob();
+ const retainedReady=makeJob('ready'),retainedRunning=makeJob('running',{pid:process.pid,processIdentity:jobs.processIdentity(process.pid),attempt:randomUUID()}),liveTerminal=makeJob('completed',{pid:process.pid,processIdentity:jobs.processIdentity(process.pid)}),oldFailed=makeJob();
  const current=makeJob();writeFileSync(join(base,'owner-'+createHash('sha256').update('another-user').digest('hex')+'.json'),JSON.stringify({id:current.id}));
+ writeFileSync(join(base,'owner-'+createHash('sha256').update('ready-owner').digest('hex')+'.json'),JSON.stringify({id:retainedReady.id}));
+ const abandonedReady=makeJob('ready'),recentReady=makeJob('ready',{createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()});
  const failedImport=makeJob('failed',{operation:'import'});
  const hash=createHash('sha256').update('synthetic').digest('hex'),archive=join(root,'client-history','client-sales-originals',hash+'.xlsx');writeFileSync(archive,'synthetic');
  const done=makeJob('completed',{operation:'import',result:{fileHash:hash,status:'imported'},updatedAt:new Date().toISOString()});
@@ -84,7 +86,7 @@ fixture(root/'empty.xlsx',[],'2024-02-01','2024-02-29')
  jobs.retainJobs(root);
  for(const job of [retainedReady,retainedRunning,liveTerminal,failedImport,forged,linkedInput])assert(existsSync(join(base,job.id)),job.id);
  assert(existsSync(retainedReady.source));assert(existsSync(retainedRunning.source));assert(existsSync(failedImport.source));assert(existsSync(liveTerminal.source));
- assert(!existsSync(join(base,oldFailed.id)));assert(!existsSync(join(base,expiredDone.id)));assert(!existsSync(orphan));assert(existsSync(recentOrphan));
+ assert(!existsSync(join(base,oldFailed.id)));assert(!existsSync(join(base,expiredDone.id)));assert(!existsSync(join(base,abandonedReady.id)),'Unpinned expired ready preview is pruned');assert(existsSync(join(base,recentReady.id)),'Recent unpinned ready preview remains within retention');assert(!existsSync(orphan));assert(existsSync(recentOrphan));
  assert(existsSync(join(base,current.id,'status.json')));assert(!existsSync(current.source),'Current status retained after failed preview staging cleanup');
  assert(existsSync(join(base,done.id,'status.json')));assert(!existsSync(done.source),'Completed status retained for idempotence');
  assert(existsSync(linked));assert.equal(readFileSync(join(outside,'keep'),'utf8'),'private synthetic');assert.deepEqual(readFileSync(archive),originalArchive);
@@ -101,14 +103,17 @@ fixture(root/'empty.xlsx',[],'2024-02-01','2024-02-29')
  assert.equal([...counted,done].filter(job=>existsSync(join(base,job.id,'status.json'))).length,jobs.RETENTION.terminalCount,'Removing oversized job must not evict other retained jobs');
  // Remove deliberately unsafe test directories before capacity scanning.
  rmSync(linked);rmSync(join(base,forged.id),{recursive:true});rmSync(join(base,linkedInput.id),{recursive:true});
- const quota=makeJob('ready');const qfd=openSync(quota.source,'w');ftruncateSync(qfd,jobs.RETENTION.totalBytes);closeSync(qfd);
- assert.throws(()=>jobs.checkUploadCapacity(root,1),/Spațiul/);jobs.retainJobs(root);assert(existsSync(quota.source));rmSync(join(base,quota.id),{recursive:true});
- // Alive beyond 20 minutes, EPERM, missing PID, reused PID, and true death.
+ const quota=makeJob('ready',{createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()});const qfd=openSync(quota.source,'w');ftruncateSync(qfd,jobs.RETENTION.totalBytes);closeSync(qfd);
+ assert.throws(()=>jobs.checkUploadCapacity(root,1),/Spațiul/);jobs.retainJobs(root);assert(!existsSync(join(base,quota.id)),'Unpinned ready preview is eligible for byte-pressure pruning');assert.doesNotThrow(()=>jobs.checkUploadCapacity(root,1));
+ // Alive beyond 20 minutes, EPERM, PID-less prelaunch, reused PID, and true death.
  const live=makeJob('running',{pid:process.pid,processIdentity:jobs.processIdentity(process.pid)});
  assert.equal((await (await status(live.id)).json()).job.state,'running');
  const kill=process.kill;
  try{process.kill=()=>{throw Object.assign(new Error('denied'),{code:'EPERM'});};assert.equal(jobs.workerAlive(live),undefined);assert.equal((await (await status(live.id)).json()).job.state,'running');}finally{process.kill=kill;}
- assert.equal((await (await status(retainedRunning.id)).json()).job.state,'running','Unknown PID fails conservative');
+ assert.equal((await (await status(retainedRunning.id)).json()).job.state,'running','Known live worker remains running');
+ const prelaunch=makeJob('running');assert.equal((await (await status(prelaunch.id)).json()).job.state,'failed','PID-less prelaunch record is recovered after the grace period');
+ const attemptOnly=makeJob('running',{attempt:randomUUID()});assert.equal((await (await status(attemptOnly.id)).json()).job.state,'failed','A launch attempt without any recorded PID is also recovered after the grace period');
+ const invalidPid=makeJob('running',{pid:-1});assert.equal((await (await status(invalidPid.id)).json()).job.state,'failed');jobs.retainJobs(root);assert(!existsSync(invalidPid.source),'Invalid PID terminal job releases staged upload instead of being treated as live');
  const reused=makeJob('running',{pid:process.pid,processIdentity:'previous-boot:1'});assert.equal((await (await status(reused.id)).json()).job.state,'failed');
  const exited=spawnSync(process.execPath,['-e','']);const dead=makeJob('running',{pid:exited.pid});assert.equal((await (await status(dead.id)).json()).job.state,'failed');
  // Worker saves terminal success between status read and the ESRCH check.
@@ -121,6 +126,9 @@ fixture(root/'empty.xlsx',[],'2024-02-01','2024-02-29')
  const workerEnv={...process.env};delete workerEnv.MOBIUP_DATA_DIR;
  const stopped=spawnSync(process.execPath,[join(temp,'client-history-import-worker.mjs'),join(base,retainedReady.id,'status.json'),'attempt'],{env:workerEnv,encoding:'utf8'});
  assert.notEqual(stopped.status,0);assert.match(stopped.stderr,/MOBIUP_DATA_DIR/);assert(existsSync(retainedReady.source));
+ const staleReady=makeJob('ready',{createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()}),newerReady=makeJob('ready',{createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()});
+ writeFileSync(join(base,'owner-'+createHash('sha256').update(manager.id).digest('hex')+'.json'),JSON.stringify({id:newerReady.id}));
+ await assert.rejects(()=>commit(staleReady.id),{status:409},'Only the current ready preview can enter import; unpinned previews stay disposable');
  async function poll(id){for(let n=0;n<250;n++){const job=(await (await status(id)).json()).job;if(job.state!=='running')return job;await sleep(20);}throw Error('Job timeout');}
  async function upload(name){
   const response=await api.historyImportPreview(new Request('http://local.invalid/preview',{method:'POST',headers:{'X-Client-Sales-Filename':name},body:readFileSync(join(root,name))}),manager);assert.equal(response.status,202);
@@ -135,6 +143,7 @@ fixture(root/'empty.xlsx',[],'2024-02-01','2024-02-29')
  assert(existsSync(join(root,'rebuild-checked')));assert(!existsSync(join(base,ready.id,'input.xlsx')));assert.equal((await commit(ready.id)).status,200);
  ready=await upload('empty.xlsx');assert.equal(ready.state,'ready',ready.error);assert.equal(ready.preview.rows,0);assert.equal(ready.preview.removedOccurrences,2);assert(ready.preview.requiresAcknowledgement);
  await commit(ready.id);completed=await poll(ready.id);assert.equal(completed.state,'completed',completed.error);assert.equal(completed.result.valueCents,0);assert.equal((await commit(ready.id)).status,200);
+ for(let n=0;n<100;n++){const stored=jobs.readJob(root,join(base,ready.id,'status.json'));if(jobs.workerAlive(stored)===false)break;await sleep(20);}
  // Global flock still rejects a second worker and its failed preview is disposable.
  const holder=spawn('flock',['-n','--no-fork',join(root,'client-history','.upload-process.lock'),process.execPath,'-e',"process.stdout.write('locked');setTimeout(()=>{},10000)"],{stdio:['ignore','pipe','pipe']});children.push(holder);await once(holder.stdout,'data');
  const blocked=await upload('upload.xlsx');assert.equal(blocked.state,'failed');

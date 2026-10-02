@@ -67,9 +67,12 @@ for name,records in [('daily',[row(Data='01.02.2024')]),('cumulative',[row(Data=
  assert.equal(facts().length,3);
  ready=await upload('cumulative');assert.equal(ready.preview.alreadyImported,true);
  const before=JSON.stringify(facts());await commit(ready);assert.equal(JSON.stringify(facts()),before,'Repeated cumulative source is idempotent');
+ c.prepare("UPDATE history_rows SET value_cents=value_cents+123 WHERE date='2024-02-02'").run();
+ ready=await upload('cumulative');assert.equal(ready.preview.alreadyImported,true);assert.equal(ready.preview.requiresAcknowledgement,true,'Stored numeric correction is visible on an already-imported source');
+ const correctedInPlace=JSON.stringify(facts()),recheck=await commit(ready);assert.equal(recheck.result.status,'already_imported');assert.equal(JSON.stringify(facts()),correctedInPlace,'Centralization recheck never replaces corrected active facts and does not require a hidden acknowledgement');
  ready=await upload('corrected');assert(ready.preview.requiresAcknowledgement);assert(ready.preview.coverageShorter);
  await call('',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jobId:ready.id})},409);
- assert.equal(JSON.stringify(facts()),before,'Unconfirmed correction leaves history unchanged');
+ assert.equal(JSON.stringify(facts()),correctedInPlace,'Unconfirmed correction leaves the current corrected facts unchanged');
  await commit(ready,true);assert.equal(facts().length,2);assert.equal(facts()[1].value_cents,1800);
  const activity=new DatabaseSync(join(history,'partner-activity.sqlite'),{readOnly:true});
  assert.equal(JSON.parse(activity.prepare("SELECT value FROM meta WHERE key='snapshot'").get().value).signature.length,64);

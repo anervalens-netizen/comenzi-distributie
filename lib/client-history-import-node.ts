@@ -66,8 +66,10 @@ export async function historyImportCommit(req:Request,user:User){
  if(typeof body.jobId!=='string')fail(400,'Import invalid.');
  const job=load(user,body.jobId),dir=location(job.id);
  if(job.operation==='import'&&(job.state==='running'||job.state==='completed'))return response({job:exposed(job)},job.state==='running'?202:200);
+ const owner=existsSync(pointer(user))?JSON.parse(readFileSync(pointer(user),'utf8')):null;
+ if(owner?.id!==job.id)fail(409,'Previzualizarea nu mai este curentă. Reîncarcă fișierul.');
  if(job.state!=='ready'||!job.preview)fail(409,'Reia previzualizarea fișierului.');
- if(job.preview.requiresAcknowledgement&&body.allowRegression!==true)fail(409,'Confirmă corecțiile din previzualizare.');
+ if(job.preview.requiresAcknowledgement&&!job.preview.alreadyImported&&body.allowRegression!==true)fail(409,'Confirmă corecțiile din previzualizare.');
  worker();
  try{writeFileSync(join(dir,'commit.json'),JSON.stringify({revision:job.preview.revision,fileHash:job.preview.fileHash,allowRegression:body.allowRegression===true}),{flag:'wx',mode:0o600});}
  catch(error){if((error as NodeJS.ErrnoException).code==='EEXIST')fail(409,'Confirmarea acestui import a fost deja transmisă. Verifică progresul.');throw error;}

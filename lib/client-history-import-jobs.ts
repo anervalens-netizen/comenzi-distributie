@@ -49,8 +49,9 @@ export function processIdentity(pid:number){
   return readFileSync('/proc/sys/kernel/random/boot_id','utf8').trim()+':'+fields[19];
  }catch{return undefined;}
 }
+function validPid(pid:unknown):pid is number{return Number.isInteger(pid)&&Number(pid)>0;}
 export function workerAlive(job:Pick<ImportJob,'pid'|'processIdentity'>):boolean|undefined{
- if(!job.pid||!Number.isInteger(job.pid)||job.pid<=0)return undefined;
+ if(!validPid(job.pid))return undefined;
  try{process.kill(job.pid,0);}catch(error){return (error as NodeJS.ErrnoException).code==='ESRCH'?false:undefined;}
  const identity=processIdentity(job.pid);
  if(job.processIdentity&&identity&&job.processIdentity!==identity)return false;
@@ -58,9 +59,10 @@ export function workerAlive(job:Pick<ImportJob,'pid'|'processIdentity'>):boolean
  return true;
 }
 export function recoverDeadWorker(root:string,path:string,job:ImportJob){
- if(job.state!=='running'||Date.now()-Date.parse(job.updatedAt)<=5000||workerAlive(job)!==false)return job;
- // Read again AFTER proving death, since the worker may have saved success
- // immediately before exiting. A missing PID or EPERM can never enter here.
+ const stale=Date.now()-Date.parse(job.updatedAt)>5000,pidless=!Number.isInteger(job.pid)||Number(job.pid)<=0,alive=workerAlive(job);
+ if(job.state!=='running'||!stale||(!pidless&&alive!==false))return job;
+ // Read again AFTER proving death, or after a persisted pre-launch record has
+ // exceeded the grace period. EPERM / uncertain launched workers never enter here.
  const current=readJob(root,path);
  if(current.state!=='running'||current.attempt!==job.attempt||current.pid!==job.pid||current.updatedAt!==job.updatedAt)return current;
  current.state='failed';current.error='Procesarea a fost întreruptă. Reîncarcă același fișier; datele deja aplicate nu se dublează.';current.updatedAt=new Date().toISOString();
@@ -105,11 +107,14 @@ export function retainJobs(root:string,now=Date.now()){
    let bytes=0;for(const name of files)bytes+=ordinary(join(path,name),'file').size;
    const status=join(path,'status.json');let job=existsSync(status)?readJob(root,status):undefined;
    if(job)job=recoverDeadWorker(root,status,job);
-   if(job&&(job.state==='ready'||job.state==='running'||(job.pid&&workerAlive(job)!==false)))continue;
-   if(job&&!['failed','completed'].includes(job.state))continue;
+   if(job&&(job.state==='running'||(validPid(job.pid)&&workerAlive(job)!==false)))continue;
+   // The owner pointer is the only resumable ready preview. Older ready jobs are
+   // ordinary retention candidates so abandoned 32 MiB uploads cannot exhaust staging.
+   if(job?.state==='ready'&&pinned.has(id))continue;
+   if(job&&!['failed','completed','ready'].includes(job.state))continue;
    const time=job?Date.parse(job.updatedAt):lstatSync(path).mtimeMs;if(!Number.isFinite(time))continue;
    if(!job&&now-time<RETENTION.ttlMs)continue;
-   if(job){
+   if(job&&['failed','completed'].includes(job.state)){
     if(!cleanupStaging(root,job)&&existsSync(join(path,'input.xlsx')))continue;
     bytes=0;for(const name of readdirSync(path))bytes+=ordinary(join(path,name),'file').size;
    }
@@ -124,8 +129,18 @@ export function retainJobs(root:string,now=Date.now()){
   try{
    // A status appearing in an abandoned directory makes it a new/live job.
    if(!item.job&&existsSync(join(item.path,'status.json')))continue;
-   // Failed imports without a verified archive retain their source for recovery.
-   if(item.job&&existsSync(join(item.path,'input.xlsx'))&&!cleanupStaging(root,item.job))continue;
+   if(item.job){
+    const status=join(item.path,'status.json');if(!existsSync(status))continue;
+    const current=recoverDeadWorker(root,status,readJob(root,status));
+    // Never delete a job that changed after candidate selection (for example a
+    // ready preview concurrently entering import). The next retention pass can reconsider it.
+    if(current.state!==item.job.state||current.operation!==item.job.operation||current.updatedAt!==item.job.updatedAt||current.pid!==item.job.pid||current.attempt!==item.job.attempt)continue;
+    if(current.state==='running'||(validPid(current.pid)&&workerAlive(current)!==false))continue;
+    item.job=current;
+   }
+   // Failed/completed imports without a verified archive retain their source for recovery.
+   // Unpinned ready previews are disposable staging and can be removed directly.
+   if(item.job&&['failed','completed'].includes(item.job.state)&&existsSync(join(item.path,'input.xlsx'))&&!cleanupStaging(root,item.job))continue;
    for(const name of readdirSync(item.path)){if(!managedFile(name))throw Error('Unknown file');ordinary(join(item.path,name),'file');}
    for(const name of readdirSync(item.path))unlinkSync(join(item.path,name));
    rmdirSync(item.path);
