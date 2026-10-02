@@ -30,6 +30,9 @@ const stubs={
   'partner-planning':unused(['visitWeek','saveDayPlan']),
   'partner-map-api':unused(['browsePartners','mapPartners']),
   'client-import-server':unused(['importClients']),
+  // This in-memory route fixture must not load the host-only upload worker.
+  // Its real filesystem/HTTP import contract is exercised by its own suite.
+  'client-history-import-runtime':unused(['historyImportStatus','historyImportPreview','historyImportCommit']),
 };
 const serverPlugin={name:'synthetic-infrastructure',setup(b){
   b.onResolve({filter:/^(?:@\/lib\/|\.\/)([^/]+)$/},args=>{const name=args.path.split('/').at(-1);if(name in stubs)return {path:name,namespace:'fixture'};});
