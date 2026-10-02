@@ -17,6 +17,8 @@ import React,{useState} from 'react';
 import {createRoot} from 'react-dom/client';
 import {OrderResult} from './components/order-result';
 import {StockPanel} from './components/stock-panel';
+import {setLocalWorkUserId} from './lib/local-work';
+setLocalWorkUserId('synthetic-agent');
 window.fixture={calls:[],downloads:[],shared:[],created:[],revoked:[],ignoreAbort:false};
 const f=window.fixture;
 const createUrl=URL.createObjectURL.bind(URL),revokeUrl=URL.revokeObjectURL.bind(URL);
@@ -138,7 +140,7 @@ try{
 
   await reset();await evaluate('fixture.show("failure","sim","finalized",true);true');await waitFor('fixture.calls.length===2');
   await resolveMail(0,'failure');await evaluate('fixture.calls.find(call=>call.path==="/api/orders/failure/excel").resolve("synthetic failure",503);true');
-  await waitFor('!!document.querySelector("[role=alert]")');
+  await waitFor('!!document.querySelector("[role=alert]")&&document.querySelector(".result-buttons button")?.disabled===false');
   check(await evaluate('!document.querySelector(".result-buttons button").disabled&&fixture.downloads.length===0'),'Excel failure preserves available mail and never auto-downloads');
 
   await reset();await evaluate('fixture.ignoreAbort=true;fixture.show("old","sim","finalized",true);true');await waitFor('fixture.calls.length===2');
@@ -174,7 +176,7 @@ try{
   await evaluate('window.dispatchEvent(new Event("stock-imported"));true');await waitFor('fixture.calls.length===3');
   check(await evaluate('fixture.calls[1].aborted&&!fixture.calls[2].aborted'),'A newer stock refresh aborts the previous refresh');
   const latest={...stock,rows:[{code:'NEW',name:'Stoc nou',category:'B',quantity:99}]};
-  await evaluate('fixture.calls[2].resolve('+JSON.stringify(latest)+');true');await waitFor('document.querySelector(".stock-row small").textContent==="NEW"');
+  await evaluate('fixture.calls[2].resolve('+JSON.stringify(latest)+');true');await waitFor('document.querySelector(".stock-row small")?.textContent==="NEW"');
   await evaluate('fixture.calls[1].resolve('+JSON.stringify(stock)+');true');await delay(40);
   check(await evaluate('document.querySelector(".stock-row small").textContent==="NEW"'),'Generation guard prevents an ignored-abort response replacing newer stock');
   await evaluate('window.dispatchEvent(new Event("stock-imported"));true');await waitFor('fixture.calls.length===4');

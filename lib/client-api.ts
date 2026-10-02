@@ -18,11 +18,11 @@ export class ApiError extends Error {
 
 // A definitive session loss also fences requests started while already anonymous.
 let sessionEpoch=0,sessionRejected=false;
-async function rejectSession(expected?:Awaited<ReturnType<typeof sessionFence>>){
+async function rejectSession(expected?:Awaited<ReturnType<typeof sessionFence>>,confirmedAdmissionUser?:string){
  await withSessionGate(async()=>{
   // Compare before changing any document state: an older anonymous response is
   // not a logout of a newer validated binding in another tab.
-  const rejection=await rejectSessionFence(expected);
+  const rejection=await rejectSessionFence(expected,confirmedAdmissionUser);
   if(!rejection)throw scopeError();
   sessionEpoch++;sessionRejected=true;invalidateApiReadCache();
   const epoch=sessionEpoch;
@@ -164,7 +164,7 @@ export async function networkApi<T=Record<string,unknown>>(path: string,method='
      },true);
     }
   } else if(path==='auth/logout'&&method==='POST') {
-    await rejectSession(requestFence);
+    await rejectSession(requestFence,requestOwner);
   } else if(method==='DELETE'&&/^orders\/[^/]+$/.test(path)) {
     const userId=currentLocalWorkUserId();
     const orderId=path.slice('orders/'.length);

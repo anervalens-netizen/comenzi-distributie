@@ -1,4 +1,5 @@
-// Synthetic integration of the real portfolio and WebGL map; no auth/production API.
+// Synthetic integration of the real portfolio and WebGL map; no production API.
+// Bind the fixture's local account explicitly; cross-tab auth has its own real HTTP tests.
 import assert from 'node:assert/strict';
 import { build } from 'esbuild';
 import { mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs';
@@ -14,7 +15,7 @@ const requests=[];
 let checks=0;
 const check=(value,label)=>{assert.ok(value,label);checks++;};
 await build({entryPoints:['node_modules/maplibre-gl/dist/maplibre-gl-worker.mjs'],outfile:join(directory,'map-worker.js'),bundle:true,format:'esm',platform:'browser',logLevel:'silent'});
-const source=`import React,{useState} from 'react';import {createRoot} from 'react-dom/client';import {PartnerPortfolio} from './components/partner-portfolio';function Fixture(){const [active,setActive]=useState(false),[manager,setManager]=useState(true),[scope,setScope]=useState('');window.fixture={setActive,setManager,setScope};return <><h1>Portfolio synthetic fixture</h1><div id="fixture-host" hidden={!active}><PartnerPortfolio key={scope} userId="synthetic-agent" manager={manager} active={active} scopeQuery={scope}/></div></>;}createRoot(document.getElementById('root')).render(<Fixture/>);`;
+const source=`import React,{useState} from 'react';import {createRoot} from 'react-dom/client';import {PartnerPortfolio} from './components/partner-portfolio';import {setLocalWorkUserId} from './lib/local-work';setLocalWorkUserId('synthetic-agent');function Fixture(){const [active,setActive]=useState(false),[manager,setManager]=useState(true),[scope,setScope]=useState('');window.fixture={setActive,setManager,setScope};return <><h1>Portfolio synthetic fixture</h1><div id="fixture-host" hidden={!active}><PartnerPortfolio key={scope} userId="synthetic-agent" manager={manager} active={active} scopeQuery={scope}/></div></>;}createRoot(document.getElementById('root')).render(<Fixture/>);`;
 await build({stdin:{contents:source,resolveDir:root,sourcefile:'portfolio-fixture.tsx',loader:'tsx'},outfile:join(directory,'fixture.js'),bundle:true,minify:true,platform:'browser',jsx:'automatic',define:{'process.env.NODE_ENV':'"production"'},tsconfig:join(root,'tsconfig.json'),logLevel:'silent',plugins:[{name:'local-map-worker',setup(builder){builder.onResolve({filter:/maplibre-gl-worker\.mjs\?worker&url$/},()=>({path:'local-map-worker',namespace:'local-worker'}));builder.onLoad({filter:/.*/,namespace:'local-worker'},()=>({contents:'export default "/map-worker.js";',loader:'js'}));}}]});
 const server=createServer((request,response)=>{
  const url=new URL(request.url,'http://127.0.0.1');

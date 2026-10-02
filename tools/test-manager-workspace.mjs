@@ -3,6 +3,9 @@ import {DatabaseSync} from 'node:sqlite';
 import {createHash,randomUUID,scryptSync,randomBytes} from 'node:crypto';
 
 const db=new DatabaseSync('work/qa/mobiup.sqlite');
+// The isolated HTTP server is a separate SQLite writer; bounded waiting avoids
+// turning a short session/projection commit into a fixture setup/cleanup failure.
+db.exec('PRAGMA busy_timeout=5000');
 const base='http://127.0.0.1:3000/api';
 const ids=['mui-global','mui-region-a','mui-region-b','mui-agent-a','mui-agent-b'];
 const cookies={},requests=[],orders=[];
@@ -138,6 +141,7 @@ try {
   await mutate('admin/users',{action:'reset',id:'mui-agent-a',version:version('mui-agent-a'),password});
   check(db.prepare('SELECT COUNT(*) n FROM sessions WHERE user_id=?').get('mui-agent-a').n===0,'Assigned-agent password reset invalidates old sessions');
   const login=await fetch(base+'/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:'mui-agent-a',password})});
+  await login.text();
   check(login.ok,'Assigned agent can log in with manager-set password');
   console.log(`PASS: ${checks} manager workspace scope, location and KPI checks.`);
 } finally {

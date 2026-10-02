@@ -9,16 +9,20 @@ const PUBLIC_FILES=new Set([...ESSENTIAL_SHELL,...OPTIONAL_SHELL]);
 let preparation=null;
 let preparationState={state:'preparing',completed:0,total:PUBLIC_FILES.size};
 const verifiedClients=new Set();
+// Distinct versions can share the same script URL. Compare the actual worker,
+// and retain caches on older engines that cannot identify their own worker.
+const ownsActiveRegistration=()=>!!self.serviceWorker&&self.registration.active===self.serviceWorker&&!self.registration.waiting&&!self.registration.installing;
 async function retireUnusedShells(){
  // A waiting version owns its own prepared shell even before it controls a tab.
- if(self.registration.waiting||self.registration.installing)return;
+ if(!ownsActiveRegistration())return;
  const clients=await self.clients.matchAll({type:'window',includeUncontrolled:true});
  // Unknown/legacy documents retain every old asset. Only verified current documents permit collection.
  if(!clients.length||clients.some(client=>!verifiedClients.has(client.id)))return;
  const current=await caches.open(CACHE);
  for(const path of PUBLIC_FILES)if(!await current.match(path))return;
  for(const key of await caches.keys())if(key.startsWith('mobiup-shell-')&&key!==CACHE){
-  if(self.registration.waiting||self.registration.installing)return;
+  // Every await above (including the preceding delete) may span activation.
+  if(!ownsActiveRegistration())return;
   await caches.delete(key);
  }
 }

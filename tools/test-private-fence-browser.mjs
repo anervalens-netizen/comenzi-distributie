@@ -120,6 +120,27 @@ try{
  check(requests.at(-1).owner==='account-A'&&requests.at(-1).status===201,'successful ordinary creation sends the guard and returns its 201 contract');
  check(await a.evaluate("await denied(()=>m.networkApi('orders','POST',{},undefined,'synthetic-replay','account-B'))"),'replay cannot override captured owner');
 
+ // A confirmed logout outranks a refresh within the SAME admission, but must
+ // not reject a later login even when the account string is unchanged.
+ for(const noLocks of [false,true]){
+  if(noLocks)for(const tab of [a,b])await tab.evaluate("Object.defineProperty(navigator,'locks',{configurable:true,value:undefined})");
+  await authenticate(a,'account-A');await authenticate(b,'account-A');
+  await b.evaluate("await m.api('partner/summary')");
+  await a.evaluate("window.logoutFence=await m.sessionFence();window.releaseLogout=null;window.fetch=async(...args)=>{calls++;await new Promise(resolve=>releaseLogout=resolve);return nativeFetch(...args)};window.logoutResult=m.api('auth/logout','POST').then(()=>({ok:true}),e=>({ok:false,status:e.status}));void 0");
+  await waitFor(()=>a.evaluate('!!releaseLogout'),'logout captured its admission before dispatch');
+  await b.evaluate("await m.api('auth/session')");
+  check(await a.evaluate("(await m.sessionFence()).epoch!==logoutFence.epoch"),'same-account refresh rotates epoch while logout is pending');
+  await a.evaluate('releaseLogout();');
+  check(await a.evaluate("(await logoutResult).ok&&m.currentLocalWorkUserId()===''&&(await m.sessionFence()).rejected"),'confirmed logout clears current binding despite refresh '+noLocks);
+  check(await b.evaluate("window.before=calls;await denied(()=>m.api('partner/summary','GET',undefined,undefined,{preferCache:true}))&&calls===before"),'other-tab cached read is rejected without network after confirmed logout '+noLocks);
+  check(!await db.prepare('SELECT 1 FROM sessions WHERE token_hash=?').bind(hash(tokens.get('account-A'))).first(),'actual logout removed the synthetic server session');
+  await a.evaluate('window.fetch=(...args)=>{calls++;return nativeFetch(...args)};');
+  const token=randomUUID();tokens.set('account-A',token);
+  await db.prepare('INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,?,?)').bind(hash(token),'account-A',Date.now()+3600000).run();
+  await authenticate(a,'account-A');
+  check(await a.evaluate("!await m.rejectSessionFence(logoutFence,'account-A')&&!(await m.sessionFence()).rejected"),'old confirmed admission cannot reject a new same-account login '+noLocks);
+ }
+
  // A legacy local account with an unbound fence keeps working without silently
  // writing that account into the shared fence. Real HTTP verifies the identity.
  const legacy=await browser.newTab();

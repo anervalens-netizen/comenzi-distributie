@@ -212,13 +212,20 @@ function admittedFence(current:SessionFence,expected:SessionFence,userId:string)
  if(current.epoch!==expected.epoch&&!(sameAccount&&current.admissionEpoch!==undefined&&(current.admissionEpoch===expected.epoch||(expected.userId===userId&&expected.admissionEpoch===current.admissionEpoch))))return null;
  return {epoch:crypto.randomUUID(),rejected:false,userId,admissionEpoch:sameAccount?current.admissionEpoch??current.epoch:current.epoch};
 }
-export async function rejectSessionFence(expected?:SessionFence){
+export async function rejectSessionFence(expected?:SessionFence,confirmedAdmissionUser?:string){
  const value:SessionFence={epoch:crypto.randomUUID(),rejected:true};
+ const matches=(current:SessionFence)=>!expected||current.epoch===expected.epoch||(
+  !!confirmedAdmissionUser&&!current.rejected&&!expected.rejected&&current.userId===confirmedAdmissionUser&&current.admissionEpoch!==undefined&&(
+   expected.userId===confirmedAdmissionUser&&expected.admissionEpoch===current.admissionEpoch||
+   !expected.userId&&current.admissionEpoch===expected.epoch));
+ // Only a server-confirmed logout may supersede refreshes of its captured
+ // admission. The comparison and rejection share one metadata transaction;
+ // a new login, A -> B -> A or rejection never joins that old admission.
  const accepted=await sessionMetadata(async store=>{
   const current=(await request(store.get('session-fence')))?.value as SessionFence|undefined;
-  if(expected&&(current?.epoch??'')!==expected.epoch)return false;
+  if(!matches(current??{epoch:'',rejected:false}))return false;
   await request(store.put({key:'session-fence',value}));return true;
- },()=>!expected||memoryFence.epoch===expected.epoch);
+ },()=>matches(memoryFence));
  if(accepted)memoryFence=value;return accepted?value:null;
 }
 export async function acceptSessionFence(expected:SessionFence,userId:string){
