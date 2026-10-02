@@ -9,7 +9,7 @@ const get=(result,id)=>result.rows.find(r=>r.id===id);
 try{
  const c=new DatabaseSync(history);
  c.exec("ALTER TABLE history_references ADD COLUMN partners_json TEXT; ALTER TABLE history_allocations ADD COLUMN reason TEXT NOT NULL DEFAULT ''; ALTER TABLE history_identities ADD COLUMN franchise_code TEXT NOT NULL DEFAULT '';");
- c.prepare('UPDATE history_references SET partners_json=?').run(JSON.stringify(partners));
+ c.prepare('UPDATE history_references SET partners_json=?').run(JSON.stringify({partners,historySourceIdentities:[{client_code:'400',franchise_code:'wrong-franchise'}]}));
  c.exec(`INSERT INTO history_identities VALUES(20000,'400','wrong-franchise'),(20001,'100',''),(20002,'77777','');
  INSERT INTO history_allocations VALUES(20000,'ref','reconcile','[]','["monthly-repeat"]','Franchise/client mismatch'),(20001,'ref','reconcile','[]','["monthly-a","monthly-sibling"]','Multiple or incomplete known work-point addresses'),(20002,'ref','reconcile','[]','[]','Client absent from Partners');
  INSERT INTO history_rows VALUES(1,20000,'2026-09-27','site','disputed',900000,1000000,'Synthetic seller','x','Synthetic item',20000),(1,20001,'2026-09-10','shared-site','joint',700,1000000,'Synthetic seller','x','Synthetic item',20001),(1,20002,'2026-08-20','site','historic',3210,1000000,'Synthetic seller','x','Synthetic item',20002);
@@ -17,12 +17,16 @@ try{
  c.close();m.buildActivitySnapshot(root,'2026-09-30');
  // Eligible, fresh partial month: an undisputed control really would be overdue.
  const control=m.readClientSales(partners,'2026-09',root,'2026-09-30');
- const conflict=get(control,'monthly-overdue');assert.equal(conflict.identityComplete,false);assert.equal(conflict.metrics.valueCents,0);assert.equal(conflict.health.status,'uncertain');assert(!conflict.flags.includes('overdue'));assert(!conflict.flags.includes('new'));assert(!conflict.flags.includes('unbilled'));
+ const conflict=get(control,'monthly-overdue');assert.equal(conflict.identityComplete,false);assert.equal(conflict.metrics.valueCents,null,'disputed-only period is unknown, not a proven zero');assert.equal(conflict.metrics.documents,null);assert.equal(conflict.health.status,'uncertain');assert(!conflict.flags.includes('overdue'));assert(!conflict.flags.includes('new'));assert(!conflict.flags.includes('unbilled'));
  assert.equal(get(control,'monthly-repeat').identityComplete,false,'the other candidate firm is incomplete too');
  assert.equal(get(control,'monthly-a').identityComplete,true,'same-company multi-point uncertainty is safe');assert.equal(get(control,'monthly-a').metrics.valueCents,3900);assert.equal(get(control,'monthly-a').metrics.documents,1,'one document across aliases/points');
  const old=m.readActivitySnapshot(partners,root,'2026-09-30',{period:'year:2026',scope:'company'});assert.equal(old.rows.get('monthly-overdue').coverageComplete,false);assert.equal(old.rows.get('monthly-overdue').activity.isNew,false);assert.equal(old.metrics.get('monthly-overdue').valueCents,1000,'only undisputed August history');
  const detail=m.readPartnerSales('monthly-overdue','400',new URLSearchParams('scope=company&from=2026-09-01&to=2026-09-30'),root);assert.equal(detail.state,'ready');assert.equal(detail.coverageComplete,false);assert.equal(detail.unresolvedCompanyIdentities,1);assert.equal(detail.documents.count,0);assert.equal(detail.activity.isNew,false);
  assert.equal(m.readPartnerSales('monthly-a','100',new URLSearchParams('scope=company&from=2026-09-01&to=2026-09-30'),root).totals.valueCents,3900);
+ const linkHits=m.companyLinkCacheStats.hits,linkBuilds=m.companyLinkCacheStats.builds;
+ m.readPartnerSales('monthly-a','100',new URLSearchParams('scope=company'),root);
+ m.readPartnerSales('monthly-repeat','200',new URLSearchParams('scope=company'),root);
+ assert.equal(m.companyLinkCacheStats.builds,linkBuilds,'detail reuses an immutable index rather than rebuilding the national reference');assert(m.companyLinkCacheStats.hits>=linkHits+2);
  const derived=new DatabaseSync(snapshot,{readOnly:true});assert.equal(derived.prepare('SELECT COUNT(*) n FROM company_unresolved').get().n,1);derived.close();
  // Addition, edit, merge and split without rebuilding historical facts.
  const historic={...partners[0],id:'historic-card',cui:'77777',name:'Synthetic historic'};
@@ -54,7 +58,7 @@ try{
   const date=new Date(instant);assert.equal(m.clientSalesParams(new URLSearchParams(),date).month,defaultMonth);assert.equal(m.clientSalesParams(new URLSearchParams({month:current}),date).month,current);assert.throws(()=>m.clientSalesParams(new URLSearchParams({month:future}),date),e=>e.status===400);
  }
  assert.throws(()=>m.clientSalesParams(new URLSearchParams('month=2026-10'),new Date('2026-09-30T20:59:59Z')),e=>e.status===400);
- const missing=await m.clientSalesOverview(t.user('manager'),new URLSearchParams('month=2026-10'),new Date('2026-10-01T10:00:00Z'));assert.equal(missing.window.imported,false);assert.equal(missing.comparisons[0].valueCents,national.totals.valueCents);assert.equal(missing.counts.absentPrevious,0);
+ const missing=await m.clientSalesOverview(t.user('manager'),new URLSearchParams('month=2026-10'),new Date('2026-10-01T10:00:00Z'));assert.equal(missing.window.imported,false);assert.equal(missing.visitRange.to,'2026-10-01','visit range ends at the observed day, not future month end');assert.equal(missing.comparisons[0].valueCents,national.totals.valueCents);assert.equal(missing.counts.absentPrevious,0);
  // Source writes, WAL, same-path replacement, reference edits, atomic derived replacement.
  const edit=new DatabaseSync(history);edit.exec("PRAGMA journal_mode=WAL;UPDATE history_imports SET sha256='reimport'");assert.equal((await call()).state,'unavailable');edit.close();m.buildActivitySnapshot(root,'2026-09-30');assert.equal((await call()).state,'ready');
  const changed=new DatabaseSync(history);changed.exec("UPDATE history_references SET master_json='[]'");changed.close();assert.equal((await call()).state,'unavailable','same reference content change invalidates');m.buildActivitySnapshot(root,'2026-09-30');

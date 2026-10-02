@@ -34,7 +34,7 @@ try{
   assert(max<duration*.7,'light request must not wait behind the entire report wave');
   console.log(JSON.stringify({wave:label,groups:reports[0].total,ms:Math.round(duration),healthSamples:latencies.length,maxHealthMs:Math.round(max),cache:{...m.clientSalesCacheStats}}));return reports[0];
  }
- const before=m.clientSalesCacheStats.builds;const cold=await wave('cold');assert.equal(m.clientSalesCacheStats.builds-before,1,'identical cold reads are single-flight');const warm=await wave('warm');assert.deepEqual(warm,cold);
+ const before=m.clientSalesCacheStats.builds;const cold=await wave('cold');assert.equal(m.clientSalesCacheStats.builds-before,1,'identical cold reads are single-flight');const admittedBuilds=m.clientSalesCacheStats.builds,admittedHits=m.clientSalesCacheStats.hits;assert(m.clientSalesCacheStats.bytes>0,'national report must actually fit the bounded cache');const warm=await wave('warm');assert.deepEqual(warm,cold);assert.equal(m.clientSalesCacheStats.builds,admittedBuilds,'warm wave must reuse the report, not rebuild it');assert.equal(m.clientSalesCacheStats.hits,admittedHits+4,'all four warm requests must hit the cache');
  for(const [label,query,actor,now] of [['national','','manager'],['search','q=scale-00001','manager'],['page2','page=1','manager'],['agent','','agent'],['missing','month=2026-10','manager','2026-10-02T12:00:00Z']]){
   const params=new URLSearchParams('month=2026-09');for(const [k,v] of new URLSearchParams(query))params.set(k,v);
   const start=performance.now();const result=await m.clientSalesOverview(t.user(actor),params,new Date(now||'2026-09-30T12:00:00Z'));

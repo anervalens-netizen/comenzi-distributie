@@ -2,8 +2,8 @@ import { DatabaseSync } from 'node:sqlite';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { partnerActivity } from './partner-sales-health';
-import {normalizedCui as cuiKey,companyIdentityIndex,type CompanyAlias} from './partner-company-identity';
-import {historyCompanyLinks} from './partner-company-links';
+import {normalizedCui as cuiKey} from './partner-company-identity';
+import {historyCompanyLinks,companyLinkGeneration} from './partner-company-links';
 export class PartnerSalesInputError extends Error {}
 export type PartnerSalesResult = ReturnType<typeof readPartnerSales>;
 function isoDate(value: string) {
@@ -17,6 +17,7 @@ export function readPartnerSales(partnerId: string, cui: string, params: URLSear
   if(!existsSync(path))return {state:'unavailable' as const,message:'Istoricul pe parteneri nu este încă disponibil.'};
   const c=new DatabaseSync(path,{readOnly:true});
   c.function('history_cui_key',{deterministic:true},value=>cuiKey(String(value||'')));
+  const sourceGeneration=companyLinkGeneration(c);
   try {
     c.exec('BEGIN');
     const reference=c.prepare("SELECT value FROM history_meta WHERE key='current_reference'").get()?.value;
@@ -30,19 +31,16 @@ export function readPartnerSales(partnerId: string, cui: string, params: URLSear
     }
     const identityRows=c.prepare("SELECT a.identity_id FROM history_allocations a WHERE reference_id=? AND status IN ('direct_code','single_partner') AND EXISTS(SELECT 1 FROM json_each(a.partner_ids_json) p WHERE p.value=?)").all(String(reference),partnerId);
     const companyKey=cuiKey(cui);
-    const referenceRow=c.prepare('SELECT master_json FROM history_references WHERE id=?').get(String(reference));
-    const master=JSON.parse(String(referenceRow?.master_json||'[]')) as CompanyAlias[];
-    const index=companyIdentityIndex(master,[companyKey]);
-    const companyCodes=index.codesByCompany.get(companyKey)||new Set<string>();
-    const companyLinks=historyCompanyLinks(c,String(reference));
+    const companyLinks=historyCompanyLinks(c,String(reference),sourceGeneration);
+    const companyCodes=companyLinks.codesByCompany.get(companyKey)||new Set<string>();
     const companyIdentityComplete=!companyLinks.incomplete.has(companyKey);
-    const companyRows=Object.entries(companyLinks.links).filter(([,company])=>company===companyKey).map(([id])=>({identity_id:Number(id)}));
+    const companyRows=companyLinks.identityIdsByCompany.get(companyKey)||[];
     const requestedScope=params.get('scope')||'auto';
     if(!['auto','point','company'].includes(requestedScope))throw new PartnerSalesInputError('Nivelul istoricului este invalid.');
     const scope=requestedScope==='company'||(requestedScope==='auto'&&companyLinks.known.has(companyKey))?'company' as const:'point' as const;
     const selectedIdentities=scope==='company'?companyRows:identityRows;
     const identities=JSON.stringify(selectedIdentities.map(r=>r.identity_id));
-    const unresolved=c.prepare("SELECT COUNT(*) n FROM history_allocations a JOIN history_identities i ON i.id=a.identity_id WHERE a.reference_id=? AND (a.status='reconcile' OR (a.status IN ('direct_code','single_partner') AND json_array_length(a.partner_ids_json)=0)) AND (history_cui_key(i.client_code) IN (SELECT value FROM json_each(?)) OR EXISTS(SELECT 1 FROM json_each(a.candidates_json) p WHERE p.value=?))").get(String(reference),JSON.stringify([...companyCodes]),partnerId) as {n:number};
+    const unresolved=scope==='company'?{n:companyLinks.unresolvedCounts.get(companyKey)||0}:c.prepare("SELECT COUNT(*) n FROM history_allocations a JOIN history_identities i ON i.id=a.identity_id WHERE a.reference_id=? AND (a.status='reconcile' OR (a.status IN ('direct_code','single_partner') AND json_array_length(a.partner_ids_json)=0)) AND (history_cui_key(i.client_code) IN (SELECT value FROM json_each(?)) OR EXISTS(SELECT 1 FROM json_each(a.candidates_json) p WHERE p.value=?))").get(String(reference),JSON.stringify([...companyCodes]),partnerId) as {n:number};
     if(!selectedIdentities.length)return {state:'unlinked' as const,through,message:'Istoricul nu este încă asociat sigur acestei fișe. Aceasta nu înseamnă că partenerul nu a cumpărat.'};
     const from=isoDate(params.get('from')||periods[0].period_start);
     const to=isoDate(params.get('to')||through);
@@ -76,6 +74,6 @@ export function readPartnerSales(partnerId: string, cui: string, params: URLSear
     const activity=partnerActivity(billing,through,today,coverageComplete&&companyIdentityComplete&&(scope==='company'||!unresolved.n)&&!missingHistory.n);
     const transactions=c.prepare("SELECT date,document_number document,site_id site,item_code itemCode,item_name itemName,r.quantity_micros quantityMicros,r.value_cents valueCents,tr seller"+range+" ORDER BY date DESC,import_id DESC,source_row DESC LIMIT 51 OFFSET ?").all(...args,page*50) as {date:string;document:string;site:string;itemCode:string;itemName:string;quantityMicros:number;valueCents:number|null;seller:string}[];
     return {state:'ready' as const,through,from,to,scope,pointHistoryAvailable:identityRows.length>0,companyHistoryAvailable:companyRows.length>0,activity,coverageComplete:coverageComplete&&companyIdentityComplete&&(scope==='company'||!unresolved.n)&&!missingHistory.n,
-      unresolvedCompanyIdentities:scope==='company'?companyLinks.unresolved.filter(r=>r.companies.includes(companyKey)).length:unresolved.n,totals,documents,latestDocuments,monthly,products,sellers,transactions:transactions.slice(0,50),page,hasMore:transactions.length>50};
+      unresolvedCompanyIdentities:unresolved.n,totals,documents,latestDocuments,monthly,products,sellers,transactions:transactions.slice(0,50),page,hasMore:transactions.length>50};
   } finally {c.close();}
 }

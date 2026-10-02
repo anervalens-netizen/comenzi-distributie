@@ -84,7 +84,8 @@ function* calculateClientSales(partners:PartnerSummary[],month:string,directory=
     for(const [key,members] of groups){
       if(++work%128===0)yield;
       members.sort((a,b)=>a.id.localeCompare(b.id));const p=members[0],cui=normalizedCui(p.cui),linked=identities.has(cui),identityComplete=identities.get(cui)===true,days=byCompany.get(cui)||[];
-      const current=metrics(days,window,linked),prior=comparisons.map(w=>metrics(days,w,linked));comparisonMetrics.set(key,prior);
+      const periodMetrics=(w:MonthWindow)=>metrics(days,w,linked&&(identityComplete||days.some(d=>d.date>=w.from&&!!w.to&&d.date<=w.to)));
+      const current=periodMetrics(window),prior=comparisons.map(periodMetrics);comparisonMetrics.set(key,prior);
       const h=health(days.filter(d=>!!window.to&&d.date<=window.to),window.to,linked,identityComplete,intervals,today,window);
       const flags:ClientSalesRow['flags']=['all'];
       if(!linked||!identityComplete||current.missingValues)flags.push('unknown');
