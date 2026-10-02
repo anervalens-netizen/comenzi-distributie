@@ -175,24 +175,73 @@ export async function readCoverageManifest(userId:string):Promise<CoverageManife
  if(JSON.stringify(checked)!==JSON.stringify(manifest))await saveCoverageManifest(userId,checked);
  return checked;
 }
-// Shared session epoch lives in the existing v1 metadata store, not credentials.
-export type SessionFence={epoch:string;rejected:boolean};
-export async function sessionFence():Promise<SessionFence>{return transaction(['meta'],'readonly',async tx=>(await request(tx.objectStore('meta').get('session-fence')))?.value??{epoch:'',rejected:false});}
-export async function rejectSessionFence(){
+// Shared session authority uses only metadata in the original v1 store.
+export type SessionFence={epoch:string;rejected:boolean;userId?:string;admissionEpoch?:string};
+let memoryFence:SessionFence={epoch:'',rejected:false};
+let durableSession=true;
+export const sessionStorageAvailable=()=>durableSession;
+const sessionStorageError=()=>new Error('Verificarea stocării locale nu este disponibilă. Modul offline este dezactivat în această filă.');
+// A blocked open or stalled transaction must never hold online login hostage.
+// Once degraded, this document cannot read or publish authentication snapshots.
+async function sessionMetadata<T>(run:(store:IDBObjectStore)=>Promise<T>,fallback:()=>T):Promise<T>{
+ if(!durableSession)return fallback();
+ let active=true,tx:IDBTransaction|undefined;
+ let timer:ReturnType<typeof setTimeout>|undefined;
+ const operation=(async()=>{
+  const db=await database();
+  if(!active)throw sessionStorageError();
+  tx=db.transaction('meta','readwrite');
+  const done=new Promise<void>((resolve,reject)=>{tx!.oncomplete=()=>resolve();tx!.onabort=()=>reject(tx!.error||sessionStorageError());tx!.onerror=()=>{};});
+  try{const result=await run(tx.objectStore('meta'));await done;return result;}
+  catch(error){try{tx.abort();}catch{}await done.catch(()=>{});throw error;}
+ })();
+ try{return await Promise.race([operation,new Promise<never>((_,reject)=>{timer=setTimeout(()=>{active=false;try{tx?.abort();}catch{}reject(sessionStorageError());},1000);})]);}
+ catch{
+  if(durableSession){durableSession=false;if(typeof window!=='undefined')window.dispatchEvent(new CustomEvent('mobiup-storage-error',{detail:sessionStorageError().message}));}
+  return fallback();
+ }finally{active=false;clearTimeout(timer);}
+}
+export async function sessionFence():Promise<SessionFence>{
+ const value=await sessionMetadata(async store=>(await request(store.get('session-fence')))?.value??{epoch:'',rejected:false},()=>memoryFence);
+ memoryFence=value;return value;
+}
+function admittedFence(current:SessionFence,expected:SessionFence,userId:string):SessionFence|null{
+ // Concurrent positives may join the same uninterrupted account admission.
+ // Rejection or A -> B -> A starts a new admission, fencing older positives.
+ const sameAccount=!current.rejected&&current.userId===userId;
+ if(current.epoch!==expected.epoch&&!(sameAccount&&current.admissionEpoch!==undefined&&(current.admissionEpoch===expected.epoch||(expected.userId===userId&&expected.admissionEpoch===current.admissionEpoch))))return null;
+ return {epoch:crypto.randomUUID(),rejected:false,userId,admissionEpoch:sameAccount?current.admissionEpoch??current.epoch:current.epoch};
+}
+export async function rejectSessionFence(expected?:SessionFence){
  const value:SessionFence={epoch:crypto.randomUUID(),rejected:true};
- await transaction(['meta'],'readwrite',tx=>request(tx.objectStore('meta').put({key:'session-fence',value})));
+ const accepted=await sessionMetadata(async store=>{
+  const current=(await request(store.get('session-fence')))?.value as SessionFence|undefined;
+  if(expected&&(current?.epoch??'')!==expected.epoch)return false;
+  await request(store.put({key:'session-fence',value}));return true;
+ },()=>!expected||memoryFence.epoch===expected.epoch);
+ if(accepted)memoryFence=value;return accepted?value:null;
 }
 export async function acceptSessionFence(expected:SessionFence,userId:string){
- return transaction(['meta'],'readwrite',async tx=>{
-  const store=tx.objectStore('meta'),current=(await request(store.get('session-fence')))?.value as SessionFence|undefined;
-  if((current?.epoch??'')!==expected.epoch)return false;
-  await request(store.put({key:'session-fence',value:{epoch:expected.epoch,rejected:false}}));
-  await request(store.put({key:'active',value:userId}));return true;
- });
+ const value=await sessionMetadata(async store=>{
+  const current=(await request(store.get('session-fence')))?.value??{epoch:'',rejected:false};
+  const next=admittedFence(current,expected,userId);if(!next)return null;
+  await request(store.put({key:'session-fence',value:next}));
+  await request(store.put({key:'active',value:userId}));return next;
+ },()=>admittedFence(memoryFence,expected,userId));
+ if(value)memoryFence=value;return !!value;
 }
-export function withSessionGate<T>(run:()=>Promise<T>):Promise<T>{
- if(typeof navigator==='undefined'||!navigator.locks)return Promise.reject(new Error('Browserul nu permite verificarea sesiunii între file. Folosește un browser actualizat.'));
- return navigator.locks.request('mobiup-session-binding',run);
+let sessionGateTail:Promise<unknown>=Promise.resolve();
+function documentSessionGate<T>(run:()=>Promise<T>):Promise<T>{
+ const result=sessionGateTail.then(run,run);sessionGateTail=result.catch(()=>{});return result;
+}
+export async function withSessionGate<T>(run:()=>Promise<T>,online=false):Promise<T>{
+ if(typeof navigator==='undefined'||!navigator.locks){if(online)return documentSessionGate(run);throw sessionStorageError();}
+ const controller=new AbortController();
+ const timer=setTimeout(()=>controller.abort(),1000);
+ let entered=false;
+ try{return await navigator.locks.request('mobiup-session-binding',{signal:controller.signal},()=>{entered=true;clearTimeout(timer);return run();});}
+ catch(error){if(entered||!online)throw error;return documentSessionGate(run);}
+ finally{clearTimeout(timer);}
 }
 // All cooperating tabs serialize queue additions with worker activation. Legacy
 // installed clients do not honor this lock; retaining their assets remains vital.
@@ -202,7 +251,12 @@ export function withOutboxGate<T>(run:()=>Promise<T>,activation=false):Promise<T
  return run(); // Saving remains available; this browser cannot offer activation.
 }
 export async function pendingOperationCount(){return transaction(['outbox'],'readonly',tx=>request(tx.objectStore('outbox').count()));}
-export async function rememberAccount(userId:string){await transaction(['meta'],'readwrite',tx=>request(tx.objectStore('meta').put({key:'active',value:userId})));}
+export async function rememberAccount(userId:string,expected?:SessionFence){
+ await sessionMetadata(async store=>{
+  if(expected&&(await request(store.get('session-fence')))?.value?.epoch!==expected.epoch)return;
+  await request(store.put({key:'active',value:userId}));
+ },()=>undefined);
+}
 export async function lastAccount(){return transaction(['meta'],'readonly',async tx=>(await request(tx.objectStore('meta').get('active')))?.value as string||'');}
 export async function readWork<T>(userId:string,scope:string,id:string){return transaction(['work'],'readonly',async tx=>(await request(tx.objectStore('work').get(userId+'|'+scope+'|'+id)))?.value as T|undefined);}
 export async function saveWork(userId:string,scope:string,id:string,value:unknown){await transaction(['work'],'readwrite',tx=>request(tx.objectStore('work').put({key:userId+'|'+scope+'|'+id,value})));}
