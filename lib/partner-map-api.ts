@@ -1,3 +1,4 @@
+import {countyLabel, countyMatches, countySearch, routeMatches, routeTokens} from './portfolio-facets';
 import {portfolioSummary} from './partner-portfolio';
 import {pagedBrowse,portfolioVersion,readyReadModel,selectedSql} from './portfolio-read-model';
 import {aggregateMapPoints} from './partner-map-aggregation';
@@ -151,11 +152,11 @@ function legacyFilters(params: URLSearchParams) {
   return (p: PartnerSummary) =>
     (!q ||
       normalize(
-        [p.id, p.name, p.cui, p.city, p.county, p.address].join(' '),
+        [p.id, p.name, p.cui, p.city, countySearch(p.county), p.address].join(' '),
       ).includes(q)) &&
-    (!county || p.county === county) &&
+    (!county || countyMatches(p.county, county)) &&
     (!city || normalize(p.city).includes(city)) &&
-    (!route || p.route === route) &&
+    (!route || routeMatches(p.route, route)) &&
     (!position ||
       (position === 'yes' ? p.latitude !== null : p.latitude === null)) &&
     (!days ||
@@ -178,7 +179,7 @@ async function legacyBrowse(
   const all = await portfolioSummary(user, undefined, scope?.warehouseIds),
     selected = await billingSelection(all.filter(match),params);
   const inCounty = all.filter(
-    (p) => !params.get('county') || p.county === params.get('county'),
+    (p) => !params.get('county') || countyMatches(p.county, params.get('county')!),
   );
   const configured = await db()
     .prepare("SELECT value FROM settings WHERE key='partner-map-style-url'")
@@ -194,10 +195,11 @@ async function legacyBrowse(
     geocoded: selected.filter((p) => p.positionSource === 'geocoding').length,
     nextOffset: offset + limit < selected.length ? offset + limit : null,
     bounds: partnerBounds(selected),
+    facetVersion:2,
     facets: {
-      counties: legacyUnique(all.map((p) => p.county)),
+      counties: legacyUnique(all.map((p) => countyLabel(p.county))),
       cities: legacyUnique(inCounty.map((p) => p.city)),
-      routes: legacyUnique(inCounty.map((p) => p.route)),
+      routes: legacyUnique(inCounty.flatMap((p) => routeTokens(p.route))),
     },
     styleUrl,
     observedAt: new Date().toISOString(),

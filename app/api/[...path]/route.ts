@@ -1,4 +1,5 @@
 import {historyImportStatus,historyImportPreview,historyImportCommit} from '@/lib/client-history-import-runtime';
+import {clientSalesReconciliation} from '@/lib/client-sales-reconciliation';
 import {clientSalesOverview} from '@/lib/client-sales-api';
 import {partnerActivityOverview} from '@/lib/partner-activity-api';
 import { readPartnerSalesAsync, PartnerSalesInputError } from '@/lib/partner-sales-store';
@@ -262,6 +263,7 @@ async function dispatch(req: Request) {
     const month=new URL(req.url).searchParams.get('month');
     return response(await teamActivity(readUser,month));
   }
+  if(path.join('/')==='sales/clients/reconciliation'&&req.method==='GET')return clientSalesReconciliation(readUser,new URL(req.url).searchParams);
   if(path.join('/')==='sales/clients'&&req.method==='GET')return response(await clientSalesOverview(readUser,new URL(req.url).searchParams));
   if(path.join('/')==='sales'&&req.method==='GET')return salesView(req,readUser);
   if(path.join('/')==='client-sales/import/status'&&req.method==='GET')return historyImportStatus(req,user);

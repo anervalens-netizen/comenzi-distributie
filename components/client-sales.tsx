@@ -1,4 +1,5 @@
 'use client';
+import {ClientSalesReconciliation} from './client-sales-reconciliation';
 import {lazy,Suspense,useEffect,useState} from 'react';
 import {api,errorMessage,money} from '@/lib/client-api';
 import {bucharestReportingMonthKey,bucharestMonthKey} from '@/lib/bucharest-month';
@@ -26,6 +27,7 @@ export default function ClientSales({scopeQuery='',scopeLabel='Portofoliul meu',
     <p>Vânzările firmelor din portofoliu, din raportul pe clienți. Facturările și vizitele sunt urmărite separat.</p>
     <div className="client-sales-controls"><label>Luna raportului<input aria-label="Luna raportului pe clienți" type="month" max={bucharestMonthKey(new Date())} value={month} onChange={e=>selectMonth(e.target.value)}/></label><label>Caută client<input aria-label="Caută client în raport" value={q} onChange={e=>setQ(e.target.value)} placeholder="Nume, CUI sau localitate"/></label></div>
     <details className="client-sales-advanced"><summary>Județ și sortare{county?' · '+county:''}</summary><div className="client-sales-controls"><label>Județ<select value={county} onChange={e=>{setCounty(e.target.value);setPage(0);}}><option value="">Toate județele</option>{(ready?.counties||[county].filter(Boolean)).map(c=><option key={c}>{c}</option>)}</select></label><label>Sortare<select aria-label="Sortare clienți" value={sort} onChange={e=>{setSort(e.target.value as ClientSort);setPage(0);}}><option value="value">Vânzări nete</option><option value="name">Client</option><option value="county">Județ</option><option value="documents">Facturări</option><option value="lastBilling">Ultima facturare</option><option value="previous">Luna precedentă</option></select></label><label>Ordine<select aria-label="Ordine clienți" value={direction} onChange={e=>{setDirection(e.target.value);setPage(0);}}><option value="desc">Descrescător</option><option value="asc">Crescător</option></select></label></div></details>
+    {manager&&<ClientSalesReconciliation key={month+retry} month={month}/>}
     {error&&<p role="alert">{error} <button type="button" onClick={()=>setRetry(v=>v+1)}>Reîncearcă</button></p>}
     {!data&&!error&&<output>Se încarcă raportul pe clienți…</output>}
     {data?.state==='unavailable'&&<p role="alert">{data.message} <button type="button" onClick={()=>setRetry(v=>v+1)}>Reîncearcă</button></p>}

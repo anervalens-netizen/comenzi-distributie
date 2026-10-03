@@ -21,6 +21,8 @@ try{
  const login=async()=>{await db.prepare("INSERT OR REPLACE INTO sessions(token_hash,user_id,expires_at) VALUES(?,'agent',?)").bind(hash,Date.now()+3600000).run();if(browser)await browser.send('Network.setCookie',{name:'mobiup_session',value:token,url:await browser.evaluate('location.origin'),httpOnly:true});};await login();
  const partner={id:'point',name:'Synthetic point',warehouseId:'w',warehouseIds:['w'],cui:'TEST',address:'Example',city:'Example',county:'Example',route:''};
  await db.prepare('INSERT INTO customers(id,warehouse_id,data,active) VALUES(?,?,?,1)').bind('point','w',JSON.stringify(partner)).run();
+ const facetInputs=[['OLT','1'],['Olt','1, 11'],['Iasi','11, 1'],['Iași','11'],['Bucuresti','2, 7'],['Municipiul Bucuresti','7, 2'],['SB','1, 11'],['Sibiu','11']];
+ for(const [i,[county,route]] of facetInputs.entries())await db.prepare('INSERT INTO customers(id,warehouse_id,data,active) VALUES(?,?,?,1)').bind('facet-'+i,'w',JSON.stringify({...partner,id:'facet-'+i,name:'Facet sample '+i,county,route})).run();
  const compiled=await build({stdin:{contents:"export * from './lib/client-api';export * from './lib/offline-work';export * from './lib/local-work';",loader:'ts',resolveDir:resolve('.')},write:false,bundle:true,format:'esm',platform:'browser',logLevel:'silent'});
  let dropNext=false,legacyResponse=false;
  server=createServer(async(req,res)=>{
@@ -44,6 +46,13 @@ try{
  browser=await browserFixture(origin);const evaluate=browser.evaluate;
  await evaluate(`window.m=await import('/fixture.mjs');document.cookie='mobiup_session=${token}; Path=/';window.originalFetch=fetch;`);
  check(await evaluate("(await m.api('auth/session')).user.id==='agent'&&(await m.api('bootstrap')).user.id==='agent'"),'actual authenticated contracts');
+ await evaluate("await m.api('partner/summary');window.facetOnline=[];for(const county of ['OLT','Olt','Iasi','Iași','Bucuresti','Municipiul Bucuresti','SB','Sibiu'])facetOnline.push(await m.api('partner/browse?limit=199&q=Facet+sample&county='+encodeURIComponent(county)));window.fetch=async()=>{throw new TypeError('synthetic offline')}");
+ await evaluate("await m.saveSnapshot('agent','partner/browse?limit=198&q=Facet+sample&county=OLT',{partners:[],total:0,facets:{counties:['OLT'],cities:[],routes:['1, 11']}})");
+ check(await evaluate("let equal=true;let i=0;for(const county of ['OLT','Olt','Iasi','Iași','Bucuresti','Municipiul Bucuresti','SB','Sibiu']){const offline=await m.api('partner/browse?limit=198&q=Facet+sample&county='+encodeURIComponent(county));equal=equal&&offline.total===2&&JSON.stringify(offline.partners.map(p=>p.id).sort())===JSON.stringify(facetOnline[i++].partners.map(p=>p.id).sort());}equal"),'offline county aliases match live SQL population');
+ check(await evaluate("const routes=await m.api('partner/browse?limit=198&q=Facet+sample&route=1');routes.total===4&&!routes.facets.routes.some(r=>r.includes(','))&&routes.partners.every(p=>['1','1, 11','11, 1'].includes(p.route))"),'offline exact route memberships and atomic facets preserve raw text');
+ check(await evaluate("(await m.api('partner/browse?limit=198&q=Sibiu')).total===2"),'offline county search includes code aliases');
+ await evaluate('window.fetch=originalFetch');
+
  const bootstrap=await evaluate("(await m.snapshot('agent','bootstrap')).value");check(Array.isArray(bootstrap.products),'full authenticated bootstrap snapshot exists');
  await db.prepare('DELETE FROM sessions WHERE token_hash=?').bind(hash).run();
  check(await evaluate("const value=await m.api('bootstrap');Object.keys(value).length===1&&value.user===null&&m.currentLocalWorkUserId()===''&&(await m.lastAccount())===''"),'session expired between auth/session and bootstrap accepts exact {user:null}');

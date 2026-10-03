@@ -36,6 +36,7 @@ const server=createServer(async(request,response)=>{
  if(url.pathname.startsWith('/api/')){
   requests.push(url.pathname+url.search);response.setHeader('Content-Type','application/json');
   if(url.pathname==='/api/fail-next'){failNext=true;response.end('{}');return;}
+  if(url.pathname==='/api/sales/clients/reconciliation'){response.end(JSON.stringify({state:'ready',scope:'national',month:url.searchParams.get('month'),explanation:'Istoricul tuturor vânzătorilor, nu vânzări personale ale responsabilului actual.',window:{from:'2026-09-01',to:'2026-09-28',imported:true},source:{revision:'synthetic-revision',builtAt:'2026-09-29'},buckets:{raw:{knownCents:10000,missingValues:0,sourceRows:3},consumer:{knownCents:1000,missingValues:0,sourceRows:1},linkedCompany:{knownCents:9000,missingValues:0,sourceRows:2}},exceptions:[{key:'identity:1',category:'identity',companyId:null,clientCode:'SYNTH',reason:'Synthetic identity exception',knownCents:-123,missingValues:1,sourceRows:1}],total:1,hasMore:false}));return;}
   if(url.pathname==='/api/sales/clients'){
    if(failNext){failNext=false;response.statusCode=503;response.end(JSON.stringify({error:'Eroare sintetică'}));return;}
    await delay(url.searchParams.get('q')==='slow'?700:50);response.end(JSON.stringify(report(url.searchParams)));return;
@@ -127,6 +128,14 @@ try {
   await waitFor("document.querySelectorAll('.client-sales-table tbody tr').length===50");
   check(await evaluate("document.querySelector('[aria-label=\"Luna raportului pe clienți\"]').value==='2026-09'"),'Latest available shortcut explicitly selects month');
   check(await evaluate('document.documentElement.scrollWidth<=360'),'No document horizontal overflow at 360px');
+  await evaluate("[...document.querySelectorAll('summary')].find(s=>s.textContent==='Reconciliere națională și excepții CRM').click();true");
+  await waitFor("document.body.textContent.includes('synthetic-revision')");
+  check(await evaluate('document.documentElement.scrollWidth<=360'),'Open reconciliation table stays within mobile scroll container');
+  check(requests.some(p=>p.startsWith('/api/sales/clients/reconciliation?')&&!p.includes('agentId')),'National reconciliation never carries selected agent scope');
+  check(await evaluate("document.body.textContent.includes('Synthetic identity exception')&&document.body.textContent.includes('independent de filtrele de agent')"),'Manager sees source explanation and identity exception');
+  check(await evaluate("document.querySelector('a[href*=reconciliation]').getAttribute('href').includes('format=csv')&&!document.querySelector('a[href*=reconciliation]').getAttribute('href').includes('agentId')"),'Reconciliation export is explicitly national');
+  await evaluate("[...document.querySelectorAll('summary')].find(s=>s.textContent==='Reconciliere națională și excepții CRM').click();true");
+
   await click('.client-sales-cards button:nth-child(2)');await waitFor("[...document.querySelectorAll('.client-sales-chips button')].some(b=>b.textContent.startsWith('Facturați')&&b.getAttribute('aria-pressed')==='true')");
   await waitFor("document.querySelectorAll('.client-sales-table tbody tr').length===50");
   check(requests.some(p=>p.includes('filter=billed')),'Billed KPI opens the billed client list');

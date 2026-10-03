@@ -34,6 +34,20 @@ try {
   db.prepare("UPDATE partner_profiles SET position_source='manual',position_metadata=? WHERE customer_id='map-scale-00002'").run(JSON.stringify({positionQuality:'locality_approximate'}));
   db.prepare("UPDATE partner_profiles SET position_source='gps',position_metadata=? WHERE customer_id='map-scale-00003'").run(JSON.stringify({positionQuality:'locality_approximate'}));
   db.exec('COMMIT');
+  const facetRaw=[['OLT','1'],['Olt','1, 11'],['Iasi','11, 1'],['Iași','11'],['Bucuresti','2, 7'],['Municipiul Bucuresti','7, 2'],['SB','1, 11'],['Sibiu','11']];
+  for(const [i,[county,route]] of facetRaw.entries()){
+    const id='facet-http-'+i,address='Synthetic address',city='Synthetic city';
+    insert.run(id,'g-5',JSON.stringify({id,warehouseId:'g-5',warehouseIds:['g-5'],name:'Facet HTTP '+i,cui:'SYNTH'+i,address,city,county,route}));profile.run(id,44,25,hash(JSON.stringify([address,city,county])));
+  }
+  for(const county of ['OLT','Olt','Iasi','Iași','Bucuresti','Municipiul Bucuresti','SB','Sibiu']){
+    const query='q=Facet+HTTP&county='+encodeURIComponent(county),browse=(await call('/browse?'+query)).data,map=(await call('/map?'+query)).data;
+    assert.equal(browse.total,2);assert.deepEqual(map.features.map(p=>p.id).sort(),browse.partners.map(p=>p.id).sort());
+  }
+  const routeRead=(await call('/browse?q=Facet+HTTP&route=1')).data;
+  assert.deepEqual(routeRead.partners.map(p=>p.id),['facet-http-0','facet-http-1','facet-http-2','facet-http-6']);
+  assert.equal((await call('/map?q=Facet+HTTP&route=1')).data.features.length,4);
+  assert(!routeRead.facets.routes.some(r=>r.includes(',')));assert.equal(routeRead.facets.counties.filter(c=>c==='Olt').length,1);
+  for(const [i,[county,route]] of facetRaw.entries()){const card=JSON.parse(db.prepare('SELECT data FROM customers WHERE id=?').get('facet-http-'+i).data);assert.equal(card.county,county);assert.equal(card.route,route);}
   const coordinatePlan=db.prepare('EXPLAIN QUERY PLAN SELECT c.id FROM customers c LEFT JOIN partner_profiles p ON p.customer_id=c.id WHERE c.active=1 AND p.latitude BETWEEN 44.2 AND 44.4 AND p.longitude BETWEEN 21.5 AND 21.7').all().map(p=>p.detail);
   assert(coordinatePlan.some(s=>s.includes('idx_partner_profiles_coordinates')),'bbox query uses coordinate index');
   await call('/map?q=Map+scale','anonymous',401);
@@ -77,6 +91,7 @@ try {
 } finally {
   if(db.isTransaction)db.exec('ROLLBACK');
   db.prepare("UPDATE users SET warehouse_id='g-5' WHERE id='qa-agent1'").run();
+  db.exec("DELETE FROM partner_profiles WHERE customer_id LIKE 'facet-http-%'; DELETE FROM customers WHERE id LIKE 'facet-http-%'");
   db.prepare("DELETE FROM partner_profiles WHERE customer_id LIKE 'map-scale-%'").run();
   db.prepare("DELETE FROM customers WHERE id LIKE 'map-scale-%'").run();
   for(const token of Object.values(sessions))db.prepare('DELETE FROM sessions WHERE token_hash=?').run(token);

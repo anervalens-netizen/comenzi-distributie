@@ -26,6 +26,24 @@ try{
  assert.deepEqual(first.facets.cities,['City A','City B']);assert.equal(first.nextOffset,100);
  const warmAt=performance.now();const warm=await model.pagedBrowse(user,new URLSearchParams(),undefined,0,100);const warmMs=performance.now()-warmAt;assert.deepEqual(warm,first);
  sql.prepare("INSERT INTO customers(id,warehouse_id,data,active) VALUES(?,?,?,1) ON CONFLICT(id) DO UPDATE SET data=excluded.data").run('p000002','w',JSON.stringify({id:'p000002',warehouseId:'w',name:'Upsert',city:'City B',county:'County',route:'R1'}));sql.prepare("INSERT INTO customers(id,warehouse_id,data,active) VALUES(?,?,?,1) ON CONFLICT(id) DO UPDATE SET data=excluded.data").run('p000002','w',JSON.stringify({id:'p000002',warehouseId:'w',name:'Upsert',city:'City B',county:'County',route:'R1'}));assert.equal((await model.pagedBrowse(user,new URLSearchParams({q:'Upsert'}),undefined,0,100)).total,1);
+ // Rebuild old projection and verify aliases/membership without changing authoritative cards.
+ const facetRows=[['OLT','1'],['Olt','1, 11'],['Iasi','11, 1'],['Iași','11'],['Bucuresti','2, 7, 17, 12'],['Municipiul Bucuresti','12, 7, 2, 17'],['SB',' 11 ,\t1\n, 1'],['Sibiu','17, 12, 7, 2'],['Unknown','01'],['UNKNOWN','1']];
+ for(const [i,[county,route]] of facetRows.entries())insert.run('facet-'+i,'w',JSON.stringify({id:'facet-'+i,name:'Facet synthetic '+i,county,route,address:'Synthetic',city:'City',cui:'SYN'+i}));
+ sql.exec('UPDATE portfolio_model_state SET version=1');
+ const rawBefore=sql.prepare("SELECT data FROM customers WHERE id LIKE 'facet-%' ORDER BY id").all();
+ for(const [a,b] of [['OLT','Olt'],['Iasi','Iași'],['Bucuresti','Municipiul Bucuresti'],['SB','Sibiu']]){
+   const read=county=>model.pagedBrowse(user,new URLSearchParams({county}),undefined,0,100);
+   assert.deepEqual((await read(a)).partners,(await read(b)).partners);assert.equal((await read(a)).total,2);
+ }
+ const routeOne=await model.pagedBrowse(user,new URLSearchParams({q:'Facet synthetic',route:'1'}),undefined,0,100);
+ assert.deepEqual(routeOne.partners.map(p=>p.id),['facet-0','facet-1','facet-2','facet-6','facet-9']);
+ assert.equal((await model.pagedBrowse(user,new URLSearchParams({route:'17'}),undefined,0,100)).total,3);
+ assert.equal((await model.pagedBrowse(user,new URLSearchParams({route:' '}),undefined,0,100)).total,0);
+ assert(routeOne.facets.routes.includes('1'));assert(!routeOne.facets.routes.some(r=>r.includes(',')));
+ assert.equal((await model.pagedBrowse(user,new URLSearchParams({county:'Unknown'}),undefined,0,100)).total,1);
+ assert.equal((await model.pagedBrowse(user,new URLSearchParams({q:'Sibiu'}),undefined,0,100)).total,2);
+ assert.deepEqual(sql.prepare("SELECT data FROM customers WHERE id LIKE 'facet-%' ORDER BY id").all(),rawBefore);
+ sql.exec("DELETE FROM customers WHERE id LIKE 'facet-%'");
  const version=await model.portfolioVersion();sql.exec("INSERT INTO sessions(token_hash,user_id,expires_at) VALUES('synthetic-token','agent',0);UPDATE sessions SET expires_at=1");assert.equal(await model.portfolioVersion(),version,'session writes do not invalidate portfolio');
  const external=new DatabaseSync(file);external.prepare("UPDATE customers SET data=json_set(data,'$.name','Changed') WHERE id='p000000'").run();external.close();assert.notEqual(await model.portfolioVersion(),version,'external writer trigger');const changed=await model.pagedBrowse(user,new URLSearchParams({q:'Changed'}),undefined,0,100);assert.equal(changed.total,1);assert.equal(changed.partners[0].name,'Changed');
  sql.prepare("DELETE FROM customers WHERE id='p000001'").run();assert.equal((await model.pagedBrowse(user,new URLSearchParams(),undefined,0,100)).total,40019);

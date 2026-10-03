@@ -1,3 +1,4 @@
+import {countyLabel} from './portfolio-facets';
 import {DatabaseSync} from 'node:sqlite';
 import {existsSync} from 'node:fs';
 import {createHash} from 'node:crypto';
@@ -105,7 +106,7 @@ function* calculateClientSales(partners:PartnerSummary[],month:string,directory=
       if(absent&&comparisons.every(w=>w.covered)&&prior.every(m=>!m.missingValues)&&prior.some(m=>(m.documents||0)>0))flags.push('absentThree');
       if(h.recent)flags.push('new');if(h.recent&&h.repeat)flags.push('repeat');
       if(h.status==='waiting')flags.push('waiting');if(h.status==='overdue')flags.push('overdue');if(h.reactivated)flags.push('reactivated');
-      rows.push({key,id:p.id,name:p.name,cui:p.cui,city:p.city,counties:[...new Set(members.map(p=>p.county).filter(Boolean))].sort(),pointCount:members.length,points:members.map(p=>({id:p.id,name:p.name,city:p.city})),linked,identityComplete,metrics:current,previous:prior[0],health:h,visits:0,flags});
+      rows.push({key,id:p.id,name:p.name,cui:p.cui,city:p.city,counties:[...new Set(members.map(p=>countyLabel(p.county)).filter(Boolean))].sort(),pointCount:members.length,points:members.map(p=>({id:p.id,name:p.name,city:p.city})),linked,identityComplete,metrics:current,previous:prior[0],health:h,visits:0,flags});
     }
     if(generation!==fileGeneration(directory))return unavailable;
     return {state:'ready' as const,rows,comparisonMetrics,window,comparisons,source:{label:'Raport pe clienți',builtAt:meta.builtAt,updatedAt:meta.coverage.map(p=>p.importedAt).filter((s):s is string=>!!s).sort().at(-1)||null,declaredEnd:stamp.through,observedEnd:meta.coverage.map(p=>p.observedEnd).filter((s):s is string=>!!s).sort().at(-1)||null,effectiveCutoff,latestMonth:effectiveCutoff?.slice(0,7)||null,coverage:meta.coverage}};

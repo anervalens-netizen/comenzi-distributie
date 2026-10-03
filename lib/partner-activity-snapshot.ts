@@ -1,3 +1,4 @@
+import {buildRevenueReconciliation} from './revenue-reconciliation-snapshot';
 import {DatabaseSync} from 'node:sqlite';
 import {createHash,randomUUID} from 'node:crypto';
 import {existsSync,renameSync,rmSync,chmodSync} from 'node:fs';
@@ -11,7 +12,7 @@ import {fileGeneration,historyFileGeneration} from './history-source-generation'
 import {cooperativeStamp,type VerifiedHistoryStamp} from './history-source-stamp';
 import {salesYield} from './client-sales-cooperative';
 import {buildDetailLinks} from './partner-detail-snapshot';
-export const activityVersion='7';
+export const activityVersion='8';
 export const bucharestToday=(now=new Date())=>new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Bucharest',year:'numeric',month:'2-digit',day:'2-digit'}).format(now);
 function completeHistoryStamp(c:DatabaseSync,reference:string,referenceDigest:string){
   const imports=c.prepare("SELECT id,sha256,period_start,period_end,row_count FROM history_imports WHERE state='active' ORDER BY period_start,id").all() as {id:number;sha256:string;period_start:string;period_end:string;row_count:number}[];
@@ -143,6 +144,7 @@ export function buildActivitySnapshot(directory:string,today=bucharestToday(),ou
     const unresolvedInsert=out.prepare('INSERT INTO company_unresolved VALUES(?,?,?)');
     for(const row of companyIndex.unresolved)unresolvedInsert.run(row.identityId,JSON.stringify(row.companies),row.reason);
     buildDetailLinks(c,out,stamp.reference,companyIndex);
+    buildRevenueReconciliation(c,out,stamp.reference,companyIndex);
     if(!sourceGeneration||sourceGeneration!==historyFileGeneration(history))throw new Error('History source changed during snapshot build');
     const metadata={...stamp,sourceGeneration,version:activityVersion,builtAt:new Date().toISOString(),asOf,recentStart,previousStart,rows:count,companies:companyIndex.known.size,unresolvedCompanyIdentities:companyIndex.unresolved.length,coverage};
     out.prepare("INSERT INTO meta VALUES('snapshot',?)").run(JSON.stringify(metadata));out.exec('COMMIT');

@@ -16,4 +16,5 @@ const xml=strFromU8(files['xl/worksheets/sheet1.xml']);
 assert.ok(!xml.includes('\u0001'),'Worksheet XML excludes illegal U+0001');
 assert.ok(xml.includes('Client &lt;Test&gt;')&&xml.includes('Gestiune &amp; Test'),'XML markup characters remain escaped');
 assert.ok(xml.includes('Ș'),'Unicode and diacritics are preserved');
+for(const [raw,label] of [['OLT','Olt'],['Iasi','Iași'],['Municipiul Bucuresti','București'],['SB','Sibiu'],['Unknown raw','Unknown raw']]){const fixture={...order,client:{...order.client,county:raw}},sheet=strFromU8(unzipSync(simExport(fixture))['xl/worksheets/sheet1.xml']);assert(sheet.includes(label));assert.equal(fixture.client.county,raw,'export never rewrites CRM field');}
 console.log('PASS: generated export XML removes illegal controls and preserves valid text.');

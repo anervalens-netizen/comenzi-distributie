@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
 import {createHash,randomUUID} from 'node:crypto';
-import {mkdtempSync,rmSync,existsSync} from 'node:fs';
+import {mkdtempSync,rmSync,existsSync,readFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
@@ -47,8 +47,40 @@ try{
  const changed=await call('qa-agent1','filter=visited');assert.equal(changed.total,0);assert.equal(changed.totals.visits,0);assert.equal(changed.counts.all,64);
  app.prepare('INSERT INTO customers(id,warehouse_id,data,active) VALUES(?,?,?,1)').run('monthly-nocui','g-5',JSON.stringify({id:'monthly-nocui',name:'Client sintetic fără CUI',cui:'',city:'Oraș test',county:'Județ test',warehouseIds:['g-5'],address:'',route:''}));visit.run('monthly-visit-nocui','monthly-nocui','qa-agent1','2026-09-02T10:00:00.000Z','2026-09-02T10:00:00.000Z');
  const unidentified=await call('qa-agent1','filter=visited');assert.equal(unidentified.total,1);assert.equal(unidentified.totals.visits,1);assert.equal(unidentified.totals.visited,0);assert.equal(unidentified.totals.visitedUnidentified,1,'unidentified cards retain visits without inventing unique legal companies');
+ // Canonical county selection/search leaves legal grouping and raw point identity intact.
+ for(const [id,county] of [['monthly-a','OLT'],['monthly-sibling','Olt']])app.prepare("UPDATE customers SET data=json_set(data,'$.county',?) WHERE id=?").run(county,id);
+ const countyA=await call('qa-manager','county=OLT'),countyB=await call('qa-manager','county=Olt');assert.deepEqual(countyA.rows,countyB.rows);assert.equal(countyA.total,1);assert.equal(countyA.rows[0].metrics.valueCents,3200);assert.deepEqual(countyA.rows[0].counties,['Județ test','Olt'],'county selects a company but retains its other current points and counties');
+ async function reconcile(user='qa-manager',query='month=2026-09',status=200){const r=await fetch('http://127.0.0.1:3000/api/sales/clients/reconciliation?'+query,{headers:{Cookie:sessions[user]||''}});assert.equal(r.status,status);return r.headers.get('content-type')?.includes('application/json')?r.json():r.text();}
+ await reconcile('anonymous','month=2026-09',401);await reconcile('qa-agent1','month=2026-09',403);await reconcile('qa-agent1','month=2026-09&format=csv',403);
+ await reconcile('qa-manager','month=2026-09&agentId=qa-agent1',400);await reconcile('qa-manager','month=2026-09&format=xml',400);
+ const baselineBridge=await reconcile();assert.equal(baselineBridge.buckets.currentPortfolio.knownCents,manager.totals.valueCents);assert.equal(baselineBridge.buckets.raw.missingValues,1);
+ // Inactive/absent current CRM membership changes must apply without a historical rebuild.
+ app.prepare("UPDATE customers SET active=0 WHERE id='monthly-hidden'").run();app.prepare("DELETE FROM customers WHERE id='monthly-page-54'").run();
+ const moved=await reconcile();assert.equal(moved.buckets.inactive.knownCents,900000);assert.equal(moved.buckets.absent.knownCents,10054);assert.equal(moved.source.revision,baselineBridge.source.revision);assert.notEqual(moved.portfolioRevision,baselineBridge.portfolioRevision);
+ const historyEdit=new DatabaseSync(join(historyDir,'client-sales-history.sqlite'));
+ historyEdit.exec(`INSERT INTO history_identities VALUES(9901,'CLIENTGEN');INSERT INTO history_allocations VALUES(9901,'ref','consumer','[]','[]');INSERT INTO history_rows VALUES(1,9901,'2026-09-05','site','consumer',5000,1000000,'Synthetic seller','item','Synthetic item',9901);
+ INSERT INTO history_identities VALUES(9902,'');INSERT INTO history_allocations VALUES(9902,'ref','reconcile','[]','[]');INSERT INTO history_rows VALUES(1,9902,'2026-09-05','site','unresolved',-123,-1000000,'Synthetic seller','item','Synthetic item',9902);
+ INSERT INTO history_imports VALUES(2,'synthetic-october','active','2026-10-01','2026-10-03',2,'2026-10-03T09:00:00Z');INSERT INTO history_rows VALUES(2,9901,'2026-10-01','site','consumer-october',125,1000000,'Synthetic seller','item','Synthetic item',9903);INSERT INTO history_rows VALUES(2,9902,'2026-10-02','site','unknown-october',0,1000000,'Synthetic seller','item','Synthetic item',9904);UPDATE history_imports SET sha256='bridge-revision' WHERE id=1;`);historyEdit.close();
+ await reconcile('qa-manager','month=2026-09',503);
+ buildActivitySnapshot(root);
+ const sourceBefore=readFileSync(join(historyDir,'client-sales-history.sqlite'));
+ for(const month of ['2026-09','2026-10']){
+   const bridge=await reconcile('qa-manager','month='+month),b=bridge.buckets;
+   assert.equal(b.raw.knownCents,b.consumer.knownCents+b.linkedCompany.knownCents+b.identity.knownCents);assert.equal(b.linkedCompany.knownCents,b.currentPortfolio.knownCents+b.absent.knownCents+b.inactive.knownCents);
+   assert.equal(b.raw.sourceRows,b.consumer.sourceRows+b.currentPortfolio.sourceRows+b.absent.sourceRows+b.inactive.sourceRows+b.identity.sourceRows);
+   const sourceDb=new DatabaseSync(join(historyDir,'client-sales-history.sqlite'),{readOnly:true});const exact=sourceDb.prepare("SELECT SUM(value_cents) cents,COUNT(*) rows FROM history_rows r JOIN history_imports i ON i.id=r.import_id AND i.state='active' WHERE r.date>=? AND r.date<=?").get(bridge.window.from,bridge.window.to);sourceDb.close();assert.equal(b.raw.knownCents,exact.cents);assert.equal(b.raw.sourceRows,exact.rows);
+   assert(bridge.exceptions.some(r=>r.category==='identity'));assert(bridge.source.revision);assert(bridge.source.coverage.length===2);
+   const csv=await reconcile('qa-regional','month='+month+'&format=csv');assert(csv.includes(bridge.source.revision));assert(csv.includes('Known cents'));assert(csv.includes('identity:9902'));if(month==='2026-09')assert(csv.includes('"-123"'),'negative cents remain numeric in CSV');assert(!csv.includes('[object Object]'));
+ }
+ const nationalBridge=await reconcile();assert.equal(nationalBridge.buckets.consumer.knownCents,5000);assert.equal(nationalBridge.buckets.identity.knownCents,-123);assert.equal(nationalBridge.exceptions.find(r=>r.category==='inactive').companyId,'700');
+ assert.deepEqual((await reconcile('qa-regional')).buckets,nationalBridge.buckets);
+ assert.deepEqual(readFileSync(join(historyDir,'client-sales-history.sqlite')),sourceBefore,'read model, bridge and export never mutate historical sales');
+ assert.match(nationalBridge.source.revision,/^[a-f0-9]{64}$/);assert.match(nationalBridge.portfolioRevision,/^[a-f0-9]{64}$/,'exported revisions do not expose filesystem locations');
+ const inPlace=new DatabaseSync(join(historyDir,'client-sales-history.sqlite'));inPlace.exec("UPDATE history_rows SET value_cents=5001 WHERE identity_id=9901 AND import_id=1");inPlace.close();
+ await reconcile('qa-manager','month=2026-09',503);buildActivitySnapshot(root);const revised=await reconcile();assert.notEqual(revised.source.revision,nationalBridge.source.revision,'source revision includes physical source generation even when an external correction retains import metadata');assert.equal(revised.buckets.consumer.knownCents,5001);
+
  const c=new DatabaseSync(join(historyDir,'client-sales-history.sqlite'));c.exec("UPDATE history_imports SET sha256='changed'");c.close();assert.equal((await call()).state,'unavailable');
- console.log('PASS: monthly HTTP auth, shared/legal dedup, source sellers independent of owner, live membership, sort/page/nulls, counts, validation and Bucharest actor-scoped recorded visits.');
+ console.log('PASS: monthly HTTP auth, shared/legal dedup, source sellers independent of owner, live membership, sort/page/nulls, counts, validation Bucharest actor-scoped visits, canonical counties, national cents bridge, live CRM exceptions and protected CSV.');
 }finally{
  app.exec("DELETE FROM partner_visits WHERE id LIKE 'monthly-visit-%'; DELETE FROM customers WHERE id LIKE 'monthly-%'");for(const hash of hashes)app.prepare('DELETE FROM sessions WHERE token_hash=?').run(hash);app.close();rmSync(historyDir,{recursive:true,force:true});rmSync(temp,{recursive:true,force:true});
 }

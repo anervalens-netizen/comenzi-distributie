@@ -27,6 +27,7 @@ export type PartnerMapProperties = {
 };
 export type PartnerMapData = FeatureCollection<Point, PartnerMapProperties>&{serverAggregated?:boolean;zoom?:number;totalPoints?:number};
 export type PartnerBrowse = {
+  facetVersion?:number;
   partners: PartnerSummary[];
   total: number;
   located: number;

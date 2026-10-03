@@ -1,4 +1,5 @@
 'use client';
+import {countyLabel} from '@/lib/portfolio-facets';
 import {PartnerBillingPeriod} from './partner-billing-period';
 import { PartnerActivity } from './partner-activity';
 import { PartnerSales } from './partner-sales';
@@ -49,9 +50,9 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='', active=
     [loading, setLoading] = useState(true),
     [error, setError] = useState(''),
     [query, setQuery] = useState(()=>savedView().query||''),
-    [county, setCounty] = useState(()=>savedView().county||''),
+    [county, setCounty] = useState(()=>countyLabel(savedView().county||'')),
     [city, setCity] = useState(()=>savedView().city||''),
-    [route, setRoute] = useState(()=>savedView().route||''),
+    [route, setRoute] = useState(()=>{const route=savedView().route||'';return route.includes(',')?'':route.trim();}),
     [position, setPosition] = useState(()=>savedView().position||''),
     [days, setDays] = useState(()=>savedView().days||''),
     [selected, setSelected] = useState<string | null>(null),
@@ -392,7 +393,7 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='', active=
             {p.historyCatalog?.kind==='company'&&<small>Firmă din istoric · punct de lucru de identificat</small>}
             {p.historyCatalog?.franchiseCode&&<small>Cod punct: {p.historyCatalog.franchiseCode}</small>}
             <span>
-              {p.city} · {p.county}
+              {p.city} · {countyLabel(p.county)}
             </span>
             <small>
               CUI {p.cui} · Ruta {p.route || '—'}
@@ -646,7 +647,7 @@ export function PartnerSheet({
           <p>
             {form.address}
             <br />
-            {[form.city,form.county].filter(Boolean).join(', ')}
+            {[form.city,countyLabel(form.county)].filter(Boolean).join(', ')}
           </p>
           <p className="muted">
             CUI {form.cui}{form.route&&<> · Ruta {form.route}</>}

@@ -1,3 +1,4 @@
+import {countyLabel, countyMatches, countySearch} from './portfolio-facets';
 import {db,fail} from './server';
 import {managerFilter} from './manager-scope';
 import {clientSalesPortfolio,clientPortfolioVersion} from './client-sales-portfolio';
@@ -41,7 +42,7 @@ export async function clientSalesOverview(user:User,params:URLSearchParams,now=n
   const partners=await clientSalesPortfolio(user,scope?.warehouseIds);
   // Match any CURRENT visible point, then retain that firm's complete billing amounts.
   const q=normalize(input.q),selection=new Set<string>();
-  for(let i=0;i<partners.length;i++){const p=partners[i];if((!input.county||p.county===input.county)&&(!q||normalize([p.name,p.cui,p.address,p.city,p.county].join(' ')).includes(q))){const cui=normalizedCui(p.cui);selection.add(cui&&cui!=='CLIENTGEN'?'company:'+cui:'point:'+p.id);}if(i%256===0)await salesYield();}
+  for(let i=0;i<partners.length;i++){const p=partners[i];if((!input.county||countyMatches(p.county,input.county))&&(!q||normalize([p.name,p.cui,p.address,p.city,countySearch(p.county)].join(' ')).includes(q))){const cui=normalizedCui(p.cui);selection.add(cui&&cui!=='CLIENTGEN'?'company:'+cui:'point:'+p.id);}if(i%256===0)await salesYield();}
   const snapshot=await readClientSalesAsync(partners,input.month,undefined,bucharestToday(now),selection);
   if(snapshot.state!=='ready')return snapshot;
   const pointCompany=new Map<string,string>();
@@ -54,7 +55,7 @@ export async function clientSalesOverview(user:User,params:URLSearchParams,now=n
   const visits=(await db().prepare(`SELECT customer_id customerId,CASE ${bounds.map((_,i)=>'WHEN visited_at>=? AND visited_at<? THEN '+i).join(' ')} END period,COUNT(*) n FROM partner_visits WHERE customer_id IN (SELECT value FROM json_each(?)) AND visited_at>=? AND visited_at<? AND visited_at<=? ${actors?'AND agent_id IN (SELECT value FROM json_each(?))':''} GROUP BY customer_id,period`).bind(...bounds.flatMap(b=>[b.start,b.end]),ids,bounds.at(-1)!.start,bounds[0].end,now.toISOString(),...(actors?[JSON.stringify(actors)]:[])).all<{customerId:string;period:number;n:number}>()).results;
   const visitMaps=months.map(()=>new Map<string,number>());
   for(const v of visits){const key=pointCompany.get(v.customerId),map=visitMaps[v.period];if(key&&map)map.set(key,(map.get(key)||0)+v.n);}
-  const counties=[...new Set(partners.map(p=>p.county).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ro'));
+  const counties=[...new Set(partners.map(p=>countyLabel(p.county)).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ro'));
   const rows=snapshot.rows;
   let decorated=0;
   for(const r of rows){if(++decorated%256===0)await salesYield();r.visits=visitMaps[0].get(r.key)||0;r.flags.push(r.visits?'visited':'unvisited');if(!r.visits&&(visitMaps[1].get(r.key)||0)>0)r.flags.push('unvisitedPrevious');if(!r.visits&&visitMaps.slice(1).some(map=>(map.get(r.key)||0)>0))r.flags.push('unvisitedThree');}

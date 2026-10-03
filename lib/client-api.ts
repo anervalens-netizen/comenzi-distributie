@@ -1,3 +1,4 @@
+import {countyLabel, countyMatches, countySearch, routeMatches, routeTokens} from './portfolio-facets.ts';
 import { snapshot, saveSnapshot, sessionFence, sessionStorageAvailable, rejectSessionFence, acceptSessionFence, withSessionGate, rememberAccount, lastAccount, migrateLegacy, replay, pendingOperations, OFFLINE_CACHE_INVALIDATED_EVENT } from './offline-work.ts';
 import { currentLocalWorkGeneration, currentLocalWorkUserId, LOCAL_WORK_USER_EVENT, removeLocalWork, restoreLocalWorkUserId, setLocalWorkUserId } from './local-work.ts';
 
@@ -45,6 +46,7 @@ function validGetContract(path:string,data:unknown){
  if(/^partner\/portfolio\/[^/?]+$/.test(path))return record(data)&&record(data.partner)&&array(data.visits);
  if(/^partner\/planning(?:\?|$)/.test(path))return record(data)&&array(data.plans);
  if(/^stock(?:\?|\/|$)/.test(path))return record(data)&&typeof data.warehouseId==='string'&&array(data.rows)&&record(data.depot);
+ if(/^sales\/clients\/reconciliation(?:\?|$)/.test(path))return record(data)&&data.state==='ready'&&data.scope==='national'&&typeof data.month==='string'&&record(data.buckets)&&record(data.source)&&array(data.exceptions);
  if(/^sales\/clients(?:\?|$)/.test(path))return record(data)&&(data.state==='unavailable'?typeof data.message==='string':data.state==='ready'&&typeof data.month==='string'&&record(data.totals)&&record(data.source)&&array(data.rows)&&array(data.comparisons)&&record(data.counts));
  if(/^sales(?:\?|\/|$)/.test(path))return record(data)&&typeof data.month==='string'&&record(data.summary)&&array(data.sites)&&array(data.daily)&&array(data.products);
  return true;
@@ -229,7 +231,7 @@ export async function api<T=Record<string,unknown>>(path:string,method='GET',bod
    assertOffline();
    const stored=await snapshot<T>(account,path);
    assertOffline();
-   if(stored&&validGetContract(path,stored.value)){
+   if(stored&&validGetContract(path,stored.value)&&(!path.startsWith('partner/browse?')||(record(stored.value)&&stored.value.facetVersion===2))){
     if(authRestore&&record(stored.value)&&record(stored.value.user)&&stored.value.user.id!==account)throw scopeError();
     await confirmFence();
     if(authRestore&&!owner){
@@ -249,10 +251,10 @@ export async function api<T=Record<string,unknown>>(path:string,method='GET',bod
      const prepared=await snapshot<{partners:import('./partner-map-types').PartnerSummary[]}>(account,'partner/summary');
      assertOffline();
      if(prepared&&record(prepared.value)&&Array.isArray(prepared.value.partners)){await confirmFence();const all=prepared.value.partners,q=normalize(params.get('q')||''),county=params.get('county')||'',city=normalize(params.get('city')||''),route=params.get('route')||'',position=params.get('position')||'',days=params.get('days')||'';
-      const selected=all.filter(p=>(!q||normalize([p.id,p.name,p.cui,p.address,p.city,p.county].join(' ')).includes(q))&&(!county||p.county===county)&&(!city||normalize(p.city||'').includes(city))&&(!route||p.route===route)&&(!position||(position==='yes'?p.latitude!==null:p.latitude===null))&&(!days||(days==='never'?!p.lastVisitedAt:!!p.lastVisitedAt&&Date.now()-Date.parse(p.lastVisitedAt)>=Number(days)*86400000)));
-      const offset=Number(params.get('offset')||0),limit=Number(params.get('limit')||100),inCounty=all.filter(p=>!county||p.county===county),unique=(items:string[])=>[...new Set(items.filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ro'));
+      const selected=all.filter(p=>(!q||normalize([p.id,p.name,p.cui,p.address,p.city,countySearch(p.county)].join(' ')).includes(q))&&(!county||countyMatches(p.county,county))&&(!city||normalize(p.city||'').includes(city))&&(!route||routeMatches(p.route,route))&&(!position||(position==='yes'?p.latitude!==null:p.latitude===null))&&(!days||(days==='never'?!p.lastVisitedAt:!!p.lastVisitedAt&&Date.now()-Date.parse(p.lastVisitedAt)>=Number(days)*86400000)));
+      const offset=Number(params.get('offset')||0),limit=Number(params.get('limit')||100),inCounty=all.filter(p=>!county||countyMatches(p.county,county)),unique=(items:string[])=>[...new Set(items.filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ro'));
       window.dispatchEvent(new CustomEvent('mobiup-offline-snapshot',{detail:{path,at:prepared.at}}));
-      const value={partners:selected.slice(offset,offset+limit),total:selected.length,located:selected.filter(p=>p.latitude!==null).length,geocoded:selected.filter(p=>p.positionSource==='geocoding').length,nextOffset:offset+limit<selected.length?offset+limit:null,bounds:null,facets:{counties:unique(all.map(p=>p.county)),cities:unique(inCounty.map(p=>p.city)),routes:unique(inCounty.map(p=>p.route))},styleUrl:'https://tiles.openfreemap.org/styles/positron',observedAt:new Date(prepared.at).toISOString()} as T;
+      const value={facetVersion:2,partners:selected.slice(offset,offset+limit),total:selected.length,located:selected.filter(p=>p.latitude!==null).length,geocoded:selected.filter(p=>p.positionSource==='geocoding').length,nextOffset:offset+limit<selected.length?offset+limit:null,bounds:null,facets:{counties:unique(all.map(p=>countyLabel(p.county))),cities:unique(inCounty.map(p=>p.city)),routes:unique(inCounty.flatMap(p=>routeTokens(p.route)))},styleUrl:'https://tiles.openfreemap.org/styles/positron',observedAt:new Date(prepared.at).toISOString()} as T;
       rememberRead(account,currentLocalWorkGeneration(),path,value,prepared.at);emitFreshness(account,path,'offline',prepared.at);return value;
      }
     }

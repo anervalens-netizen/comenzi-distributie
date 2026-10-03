@@ -43,3 +43,25 @@ Runtime-ul Node construiește un model derivat, regenerabil pentru portofoliu, c
 Settings → Imports includes a manager-only cumulative monthly customer-sales XLSX upload. Preview shows the inferred or declared month, totals and changed rows; applying replaces that month atomically and preserves all other months. Repeating the same active source is idempotent. Shorter coverage or removed/changed rows require explicit confirmation. Mixed-month reports are rejected. Original files, source rows and recovery copies remain in the private data directory.
 
 Processing and derived activity rebuilds run in an isolated, persisted background job; returning to Settings restores progress. The standalone host needs Python 3 (including SQLite and zoneinfo) and util-linux flock. The build packages both Python importer files and the worker. Cloudflare returns an explicit unavailable response for this host-only operation.
+
+## Portfolio geography and route filters
+
+County aliases use explicit Romanian county codes and labels (for example `RO-OT` / `Olt`, `RO-IS` / `Iași`, `RO-B` / `București`, `RO-SB` / `Sibiu`). List, map, report, export and cached portfolio filtering share this normalization. Unknown labels remain exact. CRM text, work-point identities, ownership and geographic fingerprints are retained. The derivative portfolio projection rebuilds when its format version changes.
+
+Routes are comma-separated memberships. Filtering by `1` includes `1`, `1, 11` and `11, 1`, but excludes `11`. Facets expose trimmed unique tokens. Ordering and duplicate tokens do not affect membership; display, editing and import preserve the raw field. Old saved combination filters are cleared to all routes; select an individual route after upgrading. Old cached browse pages are recomputed from the available raw summary instead of retaining the earlier exact-string facets.
+
+## Stock coverage and confirmation
+
+Stock preview defaults to partial coverage. Managers declare coverage separately for selected warehouses and the global depot. A partial import replaces present product values and preserves absent products with their prior observation dates. A full snapshot replaces the selected coverage, including removing absent products. Omitted warehouses always remain unchanged. Depot values are global, drawn from the whole file, and repeated product values are not summed.
+
+Preview lists code additions, removals and quantity changes separately for each mapped warehouse and the depot. Any mapping or coverage change requires another preview. Apply requires the exact file hash, stock/agent version, mappings, coverage semantics and manager-bound impact confirmation; older clients without coverage confirmation must refresh before importing. Partial imports never advance the full-depot snapshot timestamp. Legacy imports without an explicit coverage decision are not certified as full coverage.
+
+The stock CAS saves one bounded recovery copy of the prior state, including provenance and observation dates, atomically with the import. This is evidence for controlled recovery, not an automatic rollback over subsequent imports. Reusing a consumed preview fails the version check.
+
+## Revenue reconciliation
+
+Managers can open the national reconciliation from the customer-sales report and export its complete exception list. It is independent of agent, county and search filters. Agents retain only their authorized portfolio/company history; national reconciliation and its export require manager access.
+
+The bridge uses integer cents and exclusive partitions: raw source = consumers + linked legal companies + unresolved identities; linked companies = current active portfolio + inactive-only companies + companies absent from the current CRM. Negative returns and zero values remain in the bridge. Missing amounts are counted separately from known cents, and an unimported month is explicitly marked. Shared points contribute once per company; historical sellers are not attributed to today's portfolio owner. Ambiguous work points are not assigned by this report.
+
+The derived activity format is version 8 and requires the supported activity-snapshot rebuild after upgrading. Existing source history is read-only. Version 7 projections are rejected as stale by new readers until rebuilt; previous readers can rebuild their own derivative format after rollback. Source revision, immutable identity reference, effective period, import coverage and live portfolio revision accompany the reconciliation/export. Current CRM membership is re-read even when immutable source totals are cached.

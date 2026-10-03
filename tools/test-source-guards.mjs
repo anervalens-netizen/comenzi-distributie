@@ -65,11 +65,11 @@ try{
    assert.deepEqual(readdirSync(stage),[]);assert.deepEqual(evidence(),before);
  }
  const cli=JSON.parse(execFileSync(process.execPath,['tools/build-partner-activity.mjs','--output',join(stage,'cli.sqlite')],{env:{...process.env,MOBIUP_DATA_DIR:root},encoding:'utf8'}));
- assert.equal(cli.state,'ready');assert.equal(cli.version,'7');assert(existsSync(join(stage,'cli.sqlite')));rmSync(join(stage,'cli.sqlite'));
+ assert.equal(cli.state,'ready');assert.equal(cli.version,'8');assert(existsSync(join(stage,'cli.sqlite')));rmSync(join(stage,'cli.sqlite'));
  assert.deepEqual(evidence(),before);
  // An allowed canonical staging output retains the very same raw provenance.
  const metadata=m.buildActivitySnapshot(rootAlias,'2026-09-30',join(stage,'candidate.sqlite'));
- assert.equal(metadata.version,'7');assert.equal(metadata.sourceGeneration,m.historyFileGeneration(history));
+ assert.equal(metadata.version,'8');assert.equal(metadata.sourceGeneration,m.historyFileGeneration(history));
  renameSync(join(stage,'candidate.sqlite'),snapshot);assert.equal(amount(read()),3200);assert.equal(amount(read(rootAlias)),3200);assert.deepEqual(evidence(),before);
  const stamp=()=>{const c=new DatabaseSync(history,{readOnly:true});try{return m.historyStamp(c);}finally{c.close();}};
  const initialStamp=stamp();
