@@ -35,11 +35,13 @@ async function rejectSession(expected?:Awaited<ReturnType<typeof sessionFence>>,
 }
 const record=(value:unknown):value is Record<string,unknown>=>!!value&&typeof value==='object'&&!Array.isArray(value);
 const array=(value:unknown)=>Array.isArray(value);
+const bootstrapPath=(path:string)=>/^bootstrap(?:\?|$)/.test(path);
 function validGetContract(path:string,data:unknown){
- if(path==='bootstrap')return record(data)&&(data.user===null||(record(data.user)&&typeof data.user.id==='string'));
+ if(bootstrapPath(path))return record(data)&&(data.user===null||(record(data.user)&&typeof data.user.id==='string'));
  if(path==='auth/session')return record(data)&&(data.user===null||(record(data.user)&&typeof data.user.id==='string'));
- if(path==='orders')return record(data)&&record(data.user)&&array(data.orders)&&typeof data.weekKey==='string';
+ if(/^orders(?:\?|$)/.test(path))return record(data)&&record(data.user)&&array(data.orders)&&typeof data.weekKey==='string'&&(!('orderPage'in data)||record(data.orderPage));
  if(/^orders\/[^/?]+$/.test(path))return record(data)&&record(data.order)&&typeof data.order.id==='string';
+ if(path==='catalog')return record(data)&&array(data.products);
  if(path==='partner/summary')return record(data)&&array(data.partners);
  if(/^partner\/browse(?:\?|$)/.test(path))return record(data)&&array(data.partners)&&typeof data.total==='number'&&record(data.facets)&&array(data.facets.counties)&&array(data.facets.cities)&&array(data.facets.routes);
  if(/^partner\/map(?:\?|$)/.test(path))return record(data)&&data.type==='FeatureCollection'&&array(data.features);
@@ -57,7 +59,7 @@ function assertScope(owner:string,generation:number){
 }
 type Fence=Awaited<ReturnType<typeof sessionFence>>;
 let localAuthority:{owner:string;generation:number;fence:Fence}|undefined;
-const publicRequest=(path:string,method:string)=>method==='GET'&&['health','bootstrap','auth/session'].includes(path)||method==='POST'&&path==='auth/login';
+const publicRequest=(path:string,method:string)=>method==='GET'&&(path==='health'||bootstrapPath(path)||path==='auth/session')||method==='POST'&&path==='auth/login';
 // Same-account auth refreshes share an admission. Logout or A -> B -> A does
 // not: a locally bound tab must explicitly rediscover authority in that case.
 function sameAuthority(current:Fence,expected:Fence,owner:string){
@@ -148,7 +150,7 @@ export async function networkApi<T=Record<string,unknown>>(path: string,method='
   if(isPrivate)await privateAuthority(requestOwner,requestGeneration,requestEpoch,requestFence);
   if(method==='GET'&&!validGetContract(path,data))throw new ApiError(502,'Serverul a trimis date incompatibile cu această pagină.',data);
   if(path==='auth/logout'&&(requestEpoch!==sessionEpoch||requestOwner!==currentLocalWorkUserId()||requestGeneration!==currentLocalWorkGeneration()))throw scopeError();
-  if((path==='bootstrap'||path==='auth/session')&&data&&typeof data==='object'&&'user' in data) {
+  if((bootstrapPath(path)||path==='auth/session')&&data&&typeof data==='object'&&'user' in data) {
     const user=(data as {user?:unknown}).user;
     if(user===null){
      if(requestEpoch!==sessionEpoch||requestOwner!==currentLocalWorkUserId()||requestGeneration!==currentLocalWorkGeneration())throw scopeError();
@@ -174,7 +176,7 @@ export async function networkApi<T=Record<string,unknown>>(path: string,method='
   }
   return data as T;
 }
-const cacheable=(path:string)=>path==='bootstrap'||path==='auth/session'||path==='orders'||/^orders\/[^/]+$/.test(path)||/^partner\/(browse|map|summary|portfolio|planning)([/?]|$)/.test(path)||/^clients[?]/.test(path)||/^stock[/?]/.test(path);
+const cacheable=(path:string)=>bootstrapPath(path)||path==='auth/session'||/^orders(?:\?|$)/.test(path)||/^orders\/[^/]+$/.test(path)||path==='catalog'||/^partner\/(browse|map|summary|portfolio|planning)([/?]|$)/.test(path)||/^clients[?]/.test(path)||/^stock[/?]/.test(path);
 export async function api<T=Record<string,unknown>>(path:string,method='GET',body?:unknown,signal?:AbortSignal,options:ApiReadOptions={}):Promise<T>{
  method=method.toUpperCase();synchronizeReadCache();
  if(signal?.aborted)throw signal.reason??new DOMException('Cerere anulată.','AbortError');
@@ -187,7 +189,7 @@ export async function api<T=Record<string,unknown>>(path:string,method='GET',bod
  const confirmAuthority=async()=>{if(isPrivate)await privateAuthority(owner,generation,epoch,authority);};
  // Without durable account authority, another tab's shared-cookie change cannot
  // be observed locally. Every private read must then reach the server guard.
- if(method==='GET'&&path!=='bootstrap'&&path!=='auth/session'&&options.preferCache&&!options.forceRefresh&&owner&&sessionStorageAvailable()){
+ if(method==='GET'&&!bootstrapPath(path)&&path!=='auth/session'&&options.preferCache&&!options.forceRefresh&&owner&&sessionStorageAvailable()){
   const key=owner+'|'+generation+'|'+path,entry=readCache.get(key),maxAge=Math.max(0,options.maxAgeMs??30000);
   if(entry&&Date.now()-entry.at<=maxAge){if(signal?.aborted)throw signal.reason;readCache.delete(key);readCache.set(key,entry);return clone(entry.value) as T;}
  }
@@ -195,10 +197,10 @@ export async function api<T=Record<string,unknown>>(path:string,method='GET',bod
   const result=await networkApi<T>(path,method,body,signal);
   if(path==='auth/logout')return result;
   await confirmAuthority();
-  if(!path.startsWith('auth/')&&path!=='bootstrap')assertScope(owner,generation);
+  if(!path.startsWith('auth/')&&!bootstrapPath(path))assertScope(owner,generation);
   const user=(result as {user?:{id:string}|null})?.user;
   const responseOwner=currentLocalWorkUserId(),responseGeneration=currentLocalWorkGeneration();
-  if((path==='bootstrap'||path==='auth/session')&&user!==undefined){
+  if((bootstrapPath(path)||path==='auth/session')&&user!==undefined){
    if(user&&sessionStorageAvailable())await migrateLegacy(user.id).catch(()=>{});assertScope(responseOwner,responseGeneration);
   }
   const account=user===null?'':user?.id||owner||currentLocalWorkUserId();
@@ -220,7 +222,7 @@ export async function api<T=Record<string,unknown>>(path:string,method='GET',bod
   // Recheck after reads too: an online tab without Web Locks can still commit CAS.
   const confirmFence=async()=>{const current=await sessionFence();assertOffline();if(!sessionStorageAvailable()||!sameAuthority(current,fence,account))throw scopeError();if(isPrivate)assertAuthority(current,owner,generation,epoch,authority);};
   let account=owner;
-  const authRestore=path==='bootstrap'||path==='auth/session';
+  const authRestore=bootstrapPath(path)||path==='auth/session';
   if(!account&&authRestore){
    assertOffline();
    account=await lastAccount();
@@ -243,6 +245,16 @@ export async function api<T=Record<string,unknown>>(path:string,method='GET',bod
     window.dispatchEvent(new CustomEvent('mobiup-offline-snapshot',{detail:{path,at:stored.at}}));
     emitFreshness(account,path,'offline',stored.at);
     return stored.value;
+   }
+   if(path==='bootstrap?compact=1'){
+    const legacy=await snapshot<T>(account,'bootstrap');
+    assertOffline();
+    if(legacy&&validGetContract('bootstrap',legacy.value)){await confirmFence();rememberRead(account,currentLocalWorkGeneration(),path,legacy.value,legacy.at);emitFreshness(account,path,'offline',legacy.at);return legacy.value;}
+   }
+   if(path==='catalog'){
+    const legacy=await snapshot<{products?:unknown[]}>(account,'bootstrap');
+    assertOffline();
+    if(legacy&&Array.isArray(legacy.value.products)){await confirmFence();const value={products:legacy.value.products} as T;rememberRead(account,currentLocalWorkGeneration(),path,value,legacy.at);emitFreshness(account,path,'offline',legacy.at);return value;}
    }
    if(path.startsWith('partner/browse?')){
     const params=new URLSearchParams(path.split('?')[1]);

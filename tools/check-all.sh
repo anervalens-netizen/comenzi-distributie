@@ -88,6 +88,7 @@ p='work/qa/mobiup.sqlite'; s='work/qa-credentials/setup.sql'
 con=sqlite3.connect(p); con.executescript(open(s).read()); con.commit(); con.close()
 PY
 node tools/test-api.mjs
+node tools/test-order-pagination.mjs
 node tools/test-audit-regressions.mjs
 node tools/test-partner-portfolio.mjs
 node tools/test-partner-activity-http.mjs
@@ -114,9 +115,11 @@ if [ -n "$CHROME_BIN" ]; then
   CHROME_BIN="$CHROME_BIN" node tools/test-recovery-navigation-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-portfolio-page-error-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-pwa-waiting-browser.mjs
+  CHROME_BIN="$CHROME_BIN" node tools/test-pwa-role-preload-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-offline-work-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-offline-upgrade-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-list-pagination-browser.mjs
+  CHROME_BIN="$CHROME_BIN" node tools/test-order-pagination-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-stock-coverage-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-client-sales-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-client-history-import-browser.mjs

@@ -2,12 +2,15 @@
 const CACHE='mobiup-shell-v3-__SHELL_VERSION__';
 const ESSENTIAL_FILES=/*__SHELL_ESSENTIAL__*/[];
 const OPTIONAL_FILES=/*__SHELL_OPTIONAL__*/[];
+const COMMON_FILES=/*__SHELL_COMMON__*/[];
+const MANAGER_FILES=/*__SHELL_MANAGER__*/[];
 const isPublicShellFile=path=>typeof path==='string'&&path.startsWith('/')&&!path.startsWith('/api/')&&!path.startsWith('/api?');
 const ESSENTIAL_SHELL=ESSENTIAL_FILES.filter(isPublicShellFile);
 const OPTIONAL_SHELL=OPTIONAL_FILES.filter(isPublicShellFile);
-const PUBLIC_FILES=new Set([...ESSENTIAL_SHELL,...OPTIONAL_SHELL]);
-let preparation=null;
-let preparationState={state:'preparing',completed:0,total:PUBLIC_FILES.size};
+const COMMON_SHELL=COMMON_FILES.filter(isPublicShellFile);
+const MANAGER_SHELL=MANAGER_FILES.filter(isPublicShellFile);
+const PUBLIC_FILES=new Set([...ESSENTIAL_SHELL,...OPTIONAL_SHELL,...COMMON_SHELL,...MANAGER_SHELL]);
+const preparations=new Map(),preparationStates=new Map(),preparationListeners=new Map();
 const verifiedClients=new Set();
 // Distinct versions can share the same script URL. Compare the actual worker,
 // and retain caches on older engines that cannot identify their own worker.
@@ -26,43 +29,46 @@ async function retireUnusedShells(){
   await caches.delete(key);
  }
 }
-const preparationListeners=new Set();
-const publishPreparation=detail=>{
- preparationState=detail;
- for(const notify of preparationListeners)try{notify({type:'OFFLINE_SHELL_PREPARATION',...detail});}catch{}
+const shellForRole=role=>new Set(role==='legacy'?PUBLIC_FILES:[...ESSENTIAL_SHELL,...COMMON_SHELL,...(role==='manager'?MANAGER_SHELL:[])]);
+const publishPreparation=(role,detail)=>{
+ preparationStates.set(role,detail);
+ for(const notify of preparationListeners.get(role)||[])try{notify({type:'OFFLINE_SHELL_PREPARATION',role,...detail});}catch{}
 };
-const prepareOfflineShell=notify=>{
- if(notify)preparationListeners.add(notify);
- if(preparation){
-  if(notify)notify({type:'OFFLINE_SHELL_PREPARATION',...preparationState});
-  return preparation;
+const prepareOfflineShell=(role,notify)=>{
+ if(!['agent','manager'].includes(role))role='legacy';
+ if(notify){const listeners=preparationListeners.get(role)||new Set();listeners.add(notify);preparationListeners.set(role,listeners);}
+ if(preparations.has(role)){
+  if(notify)notify({type:'OFFLINE_SHELL_PREPARATION',role,...(preparationStates.get(role)||{state:'preparing',completed:0,total:shellForRole(role).size,transferred:0,transferBytes:0})});
+  return preparations.get(role);
  }
- preparation=(async()=>{
-  const total=PUBLIC_FILES.size;
-  let completed=0;
-  publishPreparation({state:'preparing',completed,total});
+ const preparation=(async()=>{
+  const files=shellForRole(role),total=files.size;
+  let completed=0,transferred=0,transferBytes=0;
+  publishPreparation(role,{state:'preparing',completed,total,transferred,transferBytes});
   try{
    const cache=await caches.open(CACHE);
-   for(const path of PUBLIC_FILES){
+   for(const path of files){
     if(!await cache.match(path)){
      const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),20000);
      try{
       const response=await fetch(path,{credentials:'same-origin',cache:'reload',signal:controller.signal});
       if(!response.ok)throw new Error(`HTTP ${response.status} pentru ${path}`);
+      const bytes=await response.clone().arrayBuffer();transferBytes+=bytes.byteLength;transferred++;
       await cache.put(path,response);
      }finally{clearTimeout(timer);}
     }
     completed++;
-    publishPreparation({state:'preparing',completed,total});
+    publishPreparation(role,{state:'preparing',completed,total,transferred,transferBytes});
    }
-   publishPreparation({state:'ready',completed,total});
+   publishPreparation(role,{state:'ready',completed,total,transferred,transferBytes});
   }catch(error){
-   publishPreparation({state:'error',completed,total,error:error instanceof Error?error.message:String(error)});
+   publishPreparation(role,{state:'error',completed,total,transferred,transferBytes,error:error instanceof Error?error.message:String(error)});
   }finally{
-   preparation=null;
-   preparationListeners.clear();
+   preparations.delete(role);
+   preparationListeners.delete(role);
   }
  })();
+ preparations.set(role,preparation);
  return preparation;
 };
 self.addEventListener('install',event=>{event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(ESSENTIAL_SHELL)));});
@@ -79,7 +85,7 @@ self.addEventListener('message',event=>{
  const port=event.ports?.[0];
  const source=event.source;
  const notify=message=>{if(port)port.postMessage(message);else source?.postMessage(message);};
- event.waitUntil(prepareOfflineShell(notify));
+ event.waitUntil(prepareOfflineShell(event.data?.role,notify));
 });
 self.addEventListener('activate',event=>{event.waitUntil(self.clients.claim());});
 // Old version assets are retained because client APIs do not prove that no open

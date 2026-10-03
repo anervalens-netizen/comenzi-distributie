@@ -95,7 +95,7 @@ listeners.get('message')({
 await Promise.resolve(preparation);
 assert.deepEqual(optional.map(path=>current.has(path)),[true,true],'explicit preparation caches every optional module');
 assert.equal(progress.at(0).state,'preparing','preparation announces its initial state');
-assert.deepEqual(progress.at(-1),{type:'OFFLINE_SHELL_PREPARATION',state:'ready',completed:essential.length+optional.length,total:essential.length+optional.length},'ready is reported only after every optional module is cached');
+assert.deepEqual(progress.at(-1),{type:'OFFLINE_SHELL_PREPARATION',role:'legacy',state:'ready',completed:essential.length+optional.length,total:essential.length+optional.length,transferred:optional.length,transferBytes:optional.reduce((sum,path)=>sum+Buffer.byteLength('network:'+path),0)},'ready reports only network transfers and waits for every legacy optional module');
 assert.deepEqual(fetched,optional,'only optional public shell assets are fetched during preparation');
 
 openClients=[{id:'current'},{id:'unknown-legacy'}];

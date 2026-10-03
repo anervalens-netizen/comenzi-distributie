@@ -31,6 +31,20 @@ export async function buildOfflineShell(){
   }
  };
  visit(entry[0]);
+ const groupedOutputs=patterns=>{
+  const selected=new Set();
+  const include=path=>{if(selected.has(path)||criticalOutputs.has(path))return;const metadata=outputs.get(path);if(!metadata)return;selected.add(path);if(metadata.cssBundle){const css=resolveOutput(path,metadata.cssBundle);if(css)include(css);}for(const dependency of metadata.imports){if(dependency.external||dependency.kind==='dynamic-import')continue;const imported=resolveOutput(path,dependency.path);if(imported)include(imported);}};
+  for(const [path,metadata] of outputs)if(Object.keys(metadata.inputs).some(input=>patterns.some(pattern=>input.replaceAll('\\','/').endsWith(pattern))))include(path);
+  return selected;
+ };
+ const commonOutputs=groupedOutputs(['components/order-editor.tsx','components/combined-order-editor.tsx','components/order-result.tsx']);
+ const managerOutputs=groupedOutputs(['components/manager-workspace.tsx']);
+ if(!commonOutputs.size)throw new Error('Common preload group is empty');
+ if(!managerOutputs.size)throw new Error('Manager preload group is empty');
+ for(const path of commonOutputs){
+  const inputs=Object.keys(outputs.get(path)?.inputs??{}).map(input=>input.replaceAll('\\','/'));
+  if(inputs.some(input=>input.endsWith('components/admin.tsx')||input.endsWith('components/product-catalog.tsx')))throw new Error(`Agent preload includes intent-only code: ${path}`);
+ }
  const toPublicPath=path=>{
   if(path!==root&&!path.startsWith(root+'/'))throw new Error(`Shell output is outside dist/client: ${path}`);
   return '/'+path.slice(root.length+1).replaceAll('\\','/');
@@ -43,10 +57,13 @@ export async function buildOfflineShell(){
  const essential=[...new Set(['/offline.html','/manifest.webmanifest','/icons/icon-192.png','/mobiup-logo.webp',...criticalStatic])].sort((a,b)=>a.localeCompare(b));
  const essentialSet=new Set(essential);
  const optional=[...new Set(['/icons/icon-512.png','/icons/maskable-512.png',...files].filter(path=>!essentialSet.has(path)))].sort((a,b)=>a.localeCompare(b));
+ const common=[...commonOutputs].map(toPublicPath).filter(path=>!essentialSet.has(path)).sort((a,b)=>a.localeCompare(b));
+ const commonSet=new Set(common);
+ const manager=[...managerOutputs].map(toPublicPath).filter(path=>!essentialSet.has(path)&&!commonSet.has(path)).sort((a,b)=>a.localeCompare(b));
  if([...essential,...optional].some(path=>path.startsWith('/api/')||path.startsWith('/api?')))throw new Error('Private API paths cannot be part of the offline shell');
- const version=createHash('sha256').update(html+essential.join('\n')+'\n--optional--\n'+optional.join('\n')).digest('hex').slice(0,16);
+ const version=createHash('sha256').update(html+essential.join('\n')+'\n--optional--\n'+optional.join('\n')+'\n--common--\n'+common.join('\n')+'\n--manager--\n'+manager.join('\n')).digest('hex').slice(0,16);
  let sw=await readFile('public/sw.js','utf8');
- if(!sw.includes('/*__SHELL_ESSENTIAL__*/[]')||!sw.includes('/*__SHELL_OPTIONAL__*/[]'))throw new Error('Service worker shell placeholders missing');
- sw=sw.replace('__SHELL_VERSION__',version).replace('/*__SHELL_ESSENTIAL__*/[]',JSON.stringify(essential)).replace('/*__SHELL_OPTIONAL__*/[]',JSON.stringify(optional));
+ if(!sw.includes('/*__SHELL_ESSENTIAL__*/[]')||!sw.includes('/*__SHELL_OPTIONAL__*/[]')||!sw.includes('/*__SHELL_COMMON__*/[]')||!sw.includes('/*__SHELL_MANAGER__*/[]'))throw new Error('Service worker shell placeholders missing');
+ sw=sw.replace('__SHELL_VERSION__',version).replace('/*__SHELL_ESSENTIAL__*/[]',JSON.stringify(essential)).replace('/*__SHELL_OPTIONAL__*/[]',JSON.stringify(optional)).replace('/*__SHELL_COMMON__*/[]',JSON.stringify(common)).replace('/*__SHELL_MANAGER__*/[]',JSON.stringify(manager));
  await writeFile(join(root,'sw.js'),sw);
 }

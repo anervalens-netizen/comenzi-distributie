@@ -11,7 +11,7 @@ for(const connection of [{saveData:true,effectiveType:'4g'},{saveData:false,effe
  let version='old',offline=false,failLazy=false,browser,server;const shellRequests=[];
  const source=`import React from 'react';import {createRoot} from 'react-dom/client';import {PwaInstall,prepareOfflineShell,getOfflineShellPreparation} from './components/pwa';import * as work from './lib/offline-work';import {setLocalWorkUserId} from './lib/local-work';Object.defineProperty(navigator,'connection',{value:${JSON.stringify(connection)}});setLocalWorkUserId('synthetic');window.fixture={work,prepareOfflineShell,getOfflineShellPreparation};window.documentToken=crypto.randomUUID();createRoot(document.getElementById('root')).render(<><textarea defaultValue="Synthetic unsaved editor"/><PwaInstall/></>);`;
  const bundle=await build({stdin:{contents:source,resolveDir:resolve('.'),loader:'tsx'},write:false,bundle:true,platform:'browser',jsx:'automatic',define:{'process.env.NODE_ENV':'"production"'},logLevel:'silent'});
- const worker=tag=>readFileSync('public/sw.js','utf8').replace('__SHELL_VERSION__',tag).replace('/*__SHELL_ESSENTIAL__*/[]',JSON.stringify(['/offline.html','/_next/static/distribution-app-'+tag+'.js'])).replace('/*__SHELL_OPTIONAL__*/[]',JSON.stringify(['/_next/static/lazy-'+tag+'.js']));
+ const worker=tag=>readFileSync('public/sw.js','utf8').replace('__SHELL_VERSION__',tag).replace('/*__SHELL_ESSENTIAL__*/[]',JSON.stringify(['/offline.html','/_next/static/distribution-app-'+tag+'.js'])).replace('/*__SHELL_OPTIONAL__*/[]',JSON.stringify(['/_next/static/lazy-'+tag+'.js'])).replace('/*__SHELL_COMMON__*/[]',JSON.stringify(['/_next/static/lazy-'+tag+'.js']));
  try{
   server=createServer((req,res)=>{
    if(offline){req.socket.destroy();return;}
@@ -28,7 +28,7 @@ for(const connection of [{saveData:true,effectiveType:'4g'},{saveData:false,effe
   await wait('!!window.fixture&&!!navigator.serviceWorker.controller');
   const token=await evaluate('documentToken');
   version='new';await evaluate("await navigator.serviceWorker.getRegistration().then(r=>r.update())");await wait("navigator.serviceWorker.getRegistration().then(r=>!!r.waiting)");await wait("document.body.innerText.includes('Actualizare disponibilă')");
-  await evaluate("window.dispatchEvent(new CustomEvent('mobiup-data-freshness',{detail:{path:'bootstrap',source:'network'}}))");await delay(2400);
+  await evaluate("window.dispatchEvent(new CustomEvent('mobiup-pwa-role',{detail:{role:'agent'}}));window.dispatchEvent(new CustomEvent('mobiup-data-freshness',{detail:{path:'bootstrap',source:'network'}}))");await delay(2400);
   check(await evaluate("!(await (await caches.open('mobiup-shell-v3-old')).match('/_next/static/lazy-old.js'))&&!(await (await caches.open('mobiup-shell-v3-new')).match('/_next/static/lazy-new.js'))"),'Save-Data/2G skips automatic preparation of both versions');
   failLazy=true;
   check(await evaluate("let failed=false;try{await fixture.prepareOfflineShell()}catch{failed=true}failed&&fixture.getOfflineShellPreparation().state==='error'&&(await navigator.serviceWorker.getRegistration()).waiting!==null"),'waiting worker failure cannot report ready or activate');
