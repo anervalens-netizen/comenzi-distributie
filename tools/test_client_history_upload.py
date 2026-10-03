@@ -28,6 +28,24 @@ class UploadTests(unittest.TestCase):
   rows,summary,end,req,p=data;req['allowRegression']=ack
   return u.apply(self.c,rows,summary,end,req,self.root)
  def facts(self):return [tuple(r) for r in self.c.execute('SELECT date,quantity_micros,value_cents FROM history_current ORDER BY date,value_cents')]
+ def test_incompatible_header_explains_expected_customer_report(self):
+  path=self.directory/'incompatible.xlsx';fixture(path,[row(Data='01.02.2024')],'2024-02-01','2024-02-29')
+  with zipfile.ZipFile(path) as z:files={name:z.read(name) for name in z.namelist()}
+  files['xl/worksheets/sheet1.xml']=files['xl/worksheets/sheet1.xml'].replace(b'Cod Client',b'Other Column')
+  with zipfile.ZipFile(path,'w') as z:
+   for name,data in files.items():z.writestr(name,data)
+  before=self.facts()
+  with self.assertRaisesRegex(u.UploadError,'Lipsește antetul așteptat.*Cod Client.*Datele existente nu au fost modificate'):u.parse_upload(path)
+  self.assertEqual(self.facts(),before)
+ def test_changed_customer_columns_explained_without_import(self):
+  path=self.directory/'changed.xlsx';fixture(path,[row(Data='01.02.2024')],'2024-02-01','2024-02-29')
+  with zipfile.ZipFile(path) as z:files={name:z.read(name) for name in z.namelist()}
+  files['xl/worksheets/sheet1.xml']=files['xl/worksheets/sheet1.xml'].replace(b'ItemName',b'UnexpectedColumn')
+  with zipfile.ZipFile(path,'w') as z:
+   for name,data in files.items():z.writestr(name,data)
+  before=self.facts()
+  with self.assertRaisesRegex(u.UploadError,'Coloanele raportului.*Datele existente nu au fost modificate'):u.parse_upload(path)
+  self.assertEqual(self.facts(),before)
  def test_infer_and_preserve_other_months(self):
   data=self.upload([row(Data='01.02.2024'),row(Data='02.02.2024')])
   self.assertEqual(data[1]['through'],'2024-02-02');self.assertTrue(data[-1]['coverageShorter'])

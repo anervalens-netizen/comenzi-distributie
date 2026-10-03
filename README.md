@@ -30,7 +30,7 @@ All managers can view national activity, partners, orders, stock, inventory and 
 
 ## Lucru mobil și offline
 
-Agentul poate folosi modul Listă și poate pregăti datele din „Lucru pe telefon” înainte de deplasare. Interfața arată data pregătirii și acoperirea catalogului/fișelor; pregătirea este limitată, cu fișele traseului săptămânii prioritare. Fundalul hărții necesită conexiune.
+Datele consultate și ciornele se păstrează automat pe dispozitiv, fără activare manuală. Aplicația nu descarcă preventiv întregul portofoliu; fără conexiune sunt disponibile doar datele deja păstrate local. Fundalul hărții necesită conexiune.
 
 Ciornele, modificările fișelor, vizitele și planurile sunt păstrate separat pentru fiecare cont în IndexedDB. „Salvat pe telefon” confirmă doar persistența locală. Operațiunile se sincronizează în ordine când aplicația este deschisă și conexiunea revine. Finalizarea și exportul necesită confirmarea serverului. Erorile de sesiune, permisiune sau revizie păstrează lucrul pentru verificare; scoaterea unei operațiuni din coadă păstrează copia locală de recuperare.
 

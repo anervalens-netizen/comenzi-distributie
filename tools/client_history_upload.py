@@ -68,11 +68,20 @@ def parse_upload(path):
  with zipfile.ZipFile(path) as z:
   if len(z.infolist())>4096 or sum(x.file_size for x in z.infolist())>512*1024*1024:
    raise UploadError('Fișierul Excel este prea mare după decomprimare.')
- stream=h.workbook(path,allow_inferred_period=True);_,meta=next(stream)
- rows=[]
- for _,r in stream:
-  rows.append(r)
-  if len(rows)>500000:raise UploadError('Maximum 500.000 de rânduri per import lunar.')
+ try:
+  stream=h.workbook(path,allow_inferred_period=True);_,meta=next(stream)
+  rows=[]
+  for _,r in stream:
+   rows.append(r)
+   if len(rows)>500000:raise UploadError('Maximum 500.000 de rânduri per import lunar.')
+ except ValueError as error:
+  messages={
+   'Header not found':'Fișier incompatibil cu vânzările pe clienți. Lipsește antetul așteptat: Data, Denumire Client, Cod Client, Cod_Franciza. Alege raportul detaliat pe clienți. Datele existente nu au fost modificate.',
+   'Unexpected or duplicate header; explicit mapping required':'Coloanele raportului pe clienți nu corespund formatului așteptat sau sunt duplicate. Alege exportul detaliat original, fără modificarea coloanelor. Datele existente nu au fost modificate.',
+  }
+  message=messages.get(str(error))
+  if message:raise UploadError(message) from error
+  raise
  if not rows:validate_empty_period(path,meta)
  # Empty strings preserve the wire date type without inventing transaction dates.
  first=min((r['date'] for r in rows),default='');last=max((r['date'] for r in rows),default='')
