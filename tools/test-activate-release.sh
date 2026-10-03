@@ -22,7 +22,7 @@ cat > "$root/curl" <<'EOF'
 #!/usr/bin/env bash
 mode="$(cat "$MOBIUP_TEST_HEALTH_MODE")"
 current="$(readlink -f "$MOBIUP_CURRENT_LINK")"
-if [[ "$mode" == fail-new && "$current" == */3333333333333333333333333333333333333333 ]]; then exit 22; fi
+if [[ "$mode" == fail-new && "$current" == */3333333333333333333333333333333333333333 && "${@: -1}" == */api/bootstrap ]]; then exit 22; fi
 exit 0
 EOF
 chmod +x "$root/systemctl" "$root/curl"
@@ -37,7 +37,7 @@ check "$(readlink "$runtime/current")" "$releases/$new" 'SHA activation uses abs
 check "$(readlink -f "$runtime/current")" "$releases/$new" 'SHA activation selects requested release'
 ln -sfn "$releases/$old" "$runtime/current"; echo fail-new > "$mode"
 set +e; "$script" "$bad" >/dev/null 2>&1; rc=$?; set -e
-check "$rc" "1" 'failed health returns deployment failure after healthy rollback'
+check "$rc" "1" 'healthy liveness with failed database readiness triggers rollback'
 check "$(readlink -f "$runtime/current")" "$releases/$old" 'failed health restores previous release'
 echo success > "$mode"
 "$script" "$releases/$new" >/dev/null

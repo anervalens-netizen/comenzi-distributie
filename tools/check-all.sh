@@ -5,11 +5,13 @@ cd "$ROOT"
 pids=()
 cleanup(){ for pid in "${pids[@]:-}"; do kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; done; }
 trap cleanup EXIT
-wait_health(){ local port="$1"; for _ in $(seq 1 40); do curl -fsS "http://127.0.0.1:${port}/api/health" >/dev/null 2>&1 && return 0; sleep .25; done; return 1; }
-start_server(){ local data="$1" port="$2" log="$3"; MOBIUP_DATA_DIR="$data" HOST=127.0.0.1 PORT="$port" NODE_ENV=production node dist/standalone/server.js >"$log" 2>&1 & pids+=("$!"); wait_health "$port"; }
+wait_ready(){ local port="$1"; for _ in $(seq 1 40); do curl -fsS "http://127.0.0.1:${port}/api/bootstrap" >/dev/null 2>&1 && return 0; sleep .25; done; return 1; }
+start_server(){ local data="$1" port="$2" log="$3"; MOBIUP_DATA_DIR="$data" HOST=127.0.0.1 PORT="$port" NODE_ENV=production node dist/standalone/server.js >"$log" 2>&1 & pids+=("$!"); wait_ready "$port"; }
 stop_last(){ local i=$((${#pids[@]}-1)); kill "${pids[$i]}" 2>/dev/null || true; wait "${pids[$i]}" 2>/dev/null || true; unset 'pids[$i]'; pids=("${pids[@]}"); }
 
 python3 tools/test_crm_master_reconcile.py
+node tools/test-bind-ready.mjs
+node tools/test-operational-status.mjs
 python3 tools/test_client_sales_history.py
 python3 tools/test_client_history_upload.py
 node tools/test-client-history-import-isolated.mjs
@@ -45,6 +47,7 @@ node tools/test-partner-detail-http.mjs
 node tools/test-client-sales-performance.mjs
 node tools/test-pwa-preparation.mjs
 node tools/test-runtime-init.mjs
+node tools/test-operational-http.mjs
 node tools/test-bucharest-month.mjs
 node tools/test-sales-worker.mjs
 node tools/test-sales-view-worker.mjs

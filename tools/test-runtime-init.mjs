@@ -14,7 +14,7 @@ insert.run('dup-a','dup.a','Dup A','agent','g-5','G A','DUPLICATE');
 insert.run('dup-b','dup.b','Dup B','agent','g-3','G B',' duplicate ');
 db.close();
 
-const port=3031,root=`http://127.0.0.1:${port}/api/health`;
+const port=3031,root=`http://127.0.0.1:${port}/api/bootstrap`;
 const child=spawn(process.execPath,['dist/standalone/server.js'],{env:{...process.env,MOBIUP_DATA_DIR:folder,HOST:'127.0.0.1',PORT:String(port),NODE_ENV:'production'},stdio:'ignore'});
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function health(){try{return await fetch(root);}catch{return null;}}
@@ -22,6 +22,9 @@ try {
   let ready=null;
   for(let i=0;i<40&&!ready;i++){ready=await health();if(!ready)await sleep(100);}
   assert.ok(ready,'QA server did not start listening');
+  const live=await fetch(`http://127.0.0.1:${port}/api/health`);
+  assert.equal(live.status,200,'Liveness is independent of invalid business data');
+  assert.deepEqual(await live.json(),{status:'ok',service:'comenzi-distributie'});
   const statuses=[ready.status];
   for(let i=1;i<3;i++)statuses.push((await fetch(root)).status);
   assert.deepEqual(statuses,[500,500,500],'Invalid startup must remain unhealthy on every request');

@@ -18,6 +18,39 @@ Tests use isolated temporary data. Never point CI at a production database or im
 
 Configure actual hosts, filesystem paths and secrets privately. Files under deploy/ are templates, not an inventory of live machines. Preserve installed application identifiers and existing databases during upgrades. Operator deployment records and rollback procedures belong outside Git.
 
+The standalone entry waits for the specific `HOST` address before starting the
+HTTP server. `HOST` must be an IPv4 or IPv6 literal; it defaults to loopback and
+rejects wildcard addresses. Only `EADDRNOTAVAIL` is retried, for at most
+`MOBIUP_BIND_TIMEOUT_MS` (default 60000, maximum 300000). Timeout exits nonzero;
+the service template uses `Restart=on-failure`, a delay and a start-rate limit.
+`network-online.target` alone does not guarantee that an overlay address exists.
+An address disappearing after the probe still fails the actual bind; no fallback
+interface is used. A persistent failure can exhaust the systemd start limit and
+requires operator diagnosis. Configure the bind address and matching proxy
+upstream privately.
+
+`GET /api/health` is unauthenticated process liveness only; it does not initialize
+or query the database. `GET /api/admin/status` requires a global manager session
+and returns read-only aggregate history import dates/coverage and portfolio
+projection revisions/pending rows. Missing/error states are explicit; no source
+filenames, paths, customers or raw errors are returned. Coverage bounds do not
+prove that every intervening month was imported, and `current` refers only to the
+portfolio projection's recorded dirty queue. Backup success remains the external
+backup job's responsibility, not an HTTP health claim. Existing import screens
+remain available for job details. Activation checks liveness plus anonymous
+`/api/bootstrap` for database initialization; configure `MOBIUP_READY_URL` when
+using a custom health URL, and size the activation wait for any longer bind wait.
+
+Full recovery requires runtime, classified resources and product assets configured
+through the existing `MOBIUP_RECOVERY_*` settings. The runtime includes
+`bind-ready.mjs`. Backups preserve SQLite snapshots, history originals and a
+checksummed recovery manifest. `deploy/restore.py` requires the archive checksum
+sidecar, validates required resources against the compiled release and restores
+only to a new isolated directory; it does not start services. Derived portfolio
+and activity models are rebuildable and do not replace authoritative history.
+Synthetic recovery tests are not evidence of a production restore or a real
+reboot, and cannot establish production RPO/RTO.
+
 ## Contributions
 
 Read AGENTS.md. Use a GitHub noreply author address. Keep public issues and comments limited to generic code behavior; exclude private logs, screenshots, addresses and account information. Run the public-data guard before committing.

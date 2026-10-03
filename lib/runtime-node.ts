@@ -11,6 +11,7 @@ import partnerDayPlansSchema from '@/drizzle/0007_partner_day_plans.sql?raw';
 import partnerMapIndex from '@/drizzle/0008_partner_map_index.sql?raw';
 
 export const runtimeKind = 'node';
+export { operationalStatus } from './operational-status-node';
 const dataDirectory = resolve(process.env.MOBIUP_DATA_DIR || './work/server-data');
 let connection: DatabaseSync | undefined;
 function sqlite() {

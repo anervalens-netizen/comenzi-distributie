@@ -65,6 +65,26 @@ def restore(archive: Path, destination: Path, checksum: Path | None = None) -> d
         release = json.loads((temporary / 'RELEASE.json').read_text())
         if json.loads((runtime / 'RELEASE.json').read_text()) != release or not (runtime / 'server.js').is_file():
             raise RuntimeError('Release/runtime recovery mismatch')
+        if './bind-ready.mjs' in (runtime / 'server.js').read_text() and not (runtime / 'bind-ready.mjs').is_file():
+            raise RuntimeError('Recovery runtime is missing bind-ready.mjs')
+        # An internally consistent file list alone does not prove that required
+        # build inputs survived. Check completeness and the compiled resource set.
+        resources = temporary / 'recovery/resources'
+        mode = json.loads((resources / 'resource-mode.json').read_text())
+        names = ['seed.json', 'initial-users.json', 'accesorii.xlsx', 'standuri.xlsx', 'templates.json', 'template-hashes.json', 'mail-defaults.json']
+        if mode.get('mode') != 'private' or mode.get('schema') != 1:
+            raise RuntimeError('Recovery resources are not private production inputs')
+        hashes = {}
+        for name in names:
+            path = resources / name
+            if not path.is_file() or digest(path) != mode.get('sha256', {}).get(name):
+                raise RuntimeError('Required recovery resource missing or checksum mismatch')
+            hashes[name] = mode['sha256'][name]
+        resource_digest = hashlib.sha256(json.dumps(hashes, separators=(',', ':')).encode()).hexdigest()
+        if release.get('resourceDigest') != resource_digest:
+            raise RuntimeError('Recovery resources do not match the compiled release')
+        if not any(name.startswith('recovery/products/') for name in manifest['files']):
+            raise RuntimeError('Required recovery products are missing')
         databases = {}
         for name in ('mobiup.sqlite', 'sales.sqlite', 'client-history/client-sales-history.sqlite'):
             path = temporary / name

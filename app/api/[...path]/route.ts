@@ -7,7 +7,7 @@ import { clientPortfolioVersion } from '@/lib/client-sales-portfolio';
 import { visitWeek, saveDayPlan } from '@/lib/partner-planning';
 import { portfolio, portfolioSummary, partnerDetail, updatePartner, recordVisit } from '@/lib/partner-portfolio';
 import { browsePartners, mapPartners } from '@/lib/partner-map-api';
-import { env, runtimeKind } from '@/lib/runtime';
+import { env, runtimeKind, operationalStatus } from '@/lib/runtime';
 import { randomBytes, createHash } from 'node:crypto';
 import seed from '@/resources/seed.json';
 import templateHashes from '@/resources/template-hashes.json';
@@ -184,8 +184,12 @@ async function dispatch(req: Request) {
   if(req.method!=='GET') assertOrigin(req);
   const path=new URL(req.url).pathname.replace(/^\/api\//,'').split('/');
   if(runtimeKind==='cloudflare' && req.method!=='GET' && !['auth/login','auth/logout'].includes(path.join('/'))) fail(409,'Versiunea de test este acum doar pentru consultare. Folosește instanța de producție configurată pentru comenzi noi.');
+  if(path.join('/')==='health' && req.method==='GET') return response({status:'ok',service:'comenzi-distributie'});
+  if(path.join('/')==='admin/status' && req.method==='GET') {
+    requireGlobalManager(await requireUser(req));
+    return response(operationalStatus());
+  }
   await seedDatabase();
-  if(path.join('/')==='health' && req.method==='GET') { await db().prepare('SELECT 1').first(); return response({status:'ok',service:'comenzi-distributie'}); }
   if(path.join('/')==='auth/login' && req.method==='POST') {
     const body=await jsonBody(req); const username=textField(body.username,80).toLowerCase();
     if(typeof body.password!=='string'||body.password.length>128||!username) fail(400,'Completează utilizatorul și parola.');

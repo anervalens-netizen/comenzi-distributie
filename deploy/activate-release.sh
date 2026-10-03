@@ -5,9 +5,11 @@ RUNTIME_ROOT="${MOBIUP_RUNTIME_ROOT:-/opt/Mobiup/comenzi-distributie/runtime}"
 CURRENT_LINK="${MOBIUP_CURRENT_LINK:-$RUNTIME_ROOT/current}"
 SERVICE="${MOBIUP_SERVICE:-mobiup-comenzi-distributie.service}"
 HEALTH_URL="${MOBIUP_HEALTH_URL:-http://127.0.0.1:39120/api/health}"
+# Liveness alone cannot certify database initialization after promotion.
+READY_URL="${MOBIUP_READY_URL:-${HEALTH_URL%/api/health}/api/bootstrap}"
 SYSTEMCTL="${MOBIUP_SYSTEMCTL:-systemctl}"
 CURL="${MOBIUP_CURL:-curl}"
-HEALTH_ATTEMPTS="${MOBIUP_HEALTH_ATTEMPTS:-15}"
+HEALTH_ATTEMPTS="${MOBIUP_HEALTH_ATTEMPTS:-90}"
 HEALTH_DELAY="${MOBIUP_HEALTH_DELAY:-1}"
 
 fail() { echo "activate-release: $*" >&2; exit 2; }
@@ -47,7 +49,7 @@ switch_link() {
 healthy() {
   local attempt
   for ((attempt=1; attempt<=HEALTH_ATTEMPTS; attempt++)); do
-    if "$CURL" -fsS --max-time 2 "$HEALTH_URL" >/dev/null; then return 0; fi
+    if "$CURL" -fsS --max-time 2 "$HEALTH_URL" >/dev/null && "$CURL" -fsS --max-time 2 "$READY_URL" >/dev/null; then return 0; fi
     [[ "$attempt" -lt "$HEALTH_ATTEMPTS" ]] && sleep "$HEALTH_DELAY"
   done
   return 1

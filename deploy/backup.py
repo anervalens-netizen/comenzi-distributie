@@ -54,6 +54,8 @@ def add_recovery_files(output: tarfile.TarFile, recovery: dict[str, Path], relea
     for name, required in [('runtime', 'server.js'), ('resources', 'resource-mode.json')]:
         if not (roots[name] / required).is_file():
             raise RuntimeError(f'Recovery {name} is missing {required}')
+    if './bind-ready.mjs' in (roots['runtime'] / 'server.js').read_text() and not (roots['runtime'] / 'bind-ready.mjs').is_file():
+        raise RuntimeError('Recovery runtime is missing bind-ready.mjs')
     mode = json.loads((roots['resources'] / 'resource-mode.json').read_text())
     names = ['seed.json', 'initial-users.json', 'accesorii.xlsx', 'standuri.xlsx', 'templates.json', 'template-hashes.json', 'mail-defaults.json']
     if mode.get('mode') != 'private' or mode.get('schema') != 1 or any(name not in mode.get('sha256', {}) for name in names):
