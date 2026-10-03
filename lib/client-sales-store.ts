@@ -3,6 +3,7 @@ import {DatabaseSync} from 'node:sqlite';
 import {existsSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 import {salesYield} from './client-sales-cooperative';
+import {packClientSales,unpackClientSales,type PackedClientSales} from './client-sales-cache-codec';
 import {resolve} from 'node:path';
 import {activityVersion,bucharestToday,historyStamp} from './partner-activity-snapshot';
 import {normalizedCui} from './partner-company-identity';
@@ -121,7 +122,8 @@ export function readClientSales(...args:Parameters<typeof calculateClientSales>)
 type Report=ReturnType<typeof readClientSales>;
 // Only billing is cached. Current portfolio, actors and visits are read on every request.
 // Entries are private; every caller receives independently mutable records.
-const reports=new Map<string,{report:Report;bytes:number}>(),flights=new Map<string,Promise<Report>>();
+const reports=new Map<string,PackedClientSales|{report:Report;bytes:number}>(),flights=new Map<string,Promise<Report>>();
+const decodeFlights=new Map<string,{waiters:number;promise:Promise<Report>}>();
 const MAX_BYTES=64*1024*1024;
 let cacheBytes=0;
 async function copyReport(report:Report,selection?:ReadonlySet<string>):Promise<Report>{
@@ -151,7 +153,25 @@ export async function readClientSalesAsync(partners:PartnerSummary[],month:strin
   };
   const key=JSON.stringify([activityVersion,directory,generation,month,today,hash.digest('hex')]);
   const hit=reports.get(key);
-  if(hit){clientSalesCacheStats.hits++;reports.delete(key);reports.set(key,hit);return deliver(hit.report);}
+  if(hit){
+    clientSalesCacheStats.hits++;reports.delete(key);reports.set(key,hit);
+    if('report' in hit)return deliver(hit.report);
+    if(!selection){
+      let decode=decodeFlights.get(key);
+      if(!decode){
+        const entry={waiters:0,promise:Promise.resolve(undefined as unknown as Report)};
+        entry.promise=unpackClientSales(hit).finally(()=>decodeFlights.delete(key));decodeFlights.set(key,entry);decode=entry;
+      }
+      decode.waiters++;
+      const report=await decode.promise;
+      // A solitary reader can own the fresh decode. Concurrent readers receive
+      // independent copies before the API decorates visits and flags.
+      if(decode.waiters>1)return deliver(report);
+      return generation===fileGeneration(directory)?report:{state:'unavailable' as const,message:'Sursa se actualizează. Reîncearcă raportul.'};
+    }
+    const report=await unpackClientSales(hit,selection);
+    return generation===fileGeneration(directory)?report:{state:'unavailable' as const,message:'Sursa se actualizează. Reîncearcă raportul.'};
+  }
   let flight=flights.get(key);
   if(!flight){
     if(flights.size>=4)throw new Error('Prea multe rapoarte în calcul. Reîncearcă.');
@@ -168,10 +188,17 @@ export async function readClientSalesAsync(partners:PartnerSummary[],month:strin
       if(generation!==fileGeneration(directory))return {state:'unavailable' as const,message:'Sursa se actualizează. Reîncearcă raportul.'};
       if(report.state==='ready'){
         let bytes=0;
-        for(let i=0;i<report.rows.length;i++){const r=report.rows[i];bytes+=2*(JSON.stringify(r).length+JSON.stringify(report.comparisonMetrics.get(r.key)).length)+256;if(i%256===0)await salesYield();}
-        if(bytes<=MAX_BYTES&&generation===fileGeneration(directory)){
-          while(reports.size&&(reports.size>=4||cacheBytes+bytes>MAX_BYTES)){const oldest=reports.keys().next().value!;cacheBytes-=reports.get(oldest)!.bytes;reports.delete(oldest);}
-          reports.set(key,{report,bytes});cacheBytes+=bytes;clientSalesCacheStats.bytes=cacheBytes;
+        for(let i=0;i<report.rows.length;i++){
+          const r=report.rows[i];bytes+=2*(JSON.stringify(r).length+JSON.stringify(report.comparisonMetrics.get(r.key)).length)+256;
+          if(bytes>MAX_BYTES)break;
+          if(i%256===0)await salesYield();
+        }
+        // Keep the existing cheap copies for small scopes. Compact only reports
+        // that would otherwise be rejected and recomputed on every warm read.
+        const cached=bytes<=MAX_BYTES?{report,bytes}:await packClientSales(report,MAX_BYTES);
+        if(cached&&generation===fileGeneration(directory)){
+          while(reports.size&&(reports.size>=4||cacheBytes+cached.bytes>MAX_BYTES)){const oldest=reports.keys().next().value!;cacheBytes-=reports.get(oldest)!.bytes;reports.delete(oldest);}
+          reports.set(key,cached);cacheBytes+=cached.bytes;clientSalesCacheStats.bytes=cacheBytes;
         }
       }
       return report;

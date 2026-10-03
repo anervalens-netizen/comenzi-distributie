@@ -1,0 +1,10 @@
+import assert from 'node:assert/strict';
+import {readFileSync,writeFileSync} from 'node:fs';
+import {resolve,sep} from 'node:path';
+const paths=process.argv.slice(2);assert.equal(paths.length,2,'Usage: node tools/compare-performance.mjs work/performance/suite-before.json work/performance/suite-after.json');
+const root=resolve('work/performance')+sep;
+const read=path=>{assert(resolve(path).startsWith(root),'Artifacts must be in ignored work/performance');return JSON.parse(readFileSync(path,'utf8'));};
+const [a,b]=paths.map(read);assert.equal(a.schema,b.schema);assert.equal(a.suite,b.suite);assert.deepEqual(a.source,b.source);assert.equal(a.node,b.node,'Use the same runtime for A/B');
+const rows=a.cases.map(x=>{const y=b.cases.find(c=>c.name===x.name&&c.role===x.role&&c.state===x.state);assert(y,'Missing candidate case');const n=x.n??x.distribution.n;assert.equal(n,y.n??y.distribution.n,'Use equal actual sample counts');const metric=n>=30?'p95':'single observation';assert(n>=30||n===1,'No distribution comparison below N=30');const value=c=>n>=30?c.distribution.p95:c.observationsMs?.[0]??c.distribution.mean;return {name:x.name,role:x.role,state:x.state,n,metric,beforeMs:value(x),afterMs:value(y),deltaPercent:100*(value(y)/value(x)-1)};});
+const result={suite:a.suite,source:a.source,beforeLabel:a.label,afterLabel:b.label,rows,verdict:'Measured LAB comparison only; no machine-independent timing gate'};
+writeFileSync(resolve(root,a.suite+'-comparison.json'),JSON.stringify(result,null,2)+'\n',{mode:0o600});console.log(JSON.stringify(result,null,2));

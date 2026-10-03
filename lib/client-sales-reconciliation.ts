@@ -55,10 +55,12 @@ export async function clientSalesReconciliation(user:User,params:URLSearchParams
   if(params.has('format')&&params.get('format')!=='csv')fail(400,'Format invalid.');
   const directory=resolve(process.env.MOBIUP_DATA_DIR||'./work/server-data'),generation=fileGeneration(directory),version=await clientPortfolioVersion();
   const facts=await sourceFacts(directory,input.month,bucharestToday(now),generation);
+  // Project only the identity JSON value. Preserve its original JS coercion,
+  // including legacy numeric/boolean values, without decoding unrelated CRM data.
   const current=new Map<string,boolean>();let cursor='';
   for(;;){
-    const rows=(await db().prepare('SELECT id,active,data FROM customers WHERE id>? ORDER BY id LIMIT 512').bind(cursor).all<{id:string;active:number;data:string}>()).results;
-    for(const r of rows){const cui=normalizedCui(String(JSON.parse(r.data).cui||''));if(cui&&cui!=='CLIENTGEN')current.set(cui,!!r.active||current.get(cui)===true);}
+    const rows=(await db().prepare("SELECT id,active,data->'$.cui' cui FROM customers WHERE id>? ORDER BY id LIMIT 512").bind(cursor).all<{id:string;active:number;cui:string|null}>()).results;
+    for(const r of rows){const cui=normalizedCui(String(JSON.parse(r.cui??'null')||''));if(cui&&cui!=='CLIENTGEN')current.set(cui,!!r.active||current.get(cui)===true);}
     if(rows.length<512)break;cursor=rows.at(-1)!.id;await salesYield();
   }
   const buckets={raw:empty(),consumer:empty(),linkedCompany:empty(),currentPortfolio:empty(),absent:empty(),inactive:empty(),identity:empty()},exceptions=new Map<string,RevenueException>();

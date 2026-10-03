@@ -104,3 +104,10 @@ Managers can open the national reconciliation from the customer-sales report and
 The bridge uses integer cents and exclusive partitions: raw source = consumers + linked legal companies + unresolved identities; linked companies = current active portfolio + inactive-only companies + companies absent from the current CRM. Negative returns and zero values remain in the bridge. Missing amounts are counted separately from known cents, and an unimported month is explicitly marked. Shared points contribute once per company; historical sellers are not attributed to today's portfolio owner. Ambiguous work points are not assigned by this report.
 
 The derived activity format is version 8 and requires the supported activity-snapshot rebuild after upgrading. Existing source history is read-only. Version 7 projections are rejected as stale by new readers until rebuilt; previous readers can rebuild their own derivative format after rollback. Source revision, immutable identity reference, effective period, import coverage and live portfolio revision accompany the reconciliation/export. Current CRM membership is re-read even when immutable source totals are cached.
+
+## Synthetic performance measurements
+
+See [the LAB harness guide](tools/performance/README.md) for repeatable report,
+bootstrap/search and inventory measurements. Artifacts are written only under
+ignored `work/performance/`. The report cache keeps bounded compact chunks within
+its existing budget; clients still receive independently mutable full results.

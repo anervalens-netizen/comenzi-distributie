@@ -41,8 +41,8 @@ export async function clientSalesOverview(user:User,params:URLSearchParams,now=n
   const input=clientSalesParams(params,now),scope=await managerFilter(user,params);
   const partners=await clientSalesPortfolio(user,scope?.warehouseIds);
   // Match any CURRENT visible point, then retain that firm's complete billing amounts.
-  const q=normalize(input.q),selection=new Set<string>();
-  for(let i=0;i<partners.length;i++){const p=partners[i];if((!input.county||countyMatches(p.county,input.county))&&(!q||normalize([p.name,p.cui,p.address,p.city,countySearch(p.county)].join(' ')).includes(q))){const cui=normalizedCui(p.cui);selection.add(cui&&cui!=='CLIENTGEN'?'company:'+cui:'point:'+p.id);}if(i%256===0)await salesYield();}
+  const q=normalize(input.q),selection=input.county||q?new Set<string>():undefined;
+  if(selection)for(let i=0;i<partners.length;i++){const p=partners[i];if((!input.county||countyMatches(p.county,input.county))&&(!q||normalize([p.name,p.cui,p.address,p.city,countySearch(p.county)].join(' ')).includes(q))){const cui=normalizedCui(p.cui);selection.add(cui&&cui!=='CLIENTGEN'?'company:'+cui:'point:'+p.id);}if(i%256===0)await salesYield();}
   const snapshot=await readClientSalesAsync(partners,input.month,undefined,bucharestToday(now),selection);
   if(snapshot.state!=='ready')return snapshot;
   const pointCompany=new Map<string,string>();

@@ -45,7 +45,9 @@ node tools/test-company-resolved-evidence.mjs
 node tools/test-source-guards.mjs
 node tools/test-partner-detail-remediation.mjs
 node tools/test-partner-detail-http.mjs
+node tools/test-performance-lab.mjs
 node tools/test-client-sales-performance.mjs
+node tools/bench-inventory.mjs
 node tools/test-pwa-preparation.mjs
 node tools/test-runtime-init.mjs
 node tools/test-operational-http.mjs
