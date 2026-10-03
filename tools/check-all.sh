@@ -31,6 +31,7 @@ node tools/test-client-sales.mjs
 node tools/test-partner-billing-period.mjs
 python3 tools/test-partner-portfolio-schema.py
 node tools/test-partner-geocode.mjs
+node tools/test-partner-position.mjs
 node tools/test-partner-geocode-worker.mjs
 node tools/test-public-resources.mjs
 npm run typecheck

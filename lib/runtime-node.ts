@@ -41,6 +41,10 @@ function sqlite() {
     candidate.exec("CREATE TABLE IF NOT EXISTS push_subscriptions (endpoint TEXT PRIMARY KEY NOT NULL,user_id TEXT NOT NULL REFERENCES users(id),p256dh TEXT NOT NULL,auth TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL); CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user ON push_subscriptions(user_id);");
     candidate.exec(partnerPortfolioSchema);
     candidate.exec(partnerDayPlansSchema);
+    const visitColumns=candidate.prepare('PRAGMA table_info(partner_visits)').all().map(row=>row.name);
+    if(!visitColumns.includes('next_step'))candidate.exec("ALTER TABLE partner_visits ADD COLUMN next_step TEXT NOT NULL DEFAULT ''");
+    if(!visitColumns.includes('follow_up_date'))candidate.exec('ALTER TABLE partner_visits ADD COLUMN follow_up_date TEXT');
+    candidate.exec('CREATE INDEX IF NOT EXISTS idx_partner_visits_follow_up ON partner_visits(follow_up_date,agent_id,customer_id)');
     candidate.exec(partnerMapIndex);
     candidate.exec('BEGIN IMMEDIATE;');
     try{candidate.exec(portfolioReadModelSchema);candidate.exec('COMMIT;');}catch(error){candidate.exec('ROLLBACK;');throw error;}

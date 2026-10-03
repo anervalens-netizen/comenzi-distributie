@@ -69,6 +69,12 @@ Ciornele, modificările fișelor, vizitele și planurile sunt păstrate separat 
 
 Actualizările PWA nu reîncarcă automat editorul. Activarea unei versiuni noi este oferită după golirea cozii, iar resursele versiunilor anterioare rămân disponibile taburilor deschise.
 
+Din fișa partenerului, agentul poate înregistra explicit o vizită fără să reintroducă firma sau agentul. Nota, pasul următor și data revenirii sunt opționale; o revenire datată reutilizează planul zilei. Apelurile, facturile, coordonatele GPS și opririle planificate nu creează automat vizite. O perioadă fără vizite înregistrate înseamnă lipsă de dovezi în aplicație, nu dovada că agentul nu a mers la client.
+
+Fișa și lista disting pinul confirmat manual, poziția GPS, adresa completă, strada/adresa aproximativă, centrul localității și poziția necunoscută. Proveniența, precizia GPS disponibilă și data actualizării sunt afișate în context; pinii aproximativi nu sunt ETA sau dovadă de vizită. Confirmarea manuală este protejată de fluxul existent de geocodare.
+
+Cardul compact „Necesită atenție” din Parteneri combină numai acțiuni existente: lucrul local al contului curent de pe dispozitivul curent, reveniri scadente, poziții de confirmat, semnale din raportul pe clienți, acoperirea sursei și excepțiile CRM autorizate. Momentul încărcării sursei este separat de data până la care există acoperire; weekendurile sau sărbătorile nu produc singure alerte.
+
 Runtime-ul Node construiește un model derivat, regenerabil pentru portofoliu, cu revizii dedicate datelor și acoperirii utilizatorilor. Triggerele SQLite urmăresc și modificările făcute din alte conexiuni, fără funcții SQL private. Browse păstrează paginarea, totalurile și fațetele complete pentru selecție; harta agregă după nivelul de zoom și permite apropierea până la punctele individuale. Datele autoritative nu sunt rescrise pentru această optimizare.
 
 ## Customer sales imports

@@ -35,9 +35,10 @@ try{
   db.prepare("UPDATE customers SET data=json_set(data,'$.address','Strada Test 2') WHERE id='ph-shared'").run();
   await call('qa-agent1','/ph-shared','PATCH',p,409);
   const changed=await call('qa-agent1','/ph-shared');assert.equal(changed.partner.latitude,null);assert.equal(changed.partner.positionSource,null);
-  const visit={id:randomUUID(),notes:'Vizită explicită'};
+  const visit={id:randomUUID(),notes:'Vizită explicită',nextStep:'Revenire cu ofertă sintetică',followUpDate:'2026-10-19'};
   const first=await call('qa-agent1','/ph-shared/visits','POST',visit);assert.equal(first.visitCount,1);
-  const retry=await call('qa-agent1','/ph-shared/visits','POST',visit);assert.equal(retry.visitCount,1);assert.equal(retry.visits[0].agentId,'qa-agent1');
+  const retry=await call('qa-agent1','/ph-shared/visits','POST',visit);assert.equal(retry.visitCount,1);assert.equal(retry.visits[0].agentId,'qa-agent1');assert.equal(retry.visit.nextStep,visit.nextStep);assert.equal(retry.visit.followUpDate,visit.followUpDate);
+  assert.deepEqual(JSON.parse(db.prepare("SELECT stops FROM partner_day_plans WHERE agent_id='qa-agent1' AND plan_date='2026-10-19'").get().stops),['ph-shared'],'idempotent visit adds one existing day-plan stop');
   await call('qa-agent2','/ph-shared/visits','POST',visit,409);
   await call('qa-agent1','/ph-shared/visits','POST',{...visit,notes:'Changed'},409);
   const visited=(await call('qa-agent2')).partners.find(p=>p.id==='ph-shared');assert(visited.lastVisitedAt);

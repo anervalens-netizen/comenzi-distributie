@@ -1,7 +1,8 @@
 import { createReadProjectionCache } from './read-projection-cache';
 import { db, fail, isGlobalManager, sha256, textField } from './server';
 import type { Client, User } from './types';
-import type { PortfolioPartner, PartnerVisit } from './partner-portfolio-types';
+import type { PartnerFollowUp, PortfolioPartner, PartnerVisit } from './partner-portfolio-types';
+import {managerFilter} from './manager-scope';
 
 type Row = {
   id: string;
@@ -146,7 +147,7 @@ export async function partnerDetail(
   const rows = (
     await db()
       .prepare(
-        `SELECT id,customer_id customerId,agent_id agentId,agent_name agentName,visited_at visitedAt,notes,created_at createdAt FROM partner_visits WHERE customer_id=?${before} ORDER BY visited_at DESC,id DESC LIMIT 51`,
+        `SELECT id,customer_id customerId,agent_id agentId,agent_name agentName,visited_at visitedAt,notes,next_step nextStep,follow_up_date followUpDate,created_at createdAt FROM partner_visits WHERE customer_id=?${before} ORDER BY visited_at DESC,id DESC LIMIT 51`,
       )
       .bind(...args)
       .all<PartnerVisit>()
@@ -253,7 +254,9 @@ export async function recordVisit(
 ) {
   await get(user, id);
   const visitId = body.id,
-    notes = textField(body.notes, 2000);
+    notes = textField(body.notes, 2000),
+    nextStep = textField(body.nextStep, 500),
+    followUpDate = body.followUpDate === null || body.followUpDate === undefined || body.followUpDate === '' ? null : body.followUpDate;
   if (
     typeof visitId !== 'string' ||
     !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
@@ -261,27 +264,44 @@ export async function recordVisit(
     )
   )
     fail(400, 'Identificator vizită invalid.');
+  if(followUpDate!==null){
+    if(typeof followUpDate!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(followUpDate)||followUpDate<'2020-01-01'||followUpDate>'2100-12-31'||new Date(followUpDate+'T12:00:00Z').toISOString().slice(0,10)!==followUpDate)fail(400,'Data revenirii este invalidă.');
+    const day=new Date(followUpDate+'T12:00:00Z').getUTCDay();
+    if(day===0||day===6)fail(400,'Planifică revenirea de luni până vineri.');
+  }
   const s = partnerScope(user),
     now = new Date().toISOString();
-  await db()
-    .prepare(
-      `INSERT INTO partner_visits(id,customer_id,agent_id,agent_name,visited_at,notes,created_at) SELECT ?,c.id,?,?,?,?,? FROM customers c WHERE c.id=? AND c.active=1 AND ${s.sql} ON CONFLICT(id) DO NOTHING`,
-    )
-    .bind(visitId, user.id, user.name, now, notes, now, id, ...s.args)
-    .run();
+  const statements=[db().prepare(
+      `INSERT INTO partner_visits(id,customer_id,agent_id,agent_name,visited_at,notes,next_step,follow_up_date,created_at) SELECT ?,c.id,?,?,?,?,?,?,? FROM customers c WHERE c.id=? AND c.active=1 AND ${s.sql} ON CONFLICT(id) DO NOTHING`,
+    ).bind(visitId, user.id, user.name, now, notes, nextStep, followUpDate as string|null, now, id, ...s.args)];
+  if(followUpDate)statements.push(db().prepare(
+    `INSERT INTO partner_day_plans(agent_id,plan_date,stops,revision,updated_at) SELECT ?,?,json_array(c.id),1,? FROM customers c WHERE c.id=? AND c.active=1 AND ${s.sql} ON CONFLICT(agent_id,plan_date) DO UPDATE SET stops=json_insert(partner_day_plans.stops,'$[#]',?),revision=partner_day_plans.revision+1,updated_at=excluded.updated_at WHERE NOT EXISTS(SELECT 1 FROM json_each(partner_day_plans.stops) WHERE value=?)`,
+  ).bind(user.id,followUpDate,now,id,...s.args,id,id));
+  await db().batch(statements);
   const saved = await db()
-    .prepare('SELECT id,customer_id customerId,agent_id agentId,agent_name agentName,visited_at visitedAt,notes,created_at createdAt FROM partner_visits WHERE id=?')
+    .prepare('SELECT id,customer_id customerId,agent_id agentId,agent_name agentName,visited_at visitedAt,notes,next_step nextStep,follow_up_date followUpDate,created_at createdAt FROM partner_visits WHERE id=?')
     .bind(visitId)
     .first<PartnerVisit>();
   if (
     !saved ||
     saved.customerId !== id ||
     saved.agentId !== user.id ||
-    saved.notes !== notes
+    saved.notes !== notes ||
+    saved.nextStep !== nextStep ||
+    saved.followUpDate !== followUpDate
   )
     fail(409, 'Vizita nu a putut fi salvată cu acest identificator.');
   // Confirm the exact idempotent write even when it is outside the first history page.
   return { ...await partnerDetail(user, id, null), visit: saved };
+}
+
+export async function duePartnerFollowUps(user:User,params=new URLSearchParams()){
+  const s=partnerScope(user),today=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Bucharest',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+  const selection=await managerFilter(user,params),selectedAgents=selection?` AND v.agent_id IN (SELECT value FROM json_each(?))`:'';
+  const agentScope=user.role==='agent'?'v.agent_id=?':isGlobalManager(user)?'1=1':'EXISTS(SELECT 1 FROM manager_agents ma JOIN users a ON a.id=ma.agent_id AND a.active=1 WHERE ma.manager_id=? AND ma.agent_id=v.agent_id)';
+  const agentArgs=user.role==='agent'||!isGlobalManager(user)?[user.id]:[];
+  const rows=await db().prepare(`SELECT v.id visitId,v.customer_id customerId,json_extract(c.data,'$.name') customerName,v.agent_id agentId,v.agent_name agentName,v.follow_up_date followUpDate,v.next_step nextStep FROM partner_visits v JOIN customers c ON c.id=v.customer_id WHERE v.follow_up_date IS NOT NULL AND v.follow_up_date<=? AND c.active=1 AND ${s.sql} AND ${agentScope}${selectedAgents} AND NOT EXISTS(SELECT 1 FROM partner_visits newer WHERE newer.customer_id=v.customer_id AND newer.agent_id=v.agent_id AND (newer.visited_at>v.visited_at OR (newer.visited_at=v.visited_at AND newer.id>v.id))) ORDER BY v.follow_up_date,v.customer_id,v.agent_id LIMIT 20`).bind(today,...s.args,...agentArgs,...selection?[JSON.stringify(selection.agentIds)]:[]).all<PartnerFollowUp>();
+  return {today,followUps:rows.results};
 }
 
 export async function portfolioSummary(user:User,bbox?:import('./partner-map-types').MapBounds,warehouseIds?:string[]){

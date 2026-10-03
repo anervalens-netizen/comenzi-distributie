@@ -28,6 +28,8 @@ export type PartnerVisit = {
   agentName: string;
   visitedAt: string;
   notes: string;
+  nextStep: string;
+  followUpDate: string | null;
   createdAt: string;
 };
 export type PartnerVisitsPage = {
@@ -41,4 +43,13 @@ export type PartnerDetail = PartnerVisitsPage & {
 export type PartnerPortfolio = {
   partners: PortfolioPartner[];
   observedAt: string;
+};
+export type PartnerFollowUp = {
+  visitId: string;
+  customerId: string;
+  customerName: string;
+  agentId: string;
+  agentName: string;
+  followUpDate: string;
+  nextStep: string;
 };

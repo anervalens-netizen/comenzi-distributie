@@ -70,8 +70,10 @@ try{
  await evaluate("window.fetch=originalFetch;await m.api('auth/session');window.fetch=async()=>new Response(JSON.stringify({user:42}));");
  check(await evaluate("(await m.api('bootstrap')).user.id==='agent'"),'malformed success still preserves valid offline payload rather than masquerading as logout');
  await evaluate("window.fetch=originalFetch;window.path='partner/portfolio/point';await m.api(path);window.transport=(p,method,body,id)=>m.networkApi(p,method,body,undefined,id,'agent');window.replay=()=>m.replay('agent',transport,m.currentLocalWorkUserId);window.confirmations=0;addEventListener('mobiup-sync-confirmed',()=>confirmations++);");
- const visitId=randomUUID();dropNext=true;
- await evaluate(`window.visitBody={id:${JSON.stringify(visitId)},notes:'Synthetic recovery'};await m.enqueue('agent',path+'/visits','POST',visitBody,{scope:'visit',id:'point',value:visitBody});await replay();`);
+ const visitId=randomUUID();
+ await evaluate(`window.fetch=async()=>{throw new TypeError('synthetic disconnect')};window.visitBody={id:${JSON.stringify(visitId)},notes:'Synthetic recovery',nextStep:'Synthetic follow-up',followUpDate:'2026-10-05'};await m.enqueue('agent',path+'/visits','POST',visitBody,{scope:'visit',id:'point',value:visitBody});`);
+ check(await evaluate("(await m.pendingOperations('agent')).length===1&&(await m.readWork('agent','visit','point')).nextStep==='Synthetic follow-up'"),'disconnect keeps visit and follow-up locally pending');
+ dropNext=true;await evaluate('window.fetch=originalFetch;await replay();');
  check(await evaluate("(await m.pendingOperations('agent')).length===1&&(await m.readWork('agent','visit','point')).notes==='Synthetic recovery'"),'dropped real POST response retains operation and local recovery');
  // Backdate the already persisted idempotent request and fill a whole first page.
  await db.prepare("UPDATE partner_visits SET visited_at='2020-01-01T00:00:00Z' WHERE id=?").bind(visitId).run();
@@ -79,6 +81,8 @@ try{
  await delay(2100);await evaluate('await replay();await replay()');
  assert.equal(requests.length,2);assert.equal(requests[0].id,requests[1].id);assert.deepEqual(requests[0].body,requests[1].body);
  assert.equal((await db.prepare('SELECT COUNT(*) n FROM partner_visits WHERE id=?').bind(visitId).first()).n,1);
+ assert.deepEqual({...await db.prepare('SELECT next_step nextStep,follow_up_date followUpDate FROM partner_visits WHERE id=?').bind(visitId).first()},{nextStep:'Synthetic follow-up',followUpDate:'2026-10-05'});
+ assert.deepEqual(JSON.parse((await db.prepare("SELECT stops FROM partner_day_plans WHERE agent_id='agent' AND plan_date='2026-10-05'").first()).stops),['point']);
  check(await evaluate("(await m.pendingOperations('agent')).length===0&&confirmations===1"),'same idempotent request removes queue exactly once after bounded-page confirmation');
  const cached=await evaluate("(await m.snapshot('agent',path)).value"),actual=await evaluate("await m.networkApi(path)");assert.deepEqual(cached,actual);assert.equal(cached.visits.length,50);assert.equal(cached.visitCount,56);assert(cached.nextCursor);check(!cached.visits.some(v=>v.id===visitId),'cache is authoritative first page, not a fabricated cursor/history merge');
  // Older server contract, with our exact record out of order in the returned history.
@@ -92,6 +96,12 @@ try{
  for(const kind of ['empty','full','wrong','malformed','malformed-history']){
   check(await evaluate(`const account='ambiguous-${kind}',body={id:crypto.randomUUID(),notes:'Keep me'};await m.enqueue(account,path+'/visits','POST',body,{scope:'visit',id:'point',value:body});const detail=${kind==='empty'?"{partner:{id:'point'},visits:[],visitCount:0,nextCursor:null}":kind==='full'?JSON.stringify(cached):kind==='malformed-history'?"{partner:{id:'point'},visits:[{id:'invalid'}],visitCount:1,nextCursor:null,visit:{...body,customerId:'point',agentId:account,agentName:'Synthetic',visitedAt:'2026-01-01T00:00:00Z',createdAt:'2026-01-01T00:00:00Z'}}":kind==='wrong'?"{partner:{id:'point'},visits:[],visitCount:1,nextCursor:null,visit:{id:crypto.randomUUID()}}":"{unexpected:true}"};await m.replay(account,async()=>detail,()=>account);(await m.pendingOperations(account)).length===1&&(await m.readWork(account,'visit','point')).notes==='Keep me'`),'preserve '+kind+' ambiguous success');
  }
+ const deniedId=randomUUID();
+ await evaluate(`await m.enqueue('agent',path+'/visits','POST',{id:${JSON.stringify(deniedId)},notes:'Must remain local'},{scope:'visit',id:'point',value:{id:${JSON.stringify(deniedId)},notes:'Must remain local'}});`);
+ const moved={...partner,warehouseId:'moved',warehouseIds:['moved']};await db.prepare('UPDATE customers SET warehouse_id=?,data=? WHERE id=?').bind('moved',JSON.stringify(moved),'point').run();
+ await evaluate('await replay()');
+ check(await evaluate(`const rows=await m.pendingOperations('agent');rows.some(row=>row.body.id===${JSON.stringify(deniedId)}&&row.state==='blocked'&&row.status===404)`),'moved portfolio denies replay and preserves the local visit for recovery');
+ assert.equal((await db.prepare('SELECT COUNT(*) n FROM partner_visits WHERE id=?').bind(deniedId).first()).n,0);
  console.log(`PASS: ${checks} offline HTTP/IndexedDB contracts; actual route retries and SQLite deduplication.`);
 }finally{
  await browser?.close();if(server){server.closeAllConnections();await new Promise(r=>server.close(r));}

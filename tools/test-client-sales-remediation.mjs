@@ -45,7 +45,7 @@ try{
  assert.deepEqual(await m.readClientSalesAsync(partners,'2026-09',root,'2026-09-30'),m.readClientSales(partners,'2026-09',root,'2026-09-30'));
  sql.prepare("INSERT INTO partner_day_plans VALUES('agent','2026-09-30',?,1,'2026-09-30T10:00:00Z')").run(JSON.stringify(['monthly-waiting']));
  assert.equal((await call()).totals.visits,0,'plans are not performed visits');
- const visit=sql.prepare("INSERT INTO partner_visits VALUES(?,?,?,'Synthetic agent',?,'',?)");
+ const visit=sql.prepare("INSERT INTO partner_visits(id,customer_id,agent_id,agent_name,visited_at,notes,created_at) VALUES(?,?,?,'Synthetic agent',?,'',?)");
  for(const [id,actor,date] of [['v1','agent','2026-09-30T10:00:00.000Z'],['v2','other','2026-09-20T10:00:00.000Z'],['future','agent','2026-09-30T13:00:00.000Z'],['boundary','agent','2026-08-31T20:59:59.000Z']])visit.run(id,'monthly-a',actor,date,date);
  result=await call('filter=visited');assert.equal(result.totals.visits,1);assert.equal(result.comparisons[0].visits,1);assert.equal(result.rows[0].visits,1);assert.equal((await call('filter=visited','manager')).totals.visits,2);
  const national=await call('','manager'),agent=await call();assert.equal(national.totals.valueCents-agent.totals.valueCents,900000);assert(!JSON.stringify(agent).includes('monthly-hidden'));

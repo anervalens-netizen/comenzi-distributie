@@ -5,7 +5,7 @@ import {partnerActivityOverview} from '@/lib/partner-activity-api';
 import { readPartnerSalesAsync, PartnerSalesInputError } from '@/lib/partner-sales-store';
 import { clientPortfolioVersion } from '@/lib/client-sales-portfolio';
 import { visitWeek, saveDayPlan } from '@/lib/partner-planning';
-import { portfolio, portfolioSummary, partnerDetail, updatePartner, recordVisit } from '@/lib/partner-portfolio';
+import { portfolio, portfolioSummary, partnerDetail, updatePartner, recordVisit, duePartnerFollowUps } from '@/lib/partner-portfolio';
 import { browsePartners, mapPartners } from '@/lib/partner-map-api';
 import { env, runtimeKind, operationalStatus } from '@/lib/runtime';
 import { randomBytes, createHash } from 'node:crypto';
@@ -226,6 +226,7 @@ async function dispatch(req: Request) {
   if(path.join('/')==='partner/planning'&&req.method==='GET')return response(await visitWeek(user,new URL(req.url).searchParams.get('week')||''));
   if(path.join('/')==='partner/planning'&&req.method==='PUT')return response(await saveDayPlan(user,await jsonBody(req)));
   if(path.join('/')==='partner/activity'&&req.method==='GET')return response(await partnerActivityOverview(readUser,new URL(req.url).searchParams,user));
+  if(path.join('/')==='partner/attention'&&req.method==='GET')return response(await duePartnerFollowUps(user,new URL(req.url).searchParams));
   if(path.join('/')==='partner/browse'&&req.method==='GET')return response(await browsePartners(readUser,new URL(req.url).searchParams,user));
   if(path.join('/')==='partner/map'&&req.method==='GET')return response(await mapPartners(readUser,new URL(req.url).searchParams,user));
   if(path.join('/')==='partner/summary'&&req.method==='GET')return response({partners:await portfolioSummary(readUser)});
