@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {createHash,randomUUID} from 'node:crypto';
 import {DatabaseSync} from 'node:sqlite';
-import {mkdirSync,readFileSync,writeFileSync} from 'node:fs';
+import {mkdirSync,writeFileSync} from 'node:fs';
 
 const db=new DatabaseSync('work/qa/mobiup.sqlite'),root='http://127.0.0.1:3000/api/',token='synthetic-order-pagination-token',userId='pagination-agent';
 const cookie=`mobiup_session=${token}`;let checks=0,requests=0;
@@ -39,8 +39,8 @@ try{
  const deleteId=randomUUID(),deleteDraft=(await call('orders','POST',{id:deleteId,kind:'stands',agentId:userId},201)).data.order;await call(`orders/${deleteId}`,'DELETE',{revision:deleteDraft.revision});const deletedSearch=(await call(`orders?page=1&kind=all&status=all&range=all&q=${encodeURIComponent(deleteDraft.number)}`)).data;ok(deletedSearch.orderPage.total===0,'deleted drafts stay out of paginated search');
 
  mkdirSync('work/evidence',{recursive:true});
- const before=JSON.parse(readFileSync('work/evidence/t11-bootstrap-before.json','utf8'));
- const evidence={fixtureOrders:10000,before:{requestCount:before.requestCount,totalBytes:before.totalBytes,bootstrapBytes:before.requests.find(row=>row.path==='bootstrap').bytes,orders:before.requests.find(row=>row.path==='bootstrap').items,catalog:before.requests.find(row=>row.path==='bootstrap').catalog},after:{...compactStartup,bootstrapBytes:compact.bytes,orders:compact.data.orders.length,catalogIncluded:false,catalogIntentBytes:catalog.bytes},pagination:{pageRequests,rows:all.length,unique:new Set(all.map(order=>order.id)).size}};
+ const before={requestCount:2,totalBytes:session.bytes+legacy.bytes,bootstrapBytes:legacy.bytes,orders:legacy.data.orders.length,catalog:legacy.data.products.length};
+ const evidence={fixtureOrders:10000,before,after:{...compactStartup,bootstrapBytes:compact.bytes,orders:compact.data.orders.length,catalogIncluded:false,catalogIntentBytes:catalog.bytes},pagination:{pageRequests,rows:all.length,unique:new Set(all.map(order=>order.id)).size}};
  writeFileSync('work/evidence/t11-bootstrap-orders-after.json',JSON.stringify(evidence,null,2));
  console.log(`PASS: ${checks} compact bootstrap/order pagination checks.`,JSON.stringify(evidence));
 }finally{cleanup();}
