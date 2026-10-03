@@ -13,9 +13,9 @@ import { OrderRecoveryDialog } from '@/components/order-recovery-dialog';
 import { PushNotifications } from '@/components/push-notifications';
 import type { ManagerDestination } from '@/components/manager-workspace';
 import { ManagerScopeBar, useManagerScope } from '@/components/manager-scope';
-import { api, ApiError, dateLabel, errorMessage, normalize, kindLabels, orderDateKey, localDateKey, SESSION_EXPIRED_EVENT, startOfflineSync } from '@/lib/client-api';
+import { api, networkApi, ApiError, dateLabel, errorMessage, normalize, kindLabels, orderDateKey, localDateKey, SESSION_EXPIRED_EVENT, startOfflineSync } from '@/lib/client-api';
 import { bucharestReportingMonthKey } from '@/lib/bucharest-month';
-import { enqueue, pendingOperations, readWork, OFFLINE_EVENT } from '@/lib/offline-work';
+import { enqueue, pendingOperations, readWork, reconcileOrderList, markOrderDeleted, OFFLINE_EVENT } from '@/lib/offline-work';
 import { readFinalizedOrderRecovery, readOrphanedOrderRecoveries, type OrderRecovery } from '@/lib/order-recovery';
 import type { User, Warehouse, Product, Order, Kind, Settings, OperationalMailSettings, ManagerMailSettings, ManagerRequestInbox } from '@/lib/types';
 
@@ -66,33 +66,51 @@ export default function DistributionApp() {
   const [sessionState,setSessionState]=useState<'checking'|'authenticated'|'unauthenticated'|'network-error'|'offline-local'>('checking');
   const [offlineNotices,setOfflineNotices]=useState<Record<string,number>>({});
   const [pendingCount,setPendingCount]=useState(0);
+  const [blockedOrderIds,setBlockedOrderIds]=useState<string[]>([]);
   const createId=useRef<string|null>(null);
   const creating=useRef(false);
   const sessionUserId=useRef('');
   const bootstrapEpoch=useRef(0);
+  const openIntent=useRef(0),listIntent=useRef(0);
   const offlineSources=useRef<Record<string,number>>({});
-  const loadBootstrap=useCallback(async()=>{
-    const epoch=++bootstrapEpoch.current;
-    try{const session=await api<{user:User|null}>('auth/session');if(epoch!==bootstrapEpoch.current)return undefined;if(!session.user){setSessionState('unauthenticated');setData({user:null});return {user:null};}const changedAccount=sessionUserId.current!==session.user.id;if(changedAccount){offlineSources.current={};setOfflineNotices({});setPendingCount(0);sessionUserId.current=session.user.id;setActiveOrder(null);setPartnerOpened(false);setPartnerView('portfolio');setTab(session.user.role==='manager'?'activity':'orders');}setSessionState(current=>current==='offline-local'?'offline-local':'authenticated');setData(current=>changedAccount?{user:session.user}:({...current,user:session.user}));const result=await api<Bootstrap>('bootstrap');if(epoch!==bootstrapEpoch.current)return undefined;if(result.user){const local=await readWork<Order[]>(result.user.id,'draft-list','all')||[];if(epoch!==bootstrapEpoch.current)return undefined;result.orders=[...local.filter(o=>!result.orders?.some(r=>r.id===o.id)),...(result.orders||[])];}setData(result);setError('');if(result.user&&result.orders){const orphaned=readOrphanedOrderRecoveries(result.orders,result.user.id);if(orphaned.recoveries[0])setOrderRecovery(current=>current||orphaned.recoveries[0]);}return result;}catch(err){if(epoch!==bootstrapEpoch.current)return undefined;setError(errorMessage(err));setSessionState(current=>current==='authenticated'||current==='offline-local'?current:'network-error');return undefined;}finally{if(epoch===bootstrapEpoch.current)setLoading(false);}
+  const offerRecovery=useCallback(async(owner:string,recoveries:OrderRecovery[],valid:()=>boolean)=>{
+    const intent=openIntent.current;
+    const current=()=>valid()&&sessionUserId.current===owner&&openIntent.current===intent;
+    // Missing from a list/page is only a candidate. Require a live terminal
+    // response before offering deleted/finalized recovery after a reload.
+    for(const recovery of recoveries.slice(0,5)){
+      if(!current())return;
+      try{const {order}=await networkApi<{order:Order}>(`orders/${recovery.local.id}`);if(!current())return;if(order.status!=='draft'){setOrderRecovery(previous=>previous||{remote:order,local:recovery.local});return;}}
+      catch(error){if(!current())return;if(error instanceof ApiError&&error.status===404){setOrderRecovery(previous=>previous||{remote:null,local:recovery.local});return;}}
+    }
   },[]);
+  const loadBootstrap=useCallback(async()=>{
+    const epoch=++bootstrapEpoch.current,listRequest=++listIntent.current;
+    try{const session=await api<{user:User|null}>('auth/session');if(epoch!==bootstrapEpoch.current)return undefined;if(!session.user){setSessionState('unauthenticated');setData({user:null});return {user:null};}const changedAccount=sessionUserId.current!==session.user.id;if(changedAccount){openIntent.current++;offlineSources.current={};setOfflineNotices({});setPendingCount(0);setBlockedOrderIds([]);sessionUserId.current=session.user.id;setActiveOrder(null);setPartnerOpened(false);setPartnerView('portfolio');setTab(session.user.role==='manager'?'activity':'orders');}setSessionState(current=>current==='offline-local'?'offline-local':'authenticated');setData(current=>changedAccount?{user:session.user}:({...current,user:session.user}));const result=await api<Bootstrap>('bootstrap');if(epoch!==bootstrapEpoch.current)return undefined;if(result.user){result.orders=await reconcileOrderList(result.user.id,result.orders||[]);if(epoch!==bootstrapEpoch.current||listRequest!==listIntent.current)return undefined;}setData(result);setError('');if(result.user&&result.orders){const orphaned=readOrphanedOrderRecoveries(result.orders,result.user.id);if(orphaned.recoveries.length){setBlockedOrderIds(current=>[...new Set([...current,...orphaned.recoveries.map(row=>row.local.id)])]);void offerRecovery(result.user.id,orphaned.recoveries,()=>epoch===bootstrapEpoch.current&&listRequest===listIntent.current);}}return result;}catch(err){if(epoch!==bootstrapEpoch.current)return undefined;setError(errorMessage(err));setSessionState(current=>current==='authenticated'||current==='offline-local'?current:'network-error');return undefined;}finally{if(epoch===bootstrapEpoch.current)setLoading(false);}
+  },[offerRecovery]);
   const refreshOrders=useCallback(async()=>{
+    const request=++listIntent.current,owner=sessionUserId.current,accountEpoch=bootstrapEpoch.current;
+    const current=()=>request===listIntent.current&&owner===sessionUserId.current&&accountEpoch===bootstrapEpoch.current;
     try{
       const result=await api<OrderRefresh>('orders');
+      if(!current()||result.user.id!==owner)return;
+      result.orders=await reconcileOrderList(owner,result.orders);if(!current())return;
       setData(current=>({...current,user:result.user,orders:result.orders,weekKey:result.weekKey}));
-      const orphaned=readOrphanedOrderRecoveries(result.orders,result.user.id);if(orphaned.recoveries[0])setOrderRecovery(current=>current||orphaned.recoveries[0]);
+      const orphaned=readOrphanedOrderRecoveries(result.orders,result.user.id);if(orphaned.recoveries.length){setBlockedOrderIds(current=>[...new Set([...current,...orphaned.recoveries.map(row=>row.local.id)])]);void offerRecovery(owner,orphaned.recoveries,current);}
       setHistoryAnchor(Date.now());setError('');
     }catch(err){
+      if(!current())return;
       if(err instanceof ApiError&&err.status===401){setActiveOrder(null);sessionUserId.current='';setSessionState('unauthenticated');setData({user:null});setTab('orders');}
       else setError(errorMessage(err));
-    }finally{setLoading(false);}
-  },[]);
+    }finally{if(current())setLoading(false);}
+  },[offerRecovery]);
   const refreshRequestInbox=useCallback(async()=>{
     if(data.user?.role!=='manager')return;
     try{setRequestInbox(await api<ManagerRequestInbox>('notifications/inbox'));}catch(err){if(!(err instanceof ApiError&&err.status===401))console.warn('Request inbox refresh failed');}
   },[data.user?.role]);
   useEffect(()=>{queueMicrotask(()=>void loadBootstrap());return startOfflineSync(()=>void loadBootstrap());},[loadBootstrap]);
   useEffect(()=>{
-    const update=()=>{const owner=sessionUserId.current;if(owner)void pendingOperations(owner).then(rows=>{if(owner===sessionUserId.current)setPendingCount(rows.length);}).catch(()=>{});};
+    const update=()=>{const owner=sessionUserId.current;if(owner)void pendingOperations(owner).then(rows=>{if(owner===sessionUserId.current){setPendingCount(rows.length);setBlockedOrderIds([...new Set(rows.filter(op=>op.state==='blocked'&&op.path.startsWith('orders/')).map(op=>op.path.slice(7)))]);}}).catch(()=>{});};
     const freshness=(event:Event)=>{
       const detail=(event as CustomEvent<{userId:string;path:string;source:'network'|'offline';at:number}>).detail;
       if(!detail||detail.userId!==sessionUserId.current)return;
@@ -103,11 +121,11 @@ export default function DistributionApp() {
       if(detail.source==='offline')setSessionState('offline-local');
       else if(!Object.keys(next).length)setSessionState('authenticated');
     };
-    const confirmed=(event:Event)=>{const d=(event as CustomEvent).detail;if(d.userId===sessionUserId.current){update();if(d.result?.order)setData(old=>({...old,orders:[d.result.order,...(old.orders||[]).filter(o=>o.id!==d.result.order.id)]}));}};
+    const confirmed=(event:Event)=>{const d=(event as CustomEvent).detail;if(d.userId===sessionUserId.current){update();if(d.result?.order)void refreshOrders();}};
     window.addEventListener('mobiup-data-freshness',freshness);
     window.addEventListener(OFFLINE_EVENT,update);
     window.addEventListener('mobiup-sync-confirmed',confirmed);
-    const accountChanged=(event:StorageEvent)=>{if(event.key==='mobiup-work-user-v1'){bootstrapEpoch.current++;offlineSources.current={};setActiveOrder(null);setOfflineNotices({});setPendingCount(0);setData({user:null});setSessionState('checking');void loadBootstrap();}};
+    const accountChanged=(event:StorageEvent)=>{if(event.key==='mobiup-work-user-v1'){bootstrapEpoch.current++;openIntent.current++;listIntent.current++;offlineSources.current={};setActiveOrder(null);setOfflineNotices({});setPendingCount(0);setBlockedOrderIds([]);setData({user:null});setSessionState('checking');void loadBootstrap();}};
     window.addEventListener('storage',accountChanged);
     update();
     return()=>{
@@ -116,9 +134,9 @@ export default function DistributionApp() {
       window.removeEventListener('mobiup-sync-confirmed',confirmed);
       window.removeEventListener('storage',accountChanged);
     };
-  },[loadBootstrap]);
+  },[loadBootstrap,refreshOrders]);
   useEffect(()=>{
-    const expired=()=>{
+    const expired=()=>{openIntent.current++;listIntent.current++;
       if(activeOrder){setReauthOpen(true);setError('Sesiunea a expirat. Reautentifică-te pentru a continua ciorna.');}
       else{sessionUserId.current='';setSessionState('unauthenticated');setData({user:null});setTab('orders');}
     };
@@ -146,6 +164,9 @@ export default function DistributionApp() {
   const writes=writePermissions(user,users);
   const createAgents=managerScope.selectedAgents.filter(agent=>writes.createOrder(agent.id));
   const agentFilter=managerScope.agentId||'all',setAgentFilter=managerScope.selectAgent;
+  const selectionContext=JSON.stringify([tab,search,status,historyRange,managerScope.query,data.user?.id]);
+  const previousSelectionContext=useRef(selectionContext);
+  useEffect(()=>{if(previousSelectionContext.current!==selectionContext){openIntent.current++;previousSelectionContext.current=selectionContext;}},[selectionContext]);
   const stockAgent=managerScope.agentId,setStockAgent=managerScope.selectAgent;
   useEffect(()=>{if(tab==='partner'&&user?.role==='manager')queueMicrotask(()=>setPartnerOpened(true));},[tab,user?.role]);
   const [salesView,setSalesView]=useState<'current'|'history'|'clients'|undefined>();
@@ -156,11 +177,13 @@ export default function DistributionApp() {
     setDeleting(true);setDeleteError('');
     try {
       await api(`orders/${deleteTarget.id}`,'DELETE',{revision:deleteTarget.revision});
+      await markOrderDeleted(user!.id,deleteTarget.id);listIntent.current++;
       setData(d=>({...d,orders:(d.orders||[]).filter(o=>o.id!==deleteTarget.id)}));
       setDeleteTarget(null);toast.success('Comanda a fost ștearsă.');void refreshOrders();
     } catch(err) {setDeleteError(errorMessage(err));} finally {setDeleting(false);}
   }
   function showOrder(order:Order,account=data.user) {
+    openIntent.current++;
     if(order.status!=='draft'&&account&&writePermissions(account,users).createOrder(order.userId)) {
       const recovery=readFinalizedOrderRecovery(order,account.id);
       if(recovery){setOrderRecovery(recovery);setActiveOrder(null);setAutoDownload(false);return;}
@@ -168,11 +191,12 @@ export default function DistributionApp() {
     setOrderRecovery(null);setActiveOrder(order);setAutoDownload(false);window.scrollTo(0,0);
   }
   async function login(e:React.SyntheticEvent<HTMLFormElement>){e.preventDefault();setBusy(true);setError('');try{await api('auth/login','POST',Object.fromEntries(new FormData(e.currentTarget)));const fresh=await loadBootstrap();if(reauthOpen&&activeOrder&&fresh?.user){const r=await api<{order:Order}>(`orders/${activeOrder.id}`);showOrder(r.order,fresh.user);setEditorEpoch(value=>value+1);setReauthOpen(false);setError('');}}catch(err){setError(errorMessage(err));}finally{setBusy(false);}}
-  async function logout(){bootstrapEpoch.current++;try{await api('auth/logout','POST',{});offlineSources.current={};setActiveOrder(null);setOrderRecovery(null);setRequestInbox({count:0,items:[]});setOfflineNotices({});setPendingCount(0);sessionUserId.current='';setSessionState('unauthenticated');setData({user:null});setTab('orders');}catch(e){toast.error(errorMessage(e));}}
-  async function openOrder(o:Order){if(o.number==='Ciornă locală'){showOrder(o);return;}try{const r=await api<{order:Order}>(`orders/${o.id}`);showOrder(r.order);}catch(e){toast.error(errorMessage(e));}}
+  async function logout(){bootstrapEpoch.current++;openIntent.current++;listIntent.current++;try{await api('auth/logout','POST',{});offlineSources.current={};setActiveOrder(null);setOrderRecovery(null);setRequestInbox({count:0,items:[]});setOfflineNotices({});setPendingCount(0);setBlockedOrderIds([]);sessionUserId.current='';setSessionState('unauthenticated');setData({user:null});setTab('orders');}catch(e){toast.error(errorMessage(e));}}
+  async function openOrder(o:Order){const intent=++openIntent.current,owner=sessionUserId.current;const current=()=>intent===openIntent.current&&owner===sessionUserId.current;if(o.number==='Ciornă locală'){showOrder(o);return;}try{const r=await api<{order:Order}>(`orders/${o.id}`);const work=await readWork<{base:Order;local:Order}>(owner,'order',o.id);if(!current())return;if(r.order.status!=='draft'&&work){setOrderRecovery({remote:r.order,local:work.local});return;}showOrder(r.order);}catch(e){if(!current())return;if(e instanceof ApiError&&e.status===404){const work=await readWork<{base:Order;local:Order}>(owner,'order',o.id);if(current()&&work){setOrderRecovery({remote:null,local:work.local});return;}}if(current())toast.error(errorMessage(e));}}
+  async function openBlockedOrder(id:string){const owner=sessionUserId.current;const work=await readWork<{local:Order}>(owner,'order',id);if(owner!==sessionUserId.current)return;if(work)await openOrder({...work.local,number:work.local.number==='Ciornă locală'?'Ciornă de verificat':work.local.number});}
   async function create(kind:Kind,source?:Order){
     if(creating.current||!writes.createOrder(user?.role==='agent'?user.id:source?.userId||agentId))return;
-    creating.current=true;setBusy(true);try{
+    openIntent.current++;creating.current=true;setBusy(true);try{
       createId.current??=crypto.randomUUID();
       const r=await api<{order:Order}>('orders','POST',{id:createId.current,kind,agentId:source?.userId||agentId,sourceOrderId:source?.id});
       createId.current=null;saved(r.order);setActiveOrder(r.order);setAutoDownload(false);setNewKind(null);window.scrollTo(0,0);
@@ -218,7 +242,7 @@ export default function DistributionApp() {
   return <><Feedback/><div className={'app-shell'+(manager?' manager-shell':'')}>{staleEntries.length>0&&<p className="error-banner" aria-live="polite">Date locale · cea mai veche copie afișată {new Date(oldestOfflineAt).toLocaleString('ro-RO')}. Sunt în așteptarea actualizării {staleEntries.length} seturi de date.</p>}{pendingCount>0&&<p className="error-banner" aria-live="polite">{pendingCount} operațiuni în așteptare. Finalizarea necesită conexiune și confirmare pe server.</p>}<header className="app-header"><Brand/><div className="header-right"><span className="header-date"><CalendarDays size={16}/>{new Date().toLocaleDateString('ro-RO',{day:'numeric',month:'long',year:'numeric'})}</span><span className="header-divider"/>{manager&&<button className="icon-button request-bell" onClick={()=>setRequestsOpen(true)} aria-label={`Solicitări${requestInbox.count?` (${requestInbox.count})`:``}`} title="Solicitări"><Bell size={20}/>{requestInbox.count>0&&<span className="request-count">{requestInbox.count>99?'99+':requestInbox.count}</span>}</button>}{manager?<button className="profile" onClick={()=>setPasswordOpen(true)} aria-label="Schimbă parola contului"><span className="avatar">{user.name.split(' ').slice(0,2).map(s=>s[0]).join('')}</span><span><strong>{user.name}</strong><small>{globalManager?'Manager distribuție':'Manager regional'}</small></span></button>:<div className="profile"><span className="avatar">{user.name.split(' ').slice(0,2).map(s=>s[0]).join('')}</span><span><strong>{user.name}</strong><small>{user.warehouseName?.replace(/^gestiune\s+/i,'')}</small></span></div>}{manager&&<button className="icon-button manager-settings" aria-label="Setări" title="Setări" aria-pressed={tab==='settings'} disabled={!!activeOrder} onClick={()=>setTab('settings')}><Settings2 size={20}/></button>}<button className="icon-button logout" disabled={activeOrder?.status==='draft'} title="Ieșire din cont" aria-label="Ieșire din cont" onClick={()=>void logout()}><LogOut size={19}/></button></div></header>
     {!online&&<div className="offline-banner" role="alert"><WifiOff size={17}/> Conexiune întreruptă. Verifică starea „Salvat pe telefon” înainte să închizi pagina. Sincronizarea continuă când revine conexiunea.</div>}
     <Suspense fallback={<main className="main-content"><output aria-live="polite">Se încarcă modulul solicitat…</output></main>}>
-    {activeOrder?<main className="main-content">{activeOrder.status==='draft'?(activeOrder.kind==='combined'?<CombinedOrderEditor canEdit={writes.agent(activeOrder.userId)} key={`${activeOrder.id}:${editorEpoch}`} initial={activeOrder} products={data.products||[]} onClose={()=>{setActiveOrder(null);void refreshOrders();}} onSaved={saved} onFinalized={o=>{saved(o);setActiveOrder(o);setAutoDownload(true);window.scrollTo(0,0);}} onRecovered={o=>{saved(o);setActiveOrder(o);setEditorEpoch(value=>value+1);window.scrollTo(0,0);}}/>:<OrderEditor canEdit={writes.agent(activeOrder.userId)} partnerUserId={!manager?user.id:undefined} key={`${activeOrder.id}:${editorEpoch}`} initial={activeOrder} products={data.products||[]} onClose={()=>{setActiveOrder(null);void refreshOrders();}} onSaved={saved} onFinalized={o=>{saved(o);setActiveOrder(o);setAutoDownload(true);window.scrollTo(0,0);}} onRecovered={o=>{saved(o);setActiveOrder(o);setEditorEpoch(value=>value+1);window.scrollTo(0,0);}}/>):<OrderResult canCopy={writes.createOrder(activeOrder.userId)} key={activeOrder.id} order={activeOrder} onClose={()=>{setActiveOrder(null);void refreshOrders();}} onCopy={copy} autoDownload={autoDownload}/>}</main>:<Tabs value={tab} onValueChange={value=>{setTab(String(value));if(!manager){setSearch('');setStatus('all');setHistoryRange('7d');}}}><div className="nav-wrap"><TabsList className="main-nav" variant="line">{manager?<><TabsTrigger value="activity"><LayoutDashboard size={19}/>Sinteză</TabsTrigger><TabsTrigger value="partner"><Store size={19}/>Parteneri</TabsTrigger><TabsTrigger value="sales"><TrendingUp size={19}/>Vânzări</TabsTrigger><TabsTrigger value="team"><Users size={19}/>Echipă</TabsTrigger><TabsTrigger value={['orders','sim','stock','catalog'].includes(tab)?tab:'orders'}><Boxes size={19}/>Operațiuni</TabsTrigger></>:<><TabsTrigger value="orders"><Boxes size={19}/>Comenzi</TabsTrigger><TabsTrigger value="sim"><ScanBarcode size={19}/>Avize</TabsTrigger><TabsTrigger value="partner"><Store size={19}/>Parteneri</TabsTrigger><TabsTrigger value="sales"><TrendingUp size={19}/>Vânzări</TabsTrigger><TabsTrigger value="stock"><Package size={19}/>Stocul meu</TabsTrigger></>}</TabsList><span className="internal-label">PORTAL INTERN</span></div><main className="main-content">
+    {activeOrder?<main className="main-content">{activeOrder.status==='draft'?(activeOrder.kind==='combined'?<CombinedOrderEditor canEdit={writes.agent(activeOrder.userId)} key={`${activeOrder.id}:${editorEpoch}`} initial={activeOrder} products={data.products||[]} onClose={()=>{openIntent.current++;setActiveOrder(null);void refreshOrders();}} onSaved={saved} onFinalized={o=>{saved(o);setActiveOrder(o);setAutoDownload(true);window.scrollTo(0,0);}} onRecovered={o=>{saved(o);setActiveOrder(o);setEditorEpoch(value=>value+1);window.scrollTo(0,0);}}/>:<OrderEditor canEdit={writes.agent(activeOrder.userId)} partnerUserId={!manager?user.id:undefined} key={`${activeOrder.id}:${editorEpoch}`} initial={activeOrder} products={data.products||[]} onClose={()=>{openIntent.current++;setActiveOrder(null);void refreshOrders();}} onSaved={saved} onFinalized={o=>{saved(o);setActiveOrder(o);setAutoDownload(true);window.scrollTo(0,0);}} onRecovered={o=>{saved(o);setActiveOrder(o);setEditorEpoch(value=>value+1);window.scrollTo(0,0);}}/>):<OrderResult canCopy={writes.createOrder(activeOrder.userId)} key={activeOrder.id} order={activeOrder} onClose={()=>{openIntent.current++;setActiveOrder(null);void refreshOrders();}} onCopy={copy} autoDownload={autoDownload}/>}</main>:<Tabs value={tab} onValueChange={value=>{setTab(String(value));if(!manager){setSearch('');setStatus('all');setHistoryRange('7d');}}}><div className="nav-wrap"><TabsList className="main-nav" variant="line">{manager?<><TabsTrigger value="activity"><LayoutDashboard size={19}/>Sinteză</TabsTrigger><TabsTrigger value="partner"><Store size={19}/>Parteneri</TabsTrigger><TabsTrigger value="sales"><TrendingUp size={19}/>Vânzări</TabsTrigger><TabsTrigger value="team"><Users size={19}/>Echipă</TabsTrigger><TabsTrigger value={['orders','sim','stock','catalog'].includes(tab)?tab:'orders'}><Boxes size={19}/>Operațiuni</TabsTrigger></>:<><TabsTrigger value="orders"><Boxes size={19}/>Comenzi</TabsTrigger><TabsTrigger value="sim"><ScanBarcode size={19}/>Avize</TabsTrigger><TabsTrigger value="partner"><Store size={19}/>Parteneri</TabsTrigger><TabsTrigger value="sales"><TrendingUp size={19}/>Vânzări</TabsTrigger><TabsTrigger value="stock"><Package size={19}/>Stocul meu</TabsTrigger></>}</TabsList><span className="internal-label">PORTAL INTERN</span></div><main className="main-content">
       {error&&<p className="error-banner" role="alert">{error}</p>}
       {manager&&tab!=='settings'&&<ManagerScopeBar scope={managerScope}/>}
       {manager&&['orders','sim','stock','catalog'].includes(tab)&&<nav className="manager-operation-nav" aria-label="Operațiuni">{([['orders','Comenzi'],['sim','Avize'],['stock','Stocuri'],['catalog','Catalog produse']] as const).map(([value,label])=><button type="button" key={value} aria-current={tab===value?'page':undefined} onClick={()=>setTab(value)}>{label}</button>)}</nav>}
@@ -228,7 +252,7 @@ export default function DistributionApp() {
         <div className="page-heading"><div><span className="eyebrow">{manager?'ECHIPA MOBIUP':'SPAȚIUL TĂU DE LUCRU'}</span><h1>{key==='sim'?'Avize':'Comenzi'}</h1><p>{key==='sim'?'Pregătește avize SIM 0 sau standuri pentru clienți.':'Accesorii, cartele, telefoane și standuri într-o singură comandă.'}</p></div><div className="heading-controls">{manager&&<Choice label="Filtrează după agent" value={agentFilter} onChange={setAgentFilter} options={[{value:'all',label:'Toți agenții'},...managerScope.agents.map(u=>({value:u.id,label:u.name}))]}/>}<button className="icon-button refresh" aria-label="Actualizează comenzile" title="Actualizează" onClick={()=>void refreshOrders()}><RefreshCw size={19}/></button></div></div>
         <><div className="stats-strip"><div><span>FINALIZATE SĂPTĂMÂNA ASTA</span><strong>{businessDataReady?weekly.filter(o=>key==='sim'?['sim','stand_client'].includes(o.kind):!['sim','stand_client'].includes(o.kind)).length:'—'}<small>comenzi</small></strong></div><div><span>CIORNE ÎN LUCRU</span><strong>{businessDataReady?statsOrders.filter(o=>o.status==='draft').length:'—'}<small>de continuat</small></strong></div><div><span>PRODUSE ÎN CATALOG</span><strong>{businessDataReady?data.products!.length:'—'}<small>produse</small></strong></div><div><span>{manager?'GESTIUNI':'LIMITĂ ACCESORII'}</span><strong>{businessDataReady?(manager?warehouses.length:cfg.weeklyLimit):'—'}<small>{manager?'în echipă':'comenzi / săptămână'}</small></strong></div></div>
           <div className="quick-actions"><button className="action-card main-action order-action" onClick={()=>start(key==='sim'?'sim':'combined')} disabled={busy||!businessDataReady||(manager&&!createAgents.length)}><span className="action-icon"><Boxes size={29}/></span><span><span className="eyebrow">{key==='sim'?'SIM 0 VODAFONE':'COMANDĂ PENTRU STOC'}</span><h2>{key==='sim'?'Aviz pentru SIM 0':'Comandă nouă'}</h2><p>{key==='sim'?'Alege clientul din portofoliu și începe scanarea.':'Accesorii, cartele, telefoane și standuri.'}</p></span><span className="action-plus"><Plus size={23}/></span></button>{key==='sim'&&<button className="action-card main-action order-action" onClick={()=>start('stand_client')} disabled={busy||!businessDataReady||(manager&&!createAgents.length)}><span className="action-icon"><Boxes size={29}/></span><span><span className="eyebrow">STANDURI PENTRU CLIENT</span><h2>Aviz pentru standuri</h2><p>Alege clientul, punctul de lucru și standurile.</p></span><span className="action-plus"><Plus size={23}/></span></button>}</div></>
-        <section className="panel orders-panel"><div className="panel-heading"><div><h2>{key==='sim'?'Istoric avize':'Istoric comenzi'}</h2><span className="count-pill">{current.length}</span></div></div><div className="history-range" aria-label="Perioada istoricului">{([['day','Azi'],['7d','7 zile'],['30d','30 zile'],['all','Tot']] as const).map(([value,label])=><button key={value} className={historyRange===value?'active':''} aria-pressed={historyRange===value} onClick={()=>setHistoryRange(value)}>{label}</button>)}</div><div className="panel-toolbar"><div className="search-box"><Search size={18}/><input value={search} onChange={e=>setSearch(e.target.value)} aria-label={key==='sim'?'Caută avize':'Caută comenzi'} placeholder={key==='sim'?'Caută aviz sau client…':'Caută comandă sau client…'}/></div><Choice label="Status" value={status} onChange={setStatus} options={[{value:'all',label:'Toate statusurile'},{value:'draft',label:'Ciorne'},{value:'finalized',label:'Finalizate'}]}/></div><OrderTable paginationKey={JSON.stringify([key,search,status,historyRange,historyCutoff,managerScope.query])} canCopy={o=>writes.createOrder(o.userId)} canWrite={o=>writes.agent(o.userId)} orders={current} onOpen={o=>void openOrder(o)} onCopy={copy} manager={manager} onDelete={o=>{setDeleteTarget(o);setDeleteError('');}}/></section>
+        <section className="panel orders-panel">{blockedOrderIds.length>0&&<div className="notice">Ciorne cu modificări locale de verificat: {blockedOrderIds.map(id=><button key={id} className="quiet" onClick={()=>void openBlockedOrder(id)}>{orders.find(order=>order.id===id)?.number||'Deschide ciorna recuperabilă'}</button>)}</div>}<div className="panel-heading"><div><h2>{key==='sim'?'Istoric avize':'Istoric comenzi'}</h2><span className="count-pill">{current.length}</span></div></div><div className="history-range" aria-label="Perioada istoricului">{([['day','Azi'],['7d','7 zile'],['30d','30 zile'],['all','Tot']] as const).map(([value,label])=><button key={value} className={historyRange===value?'active':''} aria-pressed={historyRange===value} onClick={()=>setHistoryRange(value)}>{label}</button>)}</div><div className="panel-toolbar"><div className="search-box"><Search size={18}/><input value={search} onChange={e=>setSearch(e.target.value)} aria-label={key==='sim'?'Caută avize':'Caută comenzi'} placeholder={key==='sim'?'Caută aviz sau client…':'Caută comandă sau client…'}/></div><Choice label="Status" value={status} onChange={setStatus} options={[{value:'all',label:'Toate statusurile'},{value:'draft',label:'Ciorne'},{value:'finalized',label:'Finalizate'}]}/></div><OrderTable paginationKey={JSON.stringify([key,search,status,historyRange,historyCutoff,managerScope.query])} canCopy={o=>writes.createOrder(o.userId)} canWrite={o=>writes.agent(o.userId)} orders={current} onOpen={o=>void openOrder(o)} onCopy={copy} manager={manager} onDelete={o=>{setDeleteTarget(o);setDeleteError('');}}/></section>
         <div className="page-footnote"><Clock3 size={14}/>Ciornele se salvează automat și rămân vizibile indiferent de perioada selectată.</div>
       </TabsContent>)}
       {!manager&&<TabsContent value="partner"><PartnerPortfolio key={user.id} userId={user.id}/></TabsContent>}

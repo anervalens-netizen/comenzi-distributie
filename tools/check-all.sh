@@ -109,6 +109,8 @@ if [ -n "$CHROME_BIN" ]; then
   CHROME_BIN="$CHROME_BIN" node tools/test-private-fence-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-pwa-cross-tab-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-offline-contract-browser.mjs
+  CHROME_BIN="$CHROME_BIN" node tools/test-recovery-contract-browser.mjs
+  CHROME_BIN="$CHROME_BIN" node tools/test-recovery-navigation-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-portfolio-page-error-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-pwa-waiting-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-offline-work-browser.mjs

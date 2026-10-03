@@ -2,8 +2,9 @@
 import { useRef, useState } from 'react';
 import { Copy, Eye, LoaderCircle, Trash2 } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { api, errorMessage } from '@/lib/client-api';
-import { removeLocalWork } from '@/lib/local-work';
+import { api, networkApi, errorMessage } from '@/lib/client-api';
+import { retireOrderWork } from '@/lib/offline-work';
+import { currentLocalWorkUserId, removeLocalWork } from '@/lib/local-work';
 import { orderSaveBody } from '@/lib/order-draft';
 import type { OrderRecovery } from '@/lib/order-recovery';
 import type { Order } from '@/lib/types';
@@ -22,13 +23,14 @@ export function OrderRecoveryDialog({recovery,userId,onView,onRecovered,onDiscar
       const created=(await api<{order:Order}>('orders','POST',{id:recoveryId.current,kind:local.kind,agentId:local.userId,...(remote?{sourceOrderId:remote.id}:{})})).order;
       const candidate:Order={...local,id:created.id,number:created.number,userId:created.userId,agentName:created.agentName,warehouseId:created.warehouseId,warehouseName:created.warehouseName,status:'draft',createdAt:created.createdAt,finalizedAt:null,sourceOrderId:remote?.id||null,revision:created.revision};
       const saved=(await api<{order:Order}>(`orders/${created.id}`,'PUT',orderSaveBody(candidate,created.revision))).order;
+      await retireOrderWork(userId,local.id,(path,method,body,id)=>networkApi(path,method,body,undefined,id,userId),currentLocalWorkUserId);
       removeLocalWork('order',userId,local.id);onRecovered(saved);
     } catch(err) {setError(errorMessage(err));setBusy(false);}
   }
 
-  function discard() {
+  async function discard() {
     if(!window.confirm('Renunți definitiv la modificările locale neconfirmate?'))return;
-    removeLocalWork('order',userId,local.id);onDiscard(remote);
+    setBusy(true);try{await retireOrderWork(userId,local.id,(path,method,body,id)=>networkApi(path,method,body,undefined,id,userId),currentLocalWorkUserId);removeLocalWork('order',userId,local.id);onDiscard(remote);}catch(error){setError(errorMessage(error));}finally{setBusy(false);}
   }
 
   return <Dialog open onOpenChange={()=>{}}><DialogContent className="admin-dialog" showCloseButton={false}>

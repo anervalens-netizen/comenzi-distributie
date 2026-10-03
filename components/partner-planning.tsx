@@ -3,6 +3,7 @@
 /* oxlint-disable jsx-a11y/prefer-tag-over-role */
 import { useEffect, useState } from 'react';
 import { currentLocalWorkUserId } from '@/lib/local-work';
+import { QueuedWorkRecovery } from '@/components/queued-work-recovery';
 import { enqueue, readWork, saveWork } from '@/lib/offline-work';
 import { api, ApiError } from '@/lib/client-api';
 import type { PartnerSummary as PortfolioPartner } from '@/lib/partner-map-types';
@@ -160,6 +161,7 @@ export function PartnerPlanning({
   };
   return (
     <section className="partner-planning">
+      {dates.map(date=><QueuedWorkRecovery key={date} path="partner/planning" date={date} prepare={(choice,remote)=>{const value={...draft,[date]:choice==='local'?stops(date):remote.stops as string[]};return {expectedWork:draft,remote,body:{date,stops:value[date],revision:remote.revision},local:{scope:'plans',id:week,value}};}} onResolved={(choice,remote)=>{setData(current=>current?{...current,plans:[...current.plans.filter(p=>p.date!==date),remote as Plan]}:current);if(choice==='remote')setDraft(current=>({...current,[date]:remote.stops as string[]}));}}/>)}
       <div className="planner-heading">
         <h2>Vizite și traseu</h2>
         <button

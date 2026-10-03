@@ -126,5 +126,5 @@ export function PwaInstall(){
   }catch(error){const message=error instanceof Error?error.message:String(error);setError(message);publish({state:'error',completed:0,total:0,error:message});}
   finally{setActivating(false);}
  };
- return <>{error&&<p className="error-banner" role="alert">{error}</p>}{install&&<button className="secondary" onClick={()=>void install.prompt().then(()=>setInstall(null))}>Instalează aplicația</button>}{waiting&&<output className="muted">Actualizare disponibilă. {pending?'Sincronizează lucrul local înainte de actualizare.':<button disabled={activating} onClick={()=>void activate()}>Activează pentru următoarea deschidere</button>}</output>}</>;
+ return <>{error&&<p className="error-banner" role="alert">{error}</p>}{install&&<button className="secondary" onClick={()=>void install.prompt().then(()=>setInstall(null))}>Instalează aplicația</button>}{waiting&&<output className="muted">Actualizare disponibilă. {pending?'Sincronizează lucrul local înainte de actualizare. Deschide comanda, fișa partenerului sau planul cu modificări locale și rezolvă verificările. Lucrul altui cont se recuperează după autentificarea în acel cont.':<button disabled={activating} onClick={()=>void activate()}>Activează pentru următoarea deschidere</button>}</output>}</>;
 }

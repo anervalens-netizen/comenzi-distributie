@@ -14,6 +14,7 @@ import {
 } from 'react';
 import { currentLocalWorkUserId } from '@/lib/local-work';
 const userIdForWork=()=>currentLocalWorkUserId();
+import { QueuedWorkRecovery } from '@/components/queued-work-recovery';
 import { enqueue, readWork, saveWork, removeWork } from '@/lib/offline-work';
 import { api, ApiError, invalidateApiReadCache } from '@/lib/client-api';
 import type {
@@ -641,6 +642,9 @@ export function PartnerSheet({
         </p>
       )}
       {notice && <output>{notice}</output>}
+      <QueuedWorkRecovery path={`partner/portfolio/${encodeURIComponent(id)}`} prepare={form?(choice,remote)=>{const value=choice==='local'?{...form,revision:remote.revision}:remote;return {expectedWork:form,remote,body:value,local:{scope:'partner',id,value}};}:undefined} onResolved={(choice,remote)=>{setForm(current=>choice==='remote'?remote as PortfolioPartner:current?{...current,revision:Number(remote.revision)}:current);setDetail(current=>current?{...current,partner:remote as PortfolioPartner}:current);}}/>
+      <QueuedWorkRecovery path={`partner/portfolio/${encodeURIComponent(id)}/visits`}/>
+
       {!form && !error && <p>Se încarcă…</p>}
       {form && (
         <>

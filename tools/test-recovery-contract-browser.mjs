@@ -1,0 +1,145 @@
+// Real HTTP route, Node SQLite runtime and Chrome IndexedDB. All records synthetic.
+import assert from 'node:assert/strict';
+import {execFileSync} from 'node:child_process';
+import {build} from 'esbuild';
+import {createServer} from 'node:http';
+import {mkdirSync,mkdtempSync,readFileSync,rmSync} from 'node:fs';
+import {resolve,join} from 'node:path';
+import {pathToFileURL} from 'node:url';
+import {createHash,randomUUID} from 'node:crypto';
+import {browserFixture,delay,waitFor} from './offline-browser-fixture.mjs';
+mkdirSync('work',{recursive:true});const directory=mkdtempSync(resolve('work/recovery-contract-'));
+const baseline=process.env.RECOVERY_BASELINE_REF;
+const baselinePlugin={name:'baseline',setup(b){b.onLoad({filter:/(lib\/offline-work\.ts|components\/use-order-draft-save\.ts)$/},args=>({contents:execFileSync('git',['show',`${baseline}:${args.path.slice(process.cwd().length+1)}`],{encoding:'utf8'}),loader:'ts',resolveDir:resolve(args.path,'..')}));}};
+const previousDirectory=process.env.MOBIUP_DATA_DIR;process.env.MOBIUP_DATA_DIR=join(directory,'data');
+let browser,server,checks=0;const requests=[];
+const check=(value,label)=>{assert.ok(value,label);checks++;};
+try{
+ const modulePath=join(directory,'route.mjs');
+ await build({stdin:{contents:"export * from './app/api/[...path]/route';export {env} from './lib/runtime';",loader:'ts',resolveDir:resolve('.')},outfile:modulePath,bundle:true,platform:'node',format:'esm',packages:'external',logLevel:'silent',plugins:[{name:'node-runtime',setup(b){b.onResolve({filter:/^#mobiup-/},args=>({path:resolve('lib/'+args.path.slice('#mobiup-'.length)+'-node.ts')}));b.onResolve({filter:/\.sql\?raw$/},args=>({path:resolve(args.path.replace(/^@\//,'').replace(/\?raw$/,'')),namespace:'raw'}));b.onLoad({filter:/.*/,namespace:'raw'},args=>({contents:readFileSync(args.path,'utf8'),loader:'text'}));}}]});
+ const route=await import(pathToFileURL(modulePath));const db=route.env.DB;
+ await db.prepare('SELECT 1').first();
+ await db.prepare("INSERT INTO users(id,username,name,role,warehouse_id,password_hash,must_change_password,active) VALUES('agent','synthetic','Synthetic agent','agent','w','not-a-credential',0,1)").run();
+ const token=randomUUID(),hash=createHash('sha256').update(token).digest('hex');
+ const login=async()=>{await db.prepare("INSERT OR REPLACE INTO sessions(token_hash,user_id,expires_at) VALUES(?,'agent',?)").bind(hash,Date.now()+3600000).run();if(browser)await browser.send('Network.setCookie',{name:'mobiup_session',value:token,url:await browser.evaluate('location.origin'),httpOnly:true});};await login();
+ const partner={id:'point',name:'Synthetic point',warehouseId:'w',warehouseIds:['w'],cui:'TEST',address:'Example',city:'Example',county:'Example',route:''};
+ await db.prepare('INSERT INTO customers(id,warehouse_id,data,active) VALUES(?,?,?,1)').bind('point','w',JSON.stringify(partner)).run();
+ const compiled=await build({stdin:{contents:`
+ import React from 'react';import {createRoot} from 'react-dom/client';
+ import {useOrderDraftSave} from './components/use-order-draft-save';import {OrderSaveConflictDialog} from './components/order-save-conflict-dialog';
+ export {writeLocalWork} from './lib/local-work';export * from './lib/client-api';export * from './lib/offline-work';export * from './lib/local-work';export * from './lib/order-draft';
+ window.mountEditor=(initial)=>{window.root=createRoot(document.getElementById('root'));function Editor(){const draft=useOrderDraftSave({initial,storageOwnerId:'agent',onSaved:()=>{}});window.draft=draft;return <><output>{draft.saveState} {draft.saveError}</output><OrderSaveConflictDialog conflict={draft.conflict} onResolve={draft.resolveConflict}/></>;}root.render(<Editor/>);};
+ `,loader:'tsx',resolveDir:resolve('.')},write:false,bundle:true,format:'esm',platform:'browser',jsx:'automatic',logLevel:'silent',plugins:baseline?[baselinePlugin]:[]});
+ let dropNext=false,dropOrder=false;
+ server=createServer(async(req,res)=>{
+  try{
+   if(req.url.startsWith('/api/')){
+    const chunks=[];for await(const chunk of req)chunks.push(chunk);const body=Buffer.concat(chunks);
+    const headers=new Headers(req.headers),url='http://'+req.headers.host+req.url;
+    const request=new Request(url,{method:req.method,headers,...body.length?{body}: {}});
+    const result=await route[req.method](request);const text=await result.text();
+    if(req.method==='POST'&&req.url.endsWith('/visits')){
+     requests.push({id:req.headers['x-operation-id'],body:JSON.parse(body.toString()),status:result.status});
+     if(dropNext){dropNext=false;res.writeHead(200,{'Content-Type':'application/json'});res.end('{');return;}
+
+    }
+    if(req.method==='PUT'&&req.url.startsWith('/api/orders/')&&result.ok&&dropOrder){dropOrder=false;res.writeHead(200,{'Content-Type':'application/json'});res.end('{');return;}
+    res.writeHead(result.status,Object.fromEntries(result.headers));res.end(text);return;
+   }
+   res.setHeader('Content-Type',req.url==='/fixture.mjs'?'text/javascript':'text/html');res.end(req.url==='/fixture.mjs'?compiled.outputFiles[0].text:'<!doctype html><title>Synthetic recovery contracts</title><div id="root"></div>');
+  }catch(error){res.writeHead(500);res.end(JSON.stringify({error:error.message}));}
+ });
+ await new Promise(r=>server.listen(0,'127.0.0.1',r));const origin='http://127.0.0.1:'+server.address().port;
+ browser=await browserFixture(origin);const evaluate=browser.evaluate;
+ await evaluate(`window.m=await import('/fixture.mjs');document.cookie='mobiup_session=${token}; Path=/';window.originalFetch=fetch;`);
+ await evaluate("await m.api('auth/session');window.transport=(p,method,body,id)=>m.networkApi(p,method,body,undefined,id,'agent');window.replay=()=>m.replay('agent',transport,m.currentLocalWorkUserId);");
+ // T01: a real accepted PUT loses its response; a subsequent local edit must win
+ // only against that confirmation, while an external C still causes a conflict.
+ for(const external of [false,true]){
+  await evaluate("window.base=(await m.api('orders','POST',{id:crypto.randomUUID(),kind:'accessories',agentId:'agent'})).order;window.A={...base,notes:'A'};await m.enqueue('agent','orders/'+base.id,'PUT',m.orderSaveBody(A,base.revision),{scope:'order',id:base.id,value:{base,local:A}});");
+  dropOrder=true;await evaluate('await replay()');
+  const attempted=await evaluate("(await m.pendingOperations('agent')).find(op=>op.path==='orders/'+base.id)");
+  await evaluate("window.B={...base,notes:'B'};await m.enqueue('agent','orders/'+base.id,'PUT',m.orderSaveBody(B,base.revision),{scope:'order',id:base.id,value:{base,local:B}});");
+  await delay(2100);await evaluate('await replay()');
+  check(await evaluate("(await m.readWork('agent','order',base.id)).base.notes==='A'&&(await m.readWork('agent','order',base.id)).local.notes==='B'"),'T01 acknowledgement advances durable base and retains B');
+  if(!external){
+   await evaluate("m.writeLocalWork('order','agent',base.id,{base,local:B});mountEditor((await transport('orders/'+base.id,'GET')).order)");
+   await waitFor(()=>evaluate("window.draft?.order.notes==='B'&&!draft.conflict"),'durable confirmation defeats stale legacy conflict');
+   await evaluate('root.unmount()');
+  }
+  if(external)await evaluate("window.C=(await transport('orders/'+base.id,'GET')).order;await transport('orders/'+base.id,'PUT',m.orderSaveBody({...C,notes:'C'},C.revision));");
+  await evaluate('await replay()');
+  check(await evaluate(external?"(await m.pendingOperations('agent')).find(op=>op.path==='orders/'+base.id).state==='blocked'&&(await transport('orders/'+base.id,'GET')).order.notes==='C'":"(await m.pendingOperations('agent')).length===0&&(await transport('orders/'+base.id,'GET')).order.notes==='B'&&(await transport('orders/'+base.id,'GET')).order.revision===base.revision+2"),external?'T01 genuine external C remains a conflict':'T01 eventual server B and queue zero');
+  if(!external){assert.equal((await db.prepare('SELECT COUNT(*) n FROM orders WHERE id=?').bind(await evaluate('base.id')).first()).n,1);continue;}
+  // T02: mount the real React hook/dialog against the persisted blocked queue.
+  await evaluate("mountEditor((await transport('orders/'+base.id,'GET')).order)");
+  await waitFor(()=>evaluate('!!window.draft?.conflict'),'restored conflict UI');
+  await evaluate("[...document.querySelectorAll('button')].find(b=>b.textContent.includes('Păstrează modificările mele')).click()");
+  await waitFor(()=>evaluate('!draft.conflict'),'local resolution commits');
+  await evaluate('await replay()');
+  check(await evaluate("(await m.pendingOperations('agent')).length===0&&(await transport('orders/'+base.id,'GET')).order.notes==='B'"),'T02 choosing local resolves outbox and server');
+  await evaluate('root.unmount()');
+  check(attempted.attempts===1,'first attempted identity persisted');
+ }
+ // Legacy rows without optional metadata remain recoverable; server choice
+ // resolves both work and queue without a new write.
+ await evaluate("window.base=(await m.api('orders','POST',{id:crypto.randomUUID(),kind:'accessories',agentId:'agent'})).order;window.local={...base,notes:'Local legacy'};await m.enqueue('agent','orders/'+base.id,'PUT',m.orderSaveBody(local,base.revision),{scope:'order',id:base.id,value:{base,local}});window.remote=(await transport('orders/'+base.id,'PUT',m.orderSaveBody({...base,notes:'Remote'},base.revision))).order;await replay();");
+ await evaluate("const db=await new Promise(r=>{const q=indexedDB.open('mobiup-offline-v3',1);q.onsuccess=()=>r(q.result)});const tx=db.transaction('outbox','readwrite');const store=tx.objectStore('outbox');const q=store.getAll();q.onsuccess=()=>{for(const op of q.result){delete op.status;delete op.orderWork;op.attempts=1;store.put(op)}};await new Promise(r=>tx.oncomplete=r);db.close();mountEditor(remote);");
+ await waitFor(()=>evaluate('!!draft.conflict'),'legacy conflict');
+ await evaluate("[...document.querySelectorAll('button')].find(b=>b.textContent.includes('Folosește versiunea serverului')).click()");
+ await waitFor(()=>evaluate('!draft.conflict'),'legacy remote resolution');
+ check(await evaluate("(await m.pendingOperations('agent')).length===0&&(await m.readWork('agent','order',base.id)).local.notes==='Remote'"),'T02 old attempted blocked queue resolves server choice atomically');
+ await evaluate('root.unmount()');
+ // A second real tab adds B while the first tab awaits A's HTTP confirmation.
+ await evaluate("window.tabBase=(await m.api('orders','POST',{id:crypto.randomUUID(),kind:'accessories',agentId:'agent'})).order;window.tabA={...tabBase,notes:'A'};await m.enqueue('agent','orders/'+tabBase.id,'PUT',m.orderSaveBody(tabA,tabBase.revision),{scope:'order',id:tabBase.id,value:{base:tabBase,local:tabA}});window.releaseAck=null;window.inflight=m.replay('agent',async(p,method,body,id)=>{const result=await transport(p,method,body,id);if(method==='PUT')await new Promise(r=>releaseAck=r);return result;},m.currentLocalWorkUserId);true");
+ await waitFor(()=>evaluate('!!releaseAck'),'A accepted before second-tab B');
+ const tabBase=await evaluate('tabBase'),second=await browser.newTab(origin);
+ await second.evaluate(`window.m=await import('/fixture.mjs');await m.api('auth/session');window.base=${JSON.stringify(tabBase)};const local={...base,notes:'B'};await m.enqueue('agent','orders/'+base.id,'PUT',m.orderSaveBody(local,base.revision),{scope:'order',id:base.id,value:{base,local}});`);
+ await evaluate('releaseAck();await inflight');
+ await second.evaluate("await m.replay('agent',(p,method,body,id)=>m.networkApi(p,method,body,undefined,id,'agent'),m.currentLocalWorkUserId)");
+ check(await evaluate("(await transport('orders/'+tabBase.id,'GET')).order.notes==='B'&&(await m.pendingOperations('agent')).length===0"),'T01 two real tabs preserve B across A confirmation');
+ await second.close();
+ // T01 controls: confirmation merges only the submitted operation, preserving
+ // newer edits/reverts and remote changes to non-overlapping fields.
+ for(const revert of [false,true]){
+  check(await evaluate(`const owner='merge-${revert}',b={...base,id:owner,userId:owner,notes:'',items:[],revision:1};const line={id:'synthetic-product',name:'Synthetic',code:'TEST',kind:'accessories',brand:'',category:'',price:1,netPrice:1,sourceRow:1,image:null,quantity:2};let server={...b,items:[line],revision:2};const sent=[];let pause;let release;const reached=new Promise(r=>pause=r);const syntheticTransport=async(p,method,body,id)=>{if(method==='GET')return{order:server};sent.push({body:structuredClone(body),id});pause();await new Promise(r=>release=r);server={...server,notes:body.notes,revision:server.revision+1};return{order:server};};const A={...b,notes:'A'};await m.enqueue(owner,'orders/'+b.id,'PUT',m.orderSaveBody(A,1),{scope:'order',id:b.id,value:{base:b,local:A}});const first=m.replay(owner,syntheticTransport,()=>owner);await reached;const newer={...b,notes:${revert?"''":"'B'"}};await m.enqueue(owner,'orders/'+b.id,'PUT',m.orderSaveBody(newer,1),{scope:'order',id:b.id,value:{base:b,local:newer}});release();await first;const remaining=(await m.pendingOperations(owner))[0],work=await m.readWork(owner,'order',b.id);remaining.body.notes===newer.notes&&remaining.body.items[0].id===line.id&&work.local.notes===newer.notes&&work.local.items[0].id===line.id&&work.base.notes==='A'`),'T01 in-flight '+(revert?'revert':'B')+' retains non-overlapping remote lines');
+ }
+ check(await evaluate("const owner='clear-guard',b={...base,id:owner,userId:owner},local={...b,notes:'newer tab'};await m.saveWork(owner,'order',b.id,{base:b,local});await m.clearConfirmedOrderWork(owner,b.id,b);(await m.readWork(owner,'order',b.id)).local.notes==='newer tab'"),'T01 editor cleanup cannot remove another tab newer unsent work');
+ check(await evaluate("const owner='immutable-retry',b={...base,id:owner,userId:owner,revision:1,notes:''},local={...b,notes:'A'};let retryRemote=b;const sent=[];const syntheticTransport=async(p,method,body,id)=>{if(method==='GET')return{order:retryRemote};sent.push({body:structuredClone(body),id});if(sent.length===1)throw Error('lost before response');throw Object.assign(Error('revision conflict'),{status:409});};await m.enqueue(owner,'orders/'+b.id,'PUT',m.orderSaveBody(local,1),{scope:'order',id:b.id,value:{base:b,local}});await m.replay(owner,syntheticTransport,()=>owner);retryRemote={...b,revision:2,notes:'External'};await new Promise(r=>setTimeout(r,2100));await m.replay(owner,syntheticTransport,()=>owner);sent.length===2&&sent[0].id===sent[1].id&&JSON.stringify(sent[0].body)===JSON.stringify(sent[1].body)&&(await m.pendingOperations(owner))[0].state==='blocked'"),'T01 retries keep exact attempted payload and operation identity');
+ check(await evaluate("const owner='clear-revert',b={...base,id:owner,userId:owner,notes:'A',revision:1};await m.saveWork(owner,'order',b.id,{base:{...b,notes:'C',revision:2},local:b});await m.clearConfirmedOrderWork(owner,b.id,b);(await m.readWork(owner,'order',b.id)).base.revision===2"),'T01 old editor cleanup cannot remove a newer explicit revert');
+ // T02 negative controls: an ambiguous sent operation cannot be retired by a
+ // choice, revoked access cannot resolve/replay, and another tab defeats CAS.
+ for(const mode of ['ambiguous','revoked','concurrent']){
+  check(await evaluate(`const owner='resolve-${mode}',b={...base,id:owner,userId:owner,notes:'base',revision:1},local={...b,notes:'local'},remote={...b,notes:'server',revision:2};await m.enqueue(owner,'orders/'+b.id,'PUT',m.orderSaveBody(local,1),{scope:'order',id:b.id,value:{base:b,local}});await m.replay(owner,async(p,method)=>method==='GET'?{order:b}:Promise.reject(Error('lost')),()=>owner);const before=(await m.pendingOperations(owner))[0];let failed=false,reads=0;const syntheticTransport=async(p,method)=>{if('${mode}'==='revoked')throw Object.assign(Error('revoked'),{status:403});if(method==='GET'){if('${mode}'==='concurrent'&&++reads===2)await m.saveWork(owner,'order',b.id,{base:b,local:{...local,notes:'newer tab'}});return{order:remote};}if('${mode}'==='ambiguous')return{};throw Object.assign(Error('rejected revision'),{status:409});};try{await m.resolveQueuedWork({userId:owner,path:'orders/'+b.id,method:'PUT',remote,body:null,local:{scope:'order',id:b.id,value:{base:remote,local:remote}},transport:syntheticTransport,active:()=>owner});}catch{failed=true;}const after=(await m.pendingOperations(owner))[0];failed&&before.id===after.id&&JSON.stringify(before.body)===JSON.stringify(after.body)&&(await m.readWork(owner,'order',b.id)).local.notes===('${mode}'==='concurrent'?'newer tab':'local')`),'T02 '+mode+' retains exact operation and local work');
+ }
+ for(const terminal of ['deleted','finalized']){
+  check(await evaluate(`const owner='terminal-${terminal}',b={...base,id:owner,userId:owner},local={...b,notes:'retained'};const op=await m.enqueue(owner,'orders/'+b.id,'PUT',m.orderSaveBody(local,1),{scope:'order',id:b.id,value:{base:b,local}});const syntheticTransport=async()=>{if('${terminal}'==='deleted')throw Object.assign(Error('deleted'),{status:404});return{order:{...b,status:'finalized'}};};await m.retireOrderWork(owner,b.id,syntheticTransport,()=>owner);(await m.pendingOperations(owner)).length===0&&(await m.readWork(owner,'recovered-order',b.id)).local.notes==='retained'&&(await m.readWork(owner,'resolved-operation',op.id)).id===op.id`),'T02 '+terminal+' retires safely with archived recovery copy');
+ }
+ // T03: local draft survives every list read; confirmed/deleted rows never revive.
+ check(await evaluate("const local={...base,id:crypto.randomUUID(),number:'Ciornă locală'};window.listLocal=local;await m.saveWork('agent','draft-list','all',[local]);(await m.reconcileOrderList('agent',[])).some(o=>o.id===local.id)&&(await m.reconcileOrderList('agent',[])).some(o=>o.id===local.id)"),'T03 local-only survives refresh/reload rule');
+ check(await evaluate("const confirmed={...listLocal,number:'TEST'};(await m.reconcileOrderList('agent',[confirmed])).filter(o=>o.id===confirmed.id).length===1&&(await m.reconcileOrderList('agent',[])).length===0"),'T03 confirmed local collapses and cannot return from an old draft-list');
+ check(await evaluate("await m.markOrderDeleted('agent',listLocal.id);(await m.reconcileOrderList('agent',[listLocal])).length===0&&(await m.reconcileOrderList('other',[])).length===0"),'T03 tombstones defeat late server pages and preserve account isolation');
+ // T04: actual profile conflict does not starve an authorized visit. Legacy
+ // entity keys are deliberately retained to exercise an installed old queue.
+ await evaluate("window.path='partner/portfolio/point';window.profile=(await transport(path,'GET')).partner;await m.enqueue('agent',path,'PATCH',{...profile,contact:'Local contact'});await transport(path,'PATCH',{...profile,contact:'Remote contact'});await replay();window.visitId=crypto.randomUUID();await m.enqueue('agent',path+'/visits','POST',{id:visitId,notes:'Independent visit'});");
+ await evaluate("const db=await new Promise(r=>{const q=indexedDB.open('mobiup-offline-v3',1);q.onsuccess=()=>r(q.result)});const tx=db.transaction('outbox','readwrite');const q=tx.objectStore('outbox').getAll();q.onsuccess=()=>{for(const op of q.result){if(op.path.endsWith('/visits')){op.entity=path;tx.objectStore('outbox').put(op)}}};await new Promise(r=>tx.oncomplete=r);db.close();");
+ dropNext=true;await evaluate('await replay()');await delay(2100);await evaluate('await replay()');
+ assert.equal((await db.prepare('SELECT COUNT(*) n FROM partner_visits WHERE id=?').bind(await evaluate('visitId')).first()).n,1);
+ check(await evaluate("(await m.pendingOperations('agent')).length===1&&(await m.pendingOperations('agent'))[0].path===path"),'T04 independent lost-response visit confirms exactly once while profile stays blocked');
+ // Contextual client/profile resolution and day-plan resolution use the same
+ // guarded replacement transaction, with fresh authorization and revision.
+ check(await evaluate("const remote=(await transport(path,'GET')).partner;const next={...remote,contact:'Chosen contact'};const old=(await m.pendingOperations('agent'))[0];await m.resolveQueuedWork({userId:'agent',path,method:'PATCH',remote,body:next,local:{scope:'partner',id:'point',value:next},transport,active:m.currentLocalWorkUserId});const replacement=(await m.pendingOperations('agent'))[0];await replay();replacement.id!==old.id&&(await m.pendingOperations('agent')).length===0&&(await transport(path,'GET')).partner.contact==='Chosen contact'"),'T02 profile choice replaces blocked operation and confirms chosen fields');
+ for(const choice of ['local','remote']){
+  check(await evaluate(`const date='2026-10-0${choice==='local'?'5':'6'}',week='2026-10-05',payload={date,stops:[],revision:0};await m.enqueue('agent','partner/planning','PUT',payload,{scope:'plans',id:week,value:{[date]:[]}});const remote=await transport('partner/planning','PUT',{date,stops:['point'],revision:0});await replay();const old=(await m.pendingOperations('agent'))[0];const body={...remote,stops:[]};await m.resolveQueuedWork({userId:'agent',path:'partner/planning',method:'PUT',remote,body:'${choice}'==='local'?body:null,local:{scope:'plans',id:week,value:{[date]:'${choice}'==='local'?[]:remote.stops}},transport,active:m.currentLocalWorkUserId});await replay();const current=(await transport('partner/planning?week='+week,'GET')).plans.find(p=>p.date===date);(await m.pendingOperations('agent')).length===0&&current.stops.length===('${choice}'==='local'?0:1)&&(await m.readWork('agent','plans',week))[date].length===current.stops.length&&(await m.readWork('agent','resolved-operation',old.id)).id===old.id`),'T02 day-plan '+choice+' reconciles queue and local work');
+ }
+ await db.prepare("UPDATE customers SET warehouse_id='moved',data=json_set(data,'$.warehouseIds',json_array('moved')) WHERE id='point'").run();
+ await evaluate("window.deniedId=crypto.randomUUID();await m.enqueue('agent',path+'/visits','POST',{id:deniedId,notes:'Revoked'});await replay();");
+ assert.equal((await db.prepare('SELECT COUNT(*) n FROM partner_visits WHERE id=?').bind(await evaluate('deniedId')).first()).n,0);
+ check(await evaluate("(await m.pendingOperations('agent')).find(op=>op.path.endsWith('/visits')).state==='blocked'"),'T04 moved portfolio prevents visit on actual server');
+ console.log(`PASS: ${checks} recovery contracts with React, real Chrome/IndexedDB and HTTP/SQLite.`);
+
+}finally{
+ await browser?.close();if(server){server.closeAllConnections();await new Promise(r=>server.close(r));}
+ if(previousDirectory===undefined)delete process.env.MOBIUP_DATA_DIR;else process.env.MOBIUP_DATA_DIR=previousDirectory;
+ rmSync(directory,{recursive:true,force:true});
+}
