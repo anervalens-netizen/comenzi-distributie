@@ -22,7 +22,8 @@ try{
    const db=new DatabaseSync(file,{readOnly:true});
    try{return {sha:createHash('sha256').update(readFileSync(file)).digest('hex'),schema:db.prepare('SELECT type,name,sql FROM sqlite_master ORDER BY name').all()};}finally{db.close();}
  });
- const before=evidence(),tree=()=>readdirSync(root,{recursive:true}).sort();
+ const compareStrings=(a,b)=>a<b?-1:a>b?1:0;
+ const before=evidence(),tree=()=>readdirSync(root,{recursive:true}).sort(compareStrings);
  const stage=join(root,'stage');mkdirSync(stage);
  const alias=join(temp,'output-alias');symlinkSync(root,alias);
  const rootAlias=join(temp,'root-alias');symlinkSync(root,rootAlias);
@@ -52,7 +53,7 @@ try{
  assert.throws(()=>m.buildActivitySnapshot(root,'2026-09-30',join(root,'missing-parent/out.sqlite')),/ENOENT/);assert(!existsSync(join(root,'missing-parent')));
  // Swap the alias at the final integrity check, after the output is populated.
  const mutable=join(temp,'mutable-parent');symlinkSync(stage,mutable);
- const originalPrepare=DatabaseSync.prototype.prepare;
+ const originalPrepare=Reflect.get(DatabaseSync.prototype,'prepare');
  let swapped=false;
  DatabaseSync.prototype.prepare=function(sql){if(sql==='PRAGMA quick_check'){rmSync(mutable);symlinkSync(root,mutable);swapped=true;}return originalPrepare.call(this,sql);};
  try{assert.throws(()=>m.buildActivitySnapshot(root,'2026-09-30',join(mutable,'mobiup.sqlite')),/parent changed/);}finally{DatabaseSync.prototype.prepare=originalPrepare;}
@@ -97,7 +98,7 @@ try{
  // A checkpoint changes the physical generation conservatively; rebuild afterward.
  rebuild();
  // Replace the raw inode AFTER open and before BEGIN; metadata stays unchanged.
- const originalExec=DatabaseSync.prototype.exec;
+ const originalExec=Reflect.get(DatabaseSync.prototype,'exec');
  async function replaceAfterOpen(reader){
    rebuild();await asyncRead(); // Warm shared stamp, but use a cold report month below.
    copyFileSync(history,history+'.new');let replaced=false;

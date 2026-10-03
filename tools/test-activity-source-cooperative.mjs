@@ -17,7 +17,7 @@ const NativeDate=Date;
 globalThis.Date=class extends NativeDate{constructor(...args){super(...(args.length?args:['2026-09-30T12:00:00Z']));}};
 const sql=new DatabaseSync(join(root,'mobiup.sqlite'));
 let server,prepareHook;
-const originalPrepare=DatabaseSync.prototype.prepare;
+const originalPrepare=Reflect.get(DatabaseSync.prototype,'prepare');
 try{
  sql.exec(readFileSync('drizzle/0000_rare_hardball.sql','utf8'));
  sql.exec("ALTER TABLE users ADD COLUMN manager_scope TEXT DEFAULT 'assigned';ALTER TABLE users ADD COLUMN site_code TEXT;CREATE TABLE manager_agents(manager_id TEXT,agent_id TEXT);CREATE TABLE partner_requests(id TEXT,customer_id TEXT,status TEXT,confirmed_at TEXT,payload TEXT);");
@@ -96,7 +96,7 @@ try{
  for(const kind of ['activity','browse','map'])await assert.rejects(invoke(kind,new URLSearchParams('salesPeriod=bad')),e=>e.status===400);
  // Mutation at an actual cooperative source boundary (not a timer guess).
  async function duringHash(kind,change){
-   cold();let fired=false;const original=DatabaseSync.prototype.prepare;
+   cold();let fired=false;const original=Reflect.get(DatabaseSync.prototype,'prepare');
    DatabaseSync.prototype.prepare=function(query){const statement=original.call(this,query);if(query.includes('substr(CAST(COALESCE(')){const get=statement.get.bind(statement);statement.get=(...args)=>{const row=get(...args);if(!fired){fired=true;setImmediate(()=>change());}return row;};}return statement;};
    try{await assert.rejects(invoke(kind),e=>[403,409,503].includes(e.status));assert(fired);}finally{DatabaseSync.prototype.prepare=original;}
  }
@@ -132,7 +132,7 @@ try{
  await read();const pending=m.readActivitySnapshotAsync(Array.from({length:25000},(_,i)=>({id:'visible-'+i,cui:'100'})),root,'2026-09-30',options);
  await new Promise(r=>setImmediate(r));cold();assert.equal((await pending).state,'unavailable');
  // Derived open/BEGIN race: never bless an old inode using a new pathname stamp.
- await read();copyFileSync(derived,derived+'.new');const exec=DatabaseSync.prototype.exec;let replaced=false;
+ await read();copyFileSync(derived,derived+'.new');const exec=Reflect.get(DatabaseSync.prototype,'exec');let replaced=false;
  DatabaseSync.prototype.exec=function(statement){if(statement==='BEGIN'&&!replaced){replaced=true;renameSync(derived+'.new',derived);}return exec.call(this,statement);};
  try{assert.equal((await read()).state,'unavailable');assert(replaced);}finally{DatabaseSync.prototype.exec=exec;}
  cold();const builds=m.clientSalesCacheStats.stampBuilds;const [activity,monthly]=await Promise.all([read(),m.readClientSalesAsync(visible,'2026-09',root,'2026-09-30')]);assert.equal(activity.state,'ready');assert.equal(monthly.state,'ready');assert.equal(m.clientSalesCacheStats.stampBuilds,builds+1);

@@ -41,7 +41,8 @@ try{
  const regional=await call('qa-regional');assert.equal(regional.total,3,'assigned manager is promoted to national read scope without failing the authenticated-scope fence');
  assert.deepEqual(manager.partners.map(r=>r.partner.id),['activity-other','activity-shared','activity-one'],'sales ranked across complete selection');
  assert.equal(manager.partners[0].metrics.valueCents,90000);assert.equal(manager.partners[0].metrics.documents,1);assert.equal(manager.partners[0].metrics.lastBilling,'2026-09-15');
- assert.deepEqual(manager.partners.find(r=>r.partner.id==='activity-shared').agents.map(a=>a.id).sort(),app.prepare("SELECT id FROM users WHERE role='agent' AND active=1 AND warehouse_id IN ('g-5','g-3')").all().map(a=>a.id).sort(),'all shared current owners shown');
+ const compareStrings=(a,b)=>a<b?-1:a>b?1:0;
+ assert.deepEqual(manager.partners.find(r=>r.partner.id==='activity-shared').agents.map(a=>a.id).sort(compareStrings),app.prepare("SELECT id FROM users WHERE role='agent' AND active=1 AND warehouse_id IN ('g-5','g-3')").all().map(a=>a.id).sort(compareStrings),'all shared current owners shown');
  assert.deepEqual((await call('qa-manager','sort=value&direction=asc')).partners.map(r=>r.partner.id),['activity-one','activity-shared','activity-other']);
  await call('qa-manager','sort=bad',400);await call('qa-manager','direction=sideways',400);
  const scoped=await call('qa-manager','agentId=qa-agent1');assert.equal(scoped.total,2);

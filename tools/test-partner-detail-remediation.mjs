@@ -34,7 +34,7 @@ try {
  assert.equal(sync().state,'unlinked','stale attribution from unknown connection never leaks to a fresh caller');
  // Deterministically replace AFTER DatabaseSync opens, BEFORE first BEGIN/stat.
  copyFileSync(history,history+'.new');const next=new DatabaseSync(history+'.new');next.exec("UPDATE history_identities SET client_code='300' WHERE client_code='200'");next.close();
- const originalExec=DatabaseSync.prototype.exec;let replaced=false;
+ const originalExec=Reflect.get(DatabaseSync.prototype,'exec');let replaced=false;
  DatabaseSync.prototype.exec=function(sql){if(!replaced&&sql==='BEGIN'){replaced=true;renameSync(history+'.new',history);}return originalExec.call(this,sql);};
  try {sync('monthly-repeat','200');}finally{DatabaseSync.prototype.exec=originalExec;}
  assert(replaced);assert.equal(sync('monthly-repeat','200').state,'unlinked','opened-old index cannot be cached under replacement generation');
@@ -59,7 +59,7 @@ try {
  c.exec('COMMIT');c.close();m.buildActivitySnapshot(root,'2026-09-30');
  const expected=sync();assert.equal(expected.totals.valueCents,3900);assert.equal(expected.documents.count,1);
  // Instrument SQL: all/all-reference materialization on the async path is forbidden.
- const originalPrepare=DatabaseSync.prototype.prepare,queries=[];
+ const originalPrepare=Reflect.get(DatabaseSync.prototype,'prepare'),queries=[];
  DatabaseSync.prototype.prepare=function(sql){queries.push(sql);assert(!/SELECT \* FROM history_references|SELECT master_json FROM history_references|FROM history_identities i JOIN history_allocations|FROM history_allocations a/i.test(sql),'HTTP must not rebuild or scan national identities');return originalPrepare.call(this,sql);};
  server=createServer(async(req,res)=>{if(req.url==='/health'){res.end('ok');return;}try{res.setHeader('content-type','application/json');res.end(JSON.stringify(await detail()));}catch(e){res.statusCode=500;res.end(e.stack);}});
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));const origin='http://127.0.0.1:'+server.address().port;
