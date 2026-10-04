@@ -4,11 +4,37 @@ set -u
 RUNTIME_ROOT="${MOBIUP_RUNTIME_ROOT:-/opt/Mobiup/comenzi-distributie/runtime}"
 CURRENT_LINK="${MOBIUP_CURRENT_LINK:-$RUNTIME_ROOT/current}"
 SERVICE="${MOBIUP_SERVICE:-mobiup-comenzi-distributie.service}"
-HEALTH_URL="${MOBIUP_HEALTH_URL:-http://127.0.0.1:39120/api/health}"
-# Liveness alone cannot certify database initialization after promotion.
-READY_URL="${MOBIUP_READY_URL:-${HEALTH_URL%/api/health}/api/bootstrap}"
 SYSTEMCTL="${MOBIUP_SYSTEMCTL:-systemctl}"
 CURL="${MOBIUP_CURL:-curl}"
+
+service_endpoint() {
+  local env_line token host="${MOBIUP_HEALTH_HOST:-}" port="${MOBIUP_HEALTH_PORT:-}"
+  if [[ -z "$host" || -z "$port" ]]; then
+    env_line="$("$SYSTEMCTL" show "$SERVICE" -p Environment --value 2>/dev/null || true)"
+    for token in $env_line; do
+      case "$token" in
+        HOST=*) [[ -n "$host" ]] || host="${token#HOST=}" ;;
+        PORT=*) [[ -n "$port" ]] || port="${token#PORT=}" ;;
+      esac
+    done
+  fi
+  host="${host:-127.0.0.1}"
+  port="${port:-39120}"
+  [[ "$host" == *:* && "$host" != \[*\] ]] && host="[$host]"
+  printf 'http://%s:%s' "$host" "$port"
+}
+
+DEFAULT_ENDPOINT="$(service_endpoint)"
+HEALTH_URL="${MOBIUP_HEALTH_URL:-$DEFAULT_ENDPOINT/api/health}"
+# Preserve the existing override contract: a custom health endpoint also defines
+# the default readiness endpoint unless readiness is overridden explicitly.
+if [[ -n "${MOBIUP_READY_URL:-}" ]]; then
+  READY_URL="$MOBIUP_READY_URL"
+elif [[ -n "${MOBIUP_HEALTH_URL:-}" ]]; then
+  READY_URL="${HEALTH_URL%/api/health}/api/bootstrap"
+else
+  READY_URL="$DEFAULT_ENDPOINT/api/bootstrap"
+fi
 HEALTH_ATTEMPTS="${MOBIUP_HEALTH_ATTEMPTS:-90}"
 HEALTH_DELAY="${MOBIUP_HEALTH_DELAY:-1}"
 
