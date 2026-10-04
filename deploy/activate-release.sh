@@ -20,7 +20,7 @@ service_endpoint() {
   fi
   host="${host:-127.0.0.1}"
   port="${port:-39120}"
-  [[ "$host" == *:* && "$host" != [*] ]] && host="[$host]"
+  [[ "$host" == *:* && "$host" != \[*\] ]] && host="[$host]"
   printf 'http://%s:%s' "$host" "$port"
 }
 

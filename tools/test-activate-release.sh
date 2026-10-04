@@ -58,4 +58,9 @@ for kind in synthetic unclassified; do
   check "$(readlink -f "$runtime/current")" "$releases/$new" 'rejected resource build leaves current runtime untouched'
 done
 check "$(grep -c '^restart mobiup-comenzi-distributie.service$' "$log")" "4" 'rejected builds never restart production'
+export MOBIUP_TEST_SERVICE_ENV='HOST=fd00::1 PORT=39222'
+: > "$curl_log"
+"$script" "$releases/$new" >/dev/null
+check "$(grep -c '^http://\[fd00::1\]:39222/api/health$' "$curl_log")" "1" 'IPv6 health endpoint is bracketed once'
+check "$(grep -c '^http://\[fd00::1\]:39222/api/bootstrap$' "$curl_log")" "1" 'IPv6 readiness endpoint is bracketed once'
 printf 'PASS: %s activation/rollback checks.\n' "$checks"
