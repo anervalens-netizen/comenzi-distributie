@@ -26,8 +26,15 @@ service_endpoint() {
 
 DEFAULT_ENDPOINT="$(service_endpoint)"
 HEALTH_URL="${MOBIUP_HEALTH_URL:-$DEFAULT_ENDPOINT/api/health}"
-# Liveness alone cannot certify database initialization after promotion.
-READY_URL="${MOBIUP_READY_URL:-$DEFAULT_ENDPOINT/api/bootstrap}"
+# Preserve the existing override contract: a custom health endpoint also defines
+# the default readiness endpoint unless readiness is overridden explicitly.
+if [[ -n "${MOBIUP_READY_URL:-}" ]]; then
+  READY_URL="$MOBIUP_READY_URL"
+elif [[ -n "${MOBIUP_HEALTH_URL:-}" ]]; then
+  READY_URL="${HEALTH_URL%/api/health}/api/bootstrap"
+else
+  READY_URL="$DEFAULT_ENDPOINT/api/bootstrap"
+fi
 HEALTH_ATTEMPTS="${MOBIUP_HEALTH_ATTEMPTS:-90}"
 HEALTH_DELAY="${MOBIUP_HEALTH_DELAY:-1}"
 

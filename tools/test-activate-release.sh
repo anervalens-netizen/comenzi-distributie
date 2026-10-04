@@ -63,4 +63,10 @@ export MOBIUP_TEST_SERVICE_ENV='HOST=fd00::1 PORT=39222'
 "$script" "$releases/$new" >/dev/null
 check "$(grep -c '^http://\[fd00::1\]:39222/api/health$' "$curl_log")" "1" 'IPv6 health endpoint is bracketed once'
 check "$(grep -c '^http://\[fd00::1\]:39222/api/bootstrap$' "$curl_log")" "1" 'IPv6 readiness endpoint is bracketed once'
+export MOBIUP_HEALTH_URL='http://health.example.invalid:39999/api/health'
+unset MOBIUP_READY_URL
+: > "$curl_log"
+"$script" "$releases/$new" >/dev/null
+check "$(grep -c '^http://health.example.invalid:39999/api/health$' "$curl_log")" "1" 'explicit health override is preserved'
+check "$(grep -c '^http://health.example.invalid:39999/api/bootstrap$' "$curl_log")" "1" 'readiness defaults from explicit health override'
 printf 'PASS: %s activation/rollback checks.\n' "$checks"
