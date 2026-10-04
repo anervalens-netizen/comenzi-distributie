@@ -77,6 +77,7 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='', active=
       }).toString(),
     [query, county, city, route, position, days, scopeQuery, salesPeriod],
   );
+  const browseRevision=useRef<{key:string;revision:string}|null>(null);
   const [request, setRequest] = useState({key:filterKey,offset:0});
   const {key:requestKey,offset}=request;
   const [dataRequest, setDataRequest] = useState<{key:string;offset:number;scope:string}|null>(null);
@@ -103,7 +104,7 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='', active=
     const forceRefresh=refreshSeen.current!==refreshIndex;
     refreshSeen.current=refreshIndex;
     api<PartnerBrowse>(
-      `partner/browse?${requestKey}&offset=${offset}`,
+      `partner/browse?${requestKey}&offset=${offset}${offset&&browseRevision.current?.key===requestKey?'&revision='+encodeURIComponent(browseRevision.current.revision):''}`,
       'GET',
       undefined,
       controller.signal,
@@ -111,6 +112,7 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='', active=
     )
       .then((result) => {
         if (controller.signal.aborted) return;
+        browseRevision.current=result.revision?{key:requestKey,revision:result.revision}:null;
         setData(result);
         setDataRequest({key:requestKey,offset,scope:stateKey});
         setError('');
@@ -118,6 +120,7 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='', active=
       })
       .catch((e) => {
         if (!controller.signal.aborted) {
+          if(e.status===409&&offset){browseRevision.current=null;setData(null);setRequest({key:requestKey,offset:0});return;}
           setError(e.message);
           setLoading(false);
         }

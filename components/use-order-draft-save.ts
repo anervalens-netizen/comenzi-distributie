@@ -10,7 +10,7 @@ import {
   type OrderConflictChoice,
   type OrderConflictField,
 } from '@/lib/order-draft';
-import { enqueue, pendingOperations, readWork, saveOrderWork, clearConfirmedOrderWork, replay, resolveQueuedWork, retireOrderWork } from '@/lib/offline-work';
+import { DeletedOrderWorkError, enqueue, pendingOperations, readWork, saveOrderWork, clearConfirmedOrderWork, replay, resolveQueuedWork, retireOrderWork } from '@/lib/offline-work';
 import type { Order } from '@/lib/types';
 
 export type PendingOrderConflict = {
@@ -130,6 +130,7 @@ export function useOrderDraftSave({ initial, onSaved, storageOwnerId }: { initia
         if(failed)throw new ApiError(failed.status||409,failed.error||'Verifică modificările locale.',null);
         if(remaining.length){setSaveState('Salvat pe telefon · În așteptare');throw new Error('Salvat pe telefon. Așteaptă sincronizarea înainte de finalizare.');}
         const saved=(await readWork<StoredOrderWork>(owner,'order',snapshot.id))?.base??confirmed.current;
+        if((await readWork<Record<string,string>>(owner,'order-list','settled'))?.[snapshot.id]==='deleted')throw new DeletedOrderWorkError();
         revision.current=saved.revision;
         confirmed.current=saved;
         onSavedRef.current(saved);
@@ -145,7 +146,7 @@ export function useOrderDraftSave({ initial, onSaved, storageOwnerId }: { initia
         const issue=persist(merged,saved);
         if(issue)setSaveError(issue);
       } catch(err) {
-        if(err instanceof ApiError && err.status===404) {
+        if((err instanceof ApiError||err instanceof DeletedOrderWorkError) && err.status===404) {
           markRemoteDeleted(base);
           throw err;
         }

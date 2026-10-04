@@ -15,12 +15,20 @@ export const runtimeKind = 'node';
 export { operationalStatus } from './operational-status-node';
 const dataDirectory = resolve(process.env.MOBIUP_DATA_DIR || './work/server-data');
 let connection: DatabaseSync | undefined;
+function verifyDatabase(candidate:DatabaseSync){
+  const rows=candidate.prepare('PRAGMA quick_check(1)').all();
+  if(rows.length!==1||rows[0].quick_check!=='ok')throw new Error('Database structural check failed.');
+  if(candidate.prepare('PRAGMA foreign_key_check').get())throw new Error('Database foreign key check failed.');
+}
 function sqlite() {
   if (connection) return connection;
   mkdirSync(dataDirectory, { recursive: true, mode: 0o700 });
   const candidate = new DatabaseSync(resolve(dataDirectory, 'mobiup.sqlite'));
   try {
-    candidate.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;');
+    // Verify before journal-mode changes, migrations or user normalization.
+    candidate.exec('PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON;');
+    verifyDatabase(candidate);
+    candidate.exec('PRAGMA journal_mode=WAL;');
     if (!candidate.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='users'").get()) {
       candidate.exec('BEGIN IMMEDIATE;');
       try { candidate.exec(initialSchema); candidate.exec('COMMIT;'); }
@@ -50,6 +58,7 @@ function sqlite() {
     candidate.exec(orderListRevisionSchema);
     candidate.exec('BEGIN IMMEDIATE;');
     try{candidate.exec(portfolioReadModelSchema);candidate.exec('COMMIT;');}catch(error){candidate.exec('ROLLBACK;');throw error;}
+    verifyDatabase(candidate);
     connection=candidate;
     return candidate;
   } catch(error) {

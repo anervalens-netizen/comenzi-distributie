@@ -41,6 +41,7 @@ node tools/test-cloudflare-module-graph.mjs
 node tools/test-stock-cloudflare.mjs
 npm run build:server
 node tools/test-client-sales-remediation.mjs
+node tools/test-pagination-revision.mjs
 node tools/test-company-resolved-evidence.mjs
 node tools/test-source-guards.mjs
 node tools/test-partner-detail-remediation.mjs
@@ -116,6 +117,7 @@ if [ -n "$CHROME_BIN" ]; then
   CHROME_BIN="$CHROME_BIN" node tools/test-offline-contract-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-finalize-cleanup-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-recovery-contract-browser.mjs
+  CHROME_BIN="$CHROME_BIN" node tools/test-delete-recovery-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-recovery-navigation-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-portfolio-page-error-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-pwa-waiting-browser.mjs

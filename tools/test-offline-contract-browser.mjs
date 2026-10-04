@@ -24,7 +24,7 @@ try{
  const facetInputs=[['OLT','1'],['Olt','1, 11'],['Iasi','11, 1'],['Iași','11'],['Bucuresti','2, 7'],['Municipiul Bucuresti','7, 2'],['SB','1, 11'],['Sibiu','11']];
  for(const [i,[county,route]] of facetInputs.entries())await db.prepare('INSERT INTO customers(id,warehouse_id,data,active) VALUES(?,?,?,1)').bind('facet-'+i,'w',JSON.stringify({...partner,id:'facet-'+i,name:'Facet sample '+i,county,route})).run();
  const compiled=await build({stdin:{contents:"export * from './lib/client-api';export * from './lib/offline-work';export * from './lib/local-work';",loader:'ts',resolveDir:resolve('.')},write:false,bundle:true,format:'esm',platform:'browser',logLevel:'silent'});
- let dropNext=false,legacyResponse=false;
+ let dropNext=false,legacyResponse=false,omitFollowUp=false;
  server=createServer(async(req,res)=>{
   try{
    if(req.url.startsWith('/api/')){
@@ -35,7 +35,7 @@ try{
     if(req.method==='POST'&&req.url.endsWith('/visits')){
      requests.push({id:req.headers['x-operation-id'],body:JSON.parse(body.toString()),status:result.status});
      if(dropNext){dropNext=false;res.writeHead(200,{'Content-Type':'application/json'});res.end('{');return;}
-     if(legacyResponse&&result.ok){const data=JSON.parse(text);delete data.visit;text=JSON.stringify(data);}
+     if((legacyResponse||omitFollowUp)&&result.ok){const data=JSON.parse(text);if(legacyResponse)delete data.visit;if(omitFollowUp)for(const visit of [...data.visits,...data.visit?[data.visit]:[]]){delete visit.nextStep;delete visit.followUpDate;}text=JSON.stringify(data);}
     }
     res.writeHead(result.status,Object.fromEntries(result.headers));res.end(text);return;
    }
@@ -86,11 +86,20 @@ try{
  check(await evaluate("(await m.pendingOperations('agent')).length===0&&confirmations===1"),'same idempotent request removes queue exactly once after bounded-page confirmation');
  const cached=await evaluate("(await m.snapshot('agent',path)).value"),actual=await evaluate("await m.networkApi(path)");assert.deepEqual(cached,actual);assert.equal(cached.visits.length,50);assert.equal(cached.visitCount,56);assert(cached.nextCursor);check(!cached.visits.some(v=>v.id===visitId),'cache is authoritative first page, not a fabricated cursor/history merge');
  // Older server contract, with our exact record out of order in the returned history.
- legacyResponse=true;const oldId=randomUUID();
+ legacyResponse=true;omitFollowUp=true;const oldId=randomUUID();
  await evaluate(`await m.enqueue('agent',path+'/visits','POST',{id:${JSON.stringify(oldId)},notes:'Legacy detail'});`);
  await db.prepare("INSERT INTO partner_visits(id,customer_id,agent_id,agent_name,visited_at,notes,created_at) VALUES(?,'point','agent','Synthetic agent','2025-01-02T00:00:00Z','Legacy detail','2025-01-02T00:00:00Z')").bind(oldId).run();
  await db.prepare("INSERT INTO partner_visits(id,customer_id,agent_id,agent_name,visited_at,notes,created_at) VALUES(?,'point','agent','Synthetic agent','2025-01-03T00:00:00Z','','2025-01-03T00:00:00Z')").bind(randomUUID()).run();
  await evaluate('await replay()');check(await evaluate(`(await m.pendingOperations('agent')).length===0&&(await m.snapshot('agent',path)).value.visits[1].id===${JSON.stringify(oldId)}`),'legacy detail finds matching visit rather than arbitrary first row');
+ // Mixed-version rollback accepts UUID/notes but cannot confirm new follow-up fields.
+ legacyResponse=false;omitFollowUp=true;
+ await evaluate("window.mixedBody={id:crypto.randomUUID(),notes:'Mixed server',nextStep:' Call back ',followUpDate:'2026-10-05'};await m.enqueue('agent',path+'/visits','POST',mixedBody,{scope:'visit',id:'point',value:mixedBody});await replay()");
+ check(await evaluate("const rows=await m.pendingOperations('agent');rows.length===1&&rows[0].status===502&&(await m.readWork('agent','visit','point')).nextStep===' Call back '"),'legacy-shaped response cannot acknowledge new follow-up payload');
+ omitFollowUp=false;await delay(2100);await evaluate('await replay()');
+ check(await evaluate("(await m.pendingOperations('agent')).length===0"),'normalized exact new confirmation retires the same request');
+ for(const kind of ['missing-null','wrong-step','wrong-date','exact-null']){
+  check(await evaluate(`const account='fields-${kind}',body={id:crypto.randomUUID(),notes:'',nextStep:null,followUpDate:null};await m.enqueue(account,path+'/visits','POST',body,{scope:'visit',id:'point',value:body});const visit={id:body.id,customerId:'point',agentId:account,agentName:'Synthetic',notes:'',visitedAt:'2026-01-01T00:00:00Z',createdAt:'2026-01-01T00:00:00Z',nextStep:'',followUpDate:null};${kind==='missing-null'?"delete visit.followUpDate;":kind==='wrong-step'?"visit.nextStep='different';":kind==='wrong-date'?"visit.followUpDate='2026-10-05';":''}await m.replay(account,async()=>({partner:{id:'point'},visits:[visit],visitCount:1,nextCursor:null}),()=>account);(await m.pendingOperations(account)).length===${kind==='exact-null'?0:1}`),'explicit null property contract: '+kind);
+ }
  // Valid empty history, a full unmatched page, mismatched confirmation and malformed
  // success are all ambiguous, never permission to delete the durable local request.
  for(const kind of ['empty','full','wrong','malformed','malformed-history']){

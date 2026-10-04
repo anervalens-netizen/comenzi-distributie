@@ -15,7 +15,7 @@ import type { ManagerDestination } from '@/components/manager-workspace';
 import { ManagerScopeBar, useManagerScope } from '@/components/manager-scope';
 import { api, networkApi, ApiError, dateLabel, errorMessage, normalize, kindLabels, orderDateKey, localDateKey, SESSION_EXPIRED_EVENT, startOfflineSync } from '@/lib/client-api';
 import { bucharestReportingMonthKey } from '@/lib/bucharest-month';
-import { enqueue, pendingOperations, readWork, acceptAuthoritativeOrder, reconcileOrderList, markOrderDeleted, OFFLINE_EVENT } from '@/lib/offline-work';
+import { enqueue, pendingOperations, readWork, acceptAuthoritativeOrder, reconcileOrderList, OFFLINE_EVENT } from '@/lib/offline-work';
 import { readFinalizedOrderRecovery, readOrphanedOrderRecoveries, type OrderRecovery } from '@/lib/order-recovery';
 import type { User, Warehouse, Product, Order, Kind, Settings, OperationalMailSettings, ManagerMailSettings, ManagerRequestInbox } from '@/lib/types';
 
@@ -205,7 +205,7 @@ export default function DistributionApp() {
     setDeleting(true);setDeleteError('');
     try {
       await api(`orders/${deleteTarget.id}`,'DELETE',{revision:deleteTarget.revision});
-      await markOrderDeleted(user!.id,deleteTarget.id);listIntent.current++;
+      listIntent.current++;
       setData(d=>({...d,orders:(d.orders||[]).filter(o=>o.id!==deleteTarget.id)}));
       setDeleteTarget(null);toast.success('Comanda a fost ștearsă.');void refreshOrders();
     } catch(err) {setDeleteError(errorMessage(err));} finally {setDeleting(false);}

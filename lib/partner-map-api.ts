@@ -1,3 +1,5 @@
+import {fileGeneration} from './history-source-generation';
+import {paginationRevision,paginationClock} from './pagination-revision';
 import {countyLabel, countyMatches, countySearch, routeMatches, routeTokens} from './portfolio-facets';
 import {portfolioSummary} from './partner-portfolio';
 import {pagedBrowse,portfolioVersion,readyReadModel,selectedSql} from './portfolio-read-model';
@@ -83,8 +85,8 @@ export async function mapPartners(user:User,params:URLSearchParams,authenticated
   const result=await mapPartnersRead(user,params);await verify?.();return result;
 }
 /** Live scoped IDs on every request, in bounded batches; never cache membership. */
-async function selectedBillingCandidates(user:User,params:URLSearchParams,warehouseIds?:string[],bbox?:MapBounds){
-  const q=selectedSql(user,params,warehouseIds,bbox),result:{id:string;cui:string}[]=[];
+async function selectedBillingCandidates(user:User,params:URLSearchParams,warehouseIds?:string[],bbox?:MapBounds,cutoff?:number){
+  const q=selectedSql(user,params,warehouseIds,bbox,cutoff),result:{id:string;cui:string}[]=[];
   let cursor='';
   for(;;){
     const rows=(await db().prepare(`SELECT m.id,COALESCE(json_extract(m.summary,'$.cui'),'') cui FROM ${q.from} WHERE ${q.where} AND m.id>? ORDER BY m.id LIMIT 256`).bind(...q.args,cursor).all<{id:string;cui:string}>()).results;
@@ -102,12 +104,13 @@ async function browsePartnersRead(
     offset = integer(params, 'offset', 0, 0, 10000000);
   const period=params.get('salesPeriod')||'';if(!validBillingPeriod(period))fail(400,'Perioada de facturare este invalidă.');
   for(let attempt=0;attempt<3;attempt++){
+    const clock=params.get('days')&&params.get('days')!=='never'?paginationClock(params):undefined;
     const scope=await managerFilter(user,params);
     if(!period)return pagedBrowse(user,params,scope?.warehouseIds,offset,limit);
     await readyReadModel();const version=await portfolioVersion();
     // Share only the verified source fingerprint, then select current scoped IDs.
-    const ids=(await billingSelection(await selectedBillingCandidates(user,params,scope?.warehouseIds),params)).map(p=>p.id);
-    const result=await pagedBrowse(user,params,scope?.warehouseIds,offset,limit,ids);
+    const ids=(await billingSelection(await selectedBillingCandidates(user,params,scope?.warehouseIds,undefined,clock),params)).map(p=>p.id);
+    const result=await pagedBrowse(user,params,scope?.warehouseIds,offset,limit,ids,0,fileGeneration(process.env.MOBIUP_DATA_DIR||'./work/server-data')+'|'+new Date().toISOString().slice(0,10),clock);
     if(version===await portfolioVersion())return result;
   }
   return fail(503,'Portofoliul se modifică. Reîncearcă.');
@@ -133,7 +136,7 @@ async function mapPartnersRead(
 }
 
 const normalize=(s:string)=>s.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
-function legacyFilters(params: URLSearchParams) {
+function legacyFilters(params: URLSearchParams,cutoff?:number) {
   for (const key of ['q', 'county', 'city', 'route'])
     if ((params.get(key)?.length || 0) > 300)
       fail(400, 'Filtrul este prea lung.');
@@ -148,7 +151,7 @@ function legacyFilters(params: URLSearchParams) {
     city = normalize((params.get('city') || '').trim());
   const county = params.get('county') || '',
     route = params.get('route') || '',
-    now = Date.now();
+    now = cutoff??(days&&days!=='never'?paginationClock(params):Date.now());
   return (p: PartnerSummary) =>
     (!q ||
       normalize(
@@ -172,7 +175,8 @@ async function legacyBrowse(
   user: User,
   params: URLSearchParams,
 ): Promise<PartnerBrowse> {
-  const match = legacyFilters(params),
+  const clock=params.get('days')&&params.get('days')!=='never'?paginationClock(params):0;
+  const match = legacyFilters(params,clock||undefined),
     limit = integer(params, 'limit', 100, 1, 200),
     offset = integer(params, 'offset', 0, 0, 10000000);
   const scope = await managerFilter(user, params);
@@ -189,6 +193,7 @@ async function legacyBrowse(
   if (!styleUrl.startsWith('https://') && !/^\/(?!\/)/.test(styleUrl))
     fail(500, 'Configurația hărții este invalidă.');
   return {
+    revision:paginationRevision(params,[user.id,user.role,user.managerScope,user.warehouseId,scope,all,selected.map(p=>p.id),styleUrl,params.get('salesPeriod')?fileGeneration(process.env.MOBIUP_DATA_DIR||'./work/server-data'):null],clock),
     partners: selected.slice(offset, offset + limit),
     total: selected.length,
     located: selected.filter((p) => p.latitude !== null).length,

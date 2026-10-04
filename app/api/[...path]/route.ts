@@ -405,7 +405,7 @@ async function dispatch(req: Request) {
         db().prepare("DELETE FROM serials WHERE order_id=? AND EXISTS (SELECT 1 FROM orders WHERE id=? AND status='deleted' AND revision=?)").bind(id,id,order.revision+1),
       ]);
       if(!result[0].meta.changes) fail(409,'Comanda s-a modificat. Actualizează lista înainte de ștergere.');
-      return response({ok:true});
+      return response({ok:true,deletedId:id,revision:order.revision+1});
     }
     if(id && !path[2] && req.method==='PUT') return saveOrder(req,id,user);
     if(path[2]==='finalize' && req.method==='POST') return finalize(id,user,req);

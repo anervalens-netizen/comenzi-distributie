@@ -1,6 +1,6 @@
 import {countyLabel, countyMatches, countySearch, routeMatches, routeTokens} from './portfolio-facets.ts';
-import { snapshot, saveSnapshot, acceptAuthoritativeOrder, sessionFence, sessionStorageAvailable, rejectSessionFence, acceptSessionFence, withSessionGate, rememberAccount, lastAccount, migrateLegacy, replay, pendingOperations, OFFLINE_CACHE_INVALIDATED_EVENT } from './offline-work.ts';
-import { currentLocalWorkGeneration, currentLocalWorkUserId, LOCAL_WORK_USER_EVENT, removeLocalWork, restoreLocalWorkUserId, setLocalWorkUserId } from './local-work.ts';
+import { snapshot, saveSnapshot, deleteOrderDurably, acceptAuthoritativeOrder, sessionFence, sessionStorageAvailable, rejectSessionFence, acceptSessionFence, withSessionGate, rememberAccount, lastAccount, migrateLegacy, replay, pendingOperations, OFFLINE_CACHE_INVALIDATED_EVENT } from './offline-work.ts';
+import { currentLocalWorkGeneration, currentLocalWorkUserId, LOCAL_WORK_USER_EVENT, restoreLocalWorkUserId, setLocalWorkUserId } from './local-work.ts';
 
 export const SESSION_EXPIRED_EVENT='mobiup-session-expired';
 export const DATA_FRESHNESS_EVENT='mobiup-data-freshness';
@@ -176,10 +176,6 @@ export async function networkApi<T=Record<string,unknown>>(path: string,method='
     await acceptAuthoritativeOrder(requestOwner,data.order as unknown as import('./types').Order).catch(()=>{
       if(typeof window!=='undefined')window.dispatchEvent(new CustomEvent('mobiup-storage-error',{detail:'Comanda este finalizată pe server. Copia locală nu a putut fi actualizată.'}));
     });
-  } else if(method==='DELETE'&&/^orders\/[^/]+$/.test(path)) {
-    const userId=currentLocalWorkUserId();
-    const orderId=path.slice('orders/'.length);
-    if(userId&&orderId)removeLocalWork('order',userId,orderId);
   }
   return data as T;
 }
@@ -201,7 +197,9 @@ export async function api<T=Record<string,unknown>>(path:string,method='GET',bod
   if(entry&&Date.now()-entry.at<=maxAge){if(signal?.aborted)throw signal.reason;readCache.delete(key);readCache.set(key,entry);return clone(entry.value) as T;}
  }
  try{
-  const result=await networkApi<T>(path,method,body,signal);
+  const result=method==='DELETE'&&/^orders\/[^/]+$/.test(path)
+   ?await deleteOrderDurably(owner,path.slice(7),()=>networkApi<T>(path,method,body,signal))
+   :await networkApi<T>(path,method,body,signal);
   if(path==='auth/logout')return result;
   await confirmAuthority();
   if(!path.startsWith('auth/')&&!bootstrapPath(path))assertScope(owner,generation);

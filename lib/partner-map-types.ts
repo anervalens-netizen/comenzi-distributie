@@ -32,6 +32,7 @@ export type PartnerBrowse = {
   total: number;
   located: number;
   geocoded: number;
+  revision?: string;
   nextOffset: number | null;
   bounds: MapBounds | null;
   facets: { counties: string[]; cities: string[]; routes: string[] };

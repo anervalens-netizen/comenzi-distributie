@@ -141,7 +141,7 @@ try{
  check(await finalizedTab.evaluate(`const stale={...${JSON.stringify(await evaluate('finalBase'))},revision:999};await m.reconcileOrderList('agent',[stale]);const rows=await m.reconcileOrderList('agent',[stale],true);!rows.some(o=>o.id===stale.id&&o.status==='draft')`),'late old-client list cannot undo terminal projection');
  await finalizedTab.close();await browser.send('Page.bringToFront');
  check(await evaluate("const local={...finalBase,notes:'Unsaved in another tab'};await m.saveOrderWork('agent',createdId,{base:finalBase,local});m.writeLocalWork('order','agent',createdId,{base:finalBase,local});await m.api('orders/'+createdId+'/finalize','POST',{revision:finalBase.revision});(await m.readWork('agent','order',createdId)).local.notes===local.notes&&m.readLocalWork('order','agent',createdId).value.local.notes===local.notes"),'idempotent finalization preserves real unsaved recovery in both stores');
- await evaluate("await m.markOrderDeleted('agent',createdId)");
+ await evaluate("await m.deleteOrderDurably('agent',createdId,async()=>({ok:true,deletedId:createdId}))");
  check(await evaluate("!(await m.reconcileOrderList('agent',[finalBase],true)).some(o=>o.id===createdId)"),'deleted marker also defeats confirmed projection');
  // H: real rendered form rejects Saturday before persistence, allows correction,
  // and releases a definitive server rejection while retaining entered fields.
@@ -203,7 +203,7 @@ try{
  // T03: local draft survives every list read; confirmed/deleted rows never revive.
  check(await evaluate("const local={...base,id:crypto.randomUUID(),number:'Ciornă locală'};window.listLocal=local;await m.saveWork('agent','draft-list','all',[local]);(await m.reconcileOrderList('agent',[])).some(o=>o.id===local.id)&&(await m.reconcileOrderList('agent',[])).some(o=>o.id===local.id)"),'T03 local-only survives refresh/reload rule');
  check(await evaluate("const confirmed={...listLocal,number:'TEST'};(await m.reconcileOrderList('agent',[confirmed])).filter(o=>o.id===confirmed.id).length===1&&(await m.reconcileOrderList('agent',[])).length===0"),'T03 confirmed local collapses and cannot return from an old draft-list');
- check(await evaluate("await m.markOrderDeleted('agent',listLocal.id);(await m.reconcileOrderList('agent',[listLocal])).length===0&&(await m.reconcileOrderList('other',[])).length===0"),'T03 tombstones defeat late server pages and preserve account isolation');
+ check(await evaluate("await m.deleteOrderDurably('agent',listLocal.id,async()=>({ok:true,deletedId:listLocal.id}));(await m.reconcileOrderList('agent',[listLocal])).length===0&&(await m.reconcileOrderList('other',[])).length===0"),'T03 tombstones defeat late server pages and preserve account isolation');
  // T04: actual profile conflict does not starve an authorized visit. Legacy
  // entity keys are deliberately retained to exercise an installed old queue.
  await evaluate("window.path='partner/portfolio/point';window.profile=(await transport(path,'GET')).partner;await m.enqueue('agent',path,'PATCH',{...profile,contact:'Local contact'});await transport(path,'PATCH',{...profile,contact:'Remote contact'});await replay();window.visitId=crypto.randomUUID();await m.enqueue('agent',path+'/visits','POST',{id:visitId,notes:'Independent visit'});");

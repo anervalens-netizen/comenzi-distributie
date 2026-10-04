@@ -14,8 +14,6 @@ import type { Order, Product, Client } from '@/lib/types';
 import { StockQuantity, StockMetadata, useAgentStock } from '@/components/stock-panel';
 import { useOrderDraftSave } from '@/components/use-order-draft-save';
 import { OrderResult } from './order-result';
-import { markOrderDeleted } from '@/lib/offline-work';
-import { currentLocalWorkUserId } from '@/lib/local-work';
 import { QueuedWorkRecovery } from '@/components/queued-work-recovery';
 import { OrderSaveConflictDialog } from '@/components/order-save-conflict-dialog';
 
@@ -79,7 +77,7 @@ function EditableOrderEditor({initial,products,onClose,onSaved,onFinalized,onRec
   async function back() {setBusy(true);setActionError('');try{await save();onClose();}catch{if(saveState.includes('Salvat pe telefon'))onClose();setBusy(false);}}
   async function recover(){setBusy(true);setActionError('');try{const recovered=await recoverToNewDraft();toast.success('Modificările au fost copiate într-o ciornă nouă.');onRecovered(recovered);}catch(err){setActionError(errorMessage(err));setBusy(false);}}
   async function discardRecovery(){try{await discardRemoteRecovery();onClose();}catch(error){toast.error(errorMessage(error));}}
-  async function discardDraft() {if(busy||locked||!window.confirm('Renunți la această ciornă?'))return;setBusy(true);setActionError('');try{await api(`orders/${order.id}`,'DELETE',{revision:getRevision()});await markOrderDeleted(currentLocalWorkUserId(),order.id);toast.success('Ciorna a fost ștearsă.');onClose();}catch(err){setActionError(errorMessage(err));setBusy(false);}}
+  async function discardDraft() {if(busy||locked||!window.confirm('Renunți la această ciornă?'))return;setBusy(true);setActionError('');try{await api(`orders/${order.id}`,'DELETE',{revision:getRevision()});toast.success('Ciorna a fost ștearsă.');onClose();}catch(err){setActionError(errorMessage(err));setBusy(false);}}
   async function openReview(){if(busy||locked)return;setBusy(true);setActionError('');try{await save(true);setReview(true);}catch{}finally{setBusy(false);}}
   async function finalize() {
     setBusy(true);setActionError('');

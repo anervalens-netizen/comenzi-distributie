@@ -1,7 +1,7 @@
 import {mergeConcurrentOrders,orderSaveBody,sameEditableOrder} from './order-draft.ts';
 import type {Order} from './types';
 import {visitDateError} from './visit-date.ts';
-import {readLocalWork,removeLocalWork} from './local-work.ts';
+import {readLocalWork,removeLocalWork,writeLocalWork} from './local-work.ts';
 /** Account-bound durable work. Transactions never evict pending mutations. */
 export type PendingOperation = { id:string; userId:string; entity:string; path:string; method:string; body:unknown; created:number; attempts:number; next:number; state:'pending'|'blocked'; error?:string; status?:number; orderWork?:{base:Order;local:Order} };
 type Snapshot = {key:string;userId:string;path:string;value:unknown;at:number;bytes:number};
@@ -176,7 +176,7 @@ export async function readCoverageManifest(userId:string):Promise<CoverageManife
  const missing:string[]=[];
  for(const path of manifest.paths)if(!await snapshot(userId,path))missing.push(path);
  if(!missing.length&&manifest.valid)return manifest;
- const checked={...manifest,valid:missing.length===0,missing};
+ const checked={...manifest,valid:manifest.valid&&missing.length===0,missing};
  if(JSON.stringify(checked)!==JSON.stringify(manifest))await saveCoverageManifest(userId,checked);
  return checked;
 }
@@ -272,8 +272,15 @@ export async function rememberAccount(userId:string,expected?:SessionFence){
 export async function lastAccount(){return transaction(['meta'],'readonly',async tx=>(await request(tx.objectStore('meta').get('active')))?.value as string||'');}
 export async function readWork<T>(userId:string,scope:string,id:string){return transaction(['work'],'readonly',async tx=>(await request(tx.objectStore('work').get(userId+'|'+scope+'|'+id)))?.value as T|undefined);}
 export async function saveWork(userId:string,scope:string,id:string,value:unknown){await transaction(['work'],'readwrite',tx=>request(tx.objectStore('work').put({key:userId+'|'+scope+'|'+id,value})));}
+async function archiveOrderWork(store:IDBObjectStore,userId:string,id:string,value:unknown){
+ const key=userId+'|recovered-order|'+id,previous=await request(store.get(key));
+ if(previous&&JSON.stringify(previous.value)===JSON.stringify(value))return;
+ await request(store.put({key:previous?key+'|'+crypto.randomUUID():key,value}));
+}
 export async function saveOrderWork(userId:string,id:string,value:{base:Order;local:Order}){
  await transaction(['work'],'readwrite',async tx=>{const store=tx.objectStore('work'),key=userId+'|order|'+id;
+  const settled=(await request(store.get(userId+'|order-list|settled')))?.value;
+  if(settled?.[id]==='deleted'){await archiveOrderWork(store,userId,id,value);return;}
   // A comparison base belongs to this editor's content, not to another tab.
   await request(store.put({key,value}));
  });
@@ -359,11 +366,23 @@ export async function migrateLegacy(userId:string){
 }
 export async function pendingOperations(userId:string){return transaction(['outbox'],'readonly',async tx=>(await request(tx.objectStore('outbox').index('user').getAll(userId)) as PendingOperation[]).sort((a,b)=>a.created-b.created||a.id.localeCompare(b.id)));}
 function entityFor(path:string,body:unknown){return path==='orders'?'orders/'+String((body as {id?:string})?.id):path==='partner/planning'?'plan/'+String((body as {date?:string})?.date):path;}
+export class DeletedOrderWorkError extends Error {
+ readonly status=404;
+ constructor(){super('Comanda a fost ștearsă. Modificările locale sunt păstrate pentru recuperare.');}
+}
 export async function enqueue(userId:string,path:string,method:string,body:unknown,local?:{scope:string;id:string;value:unknown}){
  if(!userId)throw new Error('Contul trebuie pregătit online înainte de lucru offline.');
  if(!((path==='orders'&&method==='POST')||(/^orders\/[^/]+$/.test(path)&&method==='PUT')||(/^partner\/portfolio\/[^/]+$/.test(path)&&method==='PATCH')||(/^partner\/portfolio\/[^/]+\/visits$/.test(path)&&method==='POST')||(path==='partner/planning'&&method==='PUT')))throw new Error('Această operațiune necesită conexiune și confirmare pe server.');
  const operation:PendingOperation={id:crypto.randomUUID(),userId,path,method,body,entity:entityFor(path,body),created:Date.now(),attempts:0,next:0,state:'pending'};
- await withOutboxGate(()=>transaction(['work','outbox'],'readwrite',async tx=>{
+ const retired=await withOutboxGate(()=>transaction(['work','outbox'],'readwrite',async tx=>{
+  if(operation.entity.startsWith('orders/')){
+   const store=tx.objectStore('work'),id=operation.entity.slice(7);
+   if(method!=='POST'&&(await request(store.get(userId+'|order-list|settled')))?.value?.[id]==='deleted'){
+    await request(store.put({key:userId+'|resolved-operation|'+operation.id,value:operation}));
+    if(local)await archiveOrderWork(store,userId,id,local.value);
+    return true;
+   }
+  }
   if(local){
    const key=userId+'|'+local.scope+'|'+local.id;
    await request(tx.objectStore('work').put({key,value:local.value}));
@@ -376,7 +395,7 @@ export async function enqueue(userId:string,path:string,method:string,body:unkno
   if(method==='POST'&&all.some(o=>o.path===path&&o.method===method&&JSON.stringify(o.body)===JSON.stringify(body)))return;
   if(previous&&method!=='POST'){operation.id=previous.id;operation.created=previous.created;}
   await request(tx.objectStore('outbox').put(operation));
- }));notify();return operation;
+ }));notify();if(retired)throw new DeletedOrderWorkError();return operation;
 }
 export async function removeOperation(id:string){await transaction(['outbox'],'readwrite',tx=>request(tx.objectStore('outbox').delete(id)));notify();}
 async function updateOperation(op:PendingOperation,expected?:PendingOperation){
@@ -464,8 +483,59 @@ export async function reconcileOrderList(userId:string,remote:Order[],offline=fa
   return [...byId.values()];
  });
 }
-export async function markOrderDeleted(userId:string,id:string){
- await transaction(['work'],'readwrite',async tx=>{const store=tx.objectStore('work'),key=userId+'|order-list|settled';const value=(await request(store.get(key)))?.value||{};value[id]='deleted';await request(store.put({key,value}));await reconcileOrderListInTransaction(tx,userId,[]);});
+/** Serialize the network delete with replay. Only an authoritative deletion can
+ * retire a create; 404 and local-only drafts never enter finalization. */
+export async function deleteOrderDurably<T>(userId:string,id:string,send:()=>Promise<T>):Promise<T>{
+ const run=async()=>{
+  const token=await claimLease(userId);if(!token)throw new Error('Sincronizarea este în curs. Reîncearcă.');
+  try{
+   return await withOutboxGate(async()=>{
+    const before=readLocalWork<{base:Order;local:Order}>('order',userId,id);
+    const result=await send();
+    try{
+     if(!object(result)||result.ok!==true)throw new Error('Confirmarea ștergerii este incompletă. Copia locală rămâne păstrată.');
+     // New servers identify the deleted document explicitly. Older ok-only
+     // responses can retire edits, but cannot resolve ambiguous POST creates.
+     const provesCreate=result.deletedId===id;
+     const mirror=readLocalWork<{base:Order;local:Order}>('order',userId,id);
+     const recovery=await transaction(['work','outbox','meta'],'readwrite',async tx=>{
+      if((await request(tx.objectStore('meta').get('lease|'+userId)))?.token!==token)throw new Error('Sincronizarea locală necesită verificare.');
+      const store=tx.objectStore('work'),outbox=tx.objectStore('outbox');
+      const rows=(await request(outbox.index('user').getAll(userId)) as PendingOperation[]).filter(op=>entityFor(op.path,op.body)==='orders/'+id);
+      if(rows.some(op=>op.method==='POST')&&!provesCreate)throw new Error('Crearea comenzii nu este confirmată. Copia și operațiunea rămân păstrate.');
+      for(const op of rows){await request(store.put({key:userId+'|resolved-operation|'+op.id,value:op}));await request(outbox.delete(op.id));}
+      const key=userId+'|order|'+id,row=await request(store.get(key));
+      const archive=async(value:{base:Order;local:Order}|null|undefined,suffix='')=>{
+       if(value?.base&&value.local&&!sameEditableOrder(value.base,value.local))await archiveOrderWork(store,userId,id+suffix,value);
+      };
+      await archive(row?.value);await archive(mirror.value,row&&JSON.stringify(row.value)!==JSON.stringify(mirror.value)?'|mirror':'');
+      await request(store.delete(key));
+      const markerKey=userId+'|order-list|settled',settled=(await request(store.get(markerKey)))?.value||{};
+      settled[id]='deleted';await request(store.put({key:markerKey,value:settled}));
+      const projectionKey=userId+'|order-list|confirmed',projection=(await request(store.get(projectionKey)))?.value||{};
+      delete projection[id];await request(store.put({key:projectionKey,value:projection}));
+      await reconcileOrderListInTransaction(tx,userId,[]);
+      return row?.value?.base&&row.value.local&&!sameEditableOrder(row.value.base,row.value.local)?row.value as {base:Order;local:Order}:null;
+     });
+     // Read again AFTER the transaction. Only clean content equal to the captured
+     // mirror may be removed; dirty/newer/different legacy copies remain explicit.
+     const current=readLocalWork<{base:Order;local:Order}>('order',userId,id);
+     if(recovery&&!current.error&&JSON.stringify(current.value)===JSON.stringify(before.value)&&(!current.value||current.value.base&&current.value.local&&sameEditableOrder(current.value.base,current.value.local))){
+      const error=writeLocalWork('order',userId,id,recovery);if(error)throw new Error(error);
+     }else if(!recovery&&!current.error&&current.value?.base&&current.value.local&&JSON.stringify(current.value)===JSON.stringify(before.value)&&sameEditableOrder(current.value.base,current.value.local)){
+      const error=removeLocalWork('order',userId,id);if(error)throw new Error(error);
+     }
+     invalidateReplayCache(userId,['orders']);notify();
+    }catch(error){deletionCleanupError(error);}
+    return result;
+   });
+  }finally{try{await releaseLease(userId,token);}catch(error){deletionCleanupError(error);}}
+ };
+ if(typeof navigator!=='undefined'&&navigator.locks)return navigator.locks.request('mobiup-outbox-'+userId,run);
+ return run();
+}
+function deletionCleanupError(error:unknown){
+ if(typeof window!=='undefined')window.dispatchEvent(new CustomEvent('mobiup-storage-error',{detail:'Comanda a fost ștearsă pe server. Recuperarea locală necesită verificare: '+(error instanceof Error?error.message:'stocare indisponibilă')}));
 }
 
 type ReplayTransport=(path:string,method:string,body:unknown,operationId?:string)=>Promise<unknown>;
@@ -564,7 +634,9 @@ function confirmedVisit(op:PendingOperation,result:unknown){
  if(!object(result)||!object(op.body)||typeof op.body.id!=='string')return null;
  const body=op.body;
  const customerId=decodeURIComponent(op.path.split('/')[2]);
- const matches=(visit:unknown)=>visitRecord(visit)&&visit.id===body.id&&visit.customerId===customerId&&visit.agentId===op.userId&&visit.notes===(typeof body.notes==='string'?body.notes.trim().slice(0,2000):'');
+ const matches=(visit:unknown)=>visitRecord(visit)&&visit.id===body.id&&visit.customerId===customerId&&visit.agentId===op.userId&&visit.notes===(typeof body.notes==='string'?body.notes.trim().slice(0,2000):'')
+  &&(!Object.hasOwn(body,'nextStep')||(Object.hasOwn(visit,'nextStep')&&visit.nextStep===(typeof body.nextStep==='string'?body.nextStep.trim().slice(0,500):'')))
+  &&(!Object.hasOwn(body,'followUpDate')||(Object.hasOwn(visit,'followUpDate')&&visit.followUpDate===(body.followUpDate===null||body.followUpDate===undefined||body.followUpDate===''?null:body.followUpDate)));
  // Older servers confirm through the history page; never assume its first row is ours.
  return matches(result.visit)?result.visit:Array.isArray(result.visits)?result.visits.find(matches)??null:null;
 }

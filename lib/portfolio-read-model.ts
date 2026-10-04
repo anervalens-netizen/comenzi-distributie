@@ -1,3 +1,4 @@
+import {paginationRevision,paginationClock} from './pagination-revision';
 import {countyLabel, countySearch, routeTokens} from './portfolio-facets';
 import {db,fail,sha256} from './server';
 import {partnerScope,portfolioRowView} from './partner-portfolio';
@@ -48,7 +49,7 @@ export async function readyReadModel(){
  if(!await updateReadModel(1000)&&!await updateReadModel(1000))fail(503,'Portofoliul se actualizează. Reîncearcă.');
  scheduleMaintenance();
 }
-export function selectedSql(user:User,params:URLSearchParams,warehouseIds?:string[],bbox?:[number,number,number,number]){
+export function selectedSql(user:User,params:URLSearchParams,warehouseIds?:string[],bbox?:[number,number,number,number],cutoff?:number){
  const scope=partnerScope(user),args:(string|number)[]=[...scope.args],where=['c.active=1',scope.sql];
  if(warehouseIds){where.push("EXISTS (SELECT 1 FROM json_each(COALESCE(json_extract(c.data,'$.warehouseIds'),json_array(c.warehouse_id))) w WHERE w.value IN (SELECT value FROM json_each(?)))");args.push(JSON.stringify(warehouseIds));}
  for(const key of ['q','county','city','route'])if((params.get(key)?.length||0)>300)fail(400,'Filtrul este prea lung.');
@@ -56,7 +57,7 @@ export function selectedSql(user:User,params:URLSearchParams,warehouseIds?:strin
  if(!['','yes','no'].includes(position)||!['','never','7','14','30','60','90'].includes(days))fail(400,'Filtrul este invalid.');
  if(q){where.push('instr(m.search,?)>0');args.push(normalize(q));}if(city){where.push('instr(m.city_search,?)>0');args.push(normalize(city));}if(county){where.push('m.county=?');args.push(countyLabel(county));}if(route&&!route.trim())where.push('0');else if(route){where.push("EXISTS (SELECT 1 FROM json_each('[' || replace(json_quote(COALESCE(m.route,'')), ',', '\",\"') || ']') t WHERE trim(t.value,?)=?)");args.push(' \t\n\v\f\r\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff',route.trim());}
  if(position)where.push('m.latitude IS '+(position==='yes'?'NOT ':'')+'NULL');
- if(days==='never')where.push('(m.last_visited_at IS NULL OR m.last_visited_at=\'\')');else if(days){where.push("julianday(m.last_visited_at)<=julianday(?)-?");args.push(new Date().toISOString(),Number(days));}
+ if(days==='never')where.push('(m.last_visited_at IS NULL OR m.last_visited_at=\'\')');else if(days){where.push("julianday(m.last_visited_at)<=julianday(?)-?");args.push(new Date(cutoff??paginationClock(params)).toISOString(),Number(days));}
  if(bbox){where.push(`m.latitude BETWEEN ? AND ? AND ${bbox[0]<=bbox[2]?'m.longitude BETWEEN ? AND ?':'(m.longitude>=? OR m.longitude<=?)'}`);args.push(bbox[1],bbox[3],bbox[0],bbox[2]);}
  return {from:'portfolio_read_rows m JOIN customers c ON c.id=m.id',where:where.join(' AND '),args};
 }
@@ -94,13 +95,17 @@ async function browseFacets(user:User,warehouseIds:string[]|undefined,county:str
  if(version===await portfolioVersion())facetCache.put(key,version,result,60000);
  return result;
 }
-export async function pagedBrowse(user:User,params:URLSearchParams,warehouseIds:string[]|undefined,offset:number,limit:number,selectedIds?:string[],attempt=0):Promise<Browse>{
+export async function pagedBrowse(user:User,params:URLSearchParams,warehouseIds:string[]|undefined,offset:number,limit:number,selectedIds?:string[],attempt=0,sourceRevision?:string,cutoff?:number):Promise<Browse>{
  await readyReadModel();
  const version=await portfolioVersion();
  const configured=await db().prepare("SELECT value FROM settings WHERE key='partner-map-style-url'").first<{value:string}>();
  const configuredRevision=JSON.stringify(configured);
  // An explicit empty billing selection differs from no selection. Digest keeps keys bounded.
  const selection=selectedIds===undefined?null:sha256(JSON.stringify([...new Set(selectedIds)].sort()));
+ const clock=usesClock(params)?cutoff??paginationClock(params):0;
+ const revision=paginationRevision(params,[version,scopeKey(user,warehouseIds),configuredRevision,selection,sourceRevision],clock);
+ // Carry the first read's cutoff through every query, including retries.
+ params=new URLSearchParams(params);params.set('revision',revision);
  const key=JSON.stringify([scopeKey(user,warehouseIds),params.toString(),offset,limit,selection]);
  const cached=usesClock(params)?undefined:cache.get<Browse>(key,version+configuredRevision);
  if(cached&&version===await portfolioVersion())return cached;
@@ -111,10 +116,10 @@ export async function pagedBrowse(user:User,params:URLSearchParams,warehouseIds:
  const facets=await browseFacets(user,warehouseIds,params.get('county')||'',version);
  const styleUrl=configured?.value?.trim()||'https://tiles.openfreemap.org/styles/positron';
  if(!styleUrl.startsWith('https://')&&!/^\/(?!\/)/.test(styleUrl))fail(500,'Configurația hărții este invalidă.');
- const result:Browse={facetVersion:2,partners:page.results.map(r=>JSON.parse(r.summary)),total:totals!.total,located:totals!.located,geocoded:totals!.geocoded||0,nextOffset:offset+limit<totals!.total?offset+limit:null,bounds:totals!.west===null?null:[totals!.west,totals!.south!,totals!.east!,totals!.north!],facets,styleUrl,observedAt:new Date().toISOString()};
+ const result:Browse={revision,facetVersion:2,partners:page.results.map(r=>JSON.parse(r.summary)),total:totals!.total,located:totals!.located,geocoded:totals!.geocoded||0,nextOffset:offset+limit<totals!.total?offset+limit:null,bounds:totals!.west===null?null:[totals!.west,totals!.south!,totals!.east!,totals!.north!],facets,styleUrl,observedAt:new Date().toISOString()};
  if(version!==await portfolioVersion()){
   if(attempt>=2)fail(503,'Portofoliul se modifică. Reîncearcă.');
-  return pagedBrowse(user,params,warehouseIds,offset,limit,selectedIds,attempt+1);
+  return pagedBrowse(user,params,warehouseIds,offset,limit,selectedIds,attempt+1,sourceRevision);
  }
  if(!usesClock(params))cache.put(key,version+configuredRevision,result,30000);
  return result;

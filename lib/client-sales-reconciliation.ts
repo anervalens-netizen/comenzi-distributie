@@ -1,3 +1,4 @@
+import {paginationRevision} from './pagination-revision';
 import {DatabaseSync} from 'node:sqlite';
 import {resolve} from 'node:path';
 import {existsSync} from 'node:fs';
@@ -50,11 +51,14 @@ async function sourceFacts(directory:string,month:string,today:string,generation
  * nor joined to sellers. Current CRM membership is rechecked after every cached read. */
 export async function clientSalesReconciliation(user:User,params:URLSearchParams,now=new Date()){
   requireManager(user);
-  for(const key of params.keys())if(!['month','page','format'].includes(key)||params.getAll(key).length!==1)fail(400,'Parametru invalid pentru reconcilierea națională.');
+  for(const key of params.keys())if(!['month','page','format','revision'].includes(key)||params.getAll(key).length!==1)fail(400,'Parametru invalid pentru reconcilierea națională.');
   const input=clientSalesParams(new URLSearchParams([...params].filter(([k])=>k!=='format')),now);
   if(params.has('format')&&params.get('format')!=='csv')fail(400,'Format invalid.');
   const directory=resolve(process.env.MOBIUP_DATA_DIR||'./work/server-data'),generation=fileGeneration(directory),version=await clientPortfolioVersion();
-  const facts=await sourceFacts(directory,input.month,bucharestToday(now),generation);
+  const facts=await sourceFacts(directory,input.month,bucharestToday(now),generation).catch(error=>{
+    if(params.has('revision')&&error?.status===503)fail(409,'Sursa paginării nu mai este disponibilă. Reîncepe de la prima pagină.');
+    throw error;
+  });
   // Project only the identity JSON value. Preserve its original JS coercion,
   // including legacy numeric/boolean values, without decoding unrelated CRM data.
   const current=new Map<string,boolean>();let cursor='';
@@ -76,10 +80,11 @@ export async function clientSalesReconciliation(user:User,params:URLSearchParams
     }
     if(i%128===0)await salesYield();
   }
-  if(version!==await clientPortfolioVersion()||generation!==fileGeneration(directory))fail(503,'Portofoliul sau sursa s-au actualizat. Reîncearcă.');
+  if(version!==await clientPortfolioVersion()||generation!==fileGeneration(directory))fail(params.has('revision')?409:503,'Portofoliul sau sursa s-au actualizat. Reîncearcă.');
   const explanation='Reconciliere națională, în bani întregi. Sursă = consumatori + firme asociate + identități neasociate; firme asociate = portofoliu activ actual + firme inactive + firme absente. Istoricul tuturor vânzătorilor, nu vânzări personale ale responsabilului actual. PL ambiguu nu este alocat forțat. Sumele cunoscute exclud valorile lipsă, raportate separat. Absența unei luni importate nu înseamnă zero vânzări.';
   const portfolioRevision=version===null?null:sha256(version);
-  const rows=[...exceptions.values()],result={state:'ready' as const,scope:'national' as const,month:input.month,window:facts.window,source:facts.source,portfolioRevision,explanation,buckets,total:rows.length,page:input.page,hasMore:(input.page+1)*100<rows.length,exceptions:rows.slice(input.page*100,(input.page+1)*100)};
+  const revision=paginationRevision(params,[generation,version,user.id,user.role,user.managerScope,input.month,bucharestToday(now),facts.source,[...current]]);
+  const rows=[...exceptions.values()],result={revision,state:'ready' as const,scope:'national' as const,month:input.month,window:facts.window,source:facts.source,portfolioRevision,explanation,buckets,total:rows.length,page:input.page,hasMore:(input.page+1)*100<rows.length,exceptions:rows.slice(input.page*100,(input.page+1)*100)};
   if(params.get('format')==='csv'){
     const cell=(s:string|number|null|undefined)=>'"'+(typeof s==='number'?String(s):String(s??'').replace(/^[=+@-]/,"'$&")).replaceAll('"','""')+'"';
     const lines:(string|number|null|undefined)[][]=[['Definition',explanation],['Period',facts.window.from,facts.window.to,facts.window.imported?'imported':'not imported'],['Source revision',facts.source.revision],['Reference',facts.source.reference],['Portfolio revision',portfolioRevision],['Source coverage',JSON.stringify(facts.source.coverage)],['Bucket','Known cents','Missing values','Source rows'],...Object.entries(buckets).map(([k,v])=>[k,v.knownCents,v.missingValues,v.sourceRows]),[],['Exception key','Category','Company','Raw client code','Reason','Known cents','Missing values','Source rows'],...rows.map(r=>[r.key,r.category,r.companyId,r.clientCode,r.reason,r.knownCents,r.missingValues,r.sourceRows])];

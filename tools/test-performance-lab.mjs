@@ -30,6 +30,10 @@ try{
  }
  const first=await t.call('','manager'),builds=m.clientSalesCacheStats.builds;
  assert.deepEqual(await t.call('','manager'),first);assert.equal(m.clientSalesCacheStats.builds,builds);
- const aliases=await t.call('county=Iași&q=ȘTIINȚĂ','manager');assert.deepEqual(await t.call('q=stiinta&county=RO-IS','manager'),aliases);
+ const {revision:aliasRevision,...aliases}=await t.call('county=Iași&q=ȘTIINȚĂ','manager');
+ const {revision:canonicalRevision,...canonical}=await t.call('q=stiinta&county=RO-IS','manager');
+ assert.deepEqual(canonical,aliases,'equivalent county/search aliases preserve every report field');
+ assert.notEqual(canonicalRevision,aliasRevision,'pagination tokens are bound to the exact client query');
+ await assert.rejects(t.call('q=stiinta&county=RO-IS&page=1&revision='+encodeURIComponent(aliasRevision),'manager'),e=>e.status===409,'a token cannot cross query aliases');
  console.log('PASS: LAB percentile floor, UTF-8/compression accounting, bounded report codec and exact mutable-copy equivalence.');
 }finally{t.cleanup();}
