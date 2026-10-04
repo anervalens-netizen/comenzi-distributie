@@ -38,7 +38,7 @@ const serverPlugin={name:'synthetic-infrastructure',setup(b){
   b.onResolve({filter:/^(?:@\/lib\/|\.\/)([^/]+)$/},args=>{const name=args.path.split('/').at(-1);if(name in stubs)return {path:name,namespace:'fixture'};});
   b.onResolve({filter:/^@\/resources\//},args=>({path:args.path.split('/').at(-1),namespace:'resource'}));
   b.onLoad({filter:/.*/,namespace:'fixture'},args=>({loader:'js',contents:stubs[args.path]}));
-  b.onLoad({filter:/.*/,namespace:'resource'},args=>({loader:'json',contents:JSON.stringify(args.path==='seed.json'?{products:[],clients:[],warehouses:[],importWarnings:[]}:args.path==='initial-users.json'?[]:{})}));
+  b.onLoad({filter:/.*/,namespace:'resource'},args=>({loader:'json',contents:JSON.stringify(args.path==='seed.json'?{products:[],clients:[],warehouses:[],importWarnings:[]}:args.path==='initial-users.json'?[]:args.path==='mail-defaults.json'?{partnerTo:[],partnerCc:[]}:{})}));
 }};
 async function load(entry,plugins,name=entry.replace(/\W/g,'_')){const outfile=join(dir,name+'.mjs');await build({entryPoints:[entry],outfile,bundle:true,platform:'node',format:'esm',banner:{js:"import {createRequire as fixtureRequire} from 'node:module';const require=fixtureRequire(import.meta.url);"},plugins,logLevel:'silent'});return import(pathToFileURL(outfile));}
 const noOp=()=>{};
@@ -64,6 +64,26 @@ try {
     const response=await route[method](request),data=await response.json();
     equal(response.status,status,`${method} ${path}: ${JSON.stringify(data).slice(0,300)}`);return data;
   }
+  // National reads use the same manager filters as the other read surfaces.
+  for(const agent of ['a','a-shared','b','inactive']){
+    const order={id:'matrix-'+agent,number:'SYN-'+agent,userId:agent,kind:'accessories',status:'draft',items:[],serials:[],client:null,notes:'',createdAt:'2026-10-01T12:00:00Z',revision:1};
+    sqlite.prepare('INSERT INTO orders(id,number,user_id,warehouse_id,kind,status,payload,created_at,revision) VALUES(?,?,?,?,?,?,?,?,1)').run(order.id,order.number,agent,'w-'+agent,order.kind,order.status,JSON.stringify(order),order.createdAt);
+  }
+  const ids=data=>data.orders.map(o=>o.userId).sort();
+  for(const viewer of ['global','regional','region-b']){
+    equal(ids(await api('bootstrap?compact=1',viewer)),['a','a-shared','b','inactive'],'compact bootstrap national manager read');
+    for(const [filter,expected] of [['',['a','a-shared','b','inactive']],['managerId=region-b',['a-shared','b']],['managerId=regional',['a','a-shared','inactive']],['agentId=b',['b']],['managerId=region-b&agentId=b',['b']],['managerId=__unassigned',[]]]){
+      const page=await api('orders?page=1&kind=all&range=all&'+filter,viewer);
+      equal(ids(page),expected,'manager matrix '+viewer+' '+filter);equal(page.orderPage.total,expected.length,'national filtered total');equal(page.orderPage.stats.drafts,expected.length,'national filtered stats');
+    }
+    await api('orders?page=1&managerId=regional&agentId=b',viewer,'GET',undefined,404);
+  }
+  sqlite.prepare("DELETE FROM manager_agents WHERE agent_id='inactive'").run();
+  equal(ids(await api('orders?page=1&managerId=__unassigned','global')),['inactive'],'unassigned includes agents without active regional assignments');
+  sqlite.prepare("INSERT INTO manager_agents VALUES('regional','inactive')").run();
+  equal(ids(await api('orders?page=1','a')),['a'],'agent only reads own orders');
+  await api('orders?page=1&agentId=b','a','GET',undefined,403);
+  await api('orders/matrix-b','regional','PUT',{revision:1,items:[],serials:[],notes:'Forbidden'},404);
   // The client helper matches actual server authorization, including inactive and shared assignments.
   for(const account of users){
     const permissions=writePermissions(account,users);
@@ -149,6 +169,19 @@ try {
   const savedFollowUp=sqlite.prepare('SELECT next_step nextStep,follow_up_date followUpDate FROM partner_visits WHERE id=?').get(followUpVisit);
   equal({...savedFollowUp},{nextStep:'Bring the synthetic offer',followUpDate:'2026-10-02'},'visit stores optional next step without changing event identity');
   equal(JSON.parse(sqlite.prepare("SELECT stops FROM partner_day_plans WHERE agent_id='a' AND plan_date='2026-10-02'").get().stops),['shared'],'follow-up reuses the existing day plan without duplicate company or agent input');
+  const plan=()=>({...sqlite.prepare("SELECT * FROM partner_day_plans WHERE agent_id='a' AND plan_date='2026-10-02'").get()});
+  sqlite.prepare("UPDATE partner_day_plans SET stops='[]',revision=revision+1 WHERE agent_id='a' AND plan_date='2026-10-02'").run();
+  const editedPlan=plan();
+  await api('partner/portfolio/shared/visits','a','POST',{id:followUpVisit,notes:'Synthetic visit',nextStep:'Bring the synthetic offer',followUpDate:'2026-10-02'});
+  equal(plan(),editedPlan,'exact duplicate cannot reapply a removed plan stop');
+  await api('partner/portfolio/shared/visits','a','POST',{id:followUpVisit,notes:'Changed',followUpDate:'2026-10-05'},409);
+  equal(plan(),editedPlan,'changed duplicate preserves original plan');
+  equal(sqlite.prepare("SELECT COUNT(*) n FROM partner_day_plans WHERE plan_date='2026-10-05'").get().n,0,'changed duplicate creates no alternate plan');
+  sqlite.exec("CREATE TRIGGER reject_synthetic_plan BEFORE INSERT ON partner_day_plans WHEN NEW.plan_date='2026-10-06' BEGIN SELECT RAISE(ABORT,'Synthetic plan failure'); END");
+  const failedVisit=randomUUID();
+  await api('partner/portfolio/shared/visits','a','POST',{id:failedVisit,followUpDate:'2026-10-06'},500);
+  equal(sqlite.prepare('SELECT COUNT(*) n FROM partner_visits WHERE id=?').get(failedVisit).n,0,'plan failure rolls back first visit insert');
+  sqlite.exec('DROP TRIGGER reject_synthetic_plan');
   equal((await api('partner/attention','a')).followUps.map(row=>row.customerId),['shared'],'due follow-up is actionable through current account scope');
   await api('partner/portfolio/outside/visits','b','POST',{id:randomUUID(),nextStep:'Other territory follow-up',followUpDate:'2026-10-02'});
   equal((await api('partner/attention?agentId=a','global')).followUps.map(row=>row.agentId),['a'],'manager attention respects the selected authorized agent');

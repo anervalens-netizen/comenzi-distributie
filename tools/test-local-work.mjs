@@ -1,3 +1,4 @@
+import {visitDateError} from '../lib/visit-date.ts';
 import assert from 'node:assert/strict';
 import { currentLocalWorkUserId, listLocalWork, readLocalWork, removeLocalWork, setLocalWorkUserId, writeLocalWork } from '../lib/local-work.ts';
 import { mergeInventoryDraftsForStorage, partitionInventoryDrafts } from '../lib/inventory-recovery.ts';
@@ -35,12 +36,17 @@ const persistedDrafts=mergeInventoryDraftsForStorage({...partition.active,'AUD-B
 check(persistedDrafts['AUD-A']?.value==='7'&&persistedDrafts['AUD-B']?.value==='10','Unrelated inventory edit preserves unresolved conflicting values');
 check(writeLocalWork('inventory','user-a','inv-conflict',{warehouseId:'g-1',scanQueue:[],drafts:persistedDrafts},storage)===''&&readLocalWork('inventory','user-a','inv-conflict',storage).value?.drafts['AUD-A']?.value==='7','Conflicting inventory value survives the next persistence');
 
-const orderBase={id:'order-final',status:'draft',notes:''},orderLocal={...orderBase,notes:'UNSAVED LOCAL AUDIT NOTE'};
+const orderBase={id:'order-final',status:'draft',notes:'',serials:[],items:[],client:null},orderLocal={...orderBase,notes:'UNSAVED LOCAL AUDIT NOTE'};
 writeLocalWork('order','user-a','order-final',{base:orderBase,local:orderLocal},storage);
-const orderRecovery=readFinalizedOrderRecovery({id:'order-final',status:'finalized'},'user-a',storage);
+const orderRecovery=readFinalizedOrderRecovery({...orderBase,status:'finalized'},'user-a',storage);
 check(orderRecovery?.local.notes==='UNSAVED LOCAL AUDIT NOTE','Finalized order still exposes stored local recovery after reload');
 check(readLocalWork('order','user-a','order-final',storage).value?.local.notes==='UNSAVED LOCAL AUDIT NOTE','Reading finalized recovery does not delete its checkpoint');
 check(readFinalizedOrderRecovery({id:'order-final',status:'draft'},'user-a',storage)===null,'Draft orders continue through the normal editor recovery path');
+
+writeLocalWork('order','user-a','order-final',{base:orderBase,local:orderBase},storage);
+check(readFinalizedOrderRecovery({...orderBase,status:'finalized'},'user-a',storage)===null,'Clean saved work never offers finalized recovery');
+writeLocalWork('order','user-a','order-final',{base:orderBase,local:orderLocal},storage);
+check(readFinalizedOrderRecovery({...orderLocal,status:'finalized'},'user-a',storage)===null,'Already confirmed edits never offer finalized recovery');
 
 writeLocalWork('inventory','user-a','inv-closed',{warehouseId:'g-5',scanQueue:[{operationId:'op-1',inventoryId:'inv-closed',ean:'123',quantity:2}],drafts:{DEMOACC2:{value:'7',baseCounted:null}}},storage);
 const inventoryRecovery=readClosedInventoryRecovery({id:'inv-closed',warehouseId:'g-5',status:'finalized',canEdit:false},'user-a',storage);
@@ -52,4 +58,6 @@ check(/plin/.test(writeLocalWork('order','user-a','doc-2',{x:1},quota)),'Quota f
 check(/nu permite/.test(setLocalWorkUserId('memory-user',null)),'Unavailable storage is reported for current-user marker');
 check(currentLocalWorkUserId(null)==='memory-user','Current user remains available in memory when storage is unavailable');
 
+for(const value of ['2026-02-30','2026-13-01','2026-10-03','2026-10-04'])check(!!visitDateError(value),'Invalid or weekend date rejected: '+value);
+for(const value of ['','2026-10-05','2026-10-09'])check(!visitDateError(value),'Optional or real weekday accepted: '+value);
 console.log(`PASS: ${checks} local-work checks.`);

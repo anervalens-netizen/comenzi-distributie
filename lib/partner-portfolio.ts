@@ -274,8 +274,10 @@ export async function recordVisit(
   const statements=[db().prepare(
       `INSERT INTO partner_visits(id,customer_id,agent_id,agent_name,visited_at,notes,next_step,follow_up_date,created_at) SELECT ?,c.id,?,?,?,?,?,?,? FROM customers c WHERE c.id=? AND c.active=1 AND ${s.sql} ON CONFLICT(id) DO NOTHING`,
     ).bind(visitId, user.id, user.name, now, notes, nextStep, followUpDate as string|null, now, id, ...s.args)];
+  // batch is atomic; changes() refers to the immediately preceding visit insert.
+  // A duplicate UUID must never recreate or modify a later-edited day plan.
   if(followUpDate)statements.push(db().prepare(
-    `INSERT INTO partner_day_plans(agent_id,plan_date,stops,revision,updated_at) SELECT ?,?,json_array(c.id),1,? FROM customers c WHERE c.id=? AND c.active=1 AND ${s.sql} ON CONFLICT(agent_id,plan_date) DO UPDATE SET stops=json_insert(partner_day_plans.stops,'$[#]',?),revision=partner_day_plans.revision+1,updated_at=excluded.updated_at WHERE NOT EXISTS(SELECT 1 FROM json_each(partner_day_plans.stops) WHERE value=?)`,
+    `INSERT INTO partner_day_plans(agent_id,plan_date,stops,revision,updated_at) SELECT ?,?,json_array(c.id),1,? FROM customers c WHERE c.id=? AND c.active=1 AND ${s.sql} AND changes()=1 ON CONFLICT(agent_id,plan_date) DO UPDATE SET stops=json_insert(partner_day_plans.stops,'$[#]',?),revision=partner_day_plans.revision+1,updated_at=excluded.updated_at WHERE NOT EXISTS(SELECT 1 FROM json_each(partner_day_plans.stops) WHERE value=?)`,
   ).bind(user.id,followUpDate,now,id,...s.args,id,id));
   await db().batch(statements);
   const saved = await db()

@@ -1,4 +1,5 @@
 'use client';
+import {visitDateError} from '@/lib/visit-date';
 import {countyLabel} from '@/lib/portfolio-facets';
 import {PartnerBillingPeriod} from './partner-billing-period';
 import { PartnerActivity } from './partner-activity';
@@ -579,6 +580,8 @@ export function PartnerSheet({
   }
   async function visit() {
     if(manager||form?.canEdit!==true)return;
+    const dateError=visitDateError(pending?.followUpDate||followUpDate);
+    if(dateError){setError(dateError);return;}
     setBusy(true);
     setError('');
     setNotice('');
@@ -600,7 +603,7 @@ export function PartnerSheet({
       invalidateApiReadCache('partner/');
       onSaved();
     } catch (e) {
-      if(!(e instanceof ApiError)||e.status>=500){try{await enqueue(userIdForWork(),`partner/portfolio/${encodeURIComponent(id)}/visits`,'POST',payload,{scope:'visit',id,value:payload});setNotice('Vizită salvată pe telefon · În așteptare.');}catch(storage){setError((storage as Error).message);}}else setError((e as Error).message);
+      if(!(e instanceof ApiError)||e.status>=500){try{await enqueue(userIdForWork(),`partner/portfolio/${encodeURIComponent(id)}/visits`,'POST',payload,{scope:'visit',id,value:payload});setNotice('Vizită salvată pe telefon · În așteptare.');}catch(storage){setError((storage as Error).message);}}else{setPending(null);await removeWork(userIdForWork(),'visit',id);setError((e as Error).message);}
     } finally {
       setBusy(false);
     }

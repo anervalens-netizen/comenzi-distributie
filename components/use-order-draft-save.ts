@@ -252,7 +252,7 @@ export function useOrderDraftSave({ initial, onSaved, storageOwnerId }: { initia
       conflictRef.current=null;setConflict(null);setLocal(next);
       const clean=sameEditableOrder(next,remote);
       setSaveState(clean?'Salvat':'Salvat pe telefon · În așteptare');
-      setSaveError(writeLocalWork('order',owner,initial.id,{base:remote,local:next}));
+      setSaveError(clean?removeLocalWork('order',owner,initial.id):writeLocalWork('order',owner,initial.id,{base:remote,local:next}));
     }catch(error){setSaveError(errorMessage(error));}
   }
 

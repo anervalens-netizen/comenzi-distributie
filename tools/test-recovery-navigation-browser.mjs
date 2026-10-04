@@ -56,6 +56,9 @@ try{
  await evaluate('window.held={};window.holdOrders=true;document.querySelector("[data-order-id=A] .order-link").click()');await waitFor(()=>evaluate('!!held["orders/A"]'),'pending A');
  await evaluate('const input=document.querySelector("[aria-label=\\"Caută comenzi\\"]");Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,"value").set.call(input,"TEST-B");input.dispatchEvent(new Event("input",{bubbles:true}));');await delay(50);await evaluate('held["orders/A"]()');await delay(200);
  check(await evaluate('!document.querySelector(".cart textarea")&&!!document.querySelector("[data-order-id=B]")'),'T05 filter change invalidates pending open');
+ // Wait for the search debounce to issue its own request before holding manual
+ // refreshes. Otherwise two distinct requests race into the first held slot.
+ await waitFor(()=>evaluate('requests.some(path=>path.startsWith("orders?")&&new URLSearchParams(path.split("?")[1]).get("q")==="TEST-B")'),'search request before manual refresh');
  // Reverse list responses must not restore removed rows or older data.
  await evaluate('window.holdOrders=false;window.holdList=true;window.held={};document.querySelector("[aria-label=\\"Actualizează comenzile\\"]").click()');await waitFor(()=>evaluate('Object.keys(held).length===1'),'old list');
  await evaluate('window.orders=orders.filter(o=>o.id!=="B");document.querySelector("[aria-label=\\"Actualizează comenzile\\"]").click()');await waitFor(()=>evaluate('Object.keys(held).length===2'),'new list');

@@ -33,7 +33,7 @@ const localNotify=()=>{if(typeof window!=='undefined')window.dispatchEvent(new E
 if(workChannel)workChannel.onmessage=localNotify;
 const notify=()=>{localNotify();workChannel?.postMessage('changed');};
 const request=<T>(req:IDBRequest<T>)=>new Promise<T>((resolve,reject)=>{req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});
-const isPinnedPath=(path:string)=>path==='bootstrap'||path==='auth/session';
+const isPinnedPath=(path:string)=>path==='bootstrap'||path==='bootstrap?compact=1'||path==='auth/session';
 const isFragmentMarker=(value:unknown):value is FragmentMarker=>!!value&&typeof value==='object'&&Array.isArray((value as FragmentMarker).__mobiupFragments)&&typeof (value as FragmentMarker).property==='string';
 export class OfflineSnapshotCapacityError extends Error {
  code:'SNAPSHOT_TOO_LARGE'|'OFFLINE_CAPACITY';
@@ -111,8 +111,11 @@ export async function snapshot<T>(userId:string,path:string):Promise<{value:T;at
 }
 async function statsFor(tx:IDBTransaction){
  const meta=tx.objectStore('meta'),stored=await request(meta.get('snapshot-stats')) as SnapshotStats|undefined;
- if(stored)return stored;
- const rows=await request(tx.objectStore('snapshotIndex').getAll()) as SnapshotMetadata[];
+ if(stored&&await request(meta.get('compact-pin-v1')))return stored;
+ const index=tx.objectStore('snapshotIndex');
+ const rows=await request(index.getAll()) as SnapshotMetadata[];
+ for(const row of rows)if(row.pinned!==isPinnedPath(row.path)){row.pinned=isPinnedPath(row.path);await request(index.put(row));}
+ await request(meta.put({key:'compact-pin-v1',value:true}));
  const stats:SnapshotStats={key:'snapshot-stats',bytes:rows.reduce((sum,row)=>sum+row.bytes,0),count:rows.length,pinnedBytes:rows.filter(row=>row.pinned).reduce((sum,row)=>sum+row.bytes,0)};
  await request(meta.put(stats));return stats;
 }
@@ -126,8 +129,8 @@ export async function saveSnapshot(userId:string,path:string,value:unknown):Prom
  const pinned=isPinnedPath(path),key=userId+'|'+path,evicted:string[]=[];
  const result=await transaction(['snapshots','snapshotIndex','meta'],'readwrite',async tx=>{
   const snapshots=tx.objectStore('snapshots'),index=tx.objectStore('snapshotIndex'),meta=tx.objectStore('meta');
-  const previous=await request(index.get(key)) as SnapshotMetadata|undefined;
   const stats=await statsFor(tx);
+  const previous=await request(index.get(key)) as SnapshotMetadata|undefined;
   let projectedBytes=stats.bytes-(previous?.bytes||0)+bytes;
   let projectedCount=stats.count-(previous?1:0)+1;
   const projectedPinned=stats.pinnedBytes-(previous?.pinned?previous.bytes:0)+(pinned?bytes:0);
@@ -269,9 +272,8 @@ export async function readWork<T>(userId:string,scope:string,id:string){return t
 export async function saveWork(userId:string,scope:string,id:string,value:unknown){await transaction(['work'],'readwrite',tx=>request(tx.objectStore('work').put({key:userId+'|'+scope+'|'+id,value})));}
 export async function saveOrderWork(userId:string,id:string,value:{base:Order;local:Order}){
  await transaction(['work'],'readwrite',async tx=>{const store=tx.objectStore('work'),key=userId+'|order|'+id;
-  const previous=(await request(store.get(key)))?.value;
-  const base=previous?.base?.revision>value.base.revision?previous.base:value.base;
-  await request(store.put({key,value:{base,local:value.local}}));
+  // A comparison base belongs to this editor's content, not to another tab.
+  await request(store.put({key,value}));
  });
 }
 export async function clearConfirmedOrderWork(userId:string,id:string,confirmed:Order){
@@ -299,11 +301,6 @@ export async function enqueue(userId:string,path:string,method:string,body:unkno
  await withOutboxGate(()=>transaction(['work','outbox'],'readwrite',async tx=>{
   if(local){
    const key=userId+'|'+local.scope+'|'+local.id;
-   if(local.scope==='order'){
-    const previous=(await request(tx.objectStore('work').get(key)))?.value;
-    const value=local.value as {base:Order;local:Order};
-    if(previous?.base&&value.base&&previous.base.revision>value.base.revision)local={...local,value:{base:previous.base,local:value.local}};
-   }
    await request(tx.objectStore('work').put({key,value:local.value}));
   }
   const all=await request(tx.objectStore('outbox').index('user').getAll(userId)) as PendingOperation[];
@@ -360,6 +357,9 @@ async function acknowledgeOperation(op:PendingOperation,result:unknown,token:str
     const basis=later.orderWork??row?.value;
     if(basis){const desired=operationOrder(later,basis);const local=submitted?mergeConcurrentOrders(submitted,desired,saved,'local').order:desired;later.orderWork={base:saved,local};later.body=orderSaveBody(local,saved.revision);await request(outbox.put(later));}
    }
+   const projectionKey=op.userId+'|order-list|confirmed';
+   const projection=(await request(store.get(projectionKey)))?.value||{};
+   projection[saved.id]=saved;await request(store.put({key:projectionKey,value:projection}));
    await reconcileOrderListInTransaction(tx,op.userId,[saved],false);
   }
   await request(outbox.delete(op.id));return submitted;
@@ -376,8 +376,26 @@ async function reconcileOrderListInTransaction(tx:IDBTransaction,userId:string,r
  const rows=[...(includeLocal?remaining:[]),...remote.filter(order=>settled[order.id]!=='deleted')];
  return [...new Map(rows.map(order=>[order.id,order])).values()];
 }
-export async function reconcileOrderList(userId:string,remote:Order[]){
- return transaction(['work'],'readwrite',tx=>reconcileOrderListInTransaction(tx,userId,remote));
+export async function reconcileOrderList(userId:string,remote:Order[],offline=false){
+ return transaction(['work'],'readwrite',async tx=>{
+  const rows=await reconcileOrderListInTransaction(tx,userId,remote);
+  if(!offline){
+   const store=tx.objectStore('work'),key=userId+'|order-list|confirmed';
+   const projection=(await request(store.get(key)))?.value as Record<string,Order>|undefined;
+   if(projection){for(const order of remote)if(projection[order.id]&&order.revision>=projection[order.id].revision)projection[order.id]=order;await request(store.put({key,value:projection}));}
+   return rows;
+  }
+  // Separate confirmed-local documents from server pages: never assert page or
+  // filter membership, nor rewrite a cursor/count. The UI filters these copies.
+  const store=tx.objectStore('work');
+  const confirmed=(await request(store.get(userId+'|order-list|confirmed')))?.value as Record<string,Order>||{};
+  const settled=(await request(store.get(userId+'|order-list|settled')))?.value||{};
+  const byId=new Map(rows.map(order=>[order.id,order]));
+  for(const order of Object.values(confirmed))if(settled[order.id]!=='deleted'&&(!byId.has(order.id)||byId.get(order.id)!.revision<order.revision)){
+   if(order.status==='draft')byId.set(order.id,order);else byId.delete(order.id);
+  }
+  return [...byId.values()];
+ });
 }
 export async function markOrderDeleted(userId:string,id:string){
  await transaction(['work'],'readwrite',async tx=>{const store=tx.objectStore('work'),key=userId+'|order-list|settled';const value=(await request(store.get(key)))?.value||{};value[id]='deleted';await request(store.put({key,value}));await reconcileOrderListInTransaction(tx,userId,[]);});
@@ -424,7 +442,8 @@ export async function resolveQueuedWork(options:{expectedWork?:unknown;expectedO
     const current=(await request(outbox.index('user').getAll(userId)) as PendingOperation[]).filter(op=>entityFor(op.path,op.body)===entity);
     if(current.length!==rows.length||current.some(row=>JSON.stringify(row)!==JSON.stringify(rows.find(expected=>expected.id===row.id)))||JSON.stringify((await request(work.get(key)))?.value)!==JSON.stringify(stored))throw new Error('Lucrul local s-a schimbat în altă filă. Redeschide documentul.');
     for(const op of rows){await request(work.put({key:userId+'|resolved-operation|'+op.id,value:op}));await request(outbox.delete(op.id));}
-    await request(work.put({key,value:local.value}));
+    if(local.scope==='order'&&body===null)await request(work.delete(key));
+    else await request(work.put({key,value:local.value}));
     if(body!==null){const op:PendingOperation={id:crypto.randomUUID(),userId,path,method,body,entity,created:Date.now(),attempts:0,next:0,state:'pending',...(local.scope==='order'?{orderWork:local.value as {base:Order;local:Order}}:{})};await request(outbox.put(op));}
    }));notify();
   }finally{await releaseLease(userId,token);}

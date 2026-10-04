@@ -1,3 +1,4 @@
+import { managerFilter } from '@/lib/manager-scope';
 import {historyImportStatus,historyImportPreview,historyImportCommit} from '@/lib/client-history-import-runtime';
 import {clientSalesReconciliation} from '@/lib/client-sales-reconciliation';
 import {clientSalesOverview} from '@/lib/client-sales-api';
@@ -69,20 +70,15 @@ async function orderScope(user:User,params:URLSearchParams){
   const clauses=["o.status!='deleted'"];const values:unknown[]=[];
   if(user.role==='agent'){clauses.push('o.user_id=?');values.push(user.id);}
   else if(!isGlobalManager(user)){clauses.push('EXISTS (SELECT 1 FROM manager_agents own WHERE own.manager_id=? AND own.agent_id=o.user_id)');values.push(user.id);}
-  const managerId=textField(params.get('managerId'),100),agentId=textField(params.get('agentId'),100);
-  if(managerId){
-    if(user.role!=='manager'||(!isGlobalManager(user)&&managerId!==user.id))fail(404,'Regiunea nu a fost găsită.');
-    if(!await db().prepare("SELECT 1 ok FROM users WHERE id=? AND role='manager' AND active=1").bind(managerId).first())fail(404,'Regiunea nu a fost găsită.');
-    clauses.push('EXISTS (SELECT 1 FROM manager_agents selected WHERE selected.manager_id=? AND selected.agent_id=o.user_id)');values.push(managerId);
-  }
-  if(agentId){await requireAgentAccess(user,agentId);clauses.push('o.user_id=?');values.push(agentId);}
+  const filter=await managerFilter(user,params);
+  if(filter){clauses.push(filter.agentIds.length?`o.user_id IN (${filter.agentIds.map(()=>'?').join(',')})`:'0');values.push(...filter.agentIds);}
   return {clauses,values};
 }
 async function listOrdersPage(user:User,params:URLSearchParams){
   const requestedLimit=Number(params.get('limit')||ORDER_PAGE_LIMIT),limit=Number.isSafeInteger(requestedLimit)?Math.max(1,Math.min(100,requestedLimit)):ORDER_PAGE_LIMIT;
   const kind=params.get('kind')||'orders',status=params.get('status')||'all',range=params.get('range')||'7d',query=textField(params.get('q'),200);
   if(!['orders','sim','all'].includes(kind)||!['all','draft','finalized'].includes(status)||!['day','7d','30d','all'].includes(range))fail(400,'Filtrele listei sunt invalide.');
-  const {clauses:scopeClauses,values:scopeValues}=await orderScope(user,params),clauses=[...scopeClauses],values=[...scopeValues];
+  const {clauses:scopeClauses,values:scopeValues}=await orderScope(nationalReadScope(user),params),clauses=[...scopeClauses],values=[...scopeValues];
   if(kind==='orders')clauses.push("o.kind NOT IN ('sim','stand_client')");
   if(kind==='sim')clauses.push("o.kind IN ('sim','stand_client')");
   if(status!=='all'){clauses.push('o.status=?');values.push(status);}

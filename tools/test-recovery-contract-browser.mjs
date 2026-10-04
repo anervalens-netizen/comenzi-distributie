@@ -26,10 +26,13 @@ try{
  await db.prepare('INSERT INTO customers(id,warehouse_id,data,active) VALUES(?,?,?,1)').bind('point','w',JSON.stringify(partner)).run();
  const compiled=await build({stdin:{contents:`
  import React from 'react';import {createRoot} from 'react-dom/client';
+ import {PartnerSheet} from './components/partner-portfolio';
  import {useOrderDraftSave} from './components/use-order-draft-save';import {OrderSaveConflictDialog} from './components/order-save-conflict-dialog';
+ export * from './lib/order-recovery';
+ window.mountPartner=()=>{window.root=createRoot(document.getElementById('root'));root.render(<PartnerSheet id="point" onClose={()=>{}} onSaved={()=>{}}/>);};
  export {writeLocalWork} from './lib/local-work';export * from './lib/client-api';export * from './lib/offline-work';export * from './lib/local-work';export * from './lib/order-draft';
  window.mountEditor=(initial)=>{window.root=createRoot(document.getElementById('root'));function Editor(){const draft=useOrderDraftSave({initial,storageOwnerId:'agent',onSaved:()=>{}});window.draft=draft;return <><output>{draft.saveState} {draft.saveError}</output><OrderSaveConflictDialog conflict={draft.conflict} onResolve={draft.resolveConflict}/></>;}root.render(<Editor/>);};
- `,loader:'tsx',resolveDir:resolve('.')},write:false,bundle:true,format:'esm',platform:'browser',jsx:'automatic',logLevel:'silent',plugins:baseline?[baselinePlugin]:[]});
+ `,loader:'tsx',resolveDir:resolve('.')},write:false,outdir:'out',bundle:true,format:'esm',platform:'browser',jsx:'automatic',logLevel:'silent',alias:{'next/image':resolve('tools/offline-image.tsx')},plugins:baseline?[baselinePlugin]:[]});
  let dropNext=false,dropOrder=false;
  server=createServer(async(req,res)=>{
   try{
@@ -46,7 +49,7 @@ try{
     if(req.method==='PUT'&&req.url.startsWith('/api/orders/')&&result.ok&&dropOrder){dropOrder=false;res.writeHead(200,{'Content-Type':'application/json'});res.end('{');return;}
     res.writeHead(result.status,Object.fromEntries(result.headers));res.end(text);return;
    }
-   res.setHeader('Content-Type',req.url==='/fixture.mjs'?'text/javascript':'text/html');res.end(req.url==='/fixture.mjs'?compiled.outputFiles[0].text:'<!doctype html><title>Synthetic recovery contracts</title><div id="root"></div>');
+   res.setHeader('Content-Type',req.url==='/fixture.mjs'?'text/javascript':'text/html');res.end(req.url==='/fixture.mjs'?compiled.outputFiles.find(f=>f.path.endsWith('.js')).text:'<!doctype html><title>Synthetic recovery contracts</title><div id="root"></div>');
   }catch(error){res.writeHead(500);res.end(JSON.stringify({error:error.message}));}
  });
  await new Promise(r=>server.listen(0,'127.0.0.1',r));const origin='http://127.0.0.1:'+server.address().port;
@@ -88,7 +91,7 @@ try{
  await waitFor(()=>evaluate('!!draft.conflict'),'legacy conflict');
  await evaluate("[...document.querySelectorAll('button')].find(b=>b.textContent.includes('Folosește versiunea serverului')).click()");
  await waitFor(()=>evaluate('!draft.conflict'),'legacy remote resolution');
- check(await evaluate("(await m.pendingOperations('agent')).length===0&&(await m.readWork('agent','order',base.id)).local.notes==='Remote'"),'T02 old attempted blocked queue resolves server choice atomically');
+ check(await evaluate("(await m.pendingOperations('agent')).length===0&&!(await m.readWork('agent','order',base.id))&&!m.readLocalWork('order','agent',base.id).value"),'T02 old attempted blocked queue resolves server choice atomically');
  await evaluate('root.unmount()');
  // A second real tab adds B while the first tab awaits A's HTTP confirmation.
  await evaluate("window.tabBase=(await m.api('orders','POST',{id:crypto.randomUUID(),kind:'accessories',agentId:'agent'})).order;window.tabA={...tabBase,notes:'A'};await m.enqueue('agent','orders/'+tabBase.id,'PUT',m.orderSaveBody(tabA,tabBase.revision),{scope:'order',id:tabBase.id,value:{base:tabBase,local:tabA}});window.releaseAck=null;window.inflight=m.replay('agent',async(p,method,body,id)=>{const result=await transport(p,method,body,id);if(method==='PUT')await new Promise(r=>releaseAck=r);return result;},m.currentLocalWorkUserId);true");
@@ -99,6 +102,51 @@ try{
  await second.evaluate("await m.replay('agent',(p,method,body,id)=>m.networkApi(p,method,body,undefined,id,'agent'),m.currentLocalWorkUserId)");
  check(await evaluate("(await transport('orders/'+tabBase.id,'GET')).order.notes==='B'&&(await m.pendingOperations('agent')).length===0"),'T01 two real tabs preserve B across A confirmation');
  await second.close();
+ // A has fully confirmed before stale tab B edits an independent quantity.
+ await evaluate("window.staleBase=(await m.api('orders','POST',{id:crypto.randomUUID(),kind:'accessories',agentId:'agent'})).order;window.product=(await m.api('catalog')).products.find(p=>p.kind==='accessories');staleBase=(await transport('orders/'+staleBase.id,'PUT',m.orderSaveBody({...staleBase,items:[{...product,quantity:1}]},staleBase.revision))).order;");
+ const staleBase=await evaluate('staleBase'),product=await evaluate('product'),staleTab=await browser.newTab(origin);
+ await staleTab.evaluate(`window.m=await import('/fixture.mjs');await m.api('auth/session');window.base=${JSON.stringify(staleBase)};window.product=${JSON.stringify(product)};`);
+ await browser.send('Page.bringToFront');
+ await evaluate("const local={...staleBase,notes:'Confirmed notes from A'};await m.enqueue('agent','orders/'+staleBase.id,'PUT',m.orderSaveBody(local,staleBase.revision),{scope:'order',id:staleBase.id,value:{base:staleBase,local}});await replay()");
+ check(await evaluate("(await transport('orders/'+staleBase.id,'GET')).order.notes==='Confirmed notes from A'&&(await m.pendingOperations('agent')).length===0"),'A notes are fully acknowledged before stale tab edits');
+ await staleTab.send('Page.bringToFront');
+ await staleTab.evaluate("const local={...base,items:[{...product,quantity:3}]};await m.saveOrderWork('agent',base.id,{base,local});await m.enqueue('agent','orders/'+base.id,'PUT',m.orderSaveBody(local,base.revision),{scope:'order',id:base.id,value:{base,local}});await m.replay('agent',(p,method,body,id)=>m.networkApi(p,method,body,undefined,id,'agent'),m.currentLocalWorkUserId)");
+ check(await evaluate("const saved=(await transport('orders/'+staleBase.id,'GET')).order;saved.notes==='Confirmed notes from A'&&saved.items[0].quantity===3&&(await m.pendingOperations('agent')).length===0"),'A stale second tab quantity preserves confirmed notes through HTTP/IndexedDB');
+ await staleTab.close();await browser.send('Page.bringToFront');
+ // Compact startup and filtered page caches predate an offline create + update.
+ await evaluate("await m.api('bootstrap?compact=1');window.filteredPath='orders?page=1&q=NO-MATCH';await m.api(filteredPath);window.createdId=crypto.randomUUID();await m.enqueue('agent','orders','POST',{id:createdId,kind:'accessories',agentId:'agent'},{scope:'draft-list',id:'all',value:[{...staleBase,id:createdId,number:'Local'}]});await replay();window.created=(await transport('orders/'+createdId,'GET')).order;const local={...created,notes:'Confirmed offline update'};await m.enqueue('agent','orders/'+createdId,'PUT',m.orderSaveBody(local,created.revision),{scope:'order',id:createdId,value:{base:created,local}});await replay()");
+ const createdId=await evaluate('createdId');
+ check(await evaluate("(await m.snapshot('agent',filteredPath)).value.orders.length===0"),'D acknowledgement never inserts into an unrelated filtered page');
+ // Simulate metadata written by the installed pre-fix client.
+ await evaluate("const db=await new Promise(r=>{const q=indexedDB.open('mobiup-offline-cache-v1');q.onsuccess=()=>r(q.result)});const tx=db.transaction(['snapshotIndex','meta'],'readwrite'),index=tx.objectStore('snapshotIndex'),meta=tx.objectStore('meta');const q=index.get('agent|bootstrap?compact=1');q.onsuccess=()=>index.put({...q.result,pinned:false});meta.delete('compact-pin-v1');await new Promise(r=>tx.oncomplete=r);db.close()");
+ // Saturation is cache-only and keeps both essential startup records.
+ await evaluate("for(let i=0;i<660;i++)await m.saveSnapshot('agent','saturation/'+i,{i});");
+ const fresh=await browser.newTab(origin);
+ await fresh.evaluate("window.m=await import('/fixture.mjs');window.fetch=async()=>{throw new TypeError('Synthetic offline')};window.session=await m.api('auth/session');window.boot=await m.api('bootstrap?compact=1');window.rows=await m.reconcileOrderList('agent',boot.orders,true)");
+ check(await fresh.evaluate(`session.user.id==='agent'&&boot.user.id==='agent'&&rows.filter(o=>o.id===${JSON.stringify(createdId)}).length===1&&rows.find(o=>o.id===${JSON.stringify(createdId)}).notes==='Confirmed offline update'&&(await m.pendingOperations('agent')).length===0`),'C/D fresh client offline boot after saturation retains exactly one acknowledged draft');
+ // No projection mutates a filtered server cache or its authoritative membership.
+ check(await evaluate("(await m.readWork('agent','draft-list','all')).every(o=>o.id!==createdId)"),'acknowledged create is no longer an unconfirmed local draft');
+ await fresh.close();await browser.send('Page.bringToFront');
+ // H: real rendered form rejects Saturday before persistence, allows correction,
+ // and releases a definitive server rejection while retaining entered fields.
+ await evaluate('mountPartner()');
+ await waitFor(()=>evaluate("!!document.querySelector('.partner-visits textarea')"),'visit form');
+ const fillVisit=(selector,value)=>evaluate(`const input=document.querySelector(${JSON.stringify(selector)});Object.getOwnPropertyDescriptor(input.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype,'value').set.call(input,${JSON.stringify(value)});input.dispatchEvent(new Event('input',{bubbles:true}));`);
+ const clickVisit=()=>evaluate("document.querySelector('.partner-visits button.primary').click()");
+ await fillVisit('.partner-visits textarea','Keep entered note');await fillVisit('.partner-follow-up-fields input:not([type=date])','Keep next step');await fillVisit('.partner-follow-up-fields input[type=date]','2026-10-10');await clickVisit();
+ await waitFor(()=>evaluate("document.body.innerText.includes('luni până vineri')"),'Saturday validation');
+ check(await evaluate("!document.querySelector('.partner-follow-up-fields input[type=date]').disabled&&!(await m.readWork('agent','visit','point'))"),'H Saturday stays editable and never persists pending work');
+ await fillVisit('.partner-follow-up-fields input[type=date]','2026-10-12');
+ await evaluate("window.fetch=async(input,init)=>init?.method==='POST'?new Response(JSON.stringify({error:'Synthetic validation rejection'}),{status:400}):originalFetch(input,init)");await clickVisit();
+ await waitFor(()=>evaluate("document.body.innerText.includes('Synthetic validation rejection')"),'definitive rejection');
+ check(await evaluate("!document.querySelector('.partner-visits textarea').disabled&&document.querySelector('.partner-visits textarea').value==='Keep entered note'&&document.querySelector('.partner-follow-up-fields input[type=date]').value==='2026-10-12'&&!(await m.readWork('agent','visit','point'))"),'H definitive 4xx clears pending but preserves correction fields');
+ await evaluate('window.fetch=originalFetch');await clickVisit();
+ await waitFor(()=>evaluate("document.body.innerText.includes('Vizita a fost sincronizată.')"),'Monday visit success');
+ check(await evaluate("document.querySelector('.partner-visits textarea').value===''&&!(await m.readWork('agent','visit','point'))"),'H Monday succeeds and clears confirmed input');
+ await fillVisit('.partner-visits textarea','Network retains visit');await evaluate("window.fetch=async()=>{throw new TypeError('Synthetic offline')}");await clickVisit();
+ await waitFor(()=>evaluate("document.body.innerText.includes('Vizită salvată pe telefon')"),'network visit queued');
+ check(await evaluate("(await m.pendingOperations('agent')).some(op=>op.path.endsWith('/visits'))&&(await m.readWork('agent','visit','point')).notes==='Network retains visit'"),'H network failure remains queued');
+ await evaluate('root.unmount();window.fetch=originalFetch;await replay()');
  // T01 controls: confirmation merges only the submitted operation, preserving
  // newer edits/reverts and remote changes to non-overlapping fields.
  for(const revert of [false,true]){
