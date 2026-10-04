@@ -252,6 +252,7 @@ export async function recordVisit(
   id: string,
   body: Record<string, unknown>,
 ) {
+  if(user.role!=='agent')fail(403,'Doar agenții pot înregistra vizite.');
   await get(user, id);
   const visitId = body.id,
     notes = textField(body.notes, 2000),

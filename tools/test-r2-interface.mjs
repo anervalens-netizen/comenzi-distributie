@@ -193,7 +193,13 @@ try {
   }
   equal((await api('partner/attention','a')).followUps.map(row=>row.agentId),['a'],'agent attention remains own scope after another-region visit');
   await api('partner/attention?agentId=b','a','GET',undefined,403);
-  await api('partner/portfolio/outside/visits','regional','POST',{id:randomUUID()},404);
+  for(const manager of ['regional','global']){
+    const managerVisitId=randomUUID();
+    await api('partner/portfolio/shared/visits',manager,'POST',{id:managerVisitId,followUpDate:'2026-10-02'},403);
+    equal(sqlite.prepare('SELECT COUNT(*) n FROM partner_visits WHERE id=?').get(managerVisitId).n,0,'manager cannot create attributed visit '+manager);
+    equal(sqlite.prepare('SELECT COUNT(*) n FROM partner_day_plans WHERE agent_id=?').get(manager).n,0,'rejected manager visit cannot create plan '+manager);
+  }
+  await api('partner/portfolio/outside/visits','regional','POST',{id:randomUUID()},403);
   await api('partner/portfolio/shared/visits','a','POST',{id:randomUUID(),followUpDate:'2026-10-03'},400);
   await api('partner/portfolio/outside/visits','a','POST',{id:randomUUID()},404);
   check((await api('partner/portfolio/outside','global')).partner.canEdit,'global manager can edit outside regional scope');
