@@ -170,7 +170,12 @@ export async function networkApi<T=Record<string,unknown>>(path: string,method='
   } else if(path==='auth/logout'&&method==='POST') {
     await rejectSession(requestFence,requestOwner);
   } else if(((method==='POST'&&/^orders\/[^/]+\/finalize$/.test(path))||(method==='GET'&&sessionStorageAvailable()&&/^orders\/[^/]+$/.test(path)))&&record(data)&&record(data.order)&&data.order.status==='finalized') {
-    await acceptAuthoritativeOrder(requestOwner,data.order as unknown as import('./types').Order);
+    // The server already committed. Cache maintenance cannot turn that success
+    // into a failed finalize (and invite another submission). Auth checks above
+    // remain mandatory and are deliberately outside this best-effort boundary.
+    await acceptAuthoritativeOrder(requestOwner,data.order as unknown as import('./types').Order).catch(()=>{
+      if(typeof window!=='undefined')window.dispatchEvent(new CustomEvent('mobiup-storage-error',{detail:'Comanda este finalizată pe server. Copia locală nu a putut fi actualizată.'}));
+    });
   } else if(method==='DELETE'&&/^orders\/[^/]+$/.test(path)) {
     const userId=currentLocalWorkUserId();
     const orderId=path.slice('orders/'.length);

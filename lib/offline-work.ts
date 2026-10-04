@@ -1,5 +1,6 @@
 import {mergeConcurrentOrders,orderSaveBody,sameEditableOrder} from './order-draft.ts';
 import type {Order} from './types';
+import {visitDateError} from './visit-date.ts';
 import {readLocalWork,removeLocalWork} from './local-work.ts';
 /** Account-bound durable work. Transactions never evict pending mutations. */
 export type PendingOperation = { id:string; userId:string; entity:string; path:string; method:string; body:unknown; created:number; attempts:number; next:number; state:'pending'|'blocked'; error?:string; status?:number; orderWork?:{base:Order;local:Order} };
@@ -311,16 +312,41 @@ export async function acceptAuthoritativeOrder(userId:string,order:Order){
   const error=removeLocalWork('order',userId,order.id);if(error)throw new Error(error);
  }
 }
+/** Only a provably invalid, byte-equivalent legacy visit can be retired locally.
+ * Server date validation precedes all UUID side effects. Valid/lost-response
+ * requests must retain their identity and are never eligible here. */
 export async function unlockVisitWork(userId:string,id:string,expected:unknown){
- await transaction(['work'],'readwrite',async tx=>{
-  const store=tx.objectStore('work'),key=userId+'|visit|'+id,current=await request(store.get(key));
-  if(JSON.stringify(current?.value)!==JSON.stringify(expected))throw new Error('Vizita locală s-a schimbat. Redeschide fișa înainte de corectare.');
-  await request(store.put({key:userId+'|visit-edit|'+id,value:expected}));
-  await request(store.delete(key));
- });
- if(JSON.stringify(readLocalWork('visit',userId,id).value)===JSON.stringify(expected)){
-  const error=removeLocalWork('visit',userId,id);if(error)throw new Error(error);
- }
+ if(!userId||!object(expected)||typeof expected.id!=='string'||typeof expected.followUpDate!=='string'||!visitDateError(expected.followUpDate))throw new Error('Vizita nu poate fi retrasă automat.');
+ const run=async()=>{
+  const token=await claimLease(userId);if(!token)throw new Error('Sincronizarea este în curs. Reîncearcă.');
+  try{
+   await withOutboxGate(()=>transaction(['work','outbox','meta'],'readwrite',async tx=>{
+    if((await request(tx.objectStore('meta').get('lease|'+userId)))?.token!==token)throw new Error('Sincronizare preluată de altă fereastră.');
+    const store=tx.objectStore('work'),outbox=tx.objectStore('outbox'),key=userId+'|visit|'+id,current=await request(store.get(key));
+    const payload=JSON.stringify(expected);
+    const editKey=userId+'|visit-edit|'+id,edit=await request(store.get(editKey));
+    // Prior clients may already have unlocked this exact invalid payload while
+    // leaving its outbox row behind. A newer pending copy still defeats CAS.
+    if(JSON.stringify(current?current.value:edit?.value)!==payload)throw new Error('Vizita locală s-a schimbat. Redeschide fișa înainte de corectare.');
+    if(edit&&JSON.stringify(edit.value)!==payload)throw new Error('Există deja o corectare locală. Redeschide fișa înainte de corectare.');
+    const path='partner/portfolio/'+encodeURIComponent(id)+'/visits';
+    const rows=await request(outbox.index('user').getAll(userId)) as PendingOperation[];
+    for(const op of rows){
+     if(op.userId!==userId||op.path!==path||op.entity!==path||op.method!=='POST'||JSON.stringify(op.body)!==payload)continue;
+     await request(store.put({key:userId+'|resolved-operation|'+op.id,value:op}));
+     await request(outbox.delete(op.id));
+    }
+    await request(store.put({key:editKey,value:expected}));
+    await request(store.delete(key));
+   }));
+   notify();
+   if(JSON.stringify(readLocalWork('visit',userId,id).value)===JSON.stringify(expected)){
+    const error=removeLocalWork('visit',userId,id);if(error)throw new Error(error);
+   }
+  }finally{await releaseLease(userId,token);}
+ };
+ if(typeof navigator!=='undefined'&&navigator.locks)return navigator.locks.request('mobiup-outbox-'+userId,run);
+ return run();
 }
 export async function removeWork(userId:string,scope:string,id:string){await transaction(['work'],'readwrite',tx=>request(tx.objectStore('work').delete(userId+'|'+scope+'|'+id)));}
 export async function migrateLegacy(userId:string){

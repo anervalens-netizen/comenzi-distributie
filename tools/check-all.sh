@@ -57,6 +57,7 @@ node tools/test-sales-view-worker.mjs
 node tools/test-sales-view-consistency.mjs
 node tools/test-stock-worker.mjs
 node tools/test-exports.mjs
+node tools/test-order-read-consistency.mjs
 node tools/test-interaction-backend.mjs
 node tools/test-interaction-pwa.mjs
 node tools/test-interaction-offline.mjs
@@ -113,6 +114,7 @@ if [ -n "$CHROME_BIN" ]; then
   CHROME_BIN="$CHROME_BIN" node tools/test-private-fence-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-pwa-cross-tab-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-offline-contract-browser.mjs
+  CHROME_BIN="$CHROME_BIN" node tools/test-finalize-cleanup-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-recovery-contract-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-recovery-navigation-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-portfolio-page-error-browser.mjs

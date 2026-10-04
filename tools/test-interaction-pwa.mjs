@@ -4,11 +4,14 @@ import vm from 'node:vm';
 
 const origin='https://synthetic.invalid';
 const essential=['/offline.html','/manifest.webmanifest','/_next/static/offline/app-bootstrap.js'];
-const optional=['/_next/static/lazy-partners.js','/_next/static/lazy-map.js'];
+const common='/_next/static/common.js',manager='/_next/static/manager.js';
+const optional=['/_next/static/lazy-partners.js','/_next/static/lazy-map.js',common,manager];
 const source=(await readFile(new URL('../public/sw.js',import.meta.url),'utf8'))
  .replace('__SHELL_VERSION__','synthetic')
  .replace('/*__SHELL_ESSENTIAL__*/[]',JSON.stringify(essential))
- .replace('/*__SHELL_OPTIONAL__*/[]',JSON.stringify(optional));
+ .replace('/*__SHELL_OPTIONAL__*/[]',JSON.stringify(optional))
+ .replace('/*__SHELL_COMMON__*/[]',JSON.stringify([common]))
+ .replace('/*__SHELL_MANAGER__*/[]',JSON.stringify([manager]));
 const listeners=new Map();
 const stores=new Map();
 const fetched=[];
@@ -93,7 +96,7 @@ listeners.get('message')({
  waitUntil:value=>{preparation=Promise.resolve(value);},
 });
 await Promise.resolve(preparation);
-assert.deepEqual(optional.map(path=>current.has(path)),[true,true],'explicit preparation caches every optional module');
+assert.deepEqual(optional.map(path=>current.has(path)),optional.map(()=>true),'explicit preparation caches every optional module');
 assert.equal(progress.at(0).state,'preparing','preparation announces its initial state');
 assert.deepEqual(progress.at(-1),{type:'OFFLINE_SHELL_PREPARATION',role:'legacy',state:'ready',completed:essential.length+optional.length,total:essential.length+optional.length,transferred:optional.length,transferBytes:optional.reduce((sum,path)=>sum+Buffer.byteLength('network:'+path),0)},'ready reports only network transfers and waits for every legacy optional module');
 assert.deepEqual(fetched,optional,'only optional public shell assets are fetched during preparation');
@@ -130,6 +133,24 @@ self.serviceWorker=thisWorker;
 stores.set('mobiup-shell-v2-retained',new Map([['/offline.html',new Response('legacy')]]));
 await dispatchWait('message',{data:{type:'CLIENT_SHELL_ASSETS',paths:[essential[2]]},source:{id:'current'}});
 assert(!stores.has('mobiup-shell-v2-retained'),'only caches unused by every verified client are retired');
+// Role readiness uses the union for all live verified clients. Optional legacy
+// chunks are deliberately absent, while a missing required asset blocks GC.
+for(const path of optional)current.delete(path);
+const old='mobiup-shell-v2-role';
+const seedOld=()=>stores.set(old,new Map([...essential,...optional].map(path=>[path,new Response('old')])));
+const proof=(id,role,paths=[essential[2]])=>dispatchWait('message',{data:{type:'CLIENT_SHELL_ASSETS',role,paths},source:{id}});
+seedOld();await proof('current','agent');assert(stores.has(old),'missing common assets block agent retirement');
+current.set(common,new Response('common'));await proof('current','agent');assert(!stores.has(old),'prepared agent retires old full shell without optional/manager chunks');
+seedOld();await proof('current','manager');assert(stores.has(old),'manager requires manager assets');
+current.set(manager,new Response('manager'));await proof('current','manager');assert(!stores.has(old),'prepared manager needs no legacy-only chunks');
+seedOld();openClients=[{id:'current'},{id:'second'}];current.delete(manager);
+await proof('second','manager');await proof('current','agent');assert(stores.has(old),'second manager client blocks agent-only readiness');
+await proof('second','agent',['/_next/static/offline/app-old.js']);assert(stores.has(old),'explicit old client asset identity retains old shell');
+openClients=[{id:'current'}];await proof('current','agent');assert(!stores.has(old),'closed old client releases retention');
+// A new unknown client appears between readiness and deletion.
+seedOld();const matchAll=self.clients.matchAll;let scans=0;
+self.clients.matchAll=async()=>++scans===1?[{id:'current'}]:[{id:'current'},{id:'late-old'}];
+try{await proof('current','agent');assert(stores.has(old),'new legacy client appearing during cleanup is protected');}finally{self.clients.matchAll=matchAll;}
 listeners.get('message')({data:{type:'ACTIVATE_SAFE'},ports:[],source:null,waitUntil:()=>{}});
 assert.equal(skipWaitingCalls,1,'skipWaiting remains restricted to explicit safe activation');
 console.log('PASS: staged PWA shell, upgrade retention, progress, and private-cache isolation.');

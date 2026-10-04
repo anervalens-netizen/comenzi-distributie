@@ -16,7 +16,7 @@ function announceAssets(){
  // An older controller can retire caches on this message. Do not give it
  // cleanup proof while a different version is installing or waiting.
  void navigator.serviceWorker.getRegistration().then(reg=>{
-  if(reg&&reg.active===worker&&!reg.waiting&&!reg.installing&&navigator.serviceWorker.controller===worker)worker.postMessage({type:'CLIENT_SHELL_ASSETS',paths});
+  if(reg&&reg.active===worker&&!reg.waiting&&!reg.installing&&navigator.serviceWorker.controller===worker)worker.postMessage({type:'CLIENT_SHELL_ASSETS',paths,role:currentRole??'legacy'});
  }).catch(()=>{});
 }
 /** A dedicated port binds every acknowledgement to the exact worker object. */

@@ -11,7 +11,7 @@ const COMMON_SHELL=COMMON_FILES.filter(isPublicShellFile);
 const MANAGER_SHELL=MANAGER_FILES.filter(isPublicShellFile);
 const PUBLIC_FILES=new Set([...ESSENTIAL_SHELL,...OPTIONAL_SHELL,...COMMON_SHELL,...MANAGER_SHELL]);
 const preparations=new Map(),preparationStates=new Map(),preparationListeners=new Map();
-const verifiedClients=new Set();
+const verifiedClients=new Map();
 // Distinct versions can share the same script URL. Compare the actual worker,
 // and retain caches on older engines that cannot identify their own worker.
 const ownsActiveRegistration=()=>!!self.serviceWorker&&self.registration.active===self.serviceWorker&&!self.registration.waiting&&!self.registration.installing;
@@ -21,11 +21,16 @@ async function retireUnusedShells(){
  const clients=await self.clients.matchAll({type:'window',includeUncontrolled:true});
  // Unknown/legacy documents retain every old asset. Only verified current documents permit collection.
  if(!clients.length||clients.some(client=>!verifiedClients.has(client.id)))return;
+ const required=new Set(clients.flatMap(client=>{const proof=verifiedClients.get(client.id);return [...shellForRole(proof.role),...proof.paths];}));
  const current=await caches.open(CACHE);
- for(const path of PUBLIC_FILES)if(!await current.match(path))return;
+ for(const path of required)if(!await current.match(path))return;
  for(const key of await caches.keys())if(key.startsWith('mobiup-shell-')&&key!==CACHE){
   // Every await above (including the preceding delete) may span activation.
   if(!ownsActiveRegistration())return;
+  // Recheck the live set after cache reads; a newly opened legacy document
+  // or a changed role invalidates the earlier readiness decision.
+  const live=await self.clients.matchAll({type:'window',includeUncontrolled:true});
+  if(!live.length||live.some(client=>{const proof=verifiedClients.get(client.id);return !proof||[...shellForRole(proof.role),...proof.paths].some(path=>!required.has(path));})||!ownsActiveRegistration())return;
   await caches.delete(key);
  }
 }
@@ -76,7 +81,7 @@ self.addEventListener('message',event=>{
  if(event.data?.type==='CLIENT_SHELL_ASSETS'){
   const paths=event.data.paths,id=event.source?.id;
   const identifiable=Array.isArray(paths)&&paths.some(path=>typeof path==='string'&&(/\/distribution-app-[^/]+\.js$/.test(path)||/\/_next\/static\/offline\/app-[^/]+\.js$/.test(path)));
-  if(id&&identifiable&&paths.length<=500&&paths.every(path=>PUBLIC_FILES.has(path)))verifiedClients.add(id);
+  if(id&&identifiable&&paths.length<=500&&paths.every(path=>PUBLIC_FILES.has(path)))verifiedClients.set(id,{paths:[...paths],role:['agent','manager'].includes(event.data.role)?event.data.role:'legacy'});
   else if(id)verifiedClients.delete(id);
   event.waitUntil(retireUnusedShells());return;
  }

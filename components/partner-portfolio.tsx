@@ -496,8 +496,8 @@ export function PartnerSheet({
     gpsButton.current?.focus({ preventScroll: true });
   }
   const unlockInvalidVisit=useCallback(async(value:NonNullable<typeof pending>)=>{
-    // Keep an editable recovery copy across another close/reopen. The immutable
-    // outbox (including any attempted request) remains available for recovery.
+    // Preserve editable recovery and archive only the exact invalid legacy
+    // request. Valid or different queued requests remain unresolved.
     await unlockVisitWork(userIdForWork(),id,value);
     setNotes(value.notes);setNextStep(value.nextStep||'');setFollowUpDate(value.followUpDate||'');
     setPending(null);setError(visitDateError(value.followUpDate||''));
@@ -514,7 +514,7 @@ export function PartnerSheet({
           const editable=saved||await readWork<NonNullable<typeof pending>>(userIdForWork(),'visit-edit',id);
           if(!alive)return;
           if(editable){setNotes(editable.notes);setNextStep(editable.nextStep||'');setFollowUpDate(editable.followUpDate||'');}
-          if(saved&&visitDateError(saved.followUpDate||''))await unlockInvalidVisit(saved);else setPending(saved||null);
+          if(editable&&visitDateError(editable.followUpDate||''))await unlockInvalidVisit(editable);else setPending(saved||null);
         }
       })
       .catch((e) => {

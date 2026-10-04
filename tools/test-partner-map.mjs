@@ -5,6 +5,8 @@ import { gzipSync } from 'node:zlib';
 import { writeFileSync } from 'node:fs';
 const root = 'http://127.0.0.1:3000/api/partner';
 const db = new DatabaseSync('work/qa/mobiup.sqlite');
+// The isolated HTTP server can still be committing derived work between calls.
+db.exec('PRAGMA busy_timeout=5000');
 const hash = s => createHash('sha256').update(s).digest('hex');
 const sessions = {}, cookies = {}; let checks = 0;
 for (const id of ['qa-agent1','qa-agent2','qa-regional','qa-manager']) {

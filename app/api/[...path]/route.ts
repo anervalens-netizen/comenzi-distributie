@@ -13,7 +13,7 @@ import { randomBytes, createHash } from 'node:crypto';
 import seed from '@/resources/seed.json';
 import templateHashes from '@/resources/template-hashes.json';
 import templates from '@/resources/templates.json';
-import { db, response, handleError, assertOrigin, jsonBody, readLimited, textField, seedDatabase, userView, requireUser, requireManager, requireGlobalManager, isGlobalManager, requireAgentAccess, requireWarehouseAccess, currentUser, refreshSession, SESSION_TTL_SECONDS, SESSION_TTL_MS, sha256, sessionToken, verifyPassword, hashPassword, catalog, warehouses, getOrder, orderView, settings, managerMailSettings, regionalOperationalSettings, settingsForOrder, weekKey, fail } from '@/lib/server';
+import { AppError, db, response, handleError, assertOrigin, jsonBody, readLimited, textField, seedDatabase, userView, requireUser, requireManager, requireGlobalManager, isGlobalManager, requireAgentAccess, requireWarehouseAccess, currentUser, refreshSession, SESSION_TTL_SECONDS, SESSION_TTL_MS, sha256, sessionToken, verifyPassword, hashPassword, catalog, warehouses, getOrder, orderView, settings, managerMailSettings, regionalOperationalSettings, settingsForOrder, weekKey, fail } from '@/lib/server';
 import { templateExport, combinedExport, repairOrderExport, simExport, mailFor, emlFor } from '@/lib/exports';
 import { readCatalog, changeProduct } from '@/lib/catalog';
 import { stockImportStatus, stockView, stockUpload } from '@/lib/stock-server';
@@ -74,7 +74,7 @@ async function orderScope(user:User,params:URLSearchParams){
   if(filter){clauses.push(filter.agentIds.length?`o.user_id IN (${filter.agentIds.map(()=>'?').join(',')})`:'0');values.push(...filter.agentIds);}
   return {clauses,values};
 }
-async function listOrdersPage(user:User,params:URLSearchParams){
+async function listOrdersPage(user:User,params:URLSearchParams,attempt=0):Promise<{orders:Order[];orderPage:{revision:string;total:number;limit:number;nextCursor:string|null;stats:{drafts:number;weekly:number}}}>{
   const requestedLimit=Number(params.get('limit')||ORDER_PAGE_LIMIT),limit=Number.isSafeInteger(requestedLimit)?Math.max(1,Math.min(100,requestedLimit)):ORDER_PAGE_LIMIT;
   const kind=params.get('kind')||'orders',status=params.get('status')||'all',range=params.get('range')||'7d',query=textField(params.get('q'),200);
   if(!['orders','sim','all'].includes(kind)||!['all','draft','finalized'].includes(status)||!['day','7d','30d','all'].includes(range))fail(400,'Filtrele listei sunt invalide.');
@@ -90,7 +90,7 @@ async function listOrdersPage(user:User,params:URLSearchParams){
     clauses.push("(o.status='draft' OR COALESCE(o.finalized_at,o.created_at)>=?)");values.push(bucharestDayStartUtc(fromKey));
   }
   const revisionRow=await db().prepare('SELECT revision FROM order_list_revision WHERE id=1').first<{revision:number}>(),revision=String(Number(revisionRow?.revision||1));
-  const expected=params.get('revision');if(expected&&expected!==revision)fail(409,'Lista de comenzi s-a modificat. Reîncarcă prima pagină.');
+  const expected=params.get('revision');if(expected&&expected!==revision)throw new AppError(409,'Lista de comenzi s-a modificat. Reîncarcă prima pagină.',revision);
   const select="SELECT o.id,o.number,o.user_id,o.warehouse_id,o.kind,o.status,o.created_at,o.finalized_at,o.source_order_id,o.revision,json_set(json_remove(o.payload,'$.items','$.standItems','$.serials','$.exportKey'),'$.itemCount',COALESCE(json_array_length(o.payload,'$.items'),0)+COALESCE(json_array_length(o.payload,'$.standItems'),0)) AS payload FROM orders o";
   const cursor=decodeOrderCursor(params.get('cursor'));
   let rows:Record<string,unknown>[],total:number;
@@ -106,6 +106,13 @@ async function listOrdersPage(user:User,params:URLSearchParams){
   const hasMore=rows.length>limit,pageRows=rows.slice(0,limit),last=pageRows.at(-1);
   const statClauses=[...scopeClauses];const statValues=[...scopeValues];if(kind==='orders')statClauses.push("o.kind NOT IN ('sim','stand_client')");if(kind==='sim')statClauses.push("o.kind IN ('sim','stand_client')");
   const stats=await db().prepare(`SELECT SUM(CASE WHEN o.status='draft' THEN 1 ELSE 0 END) drafts,SUM(CASE WHEN o.status='finalized' AND o.week_key=? THEN 1 ELSE 0 END) weekly FROM orders o WHERE ${statClauses.join(' AND ')}`).bind(weekKey(),...statValues).first<{drafts:number;weekly:number}>();
+  // Every count, row and statistic belongs to this one monotonic revision.
+  // First pages may retry twice; a cursor/revision-bound page must restart.
+  const after=await db().prepare('SELECT revision FROM order_list_revision WHERE id=1').first<{revision:number}>(),currentRevision=String(Number(after?.revision||1));
+  if(currentRevision!==revision){
+    if(!cursor&&!expected&&attempt<2)return listOrdersPage(user,params,attempt+1);
+    throw new AppError(409,'Lista de comenzi s-a modificat. Reîncarcă prima pagină.',currentRevision);
+  }
   return {orders:pageRows.map(orderView),orderPage:{revision,total,limit,nextCursor:hasMore&&last?encodeOrderCursor({createdAt:String(last.created_at),id:String(last.id)}):null,stats:{drafts:Number(stats?.drafts||0),weekly:Number(stats?.weekly||0)}}};
 }
 async function targetAgent(user: User,id: unknown) {
