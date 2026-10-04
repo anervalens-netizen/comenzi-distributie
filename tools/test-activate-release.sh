@@ -12,9 +12,13 @@ for sha in "$old" "$new" "$bad"; do
   printf '{"sha":"%s","resourceMode":"private"}\n' "$sha" > "$releases/$sha/RELEASE.json"
 done
 ln -s "$releases/$old" "$runtime/current"
-log="$root/systemctl.log"; mode="$root/health-mode"; echo success > "$mode"
+log="$root/systemctl.log"; curl_log="$root/curl.log"; mode="$root/health-mode"; echo success > "$mode"
 cat > "$root/systemctl" <<'EOF'
 #!/usr/bin/env bash
+if [[ "$1" == show ]]; then
+  printf '%s\n' "$MOBIUP_TEST_SERVICE_ENV"
+  exit 0
+fi
 printf '%s\n' "$*" >> "$MOBIUP_TEST_SYSTEMCTL_LOG"
 exit 0
 EOF
@@ -22,17 +26,21 @@ cat > "$root/curl" <<'EOF'
 #!/usr/bin/env bash
 mode="$(cat "$MOBIUP_TEST_HEALTH_MODE")"
 current="$(readlink -f "$MOBIUP_CURRENT_LINK")"
+printf '%s\n' "${@: -1}" >> "$MOBIUP_TEST_CURL_LOG"
 if [[ "$mode" == fail-new && "$current" == */3333333333333333333333333333333333333333 && "${@: -1}" == */api/bootstrap ]]; then exit 22; fi
 exit 0
 EOF
 chmod +x "$root/systemctl" "$root/curl"
 export MOBIUP_RUNTIME_ROOT="$runtime" MOBIUP_CURRENT_LINK="$runtime/current"
 export MOBIUP_SYSTEMCTL="$root/systemctl" MOBIUP_CURL="$root/curl"
-export MOBIUP_TEST_SYSTEMCTL_LOG="$log" MOBIUP_TEST_HEALTH_MODE="$mode"
+export MOBIUP_TEST_SYSTEMCTL_LOG="$log" MOBIUP_TEST_CURL_LOG="$curl_log" MOBIUP_TEST_HEALTH_MODE="$mode"
+export MOBIUP_TEST_SERVICE_ENV='HOST=10.44.0.9 PORT=39222'
 export MOBIUP_HEALTH_ATTEMPTS=2 MOBIUP_HEALTH_DELAY=0
 script="$(cd "$(dirname "$0")/.." && pwd)/deploy/activate-release.sh"
 checks=0; check(){ [[ "$1" == "$2" ]] || { echo "FAIL: $3 ($1 != $2)" >&2; exit 1; }; checks=$((checks+1)); }
 "$script" "$new" >/dev/null
+check "$(grep -c '^http://10.44.0.9:39222/api/health$' "$curl_log")" "1" 'health probe uses service HOST and PORT'
+check "$(grep -c '^http://10.44.0.9:39222/api/bootstrap$' "$curl_log")" "1" 'readiness probe uses service HOST and PORT'
 check "$(readlink "$runtime/current")" "$releases/$new" 'SHA activation uses absolute symlink'
 check "$(readlink -f "$runtime/current")" "$releases/$new" 'SHA activation selects requested release'
 ln -sfn "$releases/$old" "$runtime/current"; echo fail-new > "$mode"
