@@ -114,7 +114,7 @@ try{
  check(await evaluate("const saved=(await transport('orders/'+staleBase.id,'GET')).order;saved.notes==='Confirmed notes from A'&&saved.items[0].quantity===3&&(await m.pendingOperations('agent')).length===0"),'A stale second tab quantity preserves confirmed notes through HTTP/IndexedDB');
  await staleTab.close();await browser.send('Page.bringToFront');
  // Compact startup and filtered page caches predate an offline create + update.
- await evaluate("await m.api('bootstrap?compact=1');window.filteredPath='orders?page=1&q=NO-MATCH';await m.api(filteredPath);window.createdId=crypto.randomUUID();await m.enqueue('agent','orders','POST',{id:createdId,kind:'accessories',agentId:'agent'},{scope:'draft-list',id:'all',value:[{...staleBase,id:createdId,number:'Local'}]});await replay();window.created=(await transport('orders/'+createdId,'GET')).order;const local={...created,notes:'Confirmed offline update'};await m.enqueue('agent','orders/'+createdId,'PUT',m.orderSaveBody(local,created.revision),{scope:'order',id:createdId,value:{base:created,local}});await replay()");
+ await evaluate("await m.api('bootstrap?compact=1');window.filteredPath='orders?page=1&q=NO-MATCH';await m.api(filteredPath);window.createdId=crypto.randomUUID();await m.enqueue('agent','orders','POST',{id:createdId,kind:'accessories',agentId:'agent'},{scope:'draft-list',id:'all',value:[{...staleBase,id:createdId,number:'Local'}]});await replay();window.created=(await transport('orders/'+createdId,'GET')).order;const local={...created,items:[{...product,quantity:1}],notes:'Confirmed offline update'};await m.enqueue('agent','orders/'+createdId,'PUT',m.orderSaveBody(local,created.revision),{scope:'order',id:createdId,value:{base:created,local}});await replay()");
  const createdId=await evaluate('createdId');
  check(await evaluate("(await m.snapshot('agent',filteredPath)).value.orders.length===0"),'D acknowledgement never inserts into an unrelated filtered page');
  // Simulate metadata written by the installed pre-fix client.
@@ -127,6 +127,22 @@ try{
  // No projection mutates a filtered server cache or its authoritative membership.
  check(await evaluate("(await m.readWork('agent','draft-list','all')).every(o=>o.id!==createdId)"),'acknowledged create is no longer an unconfirmed local draft');
  await fresh.close();await browser.send('Page.bringToFront');
+ // Finalize without any list refresh, then close and reopen with network loss.
+ await evaluate("window.finalBase=(await m.readWork('agent','order-list','confirmed'))[createdId];await m.saveOrderWork('agent',createdId,{base:finalBase,local:finalBase});m.writeLocalWork('order','agent',createdId,{base:finalBase,local:finalBase});");
+ const finalizingTab=await browser.newTab(origin);
+ await finalizingTab.evaluate(`window.m=await import('/fixture.mjs');await m.api('auth/session');window.base=${JSON.stringify(await evaluate('finalBase'))};window.finalOrder=(await m.api('orders/'+base.id+'/finalize','POST',{revision:base.revision})).order`);
+ check(await finalizingTab.evaluate("finalOrder.status==='finalized'"),'successful finalization returned before tab close');
+ await finalizingTab.close();
+ await evaluate("window.finalOrder=(await m.readWork('agent','order-list','confirmed'))[createdId]");
+ check(await evaluate("finalOrder.status==='finalized'&&(await m.readWork('agent','order-list','confirmed'))[createdId].status==='finalized'&&!(await m.readWork('agent','order',createdId))&&!m.readLocalWork('order','agent',createdId).value"),'finalize durably retires confirmed projection and clean recovery before returning to UI');
+ const finalizedTab=await browser.newTab(origin);
+ await finalizedTab.evaluate("window.m=await import('/fixture.mjs');window.fetch=async()=>{throw new TypeError('Synthetic offline')};await m.api('auth/session');window.boot=await m.api('bootstrap?compact=1');window.rows=await m.reconcileOrderList('agent',boot.orders,true)");
+ check(await finalizedTab.evaluate(`rows.filter(o=>o.id===${JSON.stringify(createdId)}).length<=1&&!rows.some(o=>o.id===${JSON.stringify(createdId)}&&o.status==='draft')`),'offline reopened bootstrap never resurrects or duplicates finalized acknowledged draft');
+ check(await finalizedTab.evaluate(`const stale={...${JSON.stringify(await evaluate('finalBase'))},revision:999};await m.reconcileOrderList('agent',[stale]);const rows=await m.reconcileOrderList('agent',[stale],true);!rows.some(o=>o.id===stale.id&&o.status==='draft')`),'late old-client list cannot undo terminal projection');
+ await finalizedTab.close();await browser.send('Page.bringToFront');
+ check(await evaluate("const local={...finalBase,notes:'Unsaved in another tab'};await m.saveOrderWork('agent',createdId,{base:finalBase,local});m.writeLocalWork('order','agent',createdId,{base:finalBase,local});await m.api('orders/'+createdId+'/finalize','POST',{revision:finalBase.revision});(await m.readWork('agent','order',createdId)).local.notes===local.notes&&m.readLocalWork('order','agent',createdId).value.local.notes===local.notes"),'idempotent finalization preserves real unsaved recovery in both stores');
+ await evaluate("await m.markOrderDeleted('agent',createdId)");
+ check(await evaluate("!(await m.reconcileOrderList('agent',[finalBase],true)).some(o=>o.id===createdId)"),'deleted marker also defeats confirmed projection');
  // H: real rendered form rejects Saturday before persistence, allows correction,
  // and releases a definitive server rejection while retaining entered fields.
  await evaluate('mountPartner()');
@@ -143,10 +159,26 @@ try{
  await evaluate('window.fetch=originalFetch');await clickVisit();
  await waitFor(()=>evaluate("document.body.innerText.includes('Vizita a fost sincronizată.')"),'Monday visit success');
  check(await evaluate("document.querySelector('.partner-visits textarea').value===''&&!(await m.readWork('agent','visit','point'))"),'H Monday succeeds and clears confirmed input');
+ // Installed legacy clients persisted invalid pending dates before validation.
+ for(const invalidDate of ['2026-10-10','2026-02-30']){
+  await evaluate(`root.unmount();window.legacyVisit={id:crypto.randomUUID(),notes:'Legacy note',nextStep:'Legacy next step',followUpDate:${JSON.stringify(invalidDate)}};await m.saveWork('agent','visit','point',legacyVisit);mountPartner()`);
+  await waitFor(()=>evaluate("!!document.querySelector('.partner-visits textarea')&&!document.querySelector('.partner-visits textarea').disabled&&document.querySelector('.partner-visits textarea').value==='Legacy note'"),'legacy invalid pending unlocked on reopen');
+  check(await evaluate(`!document.querySelector('.partner-follow-up-fields input[type=date]').disabled&&document.querySelector('.partner-follow-up-fields input:not([type=date])').value==='Legacy next step'&&!(await m.readWork('agent','visit','point'))&&(await m.readWork('agent','visit-edit','point')).followUpDate===${JSON.stringify(invalidDate)}`),'invalid pending retains all content as editable recovery');
+  if(invalidDate==='2026-10-10')check(await evaluate("document.querySelector('.partner-follow-up-fields input[type=date]').value==='2026-10-10'"),'legacy Saturday remains visible for correction');
+  await evaluate('root.unmount();mountPartner()');
+  await waitFor(()=>evaluate("document.querySelector('.partner-visits textarea')?.value==='Legacy note'"),'editable legacy content survives another reopen');
+  await fillVisit('.partner-follow-up-fields input[type=date]','2026-10-12');await clickVisit();
+  await waitFor(()=>evaluate("document.body.innerText.includes('Vizita a fost sincronizată.')"),'corrected legacy Monday saves');
+  check(await evaluate("!(await m.readWork('agent','visit','point'))&&!(await m.readWork('agent','visit-edit','point'))"),'corrected legacy confirmation clears pending and recovery');
+  assert.deepEqual(requests.at(-1).body.notes,'Legacy note');assert.equal(requests.at(-1).body.nextStep,'Legacy next step');assert.equal(requests.at(-1).body.followUpDate,'2026-10-12');
+ }
  await fillVisit('.partner-visits textarea','Network retains visit');await evaluate("window.fetch=async()=>{throw new TypeError('Synthetic offline')}");await clickVisit();
  await waitFor(()=>evaluate("document.body.innerText.includes('Vizită salvată pe telefon')"),'network visit queued');
  check(await evaluate("(await m.pendingOperations('agent')).some(op=>op.path.endsWith('/visits'))&&(await m.readWork('agent','visit','point')).notes==='Network retains visit'"),'H network failure remains queued');
  await evaluate('root.unmount();window.fetch=originalFetch;await replay()');
+ // Unlocking invalid local content cannot erase a newer tab's pending visit.
+ check(await evaluate("const owner='visit-race',old={id:'old',notes:'Keep old',followUpDate:'2026-10-10'},newer={id:'new',notes:'Keep newer'};await m.saveWork(owner,'visit','point',newer);let rejected=false;try{await m.unlockVisitWork(owner,'point',old)}catch{rejected=true}rejected&&(await m.readWork(owner,'visit','point')).id==='new'&&!(await m.readWork(owner,'visit-edit','point'))"),'legacy invalid cleanup compares the persisted pending version');
+ check(await evaluate("const owner='visit-retry',body={id:'retry',notes:'Ambiguous request',followUpDate:'2026-10-10'};await m.enqueue(owner,'partner/portfolio/point/visits','POST',body,{scope:'visit',id:'point',value:body});await m.replay(owner,async()=>{throw new TypeError('Synthetic lost response')},()=>owner);const before=JSON.stringify(await m.pendingOperations(owner));await m.unlockVisitWork(owner,'point',body);JSON.stringify(await m.pendingOperations(owner))===before&&(await m.readWork(owner,'visit-edit','point')).notes===body.notes"),'invalid pending unlock preserves attempted immutable outbox identity and content');
  // T01 controls: confirmation merges only the submitted operation, preserving
  // newer edits/reverts and remote changes to non-overlapping fields.
  for(const revert of [false,true]){

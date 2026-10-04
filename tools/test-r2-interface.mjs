@@ -185,7 +185,15 @@ try {
   equal((await api('partner/attention','a')).followUps.map(row=>row.customerId),['shared'],'due follow-up is actionable through current account scope');
   await api('partner/portfolio/outside/visits','b','POST',{id:randomUUID(),nextStep:'Other territory follow-up',followUpDate:'2026-10-02'});
   equal((await api('partner/attention?agentId=a','global')).followUps.map(row=>row.agentId),['a'],'manager attention respects the selected authorized agent');
-  await api('partner/attention?agentId=b','regional','GET',undefined,404);
+  for(const viewer of ['regional','region-b','global']){
+    for(const [filter,expected] of [['',['a','b']],['agentId=b',['b']],['managerId=region-b',['b']],['managerId=region-b&agentId=b',['b']],['managerId=regional',['a']],['managerId=__unassigned',[]]]){
+      equal((await api('partner/attention?'+filter,viewer)).followUps.map(row=>row.agentId).sort(),expected,'national follow-up matrix '+viewer+' '+filter);
+    }
+    await api('partner/attention?managerId=regional&agentId=b',viewer,'GET',undefined,404);
+  }
+  equal((await api('partner/attention','a')).followUps.map(row=>row.agentId),['a'],'agent attention remains own scope after another-region visit');
+  await api('partner/attention?agentId=b','a','GET',undefined,403);
+  await api('partner/portfolio/outside/visits','regional','POST',{id:randomUUID()},404);
   await api('partner/portfolio/shared/visits','a','POST',{id:randomUUID(),followUpDate:'2026-10-03'},400);
   await api('partner/portfolio/outside/visits','a','POST',{id:randomUUID()},404);
   check((await api('partner/portfolio/outside','global')).partner.canEdit,'global manager can edit outside regional scope');

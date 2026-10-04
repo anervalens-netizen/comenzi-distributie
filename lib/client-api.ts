@@ -1,5 +1,5 @@
 import {countyLabel, countyMatches, countySearch, routeMatches, routeTokens} from './portfolio-facets.ts';
-import { snapshot, saveSnapshot, sessionFence, sessionStorageAvailable, rejectSessionFence, acceptSessionFence, withSessionGate, rememberAccount, lastAccount, migrateLegacy, replay, pendingOperations, OFFLINE_CACHE_INVALIDATED_EVENT } from './offline-work.ts';
+import { snapshot, saveSnapshot, acceptAuthoritativeOrder, sessionFence, sessionStorageAvailable, rejectSessionFence, acceptSessionFence, withSessionGate, rememberAccount, lastAccount, migrateLegacy, replay, pendingOperations, OFFLINE_CACHE_INVALIDATED_EVENT } from './offline-work.ts';
 import { currentLocalWorkGeneration, currentLocalWorkUserId, LOCAL_WORK_USER_EVENT, removeLocalWork, restoreLocalWorkUserId, setLocalWorkUserId } from './local-work.ts';
 
 export const SESSION_EXPIRED_EVENT='mobiup-session-expired';
@@ -169,6 +169,8 @@ export async function networkApi<T=Record<string,unknown>>(path: string,method='
     }
   } else if(path==='auth/logout'&&method==='POST') {
     await rejectSession(requestFence,requestOwner);
+  } else if(((method==='POST'&&/^orders\/[^/]+\/finalize$/.test(path))||(method==='GET'&&sessionStorageAvailable()&&/^orders\/[^/]+$/.test(path)))&&record(data)&&record(data.order)&&data.order.status==='finalized') {
+    await acceptAuthoritativeOrder(requestOwner,data.order as unknown as import('./types').Order);
   } else if(method==='DELETE'&&/^orders\/[^/]+$/.test(path)) {
     const userId=currentLocalWorkUserId();
     const orderId=path.slice('orders/'.length);

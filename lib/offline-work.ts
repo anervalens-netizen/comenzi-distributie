@@ -1,5 +1,6 @@
 import {mergeConcurrentOrders,orderSaveBody,sameEditableOrder} from './order-draft.ts';
 import type {Order} from './types';
+import {readLocalWork,removeLocalWork} from './local-work.ts';
 /** Account-bound durable work. Transactions never evict pending mutations. */
 export type PendingOperation = { id:string; userId:string; entity:string; path:string; method:string; body:unknown; created:number; attempts:number; next:number; state:'pending'|'blocked'; error?:string; status?:number; orderWork?:{base:Order;local:Order} };
 type Snapshot = {key:string;userId:string;path:string;value:unknown;at:number;bytes:number};
@@ -283,6 +284,44 @@ export async function clearConfirmedOrderWork(userId:string,id:string,confirmed:
   if(row?.value?.local&&row.value.base?.revision===confirmed.revision&&sameEditableOrder(row.value.local,confirmed)&&!pending.some(op=>entityFor(op.path,op.body)==='orders/'+id))await request(work.delete(key));
  });
 }
+// Clean recovery copies can be retired against a live document, but an older
+// response must never erase a newer comparison base or queued/unsaved edits.
+function cleanOrderWork(value:{base:Order;local:Order}|undefined,remote:Order){
+ return !!value?.base&&!!value.local&&value.base.id===remote.id&&value.local.id===remote.id
+  &&value.base.revision<=remote.revision
+  &&(sameEditableOrder(value.base,value.local)||sameEditableOrder(value.local,remote));
+}
+export async function acceptAuthoritativeOrder(userId:string,order:Order){
+ const pending=await transaction(['work','outbox'],'readwrite',async tx=>{
+  const store=tx.objectStore('work'),key=userId+'|order-list|confirmed';
+  const projection=(await request(store.get(key)))?.value as Record<string,Order>||{};
+  const previous=projection[order.id];
+  if(!previous||(previous.status==='draft'&&order.status!=='draft')||(previous.status===order.status&&previous.revision<=order.revision))projection[order.id]=order;
+  await request(store.put({key,value:projection}));
+  await reconcileOrderListInTransaction(tx,userId,[order],false);
+  const rows=await request(tx.objectStore('outbox').index('user').getAll(userId)) as PendingOperation[];
+  const pending=rows.some(op=>entityFor(op.path,op.body)==='orders/'+order.id);
+  const workKey=userId+'|order|'+order.id,stored=await request(store.get(workKey));
+  if(!pending&&cleanOrderWork(stored?.value,order))await request(store.delete(workKey));
+  return pending;
+ });
+ // Re-read the legacy mirror after the transaction; do not remove a different
+ // tab's edit captured before an await. Keep it when any request is unresolved.
+ if(!pending&&cleanOrderWork(readLocalWork<{base:Order;local:Order}>('order',userId,order.id).value??undefined,order)){
+  const error=removeLocalWork('order',userId,order.id);if(error)throw new Error(error);
+ }
+}
+export async function unlockVisitWork(userId:string,id:string,expected:unknown){
+ await transaction(['work'],'readwrite',async tx=>{
+  const store=tx.objectStore('work'),key=userId+'|visit|'+id,current=await request(store.get(key));
+  if(JSON.stringify(current?.value)!==JSON.stringify(expected))throw new Error('Vizita locală s-a schimbat. Redeschide fișa înainte de corectare.');
+  await request(store.put({key:userId+'|visit-edit|'+id,value:expected}));
+  await request(store.delete(key));
+ });
+ if(JSON.stringify(readLocalWork('visit',userId,id).value)===JSON.stringify(expected)){
+  const error=removeLocalWork('visit',userId,id);if(error)throw new Error(error);
+ }
+}
 export async function removeWork(userId:string,scope:string,id:string){await transaction(['work'],'readwrite',tx=>request(tx.objectStore('work').delete(userId+'|'+scope+'|'+id)));}
 export async function migrateLegacy(userId:string){
  if(!userId||typeof localStorage==='undefined')return;
@@ -359,7 +398,8 @@ async function acknowledgeOperation(op:PendingOperation,result:unknown,token:str
    }
    const projectionKey=op.userId+'|order-list|confirmed';
    const projection=(await request(store.get(projectionKey)))?.value||{};
-   projection[saved.id]=saved;await request(store.put({key:projectionKey,value:projection}));
+   if(!projection[saved.id]||(projection[saved.id].status==='draft'&&projection[saved.id].revision<=saved.revision))projection[saved.id]=saved;
+   await request(store.put({key:projectionKey,value:projection}));
    await reconcileOrderListInTransaction(tx,op.userId,[saved],false);
   }
   await request(outbox.delete(op.id));return submitted;
@@ -369,11 +409,11 @@ async function acknowledgeOperation(op:PendingOperation,result:unknown,token:str
 async function reconcileOrderListInTransaction(tx:IDBTransaction,userId:string,remote:Order[],includeLocal=true){
  const store=tx.objectStore('work'),key=userId+'|draft-list|all',markerKey=userId+'|order-list|settled';
  const local=(await request(store.get(key)))?.value as Order[]|undefined;
- const settled=(await request(store.get(markerKey)))?.value as Record<string,'confirmed'|'deleted'>||{};
- for(const order of remote)if(settled[order.id]!=='deleted')settled[order.id]='confirmed';
+ const settled=(await request(store.get(markerKey)))?.value as Record<string,'confirmed'|'deleted'|'finalized'>||{};
+ for(const order of remote)if(settled[order.id]!=='deleted'&&settled[order.id]!=='finalized')settled[order.id]=order.status==='draft'?'confirmed':'finalized';
  const remaining=(local||[]).filter(order=>order.status==='draft'&&!settled[order.id]);
  await request(store.put({key,value:remaining}));await request(store.put({key:markerKey,value:settled}));
- const rows=[...(includeLocal?remaining:[]),...remote.filter(order=>settled[order.id]!=='deleted')];
+ const rows=[...(includeLocal?remaining:[]),...remote.filter(order=>settled[order.id]!=='deleted'&&(settled[order.id]!=='finalized'||order.status!=='draft'))];
  return [...new Map(rows.map(order=>[order.id,order])).values()];
 }
 export async function reconcileOrderList(userId:string,remote:Order[],offline=false){
@@ -382,7 +422,7 @@ export async function reconcileOrderList(userId:string,remote:Order[],offline=fa
   if(!offline){
    const store=tx.objectStore('work'),key=userId+'|order-list|confirmed';
    const projection=(await request(store.get(key)))?.value as Record<string,Order>|undefined;
-   if(projection){for(const order of remote)if(projection[order.id]&&order.revision>=projection[order.id].revision)projection[order.id]=order;await request(store.put({key,value:projection}));}
+   if(projection){for(const order of remote)if(projection[order.id]&&(projection[order.id].status==='draft'||order.status!=='draft')&&order.revision>=projection[order.id].revision)projection[order.id]=order;await request(store.put({key,value:projection}));}
    return rows;
   }
   // Separate confirmed-local documents from server pages: never assert page or
@@ -391,8 +431,9 @@ export async function reconcileOrderList(userId:string,remote:Order[],offline=fa
   const confirmed=(await request(store.get(userId+'|order-list|confirmed')))?.value as Record<string,Order>||{};
   const settled=(await request(store.get(userId+'|order-list|settled')))?.value||{};
   const byId=new Map(rows.map(order=>[order.id,order]));
-  for(const order of Object.values(confirmed))if(settled[order.id]!=='deleted'&&(!byId.has(order.id)||byId.get(order.id)!.revision<order.revision)){
-   if(order.status==='draft')byId.set(order.id,order);else byId.delete(order.id);
+  for(const order of Object.values(confirmed)){
+   if(settled[order.id]==='deleted'||settled[order.id]==='finalized'||order.status!=='draft'){if(byId.get(order.id)?.status==='draft')byId.delete(order.id);continue;}
+   if(!byId.has(order.id)||byId.get(order.id)!.revision<order.revision)byId.set(order.id,order);
   }
   return [...byId.values()];
  });
@@ -472,7 +513,7 @@ export async function retireOrderWork(userId:string,id:string,transport:ReplayTr
     if(row)await request(work.put({key:userId+'|recovered-order|'+id,value:row.value}));
     await request(work.delete(key));
     const markerKey=userId+'|order-list|settled',value=(await request(work.get(markerKey)))?.value||{};
-    value[id]=remote?'confirmed':'deleted';await request(work.put({key:markerKey,value}));await reconcileOrderListInTransaction(tx,userId,[]);
+    value[id]=remote?'finalized':'deleted';await request(work.put({key:markerKey,value}));await reconcileOrderListInTransaction(tx,userId,[]);
    }));notify();
   }finally{await releaseLease(userId,token);}
  };

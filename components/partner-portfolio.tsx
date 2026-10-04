@@ -16,7 +16,7 @@ import {
 import { currentLocalWorkUserId } from '@/lib/local-work';
 const userIdForWork=()=>currentLocalWorkUserId();
 import { QueuedWorkRecovery } from '@/components/queued-work-recovery';
-import { enqueue, readWork, saveWork, removeWork } from '@/lib/offline-work';
+import { enqueue, readWork, unlockVisitWork, saveWork, removeWork } from '@/lib/offline-work';
 import { api, ApiError, invalidateApiReadCache } from '@/lib/client-api';
 import type {
   PartnerDetail,
@@ -495,6 +495,13 @@ export function PartnerSheet({
     }
     gpsButton.current?.focus({ preventScroll: true });
   }
+  const unlockInvalidVisit=useCallback(async(value:NonNullable<typeof pending>)=>{
+    // Keep an editable recovery copy across another close/reopen. The immutable
+    // outbox (including any attempted request) remains available for recovery.
+    await unlockVisitWork(userIdForWork(),id,value);
+    setNotes(value.notes);setNextStep(value.nextStep||'');setFollowUpDate(value.followUpDate||'');
+    setPending(null);setError(visitDateError(value.followUpDate||''));
+  },[id]);
   useEffect(() => {
     dialog.current?.showModal();
     let alive = true;const controller=new AbortController();
@@ -503,7 +510,11 @@ export function PartnerSheet({
         if (alive) {
           setDetail(data);
           setForm(await readWork<PortfolioPartner>(userIdForWork(),'partner',id)||data.partner);
-          setPending(await readWork<{id:string;notes:string}>(userIdForWork(),'visit',id)||null);
+          const saved=await readWork<NonNullable<typeof pending>>(userIdForWork(),'visit',id);
+          const editable=saved||await readWork<NonNullable<typeof pending>>(userIdForWork(),'visit-edit',id);
+          if(!alive)return;
+          if(editable){setNotes(editable.notes);setNextStep(editable.nextStep||'');setFollowUpDate(editable.followUpDate||'');}
+          if(saved&&visitDateError(saved.followUpDate||''))await unlockInvalidVisit(saved);else setPending(saved||null);
         }
       })
       .catch((e) => {
@@ -512,12 +523,12 @@ export function PartnerSheet({
     return () => {
       alive = false;controller.abort();
     };
-  }, [id]);
+  }, [id,unlockInvalidVisit]);
   useEffect(()=>{if(form)void saveWork(userIdForWork(),'partner',id,form).catch(e=>setError(e.message));},[form,id]);
   useEffect(()=>{
     const synced=(event:Event)=>{const value=(event as CustomEvent).detail;if(value.userId!==userIdForWork())return;
       if(value.path===`partner/portfolio/${encodeURIComponent(id)}`&&value.result?.partner){const saved=value.result.partner as PortfolioPartner;setForm(current=>current?{...current,revision:saved.revision}:saved);setDetail(current=>current?{...current,partner:saved}:current);setNotice('Datele trimise au fost sincronizate. Modificările noi rămân în fișă.');}
-      if(value.path===`partner/portfolio/${encodeURIComponent(id)}/visits`&&value.result?.visits){setDetail(value.result);setPending(null);void removeWork(userIdForWork(),'visit',id).catch(e=>setError(e.message));setNotice('Vizita a fost sincronizată.');}
+      if(value.path===`partner/portfolio/${encodeURIComponent(id)}/visits`&&value.result?.visits){setDetail(value.result);setPending(null);void Promise.all([removeWork(userIdForWork(),'visit',id),removeWork(userIdForWork(),'visit-edit',id)]).catch(e=>setError(e.message));setNotice('Vizita a fost sincronizată.');}
     };window.addEventListener('mobiup-sync-confirmed',synced);return()=>window.removeEventListener('mobiup-sync-confirmed',synced);
   },[id]);
   async function save() {
@@ -580,8 +591,8 @@ export function PartnerSheet({
   }
   async function visit() {
     if(manager||form?.canEdit!==true)return;
-    const dateError=visitDateError(pending?.followUpDate||followUpDate);
-    if(dateError){setError(dateError);return;}
+    const dateError=visitDateError(pending?pending.followUpDate||'':followUpDate);
+    if(dateError){if(pending){try{await unlockInvalidVisit(pending);}catch(e){setError((e as Error).message);}}else setError(dateError);return;}
     setBusy(true);
     setError('');
     setNotice('');
@@ -599,7 +610,7 @@ export function PartnerSheet({
       setNextStep('');
       setFollowUpDate('');
       setPending(null);
-      await removeWork(userIdForWork(),'visit',id);setNotice('Vizita a fost sincronizată.');
+      await removeWork(userIdForWork(),'visit',id);await removeWork(userIdForWork(),'visit-edit',id);setNotice('Vizita a fost sincronizată.');
       invalidateApiReadCache('partner/');
       onSaved();
     } catch (e) {

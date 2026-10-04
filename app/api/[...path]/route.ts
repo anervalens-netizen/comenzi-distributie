@@ -281,7 +281,7 @@ async function dispatch(req: Request) {
   if(path.join('/')==='partner/planning'&&req.method==='GET')return response(await visitWeek(user,new URL(req.url).searchParams.get('week')||''));
   if(path.join('/')==='partner/planning'&&req.method==='PUT')return response(await saveDayPlan(user,await jsonBody(req)));
   if(path.join('/')==='partner/activity'&&req.method==='GET')return response(await partnerActivityOverview(readUser,new URL(req.url).searchParams,user));
-  if(path.join('/')==='partner/attention'&&req.method==='GET')return response(await duePartnerFollowUps(user,new URL(req.url).searchParams));
+  if(path.join('/')==='partner/attention'&&req.method==='GET')return response(await duePartnerFollowUps(readUser,new URL(req.url).searchParams));
   if(path.join('/')==='partner/browse'&&req.method==='GET')return response(await browsePartners(readUser,new URL(req.url).searchParams,user));
   if(path.join('/')==='partner/map'&&req.method==='GET')return response(await mapPartners(readUser,new URL(req.url).searchParams,user));
   if(path.join('/')==='partner/summary'&&req.method==='GET')return response({partners:await portfolioSummary(readUser)});

@@ -12,14 +12,14 @@ import React from 'react';import{createRoot}from'react-dom/client';import App fr
 window.work=work;window.client=client;window.local=local;
 const user={id:'synthetic-agent',name:'Synthetic agent',username:'synthetic',role:'agent',warehouseId:'w',warehouseName:'Synthetic',active:1,mustChangePassword:false};
 const order={id:'A',number:'TEST-A',kind:'accessories',userId:user.id,agentName:user.name,warehouseId:'w',warehouseName:'Synthetic',status:'draft',items:[],serials:[],client:null,notes:'A',createdAt:new Date().toISOString(),finalizedAt:null,sourceOrderId:null,revision:1,total:0,pieces:0};
-window.detailOnly={...order,id:'paged',number:'TEST-PAGED'};window.sessionUser=user;window.orders=[order,{...order,id:'B',number:'TEST-B',notes:'B'}];window.held={};window.requests=[];window.holdOrders=false;window.holdList=false;
+window.detailOnly={...order,id:'paged',number:'TEST-PAGED'};window.cleanDraft={...order,id:'clean',number:'TEST-CLEAN',revision:2,notes:'Remote update'};window.holdClean=true;window.sessionUser=user;window.orders=[order,{...order,id:'B',number:'TEST-B',notes:'B'}];window.held={};window.requests=[];window.holdOrders=false;window.holdList=false;
 window.fetch=async(input,init={})=>{const path=String(input).replace(/^.*\/api\//,'');window.requests.push(path);let value;
  if(path==='auth/session')value={user:window.sessionUser};else if(path.startsWith('bootstrap'))value={user:window.sessionUser,users:[window.sessionUser],warehouses:[{id:'w',name:'Synthetic'}],products:[],orders:window.sessionUser.id===user.id?window.orders:[],weekKey:'2026-10-03'};
  else if(path==='orders'||path.startsWith('orders?')){value={user,orders:window.orders,weekKey:'2026-10-03'};if(window.holdList)return new Promise(r=>window.held['list'+window.requests.filter(p=>p==='orders'||p.startsWith('orders?')).length]=()=>r(new Response(JSON.stringify(value))));}
- else if(path.startsWith('orders/')){value={order:window.orders.find(o=>o.id===path.slice(7))||(path==='orders/paged'?window.detailOnly:undefined)};if(window.holdOrders)return new Promise(r=>window.held[path]=()=>r(new Response(JSON.stringify(value))));}
+ else if(path.startsWith('orders/')){value={order:window.orders.find(o=>o.id===path.slice(7))||(path==='orders/paged'?window.detailOnly:path==='orders/clean'?window.cleanDraft:undefined)};if(path==='orders/clean'&&window.holdClean)return new Promise(r=>window.held.clean=()=>r(new Response(JSON.stringify(value))));if(window.holdOrders)return new Promise(r=>window.held[path]=()=>r(new Response(JSON.stringify(value))));}
  else if(path.startsWith('stock'))value={warehouseId:'w',rows:[],depot:{},warehouses:[]};else value={};return new Response(JSON.stringify(value),{headers:{'Content-Type':'application/json'}});};
 await work.saveWork(user.id,'draft-list','all',[{...order,id:'local',number:'Ciornă locală',notes:''}]);
-if(${!baseline}){const value={base:window.detailOnly,local:{...window.detailOnly,notes:'Unlisted local work'}};await work.saveWork(user.id,'order','paged',value);local.writeLocalWork('order',user.id,'paged',value);}
+if(${!baseline}){const clean={...window.cleanDraft,revision:1,notes:'Older synced contents'};await work.saveOrderWork(user.id,'clean',{base:clean,local:clean});local.writeLocalWork('order',user.id,'clean',{base:clean,local:clean});const value={base:window.detailOnly,local:{...window.detailOnly,notes:'Unlisted local work'}};await work.saveWork(user.id,'order','paged',value);local.writeLocalWork('order',user.id,'paged',value);}
 window.root=createRoot(document.getElementById('root'));root.render(<App/>);window.ready=true;
 `;
 const output=await build({stdin:{contents:source,resolveDir:process.cwd(),loader:'tsx'},write:false,outdir:'out',bundle:true,format:'esm',platform:'browser',jsx:'automatic',logLevel:'silent',alias:{'next/image':resolve('tools/offline-image.tsx')},plugins:baseline?[baselinePlugin]:[]});
@@ -33,6 +33,11 @@ try{
  await evaluate('document.querySelector("[aria-label=\\"Actualizează comenzile\\"]").click()');await delay(200);
  if(process.env.RECOVERY_CASE!=='navigation')check(await evaluate('!!document.querySelector("[data-order-id=local]")'),'T03 actual UI refresh keeps local draft');
  if(!baseline){
+  await waitFor(()=>evaluate('!!held.clean'),'clean omitted draft lookup pending');
+  check(await evaluate('document.body.innerText.includes("Ciorne cu modificări locale de verificat")'),'omitted record begins as a recovery candidate');
+  await evaluate('window.holdClean=false;held.clean()');
+  await waitFor(()=>evaluate('!document.body.innerText.includes("Ciorne cu modificări locale de verificat")'),'authoritative draft clears false warning');
+  check(await evaluate('!(await work.readWork("synthetic-agent","order","clean"))&&!local.readLocalWork("order","synthetic-agent","clean").value'),'clean older draft retires both recovery copies after live lookup');
   await waitFor(()=>evaluate('requests.includes("orders/paged")'),'unlisted draft verified by live detail');
   check(await evaluate('!document.body.innerText.includes("Comanda nu mai există pe server")&&(await work.readWork("synthetic-agent","order","paged")).local.notes==="Unlisted local work"'),'T03 missing page row is not a deletion');
   await evaluate('window.orders=[...orders,{...orders[0],id:"local",number:"TEST-LOCAL"}];window.dispatchEvent(new CustomEvent("mobiup-sync-confirmed",{detail:{userId:"synthetic-agent",path:"orders",result:{order:orders.at(-1)}}}))');
@@ -73,5 +78,12 @@ try{
  await evaluate('window.held={};window.holdOrders=true;document.querySelector("[data-order-id=A] .order-link").click()');await waitFor(()=>evaluate('!!held["orders/A"]'),'account pending A');
  await evaluate('window.sessionUser={...sessionUser,id:"other-agent"};local.setLocalWorkUserId("other-agent");window.dispatchEvent(new StorageEvent("storage",{key:"mobiup-work-user-v1"}))');await delay(100);await evaluate('held["orders/A"]()');await delay(100);
  check(await evaluate('!document.querySelector(".cart textarea")&&!document.querySelector("[data-order-id=local]")&&!document.querySelector("[data-order-id=A]")'),'T05 account change rejects old response and local rows');
+ if(!baseline){
+  await evaluate('window.orders=[...orders,detailOnly];window.sessionUser={...sessionUser,id:"synthetic-agent"};local.setLocalWorkUserId("synthetic-agent");window.dispatchEvent(new StorageEvent("storage",{key:"mobiup-work-user-v1"}))');
+  await waitFor(()=>evaluate('!!document.querySelector("[data-order-id=paged]")'),'previously omitted draft returns on later page');
+  await evaluate('window.holdOrders=false;document.querySelector("[data-order-id=paged] .order-link").click()');
+  await waitFor(()=>evaluate('document.querySelector(".cart textarea")?.value==="Unlisted local work"'),'unsaved differences restored in real editor');
+  check(await evaluate('!document.body.innerText.includes("Comanda nu mai există pe server")'),'live draft retains normal merge recovery after absence from a page');
+ }
  console.log('PASS: '+checks+' rendered application navigation/reconciliation contracts.');
 }finally{await browser?.close();server.closeAllConnections();await new Promise(r=>server.close(r));}

@@ -15,7 +15,7 @@ import type { ManagerDestination } from '@/components/manager-workspace';
 import { ManagerScopeBar, useManagerScope } from '@/components/manager-scope';
 import { api, networkApi, ApiError, dateLabel, errorMessage, normalize, kindLabels, orderDateKey, localDateKey, SESSION_EXPIRED_EVENT, startOfflineSync } from '@/lib/client-api';
 import { bucharestReportingMonthKey } from '@/lib/bucharest-month';
-import { enqueue, pendingOperations, readWork, reconcileOrderList, markOrderDeleted, OFFLINE_EVENT } from '@/lib/offline-work';
+import { enqueue, pendingOperations, readWork, acceptAuthoritativeOrder, reconcileOrderList, markOrderDeleted, OFFLINE_EVENT } from '@/lib/offline-work';
 import { readFinalizedOrderRecovery, readOrphanedOrderRecoveries, type OrderRecovery } from '@/lib/order-recovery';
 import type { User, Warehouse, Product, Order, Kind, Settings, OperationalMailSettings, ManagerMailSettings, ManagerRequestInbox } from '@/lib/types';
 
@@ -89,7 +89,7 @@ export default function DistributionApp() {
     // response before offering deleted/finalized recovery after a reload.
     for(const recovery of recoveries.slice(0,5)){
       if(!current())return;
-      try{const {order}=await networkApi<{order:Order}>(`orders/${recovery.local.id}`);if(!current())return;if(order.status!=='draft'){setOrderRecovery(previous=>previous||{remote:order,local:recovery.local});return;}}
+      try{const {order}=await networkApi<{order:Order}>(`orders/${recovery.local.id}`);if(!current())return;if(order.status!=='draft'){setOrderRecovery(previous=>previous||{remote:order,local:recovery.local});return;}setBlockedOrderIds(ids=>ids.filter(id=>id!==order.id));await acceptAuthoritativeOrder(owner,order);}
       catch(error){if(!current())return;if(error instanceof ApiError&&error.status===404){setOrderRecovery(previous=>previous||{remote:null,local:recovery.local});return;}}
     }
   },[]);
