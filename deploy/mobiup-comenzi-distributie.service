@@ -2,6 +2,9 @@
 Description=Mobiup comenzi distributie
 After=network-online.target
 Wants=network-online.target
+# Bound rapid failures as well as the per-process address wait.
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -10,12 +13,13 @@ WorkingDirectory=/opt/Mobiup/comenzi-distributie/runtime/current
 Environment=NODE_ENV=production
 Environment=MOBIUP_DATA_DIR=/storage/comenzi-distributie
 Environment=HOST=127.0.0.1
+Environment=MOBIUP_BIND_TIMEOUT_MS=60000
 Environment=PORT=39120
 Environment=VINEXT_TRUST_PROXY=1
 Environment=VINEXT_TRUSTED_HOSTS=app.example.invalid
 ExecStart=/usr/bin/node --max-old-space-size=384 /opt/Mobiup/comenzi-distributie/runtime/current/server.js
 Restart=on-failure
-RestartSec=3
+RestartSec=10
 UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true

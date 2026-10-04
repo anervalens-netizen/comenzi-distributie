@@ -12,9 +12,14 @@ db.exec("ALTER TABLE users ADD COLUMN warehouse_name TEXT; ALTER TABLE users ADD
 const insert=db.prepare("INSERT INTO users(id,username,name,role,warehouse_id,password_hash,must_change_password,active,warehouse_name,site_code,manager_scope) VALUES (?,?,?,?,?,'x',0,1,?,?, 'assigned')");
 insert.run('dup-a','dup.a','Dup A','agent','g-5','G A','DUPLICATE');
 insert.run('dup-b','dup.b','Dup B','agent','g-3','G B',' duplicate ');
+insert.run('manager','synthetic.manager','Synthetic Manager','manager',null,null,'');
+db.exec("PRAGMA foreign_keys=OFF; INSERT INTO sessions(token_hash,user_id,expires_at) VALUES('synthetic-orphan','missing-user',9999999999999)");
+assert.equal(db.prepare('PRAGMA quick_check').get().quick_check,'ok');
+assert.ok(db.prepare('PRAGMA foreign_key_check').get());
+const beforeSchema=db.prepare('SELECT sql FROM sqlite_master ORDER BY name').all();
 db.close();
 
-const port=3031,root=`http://127.0.0.1:${port}/api/health`;
+const port=3031,root=`http://127.0.0.1:${port}/api/bootstrap`;
 const child=spawn(process.execPath,['dist/standalone/server.js'],{env:{...process.env,MOBIUP_DATA_DIR:folder,HOST:'127.0.0.1',PORT:String(port),NODE_ENV:'production'},stdio:'ignore'});
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function health(){try{return await fetch(root);}catch{return null;}}
@@ -22,10 +27,18 @@ try {
   let ready=null;
   for(let i=0;i<40&&!ready;i++){ready=await health();if(!ready)await sleep(100);}
   assert.ok(ready,'QA server did not start listening');
+  const live=await fetch(`http://127.0.0.1:${port}/api/health`);
+  assert.equal(live.status,200,'Liveness is independent of invalid business data');
+  assert.deepEqual(await live.json(),{status:'ok',service:'comenzi-distributie'});
   const statuses=[ready.status];
   for(let i=1;i<3;i++)statuses.push((await fetch(root)).status);
   assert.deepEqual(statuses,[500,500,500],'Invalid startup must remain unhealthy on every request');
   let verify=new DatabaseSync(dbPath);
+  assert.deepEqual(verify.prepare('SELECT sql FROM sqlite_master ORDER BY name').all(),beforeSchema,'FK rejection precedes every schema migration');
+  assert.equal(verify.prepare("SELECT manager_scope FROM users WHERE id='manager'").get().manager_scope,'assigned','FK rejection precedes user normalization');
+  verify.exec("DELETE FROM sessions WHERE token_hash='synthetic-orphan'");verify.close();
+  assert.equal((await fetch(root)).status,500,'after FK repair the separate duplicate constraint still fails closed');
+  verify=new DatabaseSync(dbPath);
   assert.equal(verify.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='users_active_site_code_unique'").get(),undefined,'Unique SiteCode index must not appear after failed initialization');
   verify.prepare("UPDATE users SET site_code='' WHERE id='dup-b'").run();verify.close();
 
@@ -36,9 +49,20 @@ try {
   assert.ok(verify.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='push_subscriptions'").get(),'Successful initialization creates push subscription storage');
   assert.ok(verify.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_push_subscriptions_user'").get(),'Successful initialization creates push subscription index');
   verify.close();
-  console.log('PASS: runtime initialization remains fail-closed until all integrity checks succeed.');
+  assert.equal(verify.isOpen,false);
+  console.log('PASS: existing orphan rejected before writes; repaired clean DB initializes.');
 } finally {
   child.kill('SIGTERM');
   await Promise.race([new Promise(resolve=>child.once('exit',resolve)),sleep(2000)]);
   if(child.exitCode===null)child.kill('SIGKILL');
 }
+
+const fresh=resolve(folder,'fresh');
+const freshChild=spawn(process.execPath,['dist/standalone/server.js'],{env:{...process.env,MOBIUP_DATA_DIR:fresh,HOST:'127.0.0.1',PORT:String(port),NODE_ENV:'production'},stdio:'ignore'});
+try{
+ let response;for(let i=0;i<40;i++){try{response=await fetch(root);break;}catch{await sleep(100);}}
+ assert.equal(response?.status,200,'brand-new DB initializes before connection publication');
+ const verify=new DatabaseSync(resolve(fresh,'mobiup.sqlite'));
+ assert.equal(verify.prepare('PRAGMA quick_check(1)').get().quick_check,'ok');assert.equal(verify.prepare('PRAGMA foreign_key_check').get(),undefined);verify.close();
+ console.log('PASS: brand-new runtime database is structurally and referentially valid.');
+}finally{freshChild.kill('SIGTERM');await Promise.race([new Promise(resolve=>freshChild.once('exit',resolve)),sleep(2000)]);if(freshChild.exitCode===null)freshChild.kill('SIGKILL');}

@@ -9,16 +9,26 @@ import partnerPortfolioSchema from '@/drizzle/0006_partner_portfolio.sql?raw';
 
 import partnerDayPlansSchema from '@/drizzle/0007_partner_day_plans.sql?raw';
 import partnerMapIndex from '@/drizzle/0008_partner_map_index.sql?raw';
+import orderListRevisionSchema from '@/drizzle/0010_order_list_revision.sql?raw';
 
 export const runtimeKind = 'node';
+export { operationalStatus } from './operational-status-node';
 const dataDirectory = resolve(process.env.MOBIUP_DATA_DIR || './work/server-data');
 let connection: DatabaseSync | undefined;
+function verifyDatabase(candidate:DatabaseSync){
+  const rows=candidate.prepare('PRAGMA quick_check(1)').all();
+  if(rows.length!==1||rows[0].quick_check!=='ok')throw new Error('Database structural check failed.');
+  if(candidate.prepare('PRAGMA foreign_key_check').get())throw new Error('Database foreign key check failed.');
+}
 function sqlite() {
   if (connection) return connection;
   mkdirSync(dataDirectory, { recursive: true, mode: 0o700 });
   const candidate = new DatabaseSync(resolve(dataDirectory, 'mobiup.sqlite'));
   try {
-    candidate.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;');
+    // Verify before journal-mode changes, migrations or user normalization.
+    candidate.exec('PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON;');
+    verifyDatabase(candidate);
+    candidate.exec('PRAGMA journal_mode=WAL;');
     if (!candidate.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='users'").get()) {
       candidate.exec('BEGIN IMMEDIATE;');
       try { candidate.exec(initialSchema); candidate.exec('COMMIT;'); }
@@ -40,9 +50,15 @@ function sqlite() {
     candidate.exec("CREATE TABLE IF NOT EXISTS push_subscriptions (endpoint TEXT PRIMARY KEY NOT NULL,user_id TEXT NOT NULL REFERENCES users(id),p256dh TEXT NOT NULL,auth TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL); CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user ON push_subscriptions(user_id);");
     candidate.exec(partnerPortfolioSchema);
     candidate.exec(partnerDayPlansSchema);
+    const visitColumns=candidate.prepare('PRAGMA table_info(partner_visits)').all().map(row=>row.name);
+    if(!visitColumns.includes('next_step'))candidate.exec("ALTER TABLE partner_visits ADD COLUMN next_step TEXT NOT NULL DEFAULT ''");
+    if(!visitColumns.includes('follow_up_date'))candidate.exec('ALTER TABLE partner_visits ADD COLUMN follow_up_date TEXT');
+    candidate.exec('CREATE INDEX IF NOT EXISTS idx_partner_visits_follow_up ON partner_visits(follow_up_date,agent_id,customer_id)');
     candidate.exec(partnerMapIndex);
+    candidate.exec(orderListRevisionSchema);
     candidate.exec('BEGIN IMMEDIATE;');
     try{candidate.exec(portfolioReadModelSchema);candidate.exec('COMMIT;');}catch(error){candidate.exec('ROLLBACK;');throw error;}
+    verifyDatabase(candidate);
     connection=candidate;
     return candidate;
   } catch(error) {

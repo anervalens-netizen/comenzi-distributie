@@ -5,11 +5,13 @@ cd "$ROOT"
 pids=()
 cleanup(){ for pid in "${pids[@]:-}"; do kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; done; }
 trap cleanup EXIT
-wait_health(){ local port="$1"; for _ in $(seq 1 40); do curl -fsS "http://127.0.0.1:${port}/api/health" >/dev/null 2>&1 && return 0; sleep .25; done; return 1; }
-start_server(){ local data="$1" port="$2" log="$3"; MOBIUP_DATA_DIR="$data" HOST=127.0.0.1 PORT="$port" NODE_ENV=production node dist/standalone/server.js >"$log" 2>&1 & pids+=("$!"); wait_health "$port"; }
+wait_ready(){ local port="$1"; for _ in $(seq 1 40); do curl -fsS "http://127.0.0.1:${port}/api/bootstrap" >/dev/null 2>&1 && return 0; sleep .25; done; return 1; }
+start_server(){ local data="$1" port="$2" log="$3"; MOBIUP_DATA_DIR="$data" HOST=127.0.0.1 PORT="$port" NODE_ENV=production node dist/standalone/server.js >"$log" 2>&1 & pids+=("$!"); wait_ready "$port"; }
 stop_last(){ local i=$((${#pids[@]}-1)); kill "${pids[$i]}" 2>/dev/null || true; wait "${pids[$i]}" 2>/dev/null || true; unset 'pids[$i]'; pids=("${pids[@]}"); }
 
 python3 tools/test_crm_master_reconcile.py
+node tools/test-bind-ready.mjs
+node tools/test-operational-status.mjs
 python3 tools/test_client_sales_history.py
 python3 tools/test_client_history_upload.py
 node tools/test-client-history-import-isolated.mjs
@@ -18,6 +20,7 @@ python3 tools/test_client_catalog_apply.py
 python3 tools/test_client_catalog_geography.py
 node tools/test-customer-counts.mjs
 node tools/test-read-projection-cache.mjs
+node tools/test-portfolio-facets.mjs
 node tools/test-mobile-read-model.mjs
 node tools/test-client-import-worker.mjs
 node tools/test-partner-sales-health.mjs
@@ -28,6 +31,7 @@ node tools/test-client-sales.mjs
 node tools/test-partner-billing-period.mjs
 python3 tools/test-partner-portfolio-schema.py
 node tools/test-partner-geocode.mjs
+node tools/test-partner-position.mjs
 node tools/test-partner-geocode-worker.mjs
 node tools/test-public-resources.mjs
 npm run typecheck
@@ -37,19 +41,24 @@ node tools/test-cloudflare-module-graph.mjs
 node tools/test-stock-cloudflare.mjs
 npm run build:server
 node tools/test-client-sales-remediation.mjs
+node tools/test-pagination-revision.mjs
 node tools/test-company-resolved-evidence.mjs
 node tools/test-source-guards.mjs
 node tools/test-partner-detail-remediation.mjs
 node tools/test-partner-detail-http.mjs
+node tools/test-performance-lab.mjs
 node tools/test-client-sales-performance.mjs
+node tools/bench-inventory.mjs
 node tools/test-pwa-preparation.mjs
 node tools/test-runtime-init.mjs
+node tools/test-operational-http.mjs
 node tools/test-bucharest-month.mjs
 node tools/test-sales-worker.mjs
 node tools/test-sales-view-worker.mjs
 node tools/test-sales-view-consistency.mjs
 node tools/test-stock-worker.mjs
 node tools/test-exports.mjs
+node tools/test-order-read-consistency.mjs
 node tools/test-interaction-backend.mjs
 node tools/test-interaction-pwa.mjs
 node tools/test-interaction-offline.mjs
@@ -83,6 +92,7 @@ p='work/qa/mobiup.sqlite'; s='work/qa-credentials/setup.sql'
 con=sqlite3.connect(p); con.executescript(open(s).read()); con.commit(); con.close()
 PY
 node tools/test-api.mjs
+node tools/test-order-pagination.mjs
 node tools/test-audit-regressions.mjs
 node tools/test-partner-portfolio.mjs
 node tools/test-partner-activity-http.mjs
@@ -105,11 +115,18 @@ if [ -n "$CHROME_BIN" ]; then
   CHROME_BIN="$CHROME_BIN" node tools/test-private-fence-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-pwa-cross-tab-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-offline-contract-browser.mjs
+  CHROME_BIN="$CHROME_BIN" node tools/test-finalize-cleanup-browser.mjs
+  CHROME_BIN="$CHROME_BIN" node tools/test-recovery-contract-browser.mjs
+  CHROME_BIN="$CHROME_BIN" node tools/test-delete-recovery-browser.mjs
+  CHROME_BIN="$CHROME_BIN" node tools/test-recovery-navigation-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-portfolio-page-error-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-pwa-waiting-browser.mjs
+  CHROME_BIN="$CHROME_BIN" node tools/test-pwa-role-preload-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-offline-work-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-offline-upgrade-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-list-pagination-browser.mjs
+  CHROME_BIN="$CHROME_BIN" node tools/test-order-pagination-browser.mjs
+  CHROME_BIN="$CHROME_BIN" node tools/test-stock-coverage-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-client-sales-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-client-history-import-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-client-import-browser.mjs

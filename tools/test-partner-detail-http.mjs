@@ -17,7 +17,7 @@ const child=spawn(process.execPath,['dist/standalone/server.js'],{env:{...proces
 let log='';child.stdout.on('data',v=>{log+=v;});child.stderr.on('data',v=>{log+=v;});
 let app;
 try {
- let ready=false;for(let i=0;i<80;i++){try{if((await fetch(origin+'/api/health')).ok){ready=true;break;}}catch{}await delay(100);}assert(ready,log);
+ let ready=false;for(let i=0;i<80;i++){try{if((await fetch(origin+'/api/bootstrap')).ok){ready=true;break;}}catch{}await delay(100);}assert(ready,log);
  app=new DatabaseSync(join(root,'mobiup.sqlite'));const {partners}=createClientSalesFixture(root,true),cookies={};
  for(const [id,warehouse,role] of [['detail-agent','g-5','agent'],['detail-other','g-3','agent'],['detail-manager','','manager']]){
    app.prepare("INSERT INTO users(id,username,name,role,warehouse_id,password_hash,must_change_password,active,manager_scope) VALUES(?,?,?,?,?,'synthetic-not-a-credential',0,1,'global')").run(id,id,'Synthetic '+id,role,warehouse);

@@ -117,6 +117,6 @@ try{
  console.log(JSON.stringify(evidence,null,2));console.log(`PASS: ${checks} portfolio navigation performance checks.`);
 } finally{
  await closeBrowser?.().catch(()=>{});socket?.close();
- const exited=new Promise(resolve=>child.exitCode!==null?resolve():child.once('exit',resolve));await Promise.race([exited,delay(2000)]);if(child.exitCode===null){try{process.kill(-child.pid,'SIGTERM');}catch{}await exited;}
+ const exited=new Promise(resolve=>child.exitCode!==null?resolve():child.once('exit',resolve));await Promise.race([exited,delay(2000)]);if(child.exitCode===null){const childPid=child.pid;if(typeof childPid==='number'&&Number.isInteger(childPid)&&childPid>0){try{process.kill(-childPid,'SIGTERM');}catch{}}else child.kill('SIGTERM');await exited;}
  await delay(200);await new Promise(resolve=>server.close(resolve));rmSync(directory,{recursive:true,force:true,maxRetries:10,retryDelay:100});
 }

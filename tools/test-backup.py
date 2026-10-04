@@ -120,6 +120,32 @@ class BackupTests(unittest.TestCase):
                     self.assertEqual(db.execute('SELECT amount_cents FROM sales_rows').fetchone()[0], 12345)
         return archive
 
+    def assert_no_published_backup(self):
+        self.assertEqual(list(self.local.glob('*.tar.gz')), [])
+        self.assertEqual(list(self.local.glob('*.sha256')), [])
+
+    def test_application_foreign_key_orphan_prevents_publication(self):
+        with sqlite3.connect(self.data / 'mobiup.sqlite') as db:
+            db.executescript('CREATE TABLE fk_parent(id INTEGER PRIMARY KEY); CREATE TABLE fk_child(parent_id INTEGER REFERENCES fk_parent(id)); INSERT INTO fk_child VALUES(99);')
+        with self.assertRaisesRegex(RuntimeError, 'Application snapshot foreign key check failed'):
+            self.run_backup()
+        self.assert_no_published_backup()
+
+    def test_sales_foreign_key_orphan_prevents_publication(self):
+        with sqlite3.connect(self.data / 'sales.sqlite') as db:
+            db.executescript('CREATE TABLE fk_parent(id INTEGER PRIMARY KEY); CREATE TABLE fk_child(parent_id INTEGER REFERENCES fk_parent(id)); INSERT INTO fk_child VALUES(99);')
+        with self.assertRaisesRegex(RuntimeError, 'Sales snapshot foreign key check failed'):
+            self.run_backup()
+        self.assert_no_published_backup()
+
+    def test_history_foreign_key_orphan_prevents_publication(self):
+        self.history_fixture()
+        with sqlite3.connect(self.data / 'client-history' / 'client-sales-history.sqlite') as db:
+            db.executescript('CREATE TABLE fk_parent(id INTEGER PRIMARY KEY); CREATE TABLE fk_child(parent_id INTEGER REFERENCES fk_parent(id)); INSERT INTO fk_child VALUES(99);')
+        with self.assertRaisesRegex(RuntimeError, 'Customer history snapshot foreign key check failed'):
+            self.run_backup()
+        self.assert_no_published_backup()
+
     def old_generation(self, folder, days):
         folder.mkdir(parents=True, exist_ok=True)
         stamp = (datetime.now(timezone.utc) - timedelta(days=days)).strftime('%Y%m%dT%H%M%SZ')

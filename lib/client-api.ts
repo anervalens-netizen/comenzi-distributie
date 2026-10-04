@@ -1,5 +1,6 @@
-import { snapshot, saveSnapshot, sessionFence, sessionStorageAvailable, rejectSessionFence, acceptSessionFence, withSessionGate, rememberAccount, lastAccount, migrateLegacy, replay, pendingOperations, OFFLINE_CACHE_INVALIDATED_EVENT } from './offline-work.ts';
-import { currentLocalWorkGeneration, currentLocalWorkUserId, LOCAL_WORK_USER_EVENT, removeLocalWork, restoreLocalWorkUserId, setLocalWorkUserId } from './local-work.ts';
+import {countyLabel, countyMatches, countySearch, routeMatches, routeTokens} from './portfolio-facets.ts';
+import { snapshot, saveSnapshot, deleteOrderDurably, acceptAuthoritativeOrder, sessionFence, sessionStorageAvailable, rejectSessionFence, acceptSessionFence, withSessionGate, rememberAccount, lastAccount, migrateLegacy, replay, pendingOperations, OFFLINE_CACHE_INVALIDATED_EVENT } from './offline-work.ts';
+import { currentLocalWorkGeneration, currentLocalWorkUserId, LOCAL_WORK_USER_EVENT, restoreLocalWorkUserId, setLocalWorkUserId } from './local-work.ts';
 
 export const SESSION_EXPIRED_EVENT='mobiup-session-expired';
 export const DATA_FRESHNESS_EVENT='mobiup-data-freshness';
@@ -34,17 +35,20 @@ async function rejectSession(expected?:Awaited<ReturnType<typeof sessionFence>>,
 }
 const record=(value:unknown):value is Record<string,unknown>=>!!value&&typeof value==='object'&&!Array.isArray(value);
 const array=(value:unknown)=>Array.isArray(value);
+const bootstrapPath=(path:string)=>/^bootstrap(?:\?|$)/.test(path);
 function validGetContract(path:string,data:unknown){
- if(path==='bootstrap')return record(data)&&(data.user===null||(record(data.user)&&typeof data.user.id==='string'));
+ if(bootstrapPath(path))return record(data)&&(data.user===null||(record(data.user)&&typeof data.user.id==='string'));
  if(path==='auth/session')return record(data)&&(data.user===null||(record(data.user)&&typeof data.user.id==='string'));
- if(path==='orders')return record(data)&&record(data.user)&&array(data.orders)&&typeof data.weekKey==='string';
+ if(/^orders(?:\?|$)/.test(path))return record(data)&&record(data.user)&&array(data.orders)&&typeof data.weekKey==='string'&&(!('orderPage'in data)||record(data.orderPage));
  if(/^orders\/[^/?]+$/.test(path))return record(data)&&record(data.order)&&typeof data.order.id==='string';
+ if(path==='catalog')return record(data)&&array(data.products);
  if(path==='partner/summary')return record(data)&&array(data.partners);
  if(/^partner\/browse(?:\?|$)/.test(path))return record(data)&&array(data.partners)&&typeof data.total==='number'&&record(data.facets)&&array(data.facets.counties)&&array(data.facets.cities)&&array(data.facets.routes);
  if(/^partner\/map(?:\?|$)/.test(path))return record(data)&&data.type==='FeatureCollection'&&array(data.features);
  if(/^partner\/portfolio\/[^/?]+$/.test(path))return record(data)&&record(data.partner)&&array(data.visits);
  if(/^partner\/planning(?:\?|$)/.test(path))return record(data)&&array(data.plans);
  if(/^stock(?:\?|\/|$)/.test(path))return record(data)&&typeof data.warehouseId==='string'&&array(data.rows)&&record(data.depot);
+ if(/^sales\/clients\/reconciliation(?:\?|$)/.test(path))return record(data)&&data.state==='ready'&&data.scope==='national'&&typeof data.month==='string'&&record(data.buckets)&&record(data.source)&&array(data.exceptions);
  if(/^sales\/clients(?:\?|$)/.test(path))return record(data)&&(data.state==='unavailable'?typeof data.message==='string':data.state==='ready'&&typeof data.month==='string'&&record(data.totals)&&record(data.source)&&array(data.rows)&&array(data.comparisons)&&record(data.counts));
  if(/^sales(?:\?|\/|$)/.test(path))return record(data)&&typeof data.month==='string'&&record(data.summary)&&array(data.sites)&&array(data.daily)&&array(data.products);
  return true;
@@ -55,7 +59,7 @@ function assertScope(owner:string,generation:number){
 }
 type Fence=Awaited<ReturnType<typeof sessionFence>>;
 let localAuthority:{owner:string;generation:number;fence:Fence}|undefined;
-const publicRequest=(path:string,method:string)=>method==='GET'&&['health','bootstrap','auth/session'].includes(path)||method==='POST'&&path==='auth/login';
+const publicRequest=(path:string,method:string)=>method==='GET'&&(path==='health'||bootstrapPath(path)||path==='auth/session')||method==='POST'&&path==='auth/login';
 // Same-account auth refreshes share an admission. Logout or A -> B -> A does
 // not: a locally bound tab must explicitly rediscover authority in that case.
 function sameAuthority(current:Fence,expected:Fence,owner:string){
@@ -146,7 +150,7 @@ export async function networkApi<T=Record<string,unknown>>(path: string,method='
   if(isPrivate)await privateAuthority(requestOwner,requestGeneration,requestEpoch,requestFence);
   if(method==='GET'&&!validGetContract(path,data))throw new ApiError(502,'Serverul a trimis date incompatibile cu această pagină.',data);
   if(path==='auth/logout'&&(requestEpoch!==sessionEpoch||requestOwner!==currentLocalWorkUserId()||requestGeneration!==currentLocalWorkGeneration()))throw scopeError();
-  if((path==='bootstrap'||path==='auth/session')&&data&&typeof data==='object'&&'user' in data) {
+  if((bootstrapPath(path)||path==='auth/session')&&data&&typeof data==='object'&&'user' in data) {
     const user=(data as {user?:unknown}).user;
     if(user===null){
      if(requestEpoch!==sessionEpoch||requestOwner!==currentLocalWorkUserId()||requestGeneration!==currentLocalWorkGeneration())throw scopeError();
@@ -165,14 +169,17 @@ export async function networkApi<T=Record<string,unknown>>(path: string,method='
     }
   } else if(path==='auth/logout'&&method==='POST') {
     await rejectSession(requestFence,requestOwner);
-  } else if(method==='DELETE'&&/^orders\/[^/]+$/.test(path)) {
-    const userId=currentLocalWorkUserId();
-    const orderId=path.slice('orders/'.length);
-    if(userId&&orderId)removeLocalWork('order',userId,orderId);
+  } else if(((method==='POST'&&/^orders\/[^/]+\/finalize$/.test(path))||(method==='GET'&&sessionStorageAvailable()&&/^orders\/[^/]+$/.test(path)))&&record(data)&&record(data.order)&&data.order.status==='finalized') {
+    // The server already committed. Cache maintenance cannot turn that success
+    // into a failed finalize (and invite another submission). Auth checks above
+    // remain mandatory and are deliberately outside this best-effort boundary.
+    await acceptAuthoritativeOrder(requestOwner,data.order as unknown as import('./types').Order).catch(()=>{
+      if(typeof window!=='undefined')window.dispatchEvent(new CustomEvent('mobiup-storage-error',{detail:'Comanda este finalizată pe server. Copia locală nu a putut fi actualizată.'}));
+    });
   }
   return data as T;
 }
-const cacheable=(path:string)=>path==='bootstrap'||path==='auth/session'||path==='orders'||/^orders\/[^/]+$/.test(path)||/^partner\/(browse|map|summary|portfolio|planning)([/?]|$)/.test(path)||/^clients[?]/.test(path)||/^stock[/?]/.test(path);
+const cacheable=(path:string)=>bootstrapPath(path)||path==='auth/session'||/^orders(?:\?|$)/.test(path)||/^orders\/[^/]+$/.test(path)||path==='catalog'||/^partner\/(browse|map|summary|portfolio|planning)([/?]|$)/.test(path)||/^clients[?]/.test(path)||/^stock[/?]/.test(path);
 export async function api<T=Record<string,unknown>>(path:string,method='GET',body?:unknown,signal?:AbortSignal,options:ApiReadOptions={}):Promise<T>{
  method=method.toUpperCase();synchronizeReadCache();
  if(signal?.aborted)throw signal.reason??new DOMException('Cerere anulată.','AbortError');
@@ -185,18 +192,20 @@ export async function api<T=Record<string,unknown>>(path:string,method='GET',bod
  const confirmAuthority=async()=>{if(isPrivate)await privateAuthority(owner,generation,epoch,authority);};
  // Without durable account authority, another tab's shared-cookie change cannot
  // be observed locally. Every private read must then reach the server guard.
- if(method==='GET'&&path!=='bootstrap'&&path!=='auth/session'&&options.preferCache&&!options.forceRefresh&&owner&&sessionStorageAvailable()){
+ if(method==='GET'&&!bootstrapPath(path)&&path!=='auth/session'&&options.preferCache&&!options.forceRefresh&&owner&&sessionStorageAvailable()){
   const key=owner+'|'+generation+'|'+path,entry=readCache.get(key),maxAge=Math.max(0,options.maxAgeMs??30000);
   if(entry&&Date.now()-entry.at<=maxAge){if(signal?.aborted)throw signal.reason;readCache.delete(key);readCache.set(key,entry);return clone(entry.value) as T;}
  }
  try{
-  const result=await networkApi<T>(path,method,body,signal);
+  const result=method==='DELETE'&&/^orders\/[^/]+$/.test(path)
+   ?await deleteOrderDurably(owner,path.slice(7),()=>networkApi<T>(path,method,body,signal))
+   :await networkApi<T>(path,method,body,signal);
   if(path==='auth/logout')return result;
   await confirmAuthority();
-  if(!path.startsWith('auth/')&&path!=='bootstrap')assertScope(owner,generation);
+  if(!path.startsWith('auth/')&&!bootstrapPath(path))assertScope(owner,generation);
   const user=(result as {user?:{id:string}|null})?.user;
   const responseOwner=currentLocalWorkUserId(),responseGeneration=currentLocalWorkGeneration();
-  if((path==='bootstrap'||path==='auth/session')&&user!==undefined){
+  if((bootstrapPath(path)||path==='auth/session')&&user!==undefined){
    if(user&&sessionStorageAvailable())await migrateLegacy(user.id).catch(()=>{});assertScope(responseOwner,responseGeneration);
   }
   const account=user===null?'':user?.id||owner||currentLocalWorkUserId();
@@ -218,7 +227,7 @@ export async function api<T=Record<string,unknown>>(path:string,method='GET',bod
   // Recheck after reads too: an online tab without Web Locks can still commit CAS.
   const confirmFence=async()=>{const current=await sessionFence();assertOffline();if(!sessionStorageAvailable()||!sameAuthority(current,fence,account))throw scopeError();if(isPrivate)assertAuthority(current,owner,generation,epoch,authority);};
   let account=owner;
-  const authRestore=path==='bootstrap'||path==='auth/session';
+  const authRestore=bootstrapPath(path)||path==='auth/session';
   if(!account&&authRestore){
    assertOffline();
    account=await lastAccount();
@@ -229,7 +238,7 @@ export async function api<T=Record<string,unknown>>(path:string,method='GET',bod
    assertOffline();
    const stored=await snapshot<T>(account,path);
    assertOffline();
-   if(stored&&validGetContract(path,stored.value)){
+   if(stored&&validGetContract(path,stored.value)&&(!path.startsWith('partner/browse?')||(record(stored.value)&&stored.value.facetVersion===2))){
     if(authRestore&&record(stored.value)&&record(stored.value.user)&&stored.value.user.id!==account)throw scopeError();
     await confirmFence();
     if(authRestore&&!owner){
@@ -242,6 +251,16 @@ export async function api<T=Record<string,unknown>>(path:string,method='GET',bod
     emitFreshness(account,path,'offline',stored.at);
     return stored.value;
    }
+   if(path==='bootstrap?compact=1'){
+    const legacy=await snapshot<T>(account,'bootstrap');
+    assertOffline();
+    if(legacy&&validGetContract('bootstrap',legacy.value)){await confirmFence();rememberRead(account,currentLocalWorkGeneration(),path,legacy.value,legacy.at);emitFreshness(account,path,'offline',legacy.at);return legacy.value;}
+   }
+   if(path==='catalog'){
+    const legacy=await snapshot<{products?:unknown[]}>(account,'bootstrap');
+    assertOffline();
+    if(legacy&&Array.isArray(legacy.value.products)){await confirmFence();const value={products:legacy.value.products} as T;rememberRead(account,currentLocalWorkGeneration(),path,value,legacy.at);emitFreshness(account,path,'offline',legacy.at);return value;}
+   }
    if(path.startsWith('partner/browse?')){
     const params=new URLSearchParams(path.split('?')[1]);
     if(!params.get('salesPeriod')&&!params.get('managerId')&&!params.get('agentId')){
@@ -249,10 +268,10 @@ export async function api<T=Record<string,unknown>>(path:string,method='GET',bod
      const prepared=await snapshot<{partners:import('./partner-map-types').PartnerSummary[]}>(account,'partner/summary');
      assertOffline();
      if(prepared&&record(prepared.value)&&Array.isArray(prepared.value.partners)){await confirmFence();const all=prepared.value.partners,q=normalize(params.get('q')||''),county=params.get('county')||'',city=normalize(params.get('city')||''),route=params.get('route')||'',position=params.get('position')||'',days=params.get('days')||'';
-      const selected=all.filter(p=>(!q||normalize([p.id,p.name,p.cui,p.address,p.city,p.county].join(' ')).includes(q))&&(!county||p.county===county)&&(!city||normalize(p.city||'').includes(city))&&(!route||p.route===route)&&(!position||(position==='yes'?p.latitude!==null:p.latitude===null))&&(!days||(days==='never'?!p.lastVisitedAt:!!p.lastVisitedAt&&Date.now()-Date.parse(p.lastVisitedAt)>=Number(days)*86400000)));
-      const offset=Number(params.get('offset')||0),limit=Number(params.get('limit')||100),inCounty=all.filter(p=>!county||p.county===county),unique=(items:string[])=>[...new Set(items.filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ro'));
+      const selected=all.filter(p=>(!q||normalize([p.id,p.name,p.cui,p.address,p.city,countySearch(p.county)].join(' ')).includes(q))&&(!county||countyMatches(p.county,county))&&(!city||normalize(p.city||'').includes(city))&&(!route||routeMatches(p.route,route))&&(!position||(position==='yes'?p.latitude!==null:p.latitude===null))&&(!days||(days==='never'?!p.lastVisitedAt:!!p.lastVisitedAt&&Date.now()-Date.parse(p.lastVisitedAt)>=Number(days)*86400000)));
+      const offset=Number(params.get('offset')||0),limit=Number(params.get('limit')||100),inCounty=all.filter(p=>!county||countyMatches(p.county,county)),unique=(items:string[])=>[...new Set(items.filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ro'));
       window.dispatchEvent(new CustomEvent('mobiup-offline-snapshot',{detail:{path,at:prepared.at}}));
-      const value={partners:selected.slice(offset,offset+limit),total:selected.length,located:selected.filter(p=>p.latitude!==null).length,geocoded:selected.filter(p=>p.positionSource==='geocoding').length,nextOffset:offset+limit<selected.length?offset+limit:null,bounds:null,facets:{counties:unique(all.map(p=>p.county)),cities:unique(inCounty.map(p=>p.city)),routes:unique(inCounty.map(p=>p.route))},styleUrl:'https://tiles.openfreemap.org/styles/positron',observedAt:new Date(prepared.at).toISOString()} as T;
+      const value={facetVersion:2,partners:selected.slice(offset,offset+limit),total:selected.length,located:selected.filter(p=>p.latitude!==null).length,geocoded:selected.filter(p=>p.positionSource==='geocoding').length,nextOffset:offset+limit<selected.length?offset+limit:null,bounds:null,facets:{counties:unique(all.map(p=>countyLabel(p.county))),cities:unique(inCounty.map(p=>p.city)),routes:unique(inCounty.flatMap(p=>routeTokens(p.route)))},styleUrl:'https://tiles.openfreemap.org/styles/positron',observedAt:new Date(prepared.at).toISOString()} as T;
       rememberRead(account,currentLocalWorkGeneration(),path,value,prepared.at);emitFreshness(account,path,'offline',prepared.at);return value;
      }
     }

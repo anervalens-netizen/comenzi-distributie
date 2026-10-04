@@ -108,7 +108,7 @@ fixture(root/'empty.xlsx',[],'2024-02-01','2024-02-29')
  // Alive beyond 20 minutes, EPERM, PID-less prelaunch, reused PID, and true death.
  const live=makeJob('running',{pid:process.pid,processIdentity:jobs.processIdentity(process.pid)});
  assert.equal((await (await status(live.id)).json()).job.state,'running');
- const kill=process.kill;
+ const kill=Reflect.get(process,'kill');
  try{process.kill=()=>{throw Object.assign(new Error('denied'),{code:'EPERM'});};assert.equal(jobs.workerAlive(live),undefined);assert.equal((await (await status(live.id)).json()).job.state,'running');}finally{process.kill=kill;}
  assert.equal((await (await status(retainedRunning.id)).json()).job.state,'running','Known live worker remains running');
  const prelaunch=makeJob('running');assert.equal((await (await status(prelaunch.id)).json()).job.state,'failed','PID-less prelaunch record is recovered after the grace period');

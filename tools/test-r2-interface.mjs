@@ -20,7 +20,7 @@ const adapter={prepare(sql){return {args:[],bind(...args){this.args=args;return 
 globalThis.__r2Db=adapter;
 const unused=names=>names.map(name=>`export const ${name}=()=>{throw new Error('Unexpected infrastructure call: ${name}');};`).join('\n');
 const stubs={
-  runtime:'export const env={DB:globalThis.__r2Db};export const runtimeKind="standalone";',
+  runtime:'export const env={DB:globalThis.__r2Db};export const runtimeKind="standalone";'+unused(['operationalStatus']),
   catalog:'export const readCatalog=async()=>({products:[]});'+unused(['changeProduct']),
   'stock-server':`export const stockForWarehouse=async()=>({importedAt:'2026-09-01T00:00:00Z',filename:'synthetic.xlsx',rows:[{code:'SYNTHETIC',name:'Synthetic product',quantity:10}]});${unused(['stockImportStatus','stockView','stockUpload'])}`,
   'sales-server':unused(['salesImportStatus','salesView','salesUpload']),
@@ -38,7 +38,7 @@ const serverPlugin={name:'synthetic-infrastructure',setup(b){
   b.onResolve({filter:/^(?:@\/lib\/|\.\/)([^/]+)$/},args=>{const name=args.path.split('/').at(-1);if(name in stubs)return {path:name,namespace:'fixture'};});
   b.onResolve({filter:/^@\/resources\//},args=>({path:args.path.split('/').at(-1),namespace:'resource'}));
   b.onLoad({filter:/.*/,namespace:'fixture'},args=>({loader:'js',contents:stubs[args.path]}));
-  b.onLoad({filter:/.*/,namespace:'resource'},args=>({loader:'json',contents:JSON.stringify(args.path==='seed.json'?{products:[],clients:[],warehouses:[],importWarnings:[]}:args.path==='initial-users.json'?[]:{})}));
+  b.onLoad({filter:/.*/,namespace:'resource'},args=>({loader:'json',contents:JSON.stringify(args.path==='seed.json'?{products:[],clients:[],warehouses:[],importWarnings:[]}:args.path==='initial-users.json'?[]:args.path==='mail-defaults.json'?{partnerTo:[],partnerCc:[]}:{})}));
 }};
 async function load(entry,plugins,name=entry.replace(/\W/g,'_')){const outfile=join(dir,name+'.mjs');await build({entryPoints:[entry],outfile,bundle:true,platform:'node',format:'esm',banner:{js:"import {createRequire as fixtureRequire} from 'node:module';const require=fixtureRequire(import.meta.url);"},plugins,logLevel:'silent'});return import(pathToFileURL(outfile));}
 const noOp=()=>{};
@@ -64,6 +64,26 @@ try {
     const response=await route[method](request),data=await response.json();
     equal(response.status,status,`${method} ${path}: ${JSON.stringify(data).slice(0,300)}`);return data;
   }
+  // National reads use the same manager filters as the other read surfaces.
+  for(const agent of ['a','a-shared','b','inactive']){
+    const order={id:'matrix-'+agent,number:'SYN-'+agent,userId:agent,kind:'accessories',status:'draft',items:[],serials:[],client:null,notes:'',createdAt:'2026-10-01T12:00:00Z',revision:1};
+    sqlite.prepare('INSERT INTO orders(id,number,user_id,warehouse_id,kind,status,payload,created_at,revision) VALUES(?,?,?,?,?,?,?,?,1)').run(order.id,order.number,agent,'w-'+agent,order.kind,order.status,JSON.stringify(order),order.createdAt);
+  }
+  const ids=data=>data.orders.map(o=>o.userId).sort();
+  for(const viewer of ['global','regional','region-b']){
+    equal(ids(await api('bootstrap?compact=1',viewer)),['a','a-shared','b','inactive'],'compact bootstrap national manager read');
+    for(const [filter,expected] of [['',['a','a-shared','b','inactive']],['managerId=region-b',['a-shared','b']],['managerId=regional',['a','a-shared','inactive']],['agentId=b',['b']],['managerId=region-b&agentId=b',['b']],['managerId=__unassigned',[]]]){
+      const page=await api('orders?page=1&kind=all&range=all&'+filter,viewer);
+      equal(ids(page),expected,'manager matrix '+viewer+' '+filter);equal(page.orderPage.total,expected.length,'national filtered total');equal(page.orderPage.stats.drafts,expected.length,'national filtered stats');
+    }
+    await api('orders?page=1&managerId=regional&agentId=b',viewer,'GET',undefined,404);
+  }
+  sqlite.prepare("DELETE FROM manager_agents WHERE agent_id='inactive'").run();
+  equal(ids(await api('orders?page=1&managerId=__unassigned','global')),['inactive'],'unassigned includes agents without active regional assignments');
+  sqlite.prepare("INSERT INTO manager_agents VALUES('regional','inactive')").run();
+  equal(ids(await api('orders?page=1','a')),['a'],'agent only reads own orders');
+  await api('orders?page=1&agentId=b','a','GET',undefined,403);
+  await api('orders/matrix-b','regional','PUT',{revision:1,items:[],serials:[],notes:'Forbidden'},404);
   // The client helper matches actual server authorization, including inactive and shared assignments.
   for(const account of users){
     const permissions=writePermissions(account,users);
@@ -144,7 +164,43 @@ try {
   await api('partner/portfolio/own','regional','PATCH',{...details.own.partner,contact:'Synthetic change'});
   const agentShared=await api('partner/portfolio/shared','a');check(agentShared.partner.canEdit,'agent shared portfolio edit retained');
   const agentSaved=await api('partner/portfolio/shared','a','PATCH',{...agentShared.partner,contact:'Synthetic shared contact'});check(agentSaved.partner.canEdit,'successful save preserves capability');
-  await api('partner/portfolio/shared/visits','a','POST',{id:randomUUID(),notes:'Synthetic visit'});
+  const followUpVisit=randomUUID();
+  await api('partner/portfolio/shared/visits','a','POST',{id:followUpVisit,notes:'Synthetic visit',nextStep:'Bring the synthetic offer',followUpDate:'2026-10-02'});
+  const savedFollowUp=sqlite.prepare('SELECT next_step nextStep,follow_up_date followUpDate FROM partner_visits WHERE id=?').get(followUpVisit);
+  equal({...savedFollowUp},{nextStep:'Bring the synthetic offer',followUpDate:'2026-10-02'},'visit stores optional next step without changing event identity');
+  equal(JSON.parse(sqlite.prepare("SELECT stops FROM partner_day_plans WHERE agent_id='a' AND plan_date='2026-10-02'").get().stops),['shared'],'follow-up reuses the existing day plan without duplicate company or agent input');
+  const plan=()=>({...sqlite.prepare("SELECT * FROM partner_day_plans WHERE agent_id='a' AND plan_date='2026-10-02'").get()});
+  sqlite.prepare("UPDATE partner_day_plans SET stops='[]',revision=revision+1 WHERE agent_id='a' AND plan_date='2026-10-02'").run();
+  const editedPlan=plan();
+  await api('partner/portfolio/shared/visits','a','POST',{id:followUpVisit,notes:'Synthetic visit',nextStep:'Bring the synthetic offer',followUpDate:'2026-10-02'});
+  equal(plan(),editedPlan,'exact duplicate cannot reapply a removed plan stop');
+  await api('partner/portfolio/shared/visits','a','POST',{id:followUpVisit,notes:'Changed',followUpDate:'2026-10-05'},409);
+  equal(plan(),editedPlan,'changed duplicate preserves original plan');
+  equal(sqlite.prepare("SELECT COUNT(*) n FROM partner_day_plans WHERE plan_date='2026-10-05'").get().n,0,'changed duplicate creates no alternate plan');
+  sqlite.exec("CREATE TRIGGER reject_synthetic_plan BEFORE INSERT ON partner_day_plans WHEN NEW.plan_date='2026-10-06' BEGIN SELECT RAISE(ABORT,'Synthetic plan failure'); END");
+  const failedVisit=randomUUID();
+  await api('partner/portfolio/shared/visits','a','POST',{id:failedVisit,followUpDate:'2026-10-06'},500);
+  equal(sqlite.prepare('SELECT COUNT(*) n FROM partner_visits WHERE id=?').get(failedVisit).n,0,'plan failure rolls back first visit insert');
+  sqlite.exec('DROP TRIGGER reject_synthetic_plan');
+  equal((await api('partner/attention','a')).followUps.map(row=>row.customerId),['shared'],'due follow-up is actionable through current account scope');
+  await api('partner/portfolio/outside/visits','b','POST',{id:randomUUID(),nextStep:'Other territory follow-up',followUpDate:'2026-10-02'});
+  equal((await api('partner/attention?agentId=a','global')).followUps.map(row=>row.agentId),['a'],'manager attention respects the selected authorized agent');
+  for(const viewer of ['regional','region-b','global']){
+    for(const [filter,expected] of [['',['a','b']],['agentId=b',['b']],['managerId=region-b',['b']],['managerId=region-b&agentId=b',['b']],['managerId=regional',['a']],['managerId=__unassigned',[]]]){
+      equal((await api('partner/attention?'+filter,viewer)).followUps.map(row=>row.agentId).sort(),expected,'national follow-up matrix '+viewer+' '+filter);
+    }
+    await api('partner/attention?managerId=regional&agentId=b',viewer,'GET',undefined,404);
+  }
+  equal((await api('partner/attention','a')).followUps.map(row=>row.agentId),['a'],'agent attention remains own scope after another-region visit');
+  await api('partner/attention?agentId=b','a','GET',undefined,403);
+  for(const manager of ['regional','global']){
+    const managerVisitId=randomUUID();
+    await api('partner/portfolio/shared/visits',manager,'POST',{id:managerVisitId,followUpDate:'2026-10-02'},403);
+    equal(sqlite.prepare('SELECT COUNT(*) n FROM partner_visits WHERE id=?').get(managerVisitId).n,0,'manager cannot create attributed visit '+manager);
+    equal(sqlite.prepare('SELECT COUNT(*) n FROM partner_day_plans WHERE agent_id=?').get(manager).n,0,'rejected manager visit cannot create plan '+manager);
+  }
+  await api('partner/portfolio/outside/visits','regional','POST',{id:randomUUID()},403);
+  await api('partner/portfolio/shared/visits','a','POST',{id:randomUUID(),followUpDate:'2026-10-03'},400);
   await api('partner/portfolio/outside/visits','a','POST',{id:randomUUID()},404);
   check((await api('partner/portfolio/outside','global')).partner.canEdit,'global manager can edit outside regional scope');
 
@@ -187,11 +243,20 @@ try {
   for(const canStart of [undefined,false,true])equal(button(render(InventoryPanel,{warehouseId:'w-a',canStart}),'Pornește inventarul').disabled,canStart!==true,'inventory start capability');
   const {PartnerSheet}=await load('components/partner-portfolio.tsx',[uiPlugin]);
   for(const canEdit of [undefined,false,true]){
-    const detail={...details.shared,partner:{...details.shared.partner,canEdit}},html=render(PartnerSheet,{id:'shared',onClose:noOp,onSaved:noOp},[detail,detail.partner]);
+    const detail={...details.shared,partner:{...details.shared.partner,canEdit,latitude:45,longitude:25,positionSource:'manual',positionQuality:null,positionAccuracy:null,updatedAt:'2026-10-03T09:00:00Z'}},html=render(PartnerSheet,{id:'shared',onClose:noOp,onSaved:noOp},[detail,detail.partner]);
     equal(/<fieldset disabled=""/.test(html),canEdit!==true,'contact, GPS and pin save fieldset permission');
     equal(button(html,'Înregistrează vizita').disabled,canEdit!==true,'visit save capability');
     check(html.includes('Google Maps'),'navigation remains available');
+    check(html.includes('Firma și agentul sunt completate automat'),'visit form is explicit and frictionless');
+    check(html.includes('un apel, o factură sau poziția GPS nu creează o vizită'),'calls, invoices, GPS and visits remain distinct');
+    check(html.includes('Pin confirmat manual'),'position provenance is visible in the selected partner');
   }
+  const {PartnerAttention}=await load('components/partner-attention.tsx',[uiPlugin]);
+  const attentionSales={state:'ready',month:'2026-09',source:{updatedAt:'2026-10-01T08:00:00Z',effectiveCutoff:'2026-09-30'},window:{imported:true,covered:true},counts:{new:2,repeat:1,waiting:1,overdue:1,reactivated:1}};
+  const attentionHtml=render(PartnerAttention,{userId:'a',manager:false,scopeQuery:'',partners:[{...details.shared.partner,name:'Synthetic shop',latitude:45,positionSource:'geocoding',positionQuality:'locality_approximate'}],onOpen:noOp,onPlanning:noOp,onSales:noOp},[[{id:'op',userId:'a',entity:'partner/portfolio/shared',path:'partner/portfolio/shared',method:'PATCH',body:{},created:1,attempts:1,next:0,state:'blocked',error:'Synthetic conflict'}],[{visitId:'v',customerId:'shared',customerName:'Synthetic shop',agentId:'a',agentName:'Synthetic a',followUpDate:'2026-10-02',nextStep:'Bring offer'}],attentionSales,null,'']);
+  check(attentionHtml.includes('Necesită atenție')&&attentionHtml.includes('Acțiuni, nu clasament'),'compact attention section is operational, not disciplinary');
+  check(attentionHtml.includes('Vizibil doar pe acest dispozitiv și în contul curent'),'local queue does not claim cross-phone manager visibility');
+  check(attentionHtml.includes('Confirmă prima poziție')&&attentionHtml.includes('Revenire scadentă'),'position and due follow-up have direct contextual actions');
   const appStubs={
     feedback:['Feedback'], 'product-catalog':['ProductCatalog'], 'partner-portfolio':['PartnerPortfolio'],
     'order-recovery-dialog':['OrderRecoveryDialog'], 'push-notifications':['PushNotifications'],

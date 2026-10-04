@@ -3,7 +3,8 @@ import {useEffect,useRef,useState} from 'react';
 import {api,errorMessage} from '@/lib/client-api';
 import {currentLocalWorkGeneration,currentLocalWorkUserId,LOCAL_WORK_USER_EVENT} from '@/lib/local-work';
 import {pendingOperations,removeOperation,OFFLINE_EVENT,readCoverageManifest,saveCoverageManifest,saveFragmentedSnapshot,type CoverageManifest,type PendingOperation} from '@/lib/offline-work';
-import type {PartnerBrowse,PartnerSummary} from '@/lib/partner-map-types';
+import {preparePartnerPages} from '@/lib/prepare-partner-pages';
+import type {PartnerBrowse} from '@/lib/partner-map-types';
 import {prepareOfflineShell} from './pwa';
 export function OfflineStatus({userId,agent}:{userId:string;agent:boolean}){
  const [rows,setRows]=useState<PendingOperation[]>([]),[busy,setBusy]=useState(false),[notice,setNotice]=useState('');
@@ -33,8 +34,7 @@ export function OfflineStatus({userId,agent}:{userId:string;agent:boolean}){
    const monday=new Date();monday.setDate(monday.getDate()-((monday.getDay()+6)%7));
    const planningPath='partner/planning?week='+new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Bucharest',year:'numeric',month:'2-digit',day:'2-digit'}).format(monday);
    const weekPlans=await read<{plans:{stops:string[]}[]}>(planningPath);paths.push(planningPath);
-   const partners:PartnerSummary[]=[];let offset:number|null=0,total=0;
-   for(let page=0;page<25&&offset!==null;page++){const result:PartnerBrowse=await read<PartnerBrowse>('partner/browse?offset='+offset+'&limit=200');partners.push(...result.partners);total=result.total;offset=result.nextOffset;}
+   const {partners,total}=await preparePartnerPages(path=>read<PartnerBrowse>(path));
    guard();await saveFragmentedSnapshot(userId,'partner/summary','partners',partners);guard();paths.push('partner/summary');
    const priority=[...new Set(weekPlans.plans.flatMap(plan=>plan.stops))];const details=[...new Set([...priority,...partners.slice(0,100).map(p=>p.id)])].slice(0,500);
    for(const id of details){const path='partner/portfolio/'+encodeURIComponent(id);await read(path);paths.push(path);}

@@ -16,6 +16,15 @@ function localMonthStartUtc(year:number,monthIndex:number) {
   return new Date(approximate-offsetMinutes(new Date(approximate))*60_000).toISOString();
 }
 
+export function bucharestDayStartUtc(dateKey:string) {
+  const match=/^(\d{4})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.exec(dateKey);
+  if(!match)throw new Error('Data este invalidă.');
+  const approximate=Date.UTC(Number(match[1]),Number(match[2])-1,Number(match[3]),0,0,0,0);
+  const result=new Date(approximate-offsetMinutes(new Date(approximate))*60_000);
+  if(dateFormatter.format(result)!==dateKey)throw new Error('Data este invalidă.');
+  return result.toISOString();
+}
+
 export function bucharestMonthUtcRange(month:string) {
   const match=/^(\d{4})-(0[1-9]|1[0-2])$/.exec(month);
   if(!match)throw new Error('Luna este invalidă.');

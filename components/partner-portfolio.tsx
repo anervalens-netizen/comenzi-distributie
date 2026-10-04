@@ -1,4 +1,6 @@
 'use client';
+import {visitDateError} from '@/lib/visit-date';
+import {countyLabel} from '@/lib/portfolio-facets';
 import {PartnerBillingPeriod} from './partner-billing-period';
 import { PartnerActivity } from './partner-activity';
 import { PartnerSales } from './partner-sales';
@@ -13,14 +15,17 @@ import {
 } from 'react';
 import { currentLocalWorkUserId } from '@/lib/local-work';
 const userIdForWork=()=>currentLocalWorkUserId();
-import { enqueue, readWork, saveWork, removeWork } from '@/lib/offline-work';
+import { QueuedWorkRecovery } from '@/components/queued-work-recovery';
+import { enqueue, readWork, unlockVisitWork, saveWork, removeWork } from '@/lib/offline-work';
 import { api, ApiError, invalidateApiReadCache } from '@/lib/client-api';
 import type {
   PartnerDetail,
   PortfolioPartner,
 } from '@/lib/partner-portfolio-types';
+import {partnerPositionLabel,partnerPositionProvenance} from '@/lib/partner-position';
 import { PartnerPlanning } from './partner-planning';
 import { PartnerNew } from './partner-new';
+import {PartnerAttention} from './partner-attention';
 import type { PartnerSummary, PartnerBrowse } from '@/lib/partner-map-types';
 import './partner-portfolio.css';
 import './interaction-ui.css';
@@ -28,7 +33,7 @@ import type { PartnerMapView } from './partner-map';
 const PartnerMap = lazy(() => import('./partner-map'));
 const preloadPartnerMap = () => { void import('./partner-map').catch(()=>{}); };
 const date = (s: string) => new Date(s).toLocaleString('ro-RO');
-export function PartnerPortfolio({ userId, manager=false, scopeQuery='', active=true }: { userId: string; manager?: boolean; scopeQuery?: string; active?: boolean }) {
+export function PartnerPortfolio({ userId, manager=false, scopeQuery='', active=true, onOpenSales=()=>{} }: { userId: string; manager?: boolean; scopeQuery?: string; active?: boolean; onOpenSales?:()=>void }) {
   const stateKey='mobiup-partner-view|'+userId+'|'+scopeQuery;
   const savedView=()=>{if(typeof window==='undefined')return {};try{return JSON.parse(localStorage.getItem(stateKey)||'{}');}catch{return {};}};
   const mapView=useRef<PartnerMapView|null>(savedView().map||null);
@@ -49,9 +54,9 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='', active=
     [loading, setLoading] = useState(true),
     [error, setError] = useState(''),
     [query, setQuery] = useState(()=>savedView().query||''),
-    [county, setCounty] = useState(()=>savedView().county||''),
+    [county, setCounty] = useState(()=>countyLabel(savedView().county||'')),
     [city, setCity] = useState(()=>savedView().city||''),
-    [route, setRoute] = useState(()=>savedView().route||''),
+    [route, setRoute] = useState(()=>{const route=savedView().route||'';return route.includes(',')?'':route.trim();}),
     [position, setPosition] = useState(()=>savedView().position||''),
     [days, setDays] = useState(()=>savedView().days||''),
     [selected, setSelected] = useState<string | null>(null),
@@ -72,6 +77,7 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='', active=
       }).toString(),
     [query, county, city, route, position, days, scopeQuery, salesPeriod],
   );
+  const browseRevision=useRef<{key:string;revision:string}|null>(null);
   const [request, setRequest] = useState({key:filterKey,offset:0});
   const {key:requestKey,offset}=request;
   const [dataRequest, setDataRequest] = useState<{key:string;offset:number;scope:string}|null>(null);
@@ -98,7 +104,7 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='', active=
     const forceRefresh=refreshSeen.current!==refreshIndex;
     refreshSeen.current=refreshIndex;
     api<PartnerBrowse>(
-      `partner/browse?${requestKey}&offset=${offset}`,
+      `partner/browse?${requestKey}&offset=${offset}${offset&&browseRevision.current?.key===requestKey?'&revision='+encodeURIComponent(browseRevision.current.revision):''}`,
       'GET',
       undefined,
       controller.signal,
@@ -106,6 +112,7 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='', active=
     )
       .then((result) => {
         if (controller.signal.aborted) return;
+        browseRevision.current=result.revision?{key:requestKey,revision:result.revision}:null;
         setData(result);
         setDataRequest({key:requestKey,offset,scope:stateKey});
         setError('');
@@ -113,6 +120,7 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='', active=
       })
       .catch((e) => {
         if (!controller.signal.aborted) {
+          if(e.status===409&&offset){browseRevision.current=null;setData(null);setRequest({key:requestKey,offset:0});return;}
           setError(e.message);
           setLoading(false);
         }
@@ -333,6 +341,7 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='', active=
           ? 'Se încarcă portofoliul…'
           : `${data?.total || 0} puncte de lucru · ${data?.located || 0} pe hartă · ${(data?.total || 0) - (data?.located || 0)} fără poziție`}
       </p>
+      {current&&<PartnerAttention userId={userId} manager={manager} scopeQuery={scopeQuery} partners={filtered} onOpen={openPartner} onPlanning={()=>{if(!manager){setCatalogLoading(true);setCatalogError('');setPlanning(true);}}} onSales={onOpenSales}/>}
       <div className={manager?'manager-partner-grid':undefined}>
       <div className={manager?'manager-partner-map-pane':undefined}>
       <Suspense fallback={<div className="partner-map">Se încarcă harta…</div>}>
@@ -392,13 +401,13 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='', active=
             {p.historyCatalog?.kind==='company'&&<small>Firmă din istoric · punct de lucru de identificat</small>}
             {p.historyCatalog?.franchiseCode&&<small>Cod punct: {p.historyCatalog.franchiseCode}</small>}
             <span>
-              {p.city} · {p.county}
+              {p.city} · {countyLabel(p.county)}
             </span>
             <small>
               CUI {p.cui} · Ruta {p.route || '—'}
             </small>
             <span className="partner-badges">
-              <span>{positionLabel(p)}</span>
+              <span>{partnerPositionLabel(p)}</span>
               <span>
                 {p.lastVisitedAt
                   ? `Ultima vizită: ${date(p.lastVisitedAt)}`
@@ -471,7 +480,9 @@ export function PartnerSheet({
     [notice, setNotice] = useState(''),
     [busy, setBusy] = useState(false),
     [notes, setNotes] = useState(''),
-    [pending, setPending] = useState<{ id: string; notes: string } | null>(
+    [nextStep,setNextStep]=useState(''),
+    [followUpDate,setFollowUpDate]=useState(''),
+    [pending, setPending] = useState<{ id: string; notes: string; nextStep?:string; followUpDate?:string|null } | null>(
       null,
     );
   const dialog = useRef<HTMLDialogElement>(null);
@@ -487,6 +498,13 @@ export function PartnerSheet({
     }
     gpsButton.current?.focus({ preventScroll: true });
   }
+  const unlockInvalidVisit=useCallback(async(value:NonNullable<typeof pending>)=>{
+    // Preserve editable recovery and archive only the exact invalid legacy
+    // request. Valid or different queued requests remain unresolved.
+    await unlockVisitWork(userIdForWork(),id,value);
+    setNotes(value.notes);setNextStep(value.nextStep||'');setFollowUpDate(value.followUpDate||'');
+    setPending(null);setError(visitDateError(value.followUpDate||''));
+  },[id]);
   useEffect(() => {
     dialog.current?.showModal();
     let alive = true;const controller=new AbortController();
@@ -495,7 +513,11 @@ export function PartnerSheet({
         if (alive) {
           setDetail(data);
           setForm(await readWork<PortfolioPartner>(userIdForWork(),'partner',id)||data.partner);
-          setPending(await readWork<{id:string;notes:string}>(userIdForWork(),'visit',id)||null);
+          const saved=await readWork<NonNullable<typeof pending>>(userIdForWork(),'visit',id);
+          const editable=saved||await readWork<NonNullable<typeof pending>>(userIdForWork(),'visit-edit',id);
+          if(!alive)return;
+          if(editable){setNotes(editable.notes);setNextStep(editable.nextStep||'');setFollowUpDate(editable.followUpDate||'');}
+          if(editable&&visitDateError(editable.followUpDate||''))await unlockInvalidVisit(editable);else setPending(saved||null);
         }
       })
       .catch((e) => {
@@ -504,12 +526,12 @@ export function PartnerSheet({
     return () => {
       alive = false;controller.abort();
     };
-  }, [id]);
+  }, [id,unlockInvalidVisit]);
   useEffect(()=>{if(form)void saveWork(userIdForWork(),'partner',id,form).catch(e=>setError(e.message));},[form,id]);
   useEffect(()=>{
     const synced=(event:Event)=>{const value=(event as CustomEvent).detail;if(value.userId!==userIdForWork())return;
       if(value.path===`partner/portfolio/${encodeURIComponent(id)}`&&value.result?.partner){const saved=value.result.partner as PortfolioPartner;setForm(current=>current?{...current,revision:saved.revision}:saved);setDetail(current=>current?{...current,partner:saved}:current);setNotice('Datele trimise au fost sincronizate. Modificările noi rămân în fișă.');}
-      if(value.path===`partner/portfolio/${encodeURIComponent(id)}/visits`&&value.result?.visits){setDetail(value.result);setPending(null);void removeWork(userIdForWork(),'visit',id).catch(e=>setError(e.message));setNotice('Vizita a fost sincronizată.');}
+      if(value.path===`partner/portfolio/${encodeURIComponent(id)}/visits`&&value.result?.visits){setDetail(value.result);setPending(null);void Promise.all([removeWork(userIdForWork(),'visit',id),removeWork(userIdForWork(),'visit-edit',id)]).catch(e=>setError(e.message));setNotice('Vizita a fost sincronizată.');}
     };window.addEventListener('mobiup-sync-confirmed',synced);return()=>window.removeEventListener('mobiup-sync-confirmed',synced);
   },[id]);
   async function save() {
@@ -565,12 +587,19 @@ export function PartnerSheet({
       { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
     );
   }
+  function confirmDisplayedPosition(){
+    if(form?.canEdit!==true||form.latitude===null||form.longitude===null)return;
+    setForm({...form,positionSource:'manual',positionAccuracy:null});
+    setNotice('Pinul afișat este pregătit pentru confirmare manuală. Salvează datele pentru a-l proteja la actualizările de adresă.');
+  }
   async function visit() {
     if(manager||form?.canEdit!==true)return;
+    const dateError=visitDateError(pending?pending.followUpDate||'':followUpDate);
+    if(dateError){if(pending){try{await unlockInvalidVisit(pending);}catch(e){setError((e as Error).message);}}else setError(dateError);return;}
     setBusy(true);
     setError('');
     setNotice('');
-    const payload = pending || { id: crypto.randomUUID(), notes };
+    const payload = pending || { id: crypto.randomUUID(), notes, nextStep, followUpDate:followUpDate||null };
     setPending(payload);
     try {
       await saveWork(userIdForWork(),'visit',id,payload);
@@ -581,12 +610,14 @@ export function PartnerSheet({
       );
       setDetail(d);
       setNotes('');
+      setNextStep('');
+      setFollowUpDate('');
       setPending(null);
-      await removeWork(userIdForWork(),'visit',id);setNotice('Vizita a fost sincronizată.');
+      await removeWork(userIdForWork(),'visit',id);await removeWork(userIdForWork(),'visit-edit',id);setNotice('Vizita a fost sincronizată.');
       invalidateApiReadCache('partner/');
       onSaved();
     } catch (e) {
-      if(!(e instanceof ApiError)||e.status>=500){try{await enqueue(userIdForWork(),`partner/portfolio/${encodeURIComponent(id)}/visits`,'POST',payload,{scope:'visit',id,value:payload});setNotice('Vizită salvată pe telefon · În așteptare.');}catch(storage){setError((storage as Error).message);}}else setError((e as Error).message);
+      if(!(e instanceof ApiError)||e.status>=500){try{await enqueue(userIdForWork(),`partner/portfolio/${encodeURIComponent(id)}/visits`,'POST',payload,{scope:'visit',id,value:payload});setNotice('Vizită salvată pe telefon · În așteptare.');}catch(storage){setError((storage as Error).message);}}else{setPending(null);await removeWork(userIdForWork(),'visit',id);setError((e as Error).message);}
     } finally {
       setBusy(false);
     }
@@ -640,13 +671,16 @@ export function PartnerSheet({
         </p>
       )}
       {notice && <output>{notice}</output>}
+      <QueuedWorkRecovery path={`partner/portfolio/${encodeURIComponent(id)}`} prepare={form?(choice,remote)=>{const value=choice==='local'?{...form,revision:remote.revision}:remote;return {expectedWork:form,remote,body:value,local:{scope:'partner',id,value}};}:undefined} onResolved={(choice,remote)=>{setForm(current=>choice==='remote'?remote as PortfolioPartner:current?{...current,revision:Number(remote.revision)}:current);setDetail(current=>current?{...current,partner:remote as PortfolioPartner}:current);}}/>
+      <QueuedWorkRecovery path={`partner/portfolio/${encodeURIComponent(id)}/visits`}/>
+
       {!form && !error && <p>Se încarcă…</p>}
       {form && (
         <>
           <p>
             {form.address}
             <br />
-            {[form.city,form.county].filter(Boolean).join(', ')}
+            {[form.city,countyLabel(form.county)].filter(Boolean).join(', ')}
           </p>
           <p className="muted">
             CUI {form.cui}{form.route&&<> · Ruta {form.route}</>}
@@ -724,9 +758,7 @@ export function PartnerSheet({
                 </label>
               ))}
               <p className="muted">
-                {form.latitude === null
-                  ? 'Fără poziție'
-                  : `${positionLabel(form)}${form.positionAccuracy !== null ? ` · precizie raportată ${Math.round(form.positionAccuracy)} m` : ''}`}
+                {partnerPositionProvenance(form)}
               </p>
               {form.positionSource === 'geocoding' &&
                 form.positionQuality === 'street_approximate' && (
@@ -765,6 +797,8 @@ export function PartnerSheet({
                 >
                   Preia poziția GPS a magazinului
                 </button>
+                {form.latitude!==null&&form.longitude!==null&&form.positionSource!=='manual'&&<button type="button" className="secondary partner-position-link" onClick={confirmDisplayedPosition}>Confirmă manual pinul afișat</button>}
+                <p className="muted">Confirmarea poziției nu înregistrează o vizită și nu transformă un reper aproximativ în dovadă de traseu.</p>
               </details>
               <div className="partner-actions">
                 <button className="primary" type="submit">
@@ -775,16 +809,18 @@ export function PartnerSheet({
           </form>
           </details>
           <details className="partner-visits">
-            <summary>Vizite {detail ? `(${detail.visitCount})` : ''}</summary>
+            <summary>Înregistrează activitatea · Vizite {detail ? `(${detail.visitCount})` : ''}</summary>
             {!manager&&<><label>
-              Notă vizită
+              Rezultat / notă vizită <span className="optional">opțional</span>
               <textarea
                 maxLength={2000}
                 disabled={busy || !!pending || form.canEdit!==true}
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
+                placeholder="Ce ai discutat sau constatat?"
               />
             </label>
+            <div className="partner-follow-up-fields"><label>Pas următor <span className="optional">opțional</span><input maxLength={500} disabled={busy||!!pending||form.canEdit!==true} value={nextStep} onChange={e=>setNextStep(e.target.value)} placeholder="Ex.: revin cu oferta"/></label><label>Data revenirii <span className="optional">opțional</span><input type="date" disabled={busy||!!pending||form.canEdit!==true} value={followUpDate} onChange={e=>setFollowUpDate(e.target.value)}/></label></div>
             <button
               className="primary"
               disabled={busy||form.canEdit!==true}
@@ -795,13 +831,14 @@ export function PartnerSheet({
                 : 'Înregistrează vizita acum'}
             </button>
             <p className="muted">
-              Vizita se înregistrează doar la apăsarea butonului.
+              Firma și agentul sunt completate automat. Vizita se înregistrează doar la apăsarea butonului; un apel, o factură sau poziția GPS nu creează o vizită. Dacă alegi o dată, partenerul este adăugat în planul acelei zile.
             </p></>}
             {manager&&<p className="muted">Istoricul vizitelor înregistrate de agenți.</p>}
             {detail?.visits.map((v) => (
               <article className="partner-visit" key={v.id}>
                 <strong>{date(v.visitedAt)}</strong> · {v.agentName}
                 {v.notes && <p>{v.notes}</p>}
+                {(v.nextStep||v.followUpDate)&&<p><strong>Pas următor:</strong> {v.nextStep||'Revenire la partener'}{v.followUpDate?` · ${v.followUpDate.split('-').reverse().join('.')}`:''}</p>}
               </article>
             ))}
             {!detail?.visits.length && <p>Fără vizite înregistrate.</p>}
@@ -819,17 +856,4 @@ export function PartnerSheet({
       )}
     </dialog>
   );
-}
-
-function positionLabel(p: PartnerSummary) {
-  if (p.latitude === null) return 'Fără poziție';
-  if (p.positionSource === 'gps') return 'Poziție GPS';
-  if (p.positionQuality === 'locality_approximate')
-    return 'Reper aproximativ în localitate';
-  if (p.positionQuality?.endsWith('_approximate'))
-    return p.positionQuality === 'street_approximate'
-      ? 'Aproximativ · pe stradă'
-      : 'Aproximativ · adresă potrivită';
-  if (p.positionSource !== 'geocoding') return 'Poziție salvată';
-  return 'Poziție din adresă';
 }

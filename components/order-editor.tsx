@@ -14,6 +14,7 @@ import type { Order, Product, Client } from '@/lib/types';
 import { StockQuantity, StockMetadata, useAgentStock } from '@/components/stock-panel';
 import { useOrderDraftSave } from '@/components/use-order-draft-save';
 import { OrderResult } from './order-result';
+import { QueuedWorkRecovery } from '@/components/queued-work-recovery';
 import { OrderSaveConflictDialog } from '@/components/order-save-conflict-dialog';
 
 type OrderEditorProps = {partnerUserId?:string;initial:Order;products:Product[];onClose:()=>void;onSaved:(o:Order)=>void;onFinalized:(o:Order)=>void;onRecovered:(o:Order)=>void};
@@ -75,7 +76,7 @@ function EditableOrderEditor({initial,products,onClose,onSaved,onFinalized,onRec
   }
   async function back() {setBusy(true);setActionError('');try{await save();onClose();}catch{if(saveState.includes('Salvat pe telefon'))onClose();setBusy(false);}}
   async function recover(){setBusy(true);setActionError('');try{const recovered=await recoverToNewDraft();toast.success('Modificările au fost copiate într-o ciornă nouă.');onRecovered(recovered);}catch(err){setActionError(errorMessage(err));setBusy(false);}}
-  function discardRecovery(){discardRemoteRecovery();onClose();}
+  async function discardRecovery(){try{await discardRemoteRecovery();onClose();}catch(error){toast.error(errorMessage(error));}}
   async function discardDraft() {if(busy||locked||!window.confirm('Renunți la această ciornă?'))return;setBusy(true);setActionError('');try{await api(`orders/${order.id}`,'DELETE',{revision:getRevision()});toast.success('Ciorna a fost ștearsă.');onClose();}catch(err){setActionError(errorMessage(err));setBusy(false);}}
   async function openReview(){if(busy||locked)return;setBusy(true);setActionError('');try{await save(true);setReview(true);}catch{}finally{setBusy(false);}}
   async function finalize() {
@@ -132,6 +133,7 @@ function EditableOrderEditor({initial,products,onClose,onSaved,onFinalized,onRec
       {order.kind==='sim'?<><p><b>sim 0 vodafone</b> · {order.serials.length} bucăți</p><div className="review-serials">{order.serials.map((s,i)=><code key={s}>{i+1}. {s}</code>)}</div></>:<div className="summary-lines">{order.items.map(l=><div key={l.id}><span><strong>{l.name}</strong><small>{l.code}</small></span><b>{l.quantity} buc.</b></div>)}</div>}
       <div className="summary-total"><span>{order.pieces} bucăți</span><strong>{order.kind==='accessories'?money(order.total):kindLabels[order.kind]}</strong></div>{order.notes&&<p className="notice">{order.notes}</p>}<p className="muted">După finalizare, comanda rămâne în istoric. O poți copia pentru săptămâna următoare.</p></div><div className="dialog-actions"><button className="secondary" disabled={busy} onClick={()=>setReview(false)}>Înapoi la editare</button><button className="primary" disabled={busy} onClick={()=>void finalize()}>{busy?<LoaderCircle size={18} className="spin"/>:<Check size={18}/>} {order.kind==='stand_client'?(busy?'Se pregătește avizul…':'Finalizează avizul'):(busy?'Se pregătește Excelul…':'Finalizează și exportă Excel')}</button></div></DialogContent></Dialog>
     <Dialog open={partnerOpen} onOpenChange={open=>{setPartnerOpen(open);if(!open)setClientRefresh(v=>v+1);}}><DialogContent className="admin-dialog" style={{maxHeight:'90dvh',overflowY:'auto'}}><DialogHeader><DialogTitle>Adaugă partener / punct de lucru</DialogTitle><DialogDescription>După confirmarea managerului, punctul de lucru apare în lista de clienți.</DialogDescription></DialogHeader>{partnerUserId&&<PartnerNew userId={partnerUserId}/>}</DialogContent></Dialog>
-    <OrderSaveConflictDialog conflict={conflict} onResolve={resolveConflict}/>
+    <QueuedWorkRecovery path={`orders/${order.id}`}/>
+    <OrderSaveConflictDialog error={saveError} conflict={conflict} onResolve={resolveConflict}/>
   </div>;
 }

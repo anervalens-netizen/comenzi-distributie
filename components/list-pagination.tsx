@@ -14,7 +14,7 @@ export function useListPage(count: number, resetKey: string) {
   };
 }
 
-export function ListPagination({ count, page, pages, start, end, onPage, label }: {
+export function ListPagination({ count, page, pages, start, end, onPage, label, disabled=false, note }: {
   count: number;
   page: number;
   pages: number;
@@ -22,6 +22,8 @@ export function ListPagination({ count, page, pages, start, end, onPage, label }
   end: number;
   onPage: (page: number) => void;
   label: string;
+  disabled?: boolean;
+  note?: string;
 }) {
   const previous = useRef<HTMLButtonElement>(null), next = useRef<HTMLButtonElement>(null);
   function navigate(targetPage: number, button: HTMLButtonElement) {
@@ -36,11 +38,11 @@ export function ListPagination({ count, page, pages, start, end, onPage, label }
   if (!count) return null;
   return <nav className="list-pagination" aria-label={label}>
     <output aria-live="polite" aria-atomic="true">
-      {start + 1}–{end} din {count}{pages > 1 && <span> · Pagina {page + 1} din {pages}</span>}
+      {start + 1}–{end} din {count}{pages > 1 && <span> · Pagina {page + 1} din {pages}</span>}{note&&<span> · {note}</span>}
     </output>
     {pages > 1 && <div>
-      <button ref={previous} type="button" className="secondary" disabled={page === 0} onClick={event => navigate(page - 1, event.currentTarget)}>Anterior</button>
-      <button ref={next} type="button" className="secondary" disabled={page === pages - 1} onClick={event => navigate(page + 1, event.currentTarget)}>Următor</button>
+      <button ref={previous} type="button" className="secondary" disabled={disabled||page === 0} onClick={event => navigate(page - 1, event.currentTarget)}>Anterior</button>
+      <button ref={next} type="button" className="secondary" disabled={disabled||page === pages - 1} onClick={event => navigate(page + 1, event.currentTarget)}>Următor</button>
     </div>}
   </nav>;
 }

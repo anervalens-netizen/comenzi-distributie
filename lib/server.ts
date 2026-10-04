@@ -12,7 +12,7 @@ export const warehouses = seed.warehouses;
 export const db = () => env.DB;
 export const SESSION_TTL_SECONDS=365*24*60*60;
 export const SESSION_TTL_MS=SESSION_TTL_SECONDS*1000;
-export class AppError extends Error { constructor(public status: number, message: string) { super(message); } }
+export class AppError extends Error { constructor(public status: number, message: string, public currentRevision?:string) { super(message); } }
 export function fail(status: number, message: string): never { throw new AppError(status, message); }
 export function sha256(value: string) { return createHash('sha256').update(value).digest('hex'); }
 const scryptOptions={N:32768,r:8,p:3,maxmem:40*1024*1024} as const;
@@ -173,7 +173,7 @@ export async function settingsForOrder(order:Pick<Order,'userId'>):Promise<Setti
 }
 export function response(data: unknown,status=200,extra?: HeadersInit) { const headers=new Headers(extra);headers.set('Cache-Control','no-store');headers.set('X-Content-Type-Options','nosniff');return Response.json(data,{status,headers}); }
 export function handleError(err: unknown) {
-  if(err instanceof AppError) return response({error:err.message},err.status);
+  if(err instanceof AppError) return response({error:err.message,...(err.currentRevision!==undefined?{currentRevision:err.currentRevision}:{})},err.status);
   console.error('Request failed',err instanceof Error?err.message:'unknown');
   return response({error:'Operațiunea nu a reușit. Datele salvate rămân disponibile; încearcă din nou.'},500);
 }

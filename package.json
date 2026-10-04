@@ -28,7 +28,11 @@
     "prepare": "node .github/install-hooks.mjs",
     "test:client-sales": "node tools/test-client-sales.mjs",
     "test:client-sales:browser": "node tools/test-client-sales-browser.mjs",
-    "test:client-sales:http": "node tools/test-client-sales-http.mjs"
+    "test:client-sales:http": "node tools/test-client-sales-http.mjs",
+    "bench:reports": "node tools/bench-reports.mjs",
+    "bench:inventory": "node tools/bench-inventory.mjs",
+    "bench:http": "node tools/bench-http.mjs",
+    "test:performance-lab": "node tools/test-performance-lab.mjs"
   },
   "dependencies": {
     "@base-ui/react": "1.7.0",

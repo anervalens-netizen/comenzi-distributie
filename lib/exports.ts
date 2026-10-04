@@ -1,3 +1,4 @@
+import {countyLabel} from './portfolio-facets';
 import { unzipSync, zipSync, strFromU8, strToU8 } from 'fflate';
 import { cleanWorkbook } from './export-cleanup';
 import mailDefaults from '@/resources/mail-defaults.json';
@@ -161,7 +162,7 @@ export function repairOrderExport(bytes:Uint8Array,order:Order) {
 }
 
 export function simExport(order: Order) {
-  const rows:(string|number)[][]=[['MOBIUP · AVIZ CLIENT SIM 0'],['Data',new Date(order.finalizedAt||order.createdAt).toLocaleString('ro-RO',{timeZone:'Europe/Bucharest'})],['Gestiune',order.warehouseName],['Agent',order.agentName],['Client',order.client?.name||''],['CUI',order.client?.cui||''],['Localitate',order.client?.city||''],['Județ',order.client?.county||''],['Adresă',order.client?.address||''],['Produs','sim 0 vodafone'],['Cantitate',order.serials.length],['Observații',order.notes],[],['Nr. crt.','Serie SIM'],...order.serials.map((s,i)=>[i+1,s])];
+  const rows:(string|number)[][]=[['MOBIUP · AVIZ CLIENT SIM 0'],['Data',new Date(order.finalizedAt||order.createdAt).toLocaleString('ro-RO',{timeZone:'Europe/Bucharest'})],['Gestiune',order.warehouseName],['Agent',order.agentName],['Client',order.client?.name||''],['CUI',order.client?.cui||''],['Localitate',order.client?.city||''],['Județ',countyLabel(order.client?.county)],['Adresă',order.client?.address||''],['Produs','sim 0 vodafone'],['Cantitate',order.serials.length],['Observații',order.notes],[],['Nr. crt.','Serie SIM'],...order.serials.map((s,i)=>[i+1,s])];
   const sheet=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:B${rows.length}"/><sheetViews><sheetView workbookViewId="0"><pane ySplit="14" topLeftCell="A15" state="frozen"/></sheetView></sheetViews><cols><col min="1" max="1" width="23" customWidth="1"/><col min="2" max="2" width="85" customWidth="1"/></cols><sheetData>${rows.map((r,i)=>`<row r="${i+1}" ht="${i===0?32:23}" customHeight="1">${r.map((v,j)=>cell(`${String.fromCharCode(65+j)}${i+1}`,v,` s="${i===0||i===13?1:2}"`)).join('')}</row>`).join('')}</sheetData><mergeCells count="1"><mergeCell ref="A1:B1"/></mergeCells><pageMargins left="0.3" right="0.3" top="0.5" bottom="0.5" header="0.2" footer="0.2"/><pageSetup paperSize="9" fitToWidth="1" fitToHeight="0"/></worksheet>`;
   const files:Record<string,Uint8Array>={};
   const content={
@@ -179,7 +180,7 @@ export function mailFor(order: Order,settings: Settings): Mail {
   if(order.kind==='stand_client') {
     const to=mailDefaults.standClientTo,cc=[...new Set(settings.standsCc.filter(address=>address&&!mailDefaults.standClientExcludedCc.includes(address.trim().toLowerCase())))];
     const subject=`Aviz pentru standuri | ${order.client?.name} | ${order.warehouseName}`;
-    const body=`Bună ziua,\n\nRog avizare stand către clientul ${order.client?.name}.\nCUI: ${order.client?.cui}\nPunct de lucru: ${order.client?.city}, ${order.client?.county}, ${order.client?.address}\n\n${order.items.map(l=>`${l.code} — ${l.name}: ${l.quantity} buc.`).join('\n')}\n\nAgent: ${order.agentName}${order.notes?`\nObservații: ${order.notes}`:''}`;
+    const body=`Bună ziua,\n\nRog avizare stand către clientul ${order.client?.name}.\nCUI: ${order.client?.cui}\nPunct de lucru: ${order.client?.city}, ${countyLabel(order.client?.county)}, ${order.client?.address}\n\n${order.items.map(l=>`${l.code} — ${l.name}: ${l.quantity} buc.`).join('\n')}\n\nAgent: ${order.agentName}${order.notes?`\nObservații: ${order.notes}`:''}`;
     return {to,cc,subject,body,filename:`aviz-standuri-${order.number}.eml`,mailto:`mailto:${to}?cc=${encodeURIComponent(cc.join(','))}&subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`};
   }
   const hasAccessories=order.kind==='accessories'||order.kind==='combined'&&order.items.length>0;
@@ -191,7 +192,7 @@ export function mailFor(order: Order,settings: Settings): Mail {
   const to=[...new Set(recipientGroups.filter(Boolean))].join(',');
   const cc=[...new Set([...(hasAccessories?settings.accessoriesCc:[]),...(hasStands?settings.standsCc:[]),...(hasSim?settings.simCc:[])].filter(Boolean))];
   const subject=`${label} | ${order.kind==='sim'?`${order.client?.name} | CUI ${order.client?.cui} | `:''}${order.warehouseName}`;
-  const detail=order.kind==='sim'?`Client: ${order.client?.name}\nCUI: ${order.client?.cui}\nLocalitate: ${order.client?.city}, ${order.client?.county}\nAdresă: ${order.client?.address}\n\nProdus: sim 0 vodafone\nCantitate: ${order.serials.length}\n\nSerii SIM:\n${order.serials.map((s,i)=>`${i+1}. ${s}`).join('\n')}`:order.items.map(l=>`${l.code} — ${l.name}: ${l.quantity} buc.`).join('\n');
+  const detail=order.kind==='sim'?`Client: ${order.client?.name}\nCUI: ${order.client?.cui}\nLocalitate: ${order.client?.city}, ${countyLabel(order.client?.county)}\nAdresă: ${order.client?.address}\n\nProdus: sim 0 vodafone\nCantitate: ${order.serials.length}\n\nSerii SIM:\n${order.serials.map((s,i)=>`${i+1}. ${s}`).join('\n')}`:order.items.map(l=>`${l.code} — ${l.name}: ${l.quantity} buc.`).join('\n');
   const body=order.kind==='accessories'
     ? `Bună ziua,\n\nFișierul Excel pentru comanda de accesorii este atașat.\nGestiune: ${order.warehouseName}\nAgent: ${order.agentName}`
     : order.kind==='combined'

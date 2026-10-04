@@ -15,6 +15,7 @@ CREATE TABLE users(id TEXT PRIMARY KEY,role TEXT,warehouse_id TEXT,active INTEGE
 CREATE TABLE manager_agents(manager_id TEXT,agent_id TEXT);
 CREATE TABLE partner_requests(id TEXT PRIMARY KEY,customer_id TEXT,payload TEXT,status TEXT,confirmed_at TEXT);`);
 sqlite.exec(readFileSync('drizzle/0006_partner_portfolio.sql','utf8'));
+sqlite.exec(readFileSync('drizzle/0011_partner_visit_follow_up.sql','utf8'));
 let beforeBatch;
 const adapter={prepare(sql){return {args:[],bind(...args){this.args=args;return this;},async all(){return {results:sqlite.prepare(sql).all(...this.args)};},async first(){return sqlite.prepare(sql).get(...this.args)||null;},async run(){return this.execute();},execute(){return {meta:sqlite.prepare(sql).run(...this.args)};}};},async batch(statements){beforeBatch?.();beforeBatch=undefined;sqlite.exec('BEGIN');try{const results=statements.map(s=>s.execute());sqlite.exec('COMMIT');return results;}catch(e){sqlite.exec('ROLLBACK');throw e;}}};
 globalThis.__safetyDb=adapter;

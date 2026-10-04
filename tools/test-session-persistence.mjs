@@ -14,7 +14,7 @@ async function request(path,{cookie,method='GET',body}={}){
   return {status:response.status,data:await response.json(),setCookie:response.headers.get('set-cookie')||''};
 }
 try{
-  for(let i=0;i<80;i++){try{if((await fetch(origin+'/api/health')).ok)break;}catch{}await sleep(100);}
+  for(let i=0;i<80;i++){try{if((await fetch(origin+'/api/bootstrap')).ok)break;}catch{}await sleep(100);}
   const db=new DatabaseSync(data+'/mobiup.sqlite');
   const password=randomBytes(20).toString('hex'),salt=randomBytes(16).toString('hex'),hash='scrypt:'+salt+':'+scryptSync(password,salt,32,{N:32768,r:8,p:3,maxmem:40*1024*1024}).toString('hex');
   db.prepare("INSERT INTO users(id,username,name,role,manager_scope,password_hash,must_change_password,active) VALUES('session-qa','session-qa','Session QA','manager','global',?,0,1)").run(hash);

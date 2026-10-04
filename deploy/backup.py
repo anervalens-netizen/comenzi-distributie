@@ -54,6 +54,8 @@ def add_recovery_files(output: tarfile.TarFile, recovery: dict[str, Path], relea
     for name, required in [('runtime', 'server.js'), ('resources', 'resource-mode.json')]:
         if not (roots[name] / required).is_file():
             raise RuntimeError(f'Recovery {name} is missing {required}')
+    if './bind-ready.mjs' in (roots['runtime'] / 'server.js').read_text() and not (roots['runtime'] / 'bind-ready.mjs').is_file():
+        raise RuntimeError('Recovery runtime is missing bind-ready.mjs')
     mode = json.loads((roots['resources'] / 'resource-mode.json').read_text())
     names = ['seed.json', 'initial-users.json', 'accesorii.xlsx', 'standuri.xlsx', 'templates.json', 'template-hashes.json', 'mail-defaults.json']
     if mode.get('mode') != 'private' or mode.get('schema') != 1 or any(name not in mode.get('sha256', {}) for name in names):
@@ -104,6 +106,15 @@ def add_recovery_files(output: tarfile.TarFile, recovery: dict[str, Path], relea
     output.addfile(info, io.BytesIO(payload))
 
 
+def verify_sqlite_snapshot(connection: sqlite3.Connection, label: str) -> None:
+    integrity = connection.execute('PRAGMA integrity_check').fetchall()
+    if integrity != [('ok',)]:
+        raise RuntimeError(f'{label} integrity check failed')
+    foreign_keys = connection.execute('PRAGMA foreign_key_check').fetchall()
+    if foreign_keys:
+        raise RuntimeError(f'{label} foreign key check failed')
+
+
 def run_backup(
     *,
     data: Path = Path('/storage/comenzi-distributie'),
@@ -129,8 +140,7 @@ def run_backup(
         snapshot = Path(temporary) / 'mobiup.sqlite'
         with closing(sqlite3.connect(f'file:{data / "mobiup.sqlite"}?mode=ro', uri=True)) as source, closing(sqlite3.connect(snapshot)) as copy:
             source.backup(copy)
-            if copy.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
-                raise RuntimeError('Application snapshot integrity check failed')
+            verify_sqlite_snapshot(copy, 'Application snapshot')
             keys = []
             for row in copy.execute("SELECT kind,payload FROM orders WHERE status='finalized'"):
                 kind, payload = row
@@ -148,8 +158,7 @@ def run_backup(
         if (data / 'sales.sqlite').exists():
             with closing(sqlite3.connect(f'file:{data / "sales.sqlite"}?mode=ro', uri=True)) as source, closing(sqlite3.connect(sales_snapshot)) as copy:
                 source.backup(copy)
-                if copy.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
-                    raise RuntimeError('Sales snapshot integrity check failed')
+                verify_sqlite_snapshot(copy, 'Sales snapshot')
         # Sources are immutable and published before their database transaction.
         # Enumerating after the snapshot includes all its sources; extra newer files
         # are harmless and do not change the generation recorded in the snapshot.
@@ -163,8 +172,7 @@ def run_backup(
                 raise RuntimeError('Invalid customer history location')
             with closing(sqlite3.connect(f'file:{history_db}?mode=ro', uri=True)) as source, closing(sqlite3.connect(history_snapshot)) as copy:
                 source.backup(copy)
-                if copy.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
-                    raise RuntimeError('Customer history snapshot integrity check failed')
+                verify_sqlite_snapshot(copy, 'Customer history snapshot')
                 for expected, relative in copy.execute('SELECT sha256,original_path FROM history_imports'):
                     path = history_root / relative
                     if path.is_symlink() or not path.resolve().is_relative_to(history_root.resolve()) or not path.is_file() or digest(path) != expected:

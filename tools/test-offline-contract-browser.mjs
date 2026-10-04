@@ -21,8 +21,10 @@ try{
  const login=async()=>{await db.prepare("INSERT OR REPLACE INTO sessions(token_hash,user_id,expires_at) VALUES(?,'agent',?)").bind(hash,Date.now()+3600000).run();if(browser)await browser.send('Network.setCookie',{name:'mobiup_session',value:token,url:await browser.evaluate('location.origin'),httpOnly:true});};await login();
  const partner={id:'point',name:'Synthetic point',warehouseId:'w',warehouseIds:['w'],cui:'TEST',address:'Example',city:'Example',county:'Example',route:''};
  await db.prepare('INSERT INTO customers(id,warehouse_id,data,active) VALUES(?,?,?,1)').bind('point','w',JSON.stringify(partner)).run();
+ const facetInputs=[['OLT','1'],['Olt','1, 11'],['Iasi','11, 1'],['Iași','11'],['Bucuresti','2, 7'],['Municipiul Bucuresti','7, 2'],['SB','1, 11'],['Sibiu','11']];
+ for(const [i,[county,route]] of facetInputs.entries())await db.prepare('INSERT INTO customers(id,warehouse_id,data,active) VALUES(?,?,?,1)').bind('facet-'+i,'w',JSON.stringify({...partner,id:'facet-'+i,name:'Facet sample '+i,county,route})).run();
  const compiled=await build({stdin:{contents:"export * from './lib/client-api';export * from './lib/offline-work';export * from './lib/local-work';",loader:'ts',resolveDir:resolve('.')},write:false,bundle:true,format:'esm',platform:'browser',logLevel:'silent'});
- let dropNext=false,legacyResponse=false;
+ let dropNext=false,legacyResponse=false,omitFollowUp=false;
  server=createServer(async(req,res)=>{
   try{
    if(req.url.startsWith('/api/')){
@@ -33,7 +35,7 @@ try{
     if(req.method==='POST'&&req.url.endsWith('/visits')){
      requests.push({id:req.headers['x-operation-id'],body:JSON.parse(body.toString()),status:result.status});
      if(dropNext){dropNext=false;res.writeHead(200,{'Content-Type':'application/json'});res.end('{');return;}
-     if(legacyResponse&&result.ok){const data=JSON.parse(text);delete data.visit;text=JSON.stringify(data);}
+     if((legacyResponse||omitFollowUp)&&result.ok){const data=JSON.parse(text);if(legacyResponse)delete data.visit;if(omitFollowUp)for(const visit of [...data.visits,...data.visit?[data.visit]:[]]){delete visit.nextStep;delete visit.followUpDate;}text=JSON.stringify(data);}
     }
     res.writeHead(result.status,Object.fromEntries(result.headers));res.end(text);return;
    }
@@ -44,6 +46,13 @@ try{
  browser=await browserFixture(origin);const evaluate=browser.evaluate;
  await evaluate(`window.m=await import('/fixture.mjs');document.cookie='mobiup_session=${token}; Path=/';window.originalFetch=fetch;`);
  check(await evaluate("(await m.api('auth/session')).user.id==='agent'&&(await m.api('bootstrap')).user.id==='agent'"),'actual authenticated contracts');
+ await evaluate("await m.api('partner/summary');window.facetOnline=[];for(const county of ['OLT','Olt','Iasi','Iași','Bucuresti','Municipiul Bucuresti','SB','Sibiu'])facetOnline.push(await m.api('partner/browse?limit=199&q=Facet+sample&county='+encodeURIComponent(county)));window.fetch=async()=>{throw new TypeError('synthetic offline')}");
+ await evaluate("await m.saveSnapshot('agent','partner/browse?limit=198&q=Facet+sample&county=OLT',{partners:[],total:0,facets:{counties:['OLT'],cities:[],routes:['1, 11']}})");
+ check(await evaluate("let equal=true;let i=0;for(const county of ['OLT','Olt','Iasi','Iași','Bucuresti','Municipiul Bucuresti','SB','Sibiu']){const offline=await m.api('partner/browse?limit=198&q=Facet+sample&county='+encodeURIComponent(county));equal=equal&&offline.total===2&&JSON.stringify(offline.partners.map(p=>p.id).sort())===JSON.stringify(facetOnline[i++].partners.map(p=>p.id).sort());}equal"),'offline county aliases match live SQL population');
+ check(await evaluate("const routes=await m.api('partner/browse?limit=198&q=Facet+sample&route=1');routes.total===4&&!routes.facets.routes.some(r=>r.includes(','))&&routes.partners.every(p=>['1','1, 11','11, 1'].includes(p.route))"),'offline exact route memberships and atomic facets preserve raw text');
+ check(await evaluate("(await m.api('partner/browse?limit=198&q=Sibiu')).total===2"),'offline county search includes code aliases');
+ await evaluate('window.fetch=originalFetch');
+
  const bootstrap=await evaluate("(await m.snapshot('agent','bootstrap')).value");check(Array.isArray(bootstrap.products),'full authenticated bootstrap snapshot exists');
  await db.prepare('DELETE FROM sessions WHERE token_hash=?').bind(hash).run();
  check(await evaluate("const value=await m.api('bootstrap');Object.keys(value).length===1&&value.user===null&&m.currentLocalWorkUserId()===''&&(await m.lastAccount())===''"),'session expired between auth/session and bootstrap accepts exact {user:null}');
@@ -61,8 +70,10 @@ try{
  await evaluate("window.fetch=originalFetch;await m.api('auth/session');window.fetch=async()=>new Response(JSON.stringify({user:42}));");
  check(await evaluate("(await m.api('bootstrap')).user.id==='agent'"),'malformed success still preserves valid offline payload rather than masquerading as logout');
  await evaluate("window.fetch=originalFetch;window.path='partner/portfolio/point';await m.api(path);window.transport=(p,method,body,id)=>m.networkApi(p,method,body,undefined,id,'agent');window.replay=()=>m.replay('agent',transport,m.currentLocalWorkUserId);window.confirmations=0;addEventListener('mobiup-sync-confirmed',()=>confirmations++);");
- const visitId=randomUUID();dropNext=true;
- await evaluate(`window.visitBody={id:${JSON.stringify(visitId)},notes:'Synthetic recovery'};await m.enqueue('agent',path+'/visits','POST',visitBody,{scope:'visit',id:'point',value:visitBody});await replay();`);
+ const visitId=randomUUID();
+ await evaluate(`window.fetch=async()=>{throw new TypeError('synthetic disconnect')};window.visitBody={id:${JSON.stringify(visitId)},notes:'Synthetic recovery',nextStep:'Synthetic follow-up',followUpDate:'2026-10-05'};await m.enqueue('agent',path+'/visits','POST',visitBody,{scope:'visit',id:'point',value:visitBody});`);
+ check(await evaluate("(await m.pendingOperations('agent')).length===1&&(await m.readWork('agent','visit','point')).nextStep==='Synthetic follow-up'"),'disconnect keeps visit and follow-up locally pending');
+ dropNext=true;await evaluate('window.fetch=originalFetch;await replay();');
  check(await evaluate("(await m.pendingOperations('agent')).length===1&&(await m.readWork('agent','visit','point')).notes==='Synthetic recovery'"),'dropped real POST response retains operation and local recovery');
  // Backdate the already persisted idempotent request and fill a whole first page.
  await db.prepare("UPDATE partner_visits SET visited_at='2020-01-01T00:00:00Z' WHERE id=?").bind(visitId).run();
@@ -70,19 +81,36 @@ try{
  await delay(2100);await evaluate('await replay();await replay()');
  assert.equal(requests.length,2);assert.equal(requests[0].id,requests[1].id);assert.deepEqual(requests[0].body,requests[1].body);
  assert.equal((await db.prepare('SELECT COUNT(*) n FROM partner_visits WHERE id=?').bind(visitId).first()).n,1);
+ assert.deepEqual({...await db.prepare('SELECT next_step nextStep,follow_up_date followUpDate FROM partner_visits WHERE id=?').bind(visitId).first()},{nextStep:'Synthetic follow-up',followUpDate:'2026-10-05'});
+ assert.deepEqual(JSON.parse((await db.prepare("SELECT stops FROM partner_day_plans WHERE agent_id='agent' AND plan_date='2026-10-05'").first()).stops),['point']);
  check(await evaluate("(await m.pendingOperations('agent')).length===0&&confirmations===1"),'same idempotent request removes queue exactly once after bounded-page confirmation');
  const cached=await evaluate("(await m.snapshot('agent',path)).value"),actual=await evaluate("await m.networkApi(path)");assert.deepEqual(cached,actual);assert.equal(cached.visits.length,50);assert.equal(cached.visitCount,56);assert(cached.nextCursor);check(!cached.visits.some(v=>v.id===visitId),'cache is authoritative first page, not a fabricated cursor/history merge');
  // Older server contract, with our exact record out of order in the returned history.
- legacyResponse=true;const oldId=randomUUID();
+ legacyResponse=true;omitFollowUp=true;const oldId=randomUUID();
  await evaluate(`await m.enqueue('agent',path+'/visits','POST',{id:${JSON.stringify(oldId)},notes:'Legacy detail'});`);
  await db.prepare("INSERT INTO partner_visits(id,customer_id,agent_id,agent_name,visited_at,notes,created_at) VALUES(?,'point','agent','Synthetic agent','2025-01-02T00:00:00Z','Legacy detail','2025-01-02T00:00:00Z')").bind(oldId).run();
  await db.prepare("INSERT INTO partner_visits(id,customer_id,agent_id,agent_name,visited_at,notes,created_at) VALUES(?,'point','agent','Synthetic agent','2025-01-03T00:00:00Z','','2025-01-03T00:00:00Z')").bind(randomUUID()).run();
  await evaluate('await replay()');check(await evaluate(`(await m.pendingOperations('agent')).length===0&&(await m.snapshot('agent',path)).value.visits[1].id===${JSON.stringify(oldId)}`),'legacy detail finds matching visit rather than arbitrary first row');
+ // Mixed-version rollback accepts UUID/notes but cannot confirm new follow-up fields.
+ legacyResponse=false;omitFollowUp=true;
+ await evaluate("window.mixedBody={id:crypto.randomUUID(),notes:'Mixed server',nextStep:' Call back ',followUpDate:'2026-10-05'};await m.enqueue('agent',path+'/visits','POST',mixedBody,{scope:'visit',id:'point',value:mixedBody});await replay()");
+ check(await evaluate("const rows=await m.pendingOperations('agent');rows.length===1&&rows[0].status===502&&(await m.readWork('agent','visit','point')).nextStep===' Call back '"),'legacy-shaped response cannot acknowledge new follow-up payload');
+ omitFollowUp=false;await delay(2100);await evaluate('await replay()');
+ check(await evaluate("(await m.pendingOperations('agent')).length===0"),'normalized exact new confirmation retires the same request');
+ for(const kind of ['missing-null','wrong-step','wrong-date','exact-null']){
+  check(await evaluate(`const account='fields-${kind}',body={id:crypto.randomUUID(),notes:'',nextStep:null,followUpDate:null};await m.enqueue(account,path+'/visits','POST',body,{scope:'visit',id:'point',value:body});const visit={id:body.id,customerId:'point',agentId:account,agentName:'Synthetic',notes:'',visitedAt:'2026-01-01T00:00:00Z',createdAt:'2026-01-01T00:00:00Z',nextStep:'',followUpDate:null};${kind==='missing-null'?"delete visit.followUpDate;":kind==='wrong-step'?"visit.nextStep='different';":kind==='wrong-date'?"visit.followUpDate='2026-10-05';":''}await m.replay(account,async()=>({partner:{id:'point'},visits:[visit],visitCount:1,nextCursor:null}),()=>account);(await m.pendingOperations(account)).length===${kind==='exact-null'?0:1}`),'explicit null property contract: '+kind);
+ }
  // Valid empty history, a full unmatched page, mismatched confirmation and malformed
  // success are all ambiguous, never permission to delete the durable local request.
  for(const kind of ['empty','full','wrong','malformed','malformed-history']){
   check(await evaluate(`const account='ambiguous-${kind}',body={id:crypto.randomUUID(),notes:'Keep me'};await m.enqueue(account,path+'/visits','POST',body,{scope:'visit',id:'point',value:body});const detail=${kind==='empty'?"{partner:{id:'point'},visits:[],visitCount:0,nextCursor:null}":kind==='full'?JSON.stringify(cached):kind==='malformed-history'?"{partner:{id:'point'},visits:[{id:'invalid'}],visitCount:1,nextCursor:null,visit:{...body,customerId:'point',agentId:account,agentName:'Synthetic',visitedAt:'2026-01-01T00:00:00Z',createdAt:'2026-01-01T00:00:00Z'}}":kind==='wrong'?"{partner:{id:'point'},visits:[],visitCount:1,nextCursor:null,visit:{id:crypto.randomUUID()}}":"{unexpected:true}"};await m.replay(account,async()=>detail,()=>account);(await m.pendingOperations(account)).length===1&&(await m.readWork(account,'visit','point')).notes==='Keep me'`),'preserve '+kind+' ambiguous success');
  }
+ const deniedId=randomUUID();
+ await evaluate(`await m.enqueue('agent',path+'/visits','POST',{id:${JSON.stringify(deniedId)},notes:'Must remain local'},{scope:'visit',id:'point',value:{id:${JSON.stringify(deniedId)},notes:'Must remain local'}});`);
+ const moved={...partner,warehouseId:'moved',warehouseIds:['moved']};await db.prepare('UPDATE customers SET warehouse_id=?,data=? WHERE id=?').bind('moved',JSON.stringify(moved),'point').run();
+ await evaluate('await replay()');
+ check(await evaluate(`const rows=await m.pendingOperations('agent');rows.some(row=>row.body.id===${JSON.stringify(deniedId)}&&row.state==='blocked'&&row.status===404)`),'moved portfolio denies replay and preserves the local visit for recovery');
+ assert.equal((await db.prepare('SELECT COUNT(*) n FROM partner_visits WHERE id=?').bind(deniedId).first()).n,0);
  console.log(`PASS: ${checks} offline HTTP/IndexedDB contracts; actual route retries and SQLite deduplication.`);
 }finally{
  await browser?.close();if(server){server.closeAllConnections();await new Promise(r=>server.close(r));}

@@ -1,3 +1,4 @@
+import { sameEditableOrder } from './order-draft.ts';
 import { listLocalWork, readLocalWork, type StorageLike } from './local-work.ts';
 import type { Order } from './types.ts';
 
@@ -14,7 +15,8 @@ export function readFinalizedOrderRecovery(
   if (!userId || remote.status === 'draft') return null;
   const stored = readLocalWork<StoredOrderWork>('order', userId, remote.id, storage);
   const value = stored.value;
-  if (!value || value.base.id !== remote.id || value.local.id !== remote.id) return null;
+  if (!value || value.base?.id !== remote.id || value.local?.id !== remote.id) return null;
+  if (sameEditableOrder(value.base,value.local)||sameEditableOrder(remote,value.local)) return null;
   return { remote, local: value.local };
 }
 

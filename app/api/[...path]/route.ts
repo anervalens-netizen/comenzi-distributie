@@ -1,17 +1,19 @@
+import { managerFilter } from '@/lib/manager-scope';
 import {historyImportStatus,historyImportPreview,historyImportCommit} from '@/lib/client-history-import-runtime';
+import {clientSalesReconciliation} from '@/lib/client-sales-reconciliation';
 import {clientSalesOverview} from '@/lib/client-sales-api';
 import {partnerActivityOverview} from '@/lib/partner-activity-api';
 import { readPartnerSalesAsync, PartnerSalesInputError } from '@/lib/partner-sales-store';
 import { clientPortfolioVersion } from '@/lib/client-sales-portfolio';
 import { visitWeek, saveDayPlan } from '@/lib/partner-planning';
-import { portfolio, portfolioSummary, partnerDetail, updatePartner, recordVisit } from '@/lib/partner-portfolio';
+import { portfolio, portfolioSummary, partnerDetail, updatePartner, recordVisit, duePartnerFollowUps } from '@/lib/partner-portfolio';
 import { browsePartners, mapPartners } from '@/lib/partner-map-api';
-import { env, runtimeKind } from '@/lib/runtime';
+import { env, runtimeKind, operationalStatus } from '@/lib/runtime';
 import { randomBytes, createHash } from 'node:crypto';
 import seed from '@/resources/seed.json';
 import templateHashes from '@/resources/template-hashes.json';
 import templates from '@/resources/templates.json';
-import { db, response, handleError, assertOrigin, jsonBody, readLimited, textField, seedDatabase, userView, requireUser, requireManager, requireGlobalManager, isGlobalManager, requireAgentAccess, requireWarehouseAccess, currentUser, refreshSession, SESSION_TTL_SECONDS, SESSION_TTL_MS, sha256, sessionToken, verifyPassword, hashPassword, catalog, warehouses, getOrder, orderView, settings, managerMailSettings, regionalOperationalSettings, settingsForOrder, weekKey, fail } from '@/lib/server';
+import { AppError, db, response, handleError, assertOrigin, jsonBody, readLimited, textField, seedDatabase, userView, requireUser, requireManager, requireGlobalManager, isGlobalManager, requireAgentAccess, requireWarehouseAccess, currentUser, refreshSession, SESSION_TTL_SECONDS, SESSION_TTL_MS, sha256, sessionToken, verifyPassword, hashPassword, catalog, warehouses, getOrder, orderView, settings, managerMailSettings, regionalOperationalSettings, settingsForOrder, weekKey, fail } from '@/lib/server';
 import { templateExport, combinedExport, repairOrderExport, simExport, mailFor, emlFor } from '@/lib/exports';
 import { readCatalog, changeProduct } from '@/lib/catalog';
 import { stockImportStatus, stockView, stockUpload } from '@/lib/stock-server';
@@ -22,6 +24,7 @@ import { confirmPartnerRequest, getPartnerRequest, listPartnerRequests, partnerL
 import { managerRequestInbox, pushPublicConfig, removePushSubscription, upsertPushSubscription } from '@/lib/push-notifications';
 import { importClients } from '@/lib/client-import-server';
 import { selectUsersWithClientCounts } from '@/lib/customer-counts';
+import { bucharestDayStartUtc } from '@/lib/bucharest-month';
 import type { User, Order, Line, Client, Kind, Product } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -53,6 +56,64 @@ async function listOrders(user: User) {
   const select="SELECT id,number,user_id,warehouse_id,kind,status,created_at,finalized_at,source_order_id,revision,json_set(json_remove(payload,'$.items','$.standItems','$.serials','$.exportKey'),'$.itemCount',COALESCE(json_array_length(payload,'$.items'),0)+COALESCE(json_array_length(payload,'$.standItems'),0)) AS payload FROM orders";
   const q=user.role==='agent'?db().prepare(select+" WHERE status!='deleted' AND user_id=? ORDER BY created_at DESC").bind(user.id):user.role==='manager'?db().prepare(select+" WHERE status!='deleted' ORDER BY created_at DESC"):db().prepare(select+" WHERE status!='deleted' AND EXISTS (SELECT 1 FROM manager_agents ma WHERE ma.manager_id=? AND ma.agent_id=orders.user_id) ORDER BY created_at DESC").bind(user.id);
   return (await q.all<Record<string,unknown>>()).results.map(orderView);
+}
+const ORDER_PAGE_LIMIT=40;
+type OrderCursor={createdAt:string;id:string};
+function encodeOrderCursor(row:OrderCursor){return Buffer.from(JSON.stringify([row.createdAt,row.id])).toString('base64url');}
+function decodeOrderCursor(raw:string|null):OrderCursor|null{
+  if(!raw)return null;
+  try{const value=JSON.parse(Buffer.from(raw,'base64url').toString('utf8'));if(Array.isArray(value)&&value.length===2&&typeof value[0]==='string'&&typeof value[1]==='string'&&value[0].length<=40&&value[1].length<=100)return {createdAt:value[0],id:value[1]};}catch{}
+  fail(400,'Cursorul listei este invalid.');
+}
+const orderSearch=(value:string)=>value.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase('ro');
+async function orderScope(user:User,params:URLSearchParams){
+  const clauses=["o.status!='deleted'"];const values:unknown[]=[];
+  if(user.role==='agent'){clauses.push('o.user_id=?');values.push(user.id);}
+  else if(!isGlobalManager(user)){clauses.push('EXISTS (SELECT 1 FROM manager_agents own WHERE own.manager_id=? AND own.agent_id=o.user_id)');values.push(user.id);}
+  const filter=await managerFilter(user,params);
+  if(filter){clauses.push(filter.agentIds.length?`o.user_id IN (${filter.agentIds.map(()=>'?').join(',')})`:'0');values.push(...filter.agentIds);}
+  return {clauses,values};
+}
+async function listOrdersPage(user:User,params:URLSearchParams,attempt=0):Promise<{orders:Order[];orderPage:{revision:string;total:number;limit:number;nextCursor:string|null;stats:{drafts:number;weekly:number}}}>{
+  const requestedLimit=Number(params.get('limit')||ORDER_PAGE_LIMIT),limit=Number.isSafeInteger(requestedLimit)?Math.max(1,Math.min(100,requestedLimit)):ORDER_PAGE_LIMIT;
+  const kind=params.get('kind')||'orders',status=params.get('status')||'all',range=params.get('range')||'7d',query=textField(params.get('q'),200);
+  if(!['orders','sim','all'].includes(kind)||!['all','draft','finalized'].includes(status)||!['day','7d','30d','all'].includes(range))fail(400,'Filtrele listei sunt invalide.');
+  const {clauses:scopeClauses,values:scopeValues}=await orderScope(nationalReadScope(user),params),clauses=[...scopeClauses],values=[...scopeValues];
+  if(kind==='orders')clauses.push("o.kind NOT IN ('sim','stand_client')");
+  if(kind==='sim')clauses.push("o.kind IN ('sim','stand_client')");
+  if(status!=='all'){clauses.push('o.status=?');values.push(status);}
+  if(range!=='all'){
+    const days=range==='day'?0:range==='7d'?6:29;
+    const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Bucharest',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+    const noon=new Date(today+'T12:00:00Z');noon.setUTCDate(noon.getUTCDate()-days);
+    const fromKey=new Intl.DateTimeFormat('en-CA',{timeZone:'UTC',year:'numeric',month:'2-digit',day:'2-digit'}).format(noon);
+    clauses.push("(o.status='draft' OR COALESCE(o.finalized_at,o.created_at)>=?)");values.push(bucharestDayStartUtc(fromKey));
+  }
+  const revisionRow=await db().prepare('SELECT revision FROM order_list_revision WHERE id=1').first<{revision:number}>(),revision=String(Number(revisionRow?.revision||1));
+  const expected=params.get('revision');if(expected&&expected!==revision)throw new AppError(409,'Lista de comenzi s-a modificat. Reîncarcă prima pagină.',revision);
+  const select="SELECT o.id,o.number,o.user_id,o.warehouse_id,o.kind,o.status,o.created_at,o.finalized_at,o.source_order_id,o.revision,json_set(json_remove(o.payload,'$.items','$.standItems','$.serials','$.exportKey'),'$.itemCount',COALESCE(json_array_length(o.payload,'$.items'),0)+COALESCE(json_array_length(o.payload,'$.standItems'),0)) AS payload FROM orders o";
+  const cursor=decodeOrderCursor(params.get('cursor'));
+  let rows:Record<string,unknown>[],total:number;
+  if(query){
+    const result=await db().prepare(`${select} WHERE ${clauses.join(' AND ')} ORDER BY o.created_at DESC,o.id DESC`).bind(...values).all<Record<string,unknown>>();
+    const needle=orderSearch(query),filtered=result.results.filter(row=>{const order=orderView(row);return orderSearch([order.number,order.agentName,order.warehouseName,order.client?.name,order.client?.cui].join(' ')).includes(needle);});
+    total=filtered.length;const after=cursor?filtered.filter(row=>String(row.created_at)<cursor.createdAt||String(row.created_at)===cursor.createdAt&&String(row.id)<cursor.id):filtered;rows=after.slice(0,limit+1);
+  }else{
+    const count=await db().prepare(`SELECT COUNT(*) count FROM orders o WHERE ${clauses.join(' AND ')}`).bind(...values).first<{count:number}>();total=Number(count?.count||0);
+    const pageClauses=[...clauses],pageValues=[...values];if(cursor){pageClauses.push('(o.created_at<? OR (o.created_at=? AND o.id<?))');pageValues.push(cursor.createdAt,cursor.createdAt,cursor.id);}
+    rows=(await db().prepare(`${select} WHERE ${pageClauses.join(' AND ')} ORDER BY o.created_at DESC,o.id DESC LIMIT ?`).bind(...pageValues,limit+1).all<Record<string,unknown>>()).results;
+  }
+  const hasMore=rows.length>limit,pageRows=rows.slice(0,limit),last=pageRows.at(-1);
+  const statClauses=[...scopeClauses];const statValues=[...scopeValues];if(kind==='orders')statClauses.push("o.kind NOT IN ('sim','stand_client')");if(kind==='sim')statClauses.push("o.kind IN ('sim','stand_client')");
+  const stats=await db().prepare(`SELECT SUM(CASE WHEN o.status='draft' THEN 1 ELSE 0 END) drafts,SUM(CASE WHEN o.status='finalized' AND o.week_key=? THEN 1 ELSE 0 END) weekly FROM orders o WHERE ${statClauses.join(' AND ')}`).bind(weekKey(),...statValues).first<{drafts:number;weekly:number}>();
+  // Every count, row and statistic belongs to this one monotonic revision.
+  // First pages may retry twice; a cursor/revision-bound page must restart.
+  const after=await db().prepare('SELECT revision FROM order_list_revision WHERE id=1').first<{revision:number}>(),currentRevision=String(Number(after?.revision||1));
+  if(currentRevision!==revision){
+    if(!cursor&&!expected&&attempt<2)return listOrdersPage(user,params,attempt+1);
+    throw new AppError(409,'Lista de comenzi s-a modificat. Reîncarcă prima pagină.',currentRevision);
+  }
+  return {orders:pageRows.map(orderView),orderPage:{revision,total,limit,nextCursor:hasMore&&last?encodeOrderCursor({createdAt:String(last.created_at),id:String(last.id)}):null,stats:{drafts:Number(stats?.drafts||0),weekly:Number(stats?.weekly||0)}}};
 }
 async function targetAgent(user: User,id: unknown) {
   if(user.role==='agent') return user;
@@ -183,8 +244,12 @@ async function dispatch(req: Request) {
   if(req.method!=='GET') assertOrigin(req);
   const path=new URL(req.url).pathname.replace(/^\/api\//,'').split('/');
   if(runtimeKind==='cloudflare' && req.method!=='GET' && !['auth/login','auth/logout'].includes(path.join('/'))) fail(409,'Versiunea de test este acum doar pentru consultare. Folosește instanța de producție configurată pentru comenzi noi.');
+  if(path.join('/')==='health' && req.method==='GET') return response({status:'ok',service:'comenzi-distributie'});
+  if(path.join('/')==='admin/status' && req.method==='GET') {
+    requireGlobalManager(await requireUser(req));
+    return response(operationalStatus());
+  }
   await seedDatabase();
-  if(path.join('/')==='health' && req.method==='GET') { await db().prepare('SELECT 1').first(); return response({status:'ok',service:'comenzi-distributie'}); }
   if(path.join('/')==='auth/login' && req.method==='POST') {
     const body=await jsonBody(req); const username=textField(body.username,80).toLowerCase();
     if(typeof body.password!=='string'||body.password.length>128||!username) fail(400,'Completează utilizatorul și parola.');
@@ -210,7 +275,9 @@ async function dispatch(req: Request) {
     if(!user||user.mustChangePassword) return response({user},200,sessionHeaders);
     const cfg=await settings();
     const regional=user.role==='manager'&&!isGlobalManager(user)?await regionalOperationalSettings(user.id):undefined;
-    return response({user,products:(await readCatalog()).products,warehouses:await visibleWarehouses(user),orders:await listOrders(user),users:user.role==='manager'?await getUsers(user):[],settings:cfg,managerMailSettings:user.role==='manager'?await managerMailSettings(user.id):undefined,regionalSettings:regional?.settings,regionalSettingsMixed:regional?.mixed,weekKey:weekKey(),importWarnings:isGlobalManager(user)?seed.importWarnings:[]},200,sessionHeaders);
+    const common={user,warehouses:await visibleWarehouses(user),users:user.role==='manager'?await getUsers(user):[],settings:cfg,managerMailSettings:user.role==='manager'?await managerMailSettings(user.id):undefined,regionalSettings:regional?.settings,regionalSettingsMixed:regional?.mixed,weekKey:weekKey(),importWarnings:isGlobalManager(user)?seed.importWarnings:[]};
+    if(new URL(req.url).searchParams.get('compact')==='1')return response({...common,...await listOrdersPage(user,new URLSearchParams('kind=orders&range=7d&limit=40'))},200,sessionHeaders);
+    return response({...common,products:(await readCatalog()).products,orders:await listOrders(user)},200,sessionHeaders);
   }
   const user=await requireUser(req,path[0]==='auth'||(path[0]==='admin'&&path[1]==='templates'));
   const readUser=nationalReadScope(user);
@@ -221,6 +288,7 @@ async function dispatch(req: Request) {
   if(path.join('/')==='partner/planning'&&req.method==='GET')return response(await visitWeek(user,new URL(req.url).searchParams.get('week')||''));
   if(path.join('/')==='partner/planning'&&req.method==='PUT')return response(await saveDayPlan(user,await jsonBody(req)));
   if(path.join('/')==='partner/activity'&&req.method==='GET')return response(await partnerActivityOverview(readUser,new URL(req.url).searchParams,user));
+  if(path.join('/')==='partner/attention'&&req.method==='GET')return response(await duePartnerFollowUps(readUser,new URL(req.url).searchParams));
   if(path.join('/')==='partner/browse'&&req.method==='GET')return response(await browsePartners(readUser,new URL(req.url).searchParams,user));
   if(path.join('/')==='partner/map'&&req.method==='GET')return response(await mapPartners(readUser,new URL(req.url).searchParams,user));
   if(path.join('/')==='partner/summary'&&req.method==='GET')return response({partners:await portfolioSummary(readUser)});
@@ -262,6 +330,7 @@ async function dispatch(req: Request) {
     const month=new URL(req.url).searchParams.get('month');
     return response(await teamActivity(readUser,month));
   }
+  if(path.join('/')==='sales/clients/reconciliation'&&req.method==='GET')return clientSalesReconciliation(readUser,new URL(req.url).searchParams);
   if(path.join('/')==='sales/clients'&&req.method==='GET')return response(await clientSalesOverview(readUser,new URL(req.url).searchParams));
   if(path.join('/')==='sales'&&req.method==='GET')return salesView(req,readUser);
   if(path.join('/')==='client-sales/import/status'&&req.method==='GET')return historyImportStatus(req,user);
@@ -270,6 +339,7 @@ async function dispatch(req: Request) {
   if(path.join('/')==='sales/preview'&&req.method==='POST')return salesUpload(req,user,false);
   if(path.join('/')==='sales/import'&&req.method==='POST')return salesUpload(req,user,true);
   if(path.join('/')==='stock'&&req.method==='GET')return stockView(req,readUser);
+  if(path.join('/')==='catalog'&&req.method==='GET')return response({products:(await readCatalog()).products});
   if(path[0]==='inventory'&&path.length<=2)return inventories(req,user,path[1]);
   if(path.join('/')==='admin/stock/preview'&&req.method==='POST')return stockUpload(req,user,false);
   if(path.join('/')==='admin/stock/import'&&req.method==='POST')return stockUpload(req,user,true);
@@ -301,7 +371,11 @@ async function dispatch(req: Request) {
   }
   if(path[0]==='orders') {
     const id=path[1];
-    if(!id && req.method==='GET') return response({user,orders:await listOrders(user),weekKey:weekKey()});
+    if(!id && req.method==='GET') {
+      const params=new URL(req.url).searchParams;
+      if(params.get('page')==='1')return response({user,...await listOrdersPage(user,params),weekKey:weekKey()});
+      return response({user,orders:await listOrders(user),weekKey:weekKey()});
+    }
     if(!id && req.method==='POST') {
       const body=await jsonBody(req); const kind=body.kind as Kind;
       if(!['accessories','stands','sim','combined','stand_client'].includes(kind)) fail(400,'Tip de comandă invalid.');
@@ -331,7 +405,7 @@ async function dispatch(req: Request) {
         db().prepare("DELETE FROM serials WHERE order_id=? AND EXISTS (SELECT 1 FROM orders WHERE id=? AND status='deleted' AND revision=?)").bind(id,id,order.revision+1),
       ]);
       if(!result[0].meta.changes) fail(409,'Comanda s-a modificat. Actualizează lista înainte de ștergere.');
-      return response({ok:true});
+      return response({ok:true,deletedId:id,revision:order.revision+1});
     }
     if(id && !path[2] && req.method==='PUT') return saveOrder(req,id,user);
     if(path[2]==='finalize' && req.method==='POST') return finalize(id,user,req);

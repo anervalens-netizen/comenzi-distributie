@@ -43,7 +43,7 @@ export function StockMetadata({view,loading,error}:{view:StockView|null;loading:
   if(loading)return <p className="stock-editor-meta">Se actualizează stocurile…</p>;
   if(error)return <output className="stock-editor-meta">Stocuri indisponibile. Reîncearcă actualizarea paginii.</output>;
   const date=(value:string)=>new Date(value).toLocaleString('ro-RO',{timeZone:'Europe/Bucharest'});
-  return <p className="stock-editor-meta">Stoc agent: {view?.importedAt?date(view.importedAt):'neimportat'} · Depozit: {view?.depotImportedAt?date(view.depotImportedAt):'neimportat'}. Valorile sunt din ultimul import; — înseamnă informație absentă.</p>;
+  return <p className="stock-editor-meta">Stoc agent: {view?.importedAt?date(view.importedAt):'neimportat'} · Depozit: {view?.depotImportedAt?date(view.depotImportedAt):'neimportat'}. {view?.coverage?.mode==='partial'?'Gestiune: import parțial, produsele omise păstrează valorile și vechimea anterioare. ':''}{view?.depotCoverage?.mode==='partial'?'Depozit: import parțial; data afișată este ultimul snapshot complet, nu o confirmare de acoperire actuală. ':''}— înseamnă informație absentă.</p>;
 }
 
 export function StockQuantity({ row, depotQuantity, loading, error }: { row?: StockRow; depotQuantity?: number | null; loading?: boolean; error?: string }) {
@@ -81,7 +81,7 @@ function StockPanelContent({ warehouseId, title, showImportMeta }: { warehouseId
   }, [pageRows]);
   return <section className="panel stock-panel">
     <div className="panel-heading"><div><h2><Package size={19} /> {title}</h2></div><button className="icon-button" onClick={() => void refresh()} disabled={loading} aria-label="Actualizează stocul"><RefreshCw size={17} className={loading ? 'spin' : ''} /></button></div>
-    {showImportMeta && view?.importedAt && <p className="stock-meta">Importat la {new Date(view.importedAt).toLocaleString('ro-RO')} {view.filename && `· ${view.filename}`}</p>}
+    {view?.coverage?.mode==='partial'&&<p className="stock-meta">Import parțial: produsele omise nu au fost actualizate. Ultimul snapshot complet confirmat: {view.coverage.fullSnapshotAt?new Date(view.coverage.fullSnapshotAt).toLocaleString('ro-RO'):'necunoscut'}.</p>}{showImportMeta && view?.importedAt && <p className="stock-meta">Importat la {new Date(view.importedAt).toLocaleString('ro-RO')} {view.filename && `· ${view.filename}`}</p>}
     {error ? <p className="error-banner" role="alert">{error}</p> : loading ? <output className="portfolio-message">Se încarcă stocul…</output> : !view?.importedAt ? <p className="portfolio-message">Nu există un import de stoc pentru această gestiune.</p> : <>
       <div className="stock-summary"><div><small>Coduri distincte</small><b>{format(distinctCodes)}</b></div><div><small>Stoc total</small><b>{format(totalPieces)} <em>buc.</em></b></div><div><small>Categorii</small><b>{format(categories.length)}</b></div></div>
       <div className="stock-filters"><div className="search-box"><Search size={17} /><input aria-label="Caută în stoc" placeholder="Caută produs, cod sau categorie…" value={query} onChange={e => setQuery(e.target.value)} /></div><select aria-label="Filtrează după categorie" value={category} onChange={e => setCategory(e.target.value)}><option value="">Toate categoriile</option>{categories.map(c => <option key={c} value={c}>{c}</option>)}</select></div>

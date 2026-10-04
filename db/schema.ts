@@ -51,8 +51,8 @@ export const partnerProfiles = sqliteTable('partner_profiles', {
 export const partnerVisits = sqliteTable('partner_visits', {
   id: text('id').primaryKey(), customerId: text('customer_id').notNull().references(() => customers.id),
   agentId: text('agent_id').notNull().references(() => users.id), agentName: text('agent_name').notNull(),
-  visitedAt: text('visited_at').notNull(), notes: text('notes').notNull().default(''), createdAt: text('created_at').notNull(),
-}, t => [index('idx_partner_visits_customer_date').on(t.customerId,t.visitedAt,t.id), index('idx_partner_visits_agent_date').on(t.agentId,t.visitedAt)]);
+  visitedAt: text('visited_at').notNull(), notes: text('notes').notNull().default(''), nextStep: text('next_step').notNull().default(''), followUpDate: text('follow_up_date'), createdAt: text('created_at').notNull(),
+}, t => [index('idx_partner_visits_customer_date').on(t.customerId,t.visitedAt,t.id), index('idx_partner_visits_agent_date').on(t.agentId,t.visitedAt), index('idx_partner_visits_follow_up').on(t.followUpDate,t.agentId,t.customerId)]);
 
 export const partnerDayPlans = sqliteTable('partner_day_plans', {
  agentId: text('agent_id').notNull().references(() => users.id),

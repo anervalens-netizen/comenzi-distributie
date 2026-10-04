@@ -1,1 +1,1 @@
-export { env, runtimeKind } from '#mobiup-runtime';
+export { env, runtimeKind, operationalStatus } from '#mobiup-runtime';

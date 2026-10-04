@@ -6,8 +6,8 @@ const dir=mkdtempSync(join(tmpdir(),'sales-location-index-')),previousData=proce
 process.env.MOBIUP_DATA_DIR=dir;
 let sql,checks=0,lastMonthsQuery;
 const equal=(a,b,label)=>{assert.deepEqual(a,b,label);checks++;};
-const prepare=DatabaseSync.prototype.prepare;
-DatabaseSync.prototype.prepare=function(query){const statement=prepare.call(this,query);if(query.startsWith('SELECT month, imported_at')){const all=statement.all;statement.all=function(...args){lastMonthsQuery={query,args};return all.apply(this,args);};}return statement;};
+const prepare=Reflect.get(DatabaseSync.prototype,'prepare');
+DatabaseSync.prototype.prepare=function(query){const statement=prepare.call(this,query);if(query.startsWith('SELECT month, imported_at')){const all=Reflect.get(statement,'all');statement.all=function(...args){lastMonthsQuery={query,args};return all.apply(this,args);};}return statement;};
 try{
  const output=join(dir,'store.mjs');await build({entryPoints:['lib/sales-store.ts'],outfile:output,bundle:true,platform:'node',format:'esm',logLevel:'silent',plugins:[{name:'synthetic',setup(b){b.onResolve({filter:/resources\/seed\.json$/},()=>({path:'seed',namespace:'fixture'}));b.onLoad({filter:/.*/,namespace:'fixture'},()=>({contents:'{"products":[]}',loader:'json'}));}}]});
  const store=await import(pathToFileURL(output)),{salesLocationKey}=await import('../lib/sales-location.ts');store.salesRevision();

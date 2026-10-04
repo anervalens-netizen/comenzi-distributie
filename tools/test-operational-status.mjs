@@ -1,0 +1,40 @@
+import assert from 'node:assert/strict';
+import { DatabaseSync } from 'node:sqlite';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { operationalStatus } from '../lib/operational-status-node.ts';
+
+mkdirSync('work',{recursive:true});
+const directory=mkdtempSync(resolve('work/status-test-'));
+try {
+  assert.equal(operationalStatus(directory).history.state,'missing');
+  assert.equal(operationalStatus(directory).portfolio.state,'missing');
+  const database=resolve(directory,'mobiup.sqlite');
+  let db=new DatabaseSync(database);
+  db.exec('CREATE TABLE portfolio_revision(id,data_revision,scope_revision); INSERT INTO portfolio_revision VALUES(1,7,3); CREATE TABLE portfolio_dirty(id); CREATE TABLE portfolio_model_state(id,version)');
+  db.close();
+  assert.equal(operationalStatus(directory).portfolio.state,'uninitialized');
+  db=new DatabaseSync(database);
+  db.exec("INSERT INTO portfolio_model_state VALUES(1,1); INSERT INTO portfolio_dirty VALUES('synthetic-private-id')");
+  db.close();
+  mkdirSync(resolve(directory,'client-history'));
+  const history=resolve(directory,'client-history/client-sales-history.sqlite');
+  db=new DatabaseSync(history);
+  db.exec("CREATE TABLE history_imports(state,imported_at,period_start,period_end,filename); INSERT INTO history_imports VALUES('active','2026-01-03T12:00:00Z','2026-01-01','2026-01-02','synthetic-private-name.xlsx'); INSERT INTO history_imports VALUES('superseded','2026-02-01T00:00:00Z','2026-02-01','2026-02-28','ignored.xlsx')");
+  db.close();
+  const before=[database,history].map(path=>readFileSync(path));
+  const status=operationalStatus(directory);
+  assert.deepEqual(status.history,{state:'available',activeImports:1,lastImportedAt:'2026-01-03T12:00:00Z',from:'2026-01-01',through:'2026-01-02'});
+  assert.deepEqual(status.portfolio,{state:'stale',dataRevision:7,scopeRevision:3,pendingRows:1});
+  assert.equal(status.backup.state,'external');
+  assert.doesNotMatch(JSON.stringify(status),/synthetic-private|xlsx|sqlite|status-test/);
+  assert.deepEqual([database,history].map(path=>readFileSync(path)),before,'Status must not mutate persisted data');
+  db=new DatabaseSync(database);db.exec('DELETE FROM portfolio_dirty');db.close();
+  assert.equal(operationalStatus(directory).portfolio.state,'current');
+  db=new DatabaseSync(history);db.exec("UPDATE history_imports SET imported_at='private text',period_start='private text',period_end='private text'");db.close();
+  assert.equal(operationalStatus(directory).history.lastImportedAt,null);
+  assert.equal(operationalStatus(directory).history.through,null);
+  writeFileSync(history,'invalid synthetic database');
+  assert.deepEqual(operationalStatus(directory).history,{state:'error',errorCode:'READ_FAILED'});
+  console.log('PASS: read-only aggregate metadata, missing/stale/current/error states and no raw paths or filenames.');
+} finally {rmSync(directory,{recursive:true,force:true});}

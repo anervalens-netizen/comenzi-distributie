@@ -2,6 +2,7 @@ declare module '*.sql?raw' { const sql: string; export default sql; }
 declare module '#mobiup-runtime' {
   export const env: { DB: D1Database; FILES: R2Bucket };
   export const runtimeKind: 'node' | 'cloudflare';
+  export const operationalStatus: typeof import('./operational-status-node').operationalStatus | (() => {state: 'unsupported'});
 }
 declare module '#mobiup-sales-parser' {
   export function parseSalesFileRuntime(bytes:Uint8Array,filename:string):Promise<import('./sales-types').SalesRow[]>;

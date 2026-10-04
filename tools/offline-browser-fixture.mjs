@@ -14,8 +14,9 @@ export async function browserFixture(origin){
  const tabs=[];
  const close=async()=>{
   for(const tab of tabs)await tab.close();
-  try{process.kill(-child.pid,'SIGTERM');}catch{}
-  await delay(150);try{process.kill(-child.pid,'SIGKILL');}catch{}
+  const childPid=child.pid;
+  if(typeof childPid==='number'&&Number.isInteger(childPid)&&childPid>0){try{process.kill(-childPid,'SIGTERM');}catch{}}
+  await delay(150);if(typeof childPid==='number'&&Number.isInteger(childPid)&&childPid>0){try{process.kill(-childPid,'SIGKILL');}catch{}}
   rmSync(profile,{recursive:true,force:true,maxRetries:20,retryDelay:100});
  };
  try{

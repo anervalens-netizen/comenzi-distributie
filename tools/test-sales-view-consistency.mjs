@@ -16,7 +16,7 @@ async function request(path,{method='GET',cookie,body,headers={}}={}){
   const started=performance.now(),response=await fetch(`${origin}/api/${path}`,{method,headers:{...(cookie?{Cookie:cookie}:{}),...headers},...(body!==undefined?{body}: {})});
   const data=await response.json();return {status:response.status,data,ms:performance.now()-started,cookie:response.headers.get('set-cookie')?.split(';')[0]};
 }
-async function waitHealth(){for(let i=0;i<80;i++){try{if((await fetch(`${origin}/api/health`)).ok)return;}catch{}await sleep(100);}throw new Error(`Server did not become healthy: ${stderr}`);}
+async function waitHealth(){for(let i=0;i<80;i++){try{if((await fetch(`${origin}/api/bootstrap`)).ok)return;}catch{}await sleep(100);}throw new Error(`Server did not become healthy: ${stderr}`);}
 const columns=['Data','SiteCode','ItemCode','ItemName','Cantitate','Brand','Pret','Valoare','Locatie','Firma','ASM','Regional','Nr','Categorie','SubCategorie','Agent'];
 const smallFile=attempt=>{const book=XLSX.utils.book_new();XLSX.utils.book_append_sheet(book,XLSX.utils.aoa_to_sheet([columns,['2026-09-01','AUDIT0','P1','Produs A',1,'Brand',10,10,'TR QA','QA','','',`A${attempt}`,'Accesorii','','QA'],['2026-09-02','AUDIT0','P2','Produs B',1,'Brand',20+attempt,20+attempt,'TR QA','QA','','',`B${attempt}`,'Accesorii','','QA']]),'Sales');return XLSX.write(book,{type:'buffer',bookType:'xlsx'});};
 let salesDb;
