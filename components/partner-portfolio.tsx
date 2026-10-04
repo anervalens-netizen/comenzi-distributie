@@ -791,7 +791,7 @@ export function PartnerSheet({
             </fieldset>
           </form>
           </details>
-          <details className="partner-visits" open={!manager}>
+          <details className="partner-visits">
             <summary>Înregistrează activitatea · Vizite {detail ? `(${detail.visitCount})` : ''}</summary>
             {!manager&&<><label>
               Rezultat / notă vizită <span className="optional">opțional</span>
