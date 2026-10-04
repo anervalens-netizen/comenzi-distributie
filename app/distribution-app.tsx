@@ -163,6 +163,7 @@ export default function DistributionApp() {
     return()=>window.removeEventListener(SESSION_EXPIRED_EVENT,expired);
   },[activeOrder]);
   const online=useSyncExternalStore(useCallback((notify:()=>void)=>{window.addEventListener('online',notify);window.addEventListener('offline',notify);return()=>{window.removeEventListener('online',notify);window.removeEventListener('offline',notify);};},[]),()=>navigator.onLine,()=>true);
+  useEffect(()=>{if(online&&activeOrder?.status==='draft'&&!data.products)queueMicrotask(()=>void ensureCatalog().catch(()=>{}));},[online,activeOrder?.status,data.products,ensureCatalog]);
   useEffect(()=>{
     if(!data.user||data.user.mustChangePassword||activeOrder||!['orders','sim'].includes(tab))return;
     const refreshVisible=()=>{if(navigator.onLine&&document.visibilityState==='visible'){setHistoryAnchor(Date.now());void refreshOrders();}};
@@ -219,13 +220,13 @@ export default function DistributionApp() {
   }
   async function login(e:React.SyntheticEvent<HTMLFormElement>){e.preventDefault();setBusy(true);setError('');try{await api('auth/login','POST',Object.fromEntries(new FormData(e.currentTarget)));const fresh=await loadBootstrap();if(reauthOpen&&activeOrder&&fresh?.user){const r=await api<{order:Order}>(`orders/${activeOrder.id}`);showOrder(r.order,fresh.user);setEditorEpoch(value=>value+1);setReauthOpen(false);setError('');}}catch(err){setError(errorMessage(err));}finally{setBusy(false);}}
   async function logout(){bootstrapEpoch.current++;openIntent.current++;listIntent.current++;try{await api('auth/logout','POST',{});offlineSources.current={};setActiveOrder(null);setOrderRecovery(null);setRequestInbox({count:0,items:[]});setOfflineNotices({});setPendingCount(0);setBlockedOrderIds([]);setOrderPaging(emptyPaging);sessionUserId.current='';setSessionState('unauthenticated');setData({user:null});setTab('orders');window.dispatchEvent(new CustomEvent('mobiup-pwa-role',{detail:{role:null}}));}catch(e){toast.error(errorMessage(e));}}
-  async function openOrder(o:Order){const intent=++openIntent.current,owner=sessionUserId.current;const current=()=>intent===openIntent.current&&owner===sessionUserId.current;try{if(o.number==='Ciornă locală'){await ensureCatalog();if(current())showOrder(o);return;}const r=await api<{order:Order}>(`orders/${o.id}`);const work=await readWork<{base:Order;local:Order}>(owner,'order',o.id);if(!current())return;if(r.order.status!=='draft'&&work){setOrderRecovery({remote:r.order,local:work.local});return;}if(r.order.status==='draft')await ensureCatalog();if(current())showOrder(r.order);}catch(e){if(!current())return;if(e instanceof ApiError&&e.status===404){const work=await readWork<{base:Order;local:Order}>(owner,'order',o.id);if(current()&&work){setOrderRecovery({remote:null,local:work.local});return;}}if(current())toast.error(errorMessage(e));}}
+  const allowDraftWithoutCatalog=useCallback(async()=>{try{return await ensureCatalog();}catch(error){if(error instanceof ApiError&&error.status<500)throw error;return [] as Product[];}},[ensureCatalog]);
+  async function openOrder(o:Order){const intent=++openIntent.current,owner=sessionUserId.current;const current=()=>intent===openIntent.current&&owner===sessionUserId.current;try{if(o.number==='Ciornă locală'){await allowDraftWithoutCatalog();if(current())showOrder(o);return;}const r=await api<{order:Order}>(`orders/${o.id}`);const work=await readWork<{base:Order;local:Order}>(owner,'order',o.id);if(!current())return;if(r.order.status!=='draft'&&work){setOrderRecovery({remote:r.order,local:work.local});return;}if(r.order.status==='draft')await allowDraftWithoutCatalog();if(current())showOrder(r.order);}catch(e){if(!current())return;if(e instanceof ApiError&&e.status===404){const work=await readWork<{base:Order;local:Order}>(owner,'order',o.id);if(current()&&work){setOrderRecovery({remote:null,local:work.local});return;}}if(current())toast.error(errorMessage(e));}}
   async function openBlockedOrder(id:string){const owner=sessionUserId.current;const work=await readWork<{local:Order}>(owner,'order',id);if(owner!==sessionUserId.current)return;if(work)await openOrder({...work.local,number:work.local.number==='Ciornă locală'?'Ciornă de verificat':work.local.number});}
   async function create(kind:Kind,source?:Order){
     if(creating.current||!writes.createOrder(user?.role==='agent'?user.id:source?.userId||agentId))return;
-    openIntent.current++;creating.current=true;setBusy(true);try{
+    openIntent.current++;creating.current=true;setBusy(true);createId.current??=crypto.randomUUID();try{
       await ensureCatalog();
-      createId.current??=crypto.randomUUID();
       const r=await api<{order:Order}>('orders','POST',{id:createId.current,kind,agentId:source?.userId||agentId,sourceOrderId:source?.id});
       createId.current=null;saved(r.order);setActiveOrder(r.order);setAutoDownload(false);setNewKind(null);window.scrollTo(0,0);
     }catch(err){
