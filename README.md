@@ -79,9 +79,9 @@ Runtime-ul Node construiește un model derivat, regenerabil pentru portofoliu, c
 
 ## Customer sales imports
 
-Settings → Imports includes a manager-only cumulative monthly customer-sales XLSX upload. Preview shows the inferred or declared month, totals and changed rows; applying replaces that month atomically and preserves all other months. Repeating the same active source is idempotent. Shorter coverage or removed/changed rows require explicit confirmation. Mixed-month reports are rejected. Original files, source rows and recovery copies remain in the private data directory.
+Settings → Imports includes a manager-only cumulative monthly customer-sales XLSX upload. Preview shows the inferred or declared month, totals and changed rows; applying replaces that month atomically and preserves all other months. Repeating the same active source is idempotent. Shorter coverage or removed/changed rows require explicit confirmation. Mixed-month reports are rejected. Original files and superseded source generations remain in the private data directory. Daily uploads use transaction rollback and append/supersede; scheduled verified backups provide disaster recovery without cloning the entire history database per upload.
 
-Processing and derived activity rebuilds run in an isolated, persisted background job; returning to Settings restores progress. The standalone host needs Python 3 (including SQLite and zoneinfo) and util-linux flock. The build packages both Python importer files and the worker. Cloudflare returns an explicit unavailable response for this host-only operation.
+The derived snapshot refreshes only the replaced month and recomputes activity from its daily aggregates. It falls back to a full rebuild when historical import generations, catalog membership, prior identity allocations or snapshot compatibility change. Processing and derived activity refreshes run in an isolated, persisted background job; returning to Settings restores progress. The standalone host needs Python 3 (including SQLite and zoneinfo) and util-linux flock. The build packages both Python importer files and the worker. Cloudflare returns an explicit unavailable response for this host-only operation.
 
 ## Portfolio geography and route filters
 

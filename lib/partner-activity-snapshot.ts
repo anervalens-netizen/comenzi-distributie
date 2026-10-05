@@ -14,6 +14,10 @@ import {salesYield} from './client-sales-cooperative';
 import {buildDetailLinks} from './partner-detail-snapshot';
 export const activityVersion='8';
 export const bucharestToday=(now=new Date())=>new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Bucharest',year:'numeric',month:'2-digit',day:'2-digit'}).format(now);
+export function activitySourceImports(c:DatabaseSync){
+  const hasImportedAt=c.prepare('PRAGMA table_info(history_imports)').all().some(row=>row.name==='imported_at');
+  return c.prepare(`SELECT id,sha256,period_start,period_end,row_count,${hasImportedAt?'imported_at':'NULL'} imported_at FROM history_imports WHERE state='active' ORDER BY period_start,id`).all();
+}
 function completeHistoryStamp(c:DatabaseSync,reference:string,referenceDigest:string){
   const imports=c.prepare("SELECT id,sha256,period_start,period_end,row_count FROM history_imports WHERE state='active' ORDER BY period_start,id").all() as {id:number;sha256:string;period_start:string;period_end:string;row_count:number}[];
   let through='',complete=true;
@@ -146,7 +150,7 @@ export function buildActivitySnapshot(directory:string,today=bucharestToday(),ou
     buildDetailLinks(c,out,stamp.reference,companyIndex);
     buildRevenueReconciliation(c,out,stamp.reference,companyIndex);
     if(!sourceGeneration||sourceGeneration!==historyFileGeneration(history))throw new Error('History source changed during snapshot build');
-    const metadata={...stamp,sourceGeneration,version:activityVersion,builtAt:new Date().toISOString(),asOf,recentStart,previousStart,rows:count,companies:companyIndex.known.size,unresolvedCompanyIdentities:companyIndex.unresolved.length,coverage};
+    const metadata={...stamp,sourceImports:activitySourceImports(c),catalogPartners:partners,sourceGeneration,version:activityVersion,builtAt:new Date().toISOString(),asOf,recentStart,previousStart,rows:count,companies:companyIndex.known.size,unresolvedCompanyIdentities:companyIndex.unresolved.length,coverage};
     out.prepare("INSERT INTO meta VALUES('snapshot',?)").run(JSON.stringify(metadata));out.exec('COMMIT');
     if(out.prepare('PRAGMA quick_check').get()?.quick_check!=='ok')throw new Error('Snapshot integrity failed');
     out.close();out=undefined;output.check();
