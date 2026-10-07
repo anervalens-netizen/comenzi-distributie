@@ -35,7 +35,10 @@ export function checkRepository(args=process.argv.slice(2)){
   if(!/^[A-Za-z0-9_./-]+$/.test(ref)||ref.startsWith('-'))throw new Error('Invalid Git reference.');
   const roots=git(['rev-list','--max-parents=0',ref],{encoding:'utf8'}).trim().split('\n').filter(Boolean);
   if(roots.length!==1||git(['log','-1','--format=%s',roots[0]],{encoding:'utf8'}).trim()!=='Publish sanitized public source baseline')issues.push({path:'<history>',kind:'legacy-history',line:1});
-  const metadata=git(['log','--format=%ae%n%ce',ref],{encoding:'utf8'}).trim().split('\n');
+  // Author privacy applies to commits being published. Existing remote merge
+  // metadata is immutable history; still inspect every reachable file below.
+  // With no remote refs this remains a strict whole-history author check.
+  const metadata=git(['log','--format=%ae%n%ce',ref,'--not','--remotes=origin'],{encoding:'utf8'}).trim().split('\n').filter(Boolean);
   if(metadata.some(email=>!email.endsWith('@users.noreply.github.com')))issues.push({path:'<history>',kind:'non-noreply-author',line:1});
   const objects=git(['rev-list','--objects',ref],{encoding:'utf8'}).trim().split('\n').filter(Boolean);
   const seen=new Set();
