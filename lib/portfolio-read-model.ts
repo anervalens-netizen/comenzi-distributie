@@ -104,6 +104,7 @@ export async function pagedBrowse(user:User,params:URLSearchParams,warehouseIds:
  const selection=selectedIds===undefined?null:sha256(JSON.stringify([...new Set(selectedIds)].sort()));
  const clock=usesClock(params)?cutoff??paginationClock(params):0;
  const revision=paginationRevision(params,[version,scopeKey(user,warehouseIds),configuredRevision,selection,sourceRevision],clock);
+ const requestedParams = params;
  // Carry the first read's cutoff through every query, including retries.
  params=new URLSearchParams(params);params.set('revision',revision);
  const key=JSON.stringify([scopeKey(user,warehouseIds),params.toString(),offset,limit,selection]);
@@ -119,7 +120,7 @@ export async function pagedBrowse(user:User,params:URLSearchParams,warehouseIds:
  const result:Browse={revision,facetVersion:2,partners:page.results.map(r=>JSON.parse(r.summary)),total:totals!.total,located:totals!.located,geocoded:totals!.geocoded||0,nextOffset:offset+limit<totals!.total?offset+limit:null,bounds:totals!.west===null?null:[totals!.west,totals!.south!,totals!.east!,totals!.north!],facets,styleUrl,observedAt:new Date().toISOString()};
  if(version!==await portfolioVersion()){
   if(attempt>=2)fail(503,'Portofoliul se modifică. Reîncearcă.');
-  return pagedBrowse(user,params,warehouseIds,offset,limit,selectedIds,attempt+1,sourceRevision);
+  return pagedBrowse(user,requestedParams,warehouseIds,offset,limit,selectedIds,attempt+1,sourceRevision,clock);
  }
  if(!usesClock(params))cache.put(key,version+configuredRevision,result,30000);
  return result;

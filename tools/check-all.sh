@@ -43,6 +43,7 @@ node tools/test-stock-cloudflare.mjs
 npm run build:server
 node tools/test-client-sales-remediation.mjs
 node tools/test-pagination-revision.mjs
+node tools/test-review-findings.mjs
 node tools/test-company-resolved-evidence.mjs
 node tools/test-source-guards.mjs
 node tools/test-partner-detail-remediation.mjs

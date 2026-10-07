@@ -111,3 +111,9 @@ See [the LAB harness guide](tools/performance/README.md) for repeatable report,
 bootstrap/search and inventory measurements. Artifacts are written only under
 ignored `work/performance/`. The report cache keeps bounded compact chunks within
 its existing budget; clients still receive independently mutable full results.
+
+Health probes bypass process HTTP proxies. When a service uses EnvironmentFiles,
+activation requires an explicit effective MOBIUP_HEALTH_URL or both
+MOBIUP_HEALTH_HOST and MOBIUP_HEALTH_PORT; it does not guess values hidden by
+systemctl's Environment property. Missing endpoint evidence fails before the
+active release changes.

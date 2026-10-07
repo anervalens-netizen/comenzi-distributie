@@ -16,6 +16,7 @@ log="$root/systemctl.log"; curl_log="$root/curl.log"; mode="$root/health-mode"; 
 cat > "$root/systemctl" <<'EOF'
 #!/usr/bin/env bash
 if [[ "$1" == show ]]; then
+  if [[ "$*" == *EnvironmentFiles* ]]; then printf '%s\n' "${MOBIUP_TEST_ENV_FILES:-}"; exit 0; fi
   printf '%s\n' "$MOBIUP_TEST_SERVICE_ENV"
   exit 0
 fi
@@ -24,6 +25,7 @@ exit 0
 EOF
 cat > "$root/curl" <<'EOF'
 #!/usr/bin/env bash
+[[ "$1" == --noproxy && "$2" == "*" ]] || exit 90
 mode="$(cat "$MOBIUP_TEST_HEALTH_MODE")"
 current="$(readlink -f "$MOBIUP_CURRENT_LINK")"
 printf '%s\n' "${@: -1}" >> "$MOBIUP_TEST_CURL_LOG"
@@ -69,4 +71,13 @@ unset MOBIUP_READY_URL
 "$script" "$releases/$new" >/dev/null
 check "$(grep -c '^http://health.example.invalid:39999/api/health$' "$curl_log")" "1" 'explicit health override is preserved'
 check "$(grep -c '^http://health.example.invalid:39999/api/bootstrap$' "$curl_log")" "1" 'readiness defaults from explicit health override'
+unset MOBIUP_HEALTH_URL
+export MOBIUP_TEST_ENV_FILES='/synthetic/service.env (ignore_errors=no)'
+before="$(readlink -f "$runtime/current")"
+set +e; "$script" "$old" >/dev/null 2>&1; rc=$?; set -e
+check "$rc" "2" 'EnvironmentFiles requires explicit effective endpoint before activation'
+check "$(readlink -f "$runtime/current")" "$before" 'unknown effective endpoint never switches release'
+export MOBIUP_HEALTH_HOST='10.44.0.10' MOBIUP_HEALTH_PORT='39223'
+"$script" "$new" >/dev/null
+check "$(tail -1 "$curl_log")" 'http://10.44.0.10:39223/api/bootstrap' 'explicit effective endpoint supports EnvironmentFiles'
 printf 'PASS: %s activation/rollback checks.\n' "$checks"
