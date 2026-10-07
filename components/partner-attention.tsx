@@ -10,7 +10,7 @@ import {positionNeedsConfirmation} from '@/lib/partner-position';
 import {OFFLINE_EVENT,pendingOperations,type PendingOperation} from '@/lib/offline-work';
 
 type Reconciliation={state:'ready';total:number;window:{imported:boolean};exceptions:{key:string;reason:string}[]};
-type FollowUpPage={followUps:PartnerFollowUp[];nextOffset?:number|null};
+type FollowUpPage={followUps:PartnerFollowUp[];nextCursor?:string|null};
 type AttentionItem={key:string;title:string;reason:string;action:string;run:()=>void};
 
 const day=(value:string|null|undefined)=>value?value.split('-').reverse().join('.'):'indisponibilă';
@@ -18,26 +18,26 @@ const moment=(value:string|null|undefined)=>value?new Date(value).toLocaleString
 
 export function PartnerAttention({userId,manager,scopeQuery,partners,onOpen,onPlanning,onSales}:{userId:string;manager:boolean;scopeQuery:string;partners:PartnerSummary[];onOpen:(id:string)=>void;onPlanning:()=>void;onSales:()=>void}){
   const [local,setLocal]=useState<PendingOperation[]>([]),[followUps,setFollowUps]=useState<PartnerFollowUp[]>([]),[sales,setSales]=useState<ClientSalesResult|null>(null),[reconciliation,setReconciliation]=useState<Reconciliation|null>(null),[error,setError]=useState('');
-  const [expanded,setExpanded]=useState(false),[nextOffset,setNextOffset]=useState<number|null>(null),[loadingMore,setLoadingMore]=useState(false);
+  const [expanded,setExpanded]=useState(false),[nextCursor,setNextCursor]=useState<string|null>(null),[loadingMore,setLoadingMore]=useState(false);
   const followController=useRef<AbortController|null>(null);
   useEffect(()=>{let alive=true;const refresh=()=>void pendingOperations(userId).then(rows=>{if(alive)setLocal(rows.filter(row=>row.path.startsWith('partner/')));}).catch(e=>{if(alive)setError(errorMessage(e));});refresh();window.addEventListener(OFFLINE_EVENT,refresh);return()=>{alive=false;window.removeEventListener(OFFLINE_EVENT,refresh);};},[userId]);
   useEffect(()=>{let alive=true;const controller=new AbortController(),month=bucharestReportingMonthKey(new Date()),params=new URLSearchParams(scopeQuery);params.set('month',month);params.set('page','0');
     followController.current=controller;
-    const reads:Promise<void>[]=[api<FollowUpPage>('partner/attention?'+new URLSearchParams(scopeQuery),'GET',undefined,controller.signal).then(value=>{if(alive){setFollowUps(Array.isArray(value.followUps)?value.followUps:[]);setNextOffset(value.nextOffset??null);}}),api<ClientSalesResult>('sales/clients?'+params,'GET',undefined,controller.signal,{preferCache:true,maxAgeMs:30000}).then(value=>{if(alive)setSales(value);})];
+    const reads:Promise<void>[]=[api<FollowUpPage>('partner/attention?'+new URLSearchParams(scopeQuery),'GET',undefined,controller.signal).then(value=>{if(alive){setFollowUps(Array.isArray(value.followUps)?value.followUps:[]);setNextCursor(value.nextCursor??null);}}),api<ClientSalesResult>('sales/clients?'+params,'GET',undefined,controller.signal,{preferCache:true,maxAgeMs:30000}).then(value=>{if(alive)setSales(value);})];
     if(manager)reads.push(api<Reconciliation>('sales/clients/reconciliation?'+new URLSearchParams({month,page:'0'}),'GET',undefined,controller.signal,{preferCache:true,maxAgeMs:30000}).then(value=>{if(alive)setReconciliation(value);}));
     void Promise.allSettled(reads).then(results=>{if(alive){const failed=results.find(result=>result.status==='rejected') as PromiseRejectedResult|undefined;setError(failed?errorMessage(failed.reason):'');}});return()=>{alive=false;controller.abort();};
   },[manager,scopeQuery]);
   const moreFollowUps=async()=>{
     if(!expanded){setExpanded(true);return;}
     const controller=followController.current;
-    if(nextOffset===null||loadingMore||!controller||controller.signal.aborted)return;
+    if(nextCursor===null||loadingMore||!controller||controller.signal.aborted)return;
     setLoadingMore(true);
     try {
-      const params=new URLSearchParams(scopeQuery);params.set('offset',String(nextOffset));
+      const params=new URLSearchParams(scopeQuery);params.set('cursor',nextCursor);
       const page=await api<FollowUpPage>('partner/attention?'+params,'GET',undefined,controller.signal);
       if(controller.signal.aborted)return;
       setFollowUps(rows=>[...new Map([...rows,...page.followUps].map(row=>[row.visitId,row])).values()]);
-      setNextOffset(page.nextOffset??null);
+      setNextCursor(page.nextCursor??null);
     } catch(e){if(!controller.signal.aborted)setError(errorMessage(e));}
     finally {if(!controller.signal.aborted)setLoadingMore(false);}
   };
@@ -56,5 +56,5 @@ export function PartnerAttention({userId,manager,scopeQuery,partners,onOpen,onPl
     return [...unique.values()];
   },[expanded,followUps,local,manager,onOpen,onPlanning,onSales,partners,ready,reconciliation]);
   if(!items.length&&!error&&!ready)return null;
-  return <section className="partner-attention" aria-label="Necesită atenție"><header><span><AlertTriangle size={18}/><strong>Necesită atenție</strong></span><small>Acțiuni, nu clasament</small></header>{error&&<p className="muted">Unele semnale nu au putut fi actualizate: {error}</p>}<div>{items.map(item=><article key={item.key}><span><strong>{item.title}</strong><small>{item.reason}</small></span><button type="button" className="quiet" onClick={item.run}>{item.action}</button></article>)}</div>{((!expanded&&followUps.length>3)||nextOffset!==null)&&<button type="button" className="quiet" disabled={loadingMore} onClick={()=>void moreFollowUps()}>{loadingMore?'Se încarcă…':expanded?'Încarcă următoarele reveniri':'Vezi toate revenirile scadente'}</button>}{ready&&<footer>Încărcare sursă: {moment(ready.source.updatedAt)} · acoperire efectivă: {day(ready.source.effectiveCutoff)}. „Fără vizite” înseamnă doar lipsă de înregistrări.</footer>}</section>;
+  return <section className="partner-attention" aria-label="Necesită atenție"><header><span><AlertTriangle size={18}/><strong>Necesită atenție</strong></span><small>Acțiuni, nu clasament</small></header>{error&&<p className="muted">Unele semnale nu au putut fi actualizate: {error}</p>}<div>{items.map(item=><article key={item.key}><span><strong>{item.title}</strong><small>{item.reason}</small></span><button type="button" className="quiet" onClick={item.run}>{item.action}</button></article>)}</div>{((!expanded&&followUps.length>3)||nextCursor!==null)&&<button type="button" className="quiet" disabled={loadingMore} onClick={()=>void moreFollowUps()}>{loadingMore?'Se încarcă…':expanded?'Încarcă următoarele reveniri':'Vezi toate revenirile scadente'}</button>}{ready&&<footer>Încărcare sursă: {moment(ready.source.updatedAt)} · acoperire efectivă: {day(ready.source.effectiveCutoff)}. „Fără vizite” înseamnă doar lipsă de înregistrări.</footer>}</section>;
 }
