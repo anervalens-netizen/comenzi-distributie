@@ -17,7 +17,7 @@ const serverStub={name:'isolated-request-context',setup(b){b.onResolve({filter:/
  export const jsonBody=request=>request.json();
  export async function readLimited(request,max){const bytes=Buffer.from(await request.arrayBuffer());if(bytes.length>max)fail(413,'Too large');return bytes;}
  `}));}};
-const activityStub={name:'isolated-rebuild-boundary',setup(b){b.onResolve({filter:/^\.\/partner-activity-snapshot$/},()=>({path:'rebuild',namespace:'test'}));b.onLoad({filter:/.*/,namespace:'test'},()=>({contents:`
+const activityStub={name:'isolated-rebuild-boundary',setup(b){b.onResolve({filter:/^\.\/partner-activity-incremental$/},()=>({path:'incremental',namespace:'test'}));b.onResolve({filter:/^\.\/partner-activity-snapshot$/},()=>({path:'rebuild',namespace:'test'}));b.onLoad({filter:/.*/,namespace:'test'},args=>args.path==='incremental'?{contents:'export const refreshActivitySnapshotMonth=()=>null;'}:({contents:`
  import {readdirSync,readFileSync,existsSync,writeFileSync} from 'node:fs';import {join} from 'node:path';
  export function buildActivitySnapshot(root){
   const base=join(root,'client-history','import-jobs');

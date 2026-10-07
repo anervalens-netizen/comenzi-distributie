@@ -8,9 +8,14 @@ SYSTEMCTL="${MOBIUP_SYSTEMCTL:-systemctl}"
 CURL="${MOBIUP_CURL:-curl}"
 
 service_endpoint() {
-  local env_line token host="${MOBIUP_HEALTH_HOST:-}" port="${MOBIUP_HEALTH_PORT:-}"
+  local env_line env_files token host="${MOBIUP_HEALTH_HOST:-}" port="${MOBIUP_HEALTH_PORT:-}"
   if [[ -z "$host" || -z "$port" ]]; then
-    env_line="$("$SYSTEMCTL" show "$SERVICE" -p Environment --value 2>/dev/null || true)"
+    env_files="$("$SYSTEMCTL" show "$SERVICE" -p EnvironmentFiles --value 2>/dev/null)" || return 2
+    if [[ -n "$env_files" ]]; then
+      echo "activate-release: EnvironmentFiles configured; set MOBIUP_HEALTH_URL or both MOBIUP_HEALTH_HOST and MOBIUP_HEALTH_PORT to the effective bind endpoint" >&2
+      return 2
+    fi
+    env_line="$("$SYSTEMCTL" show "$SERVICE" -p Environment --value 2>/dev/null)" || return 2
     for token in $env_line; do
       case "$token" in
         HOST=*) [[ -n "$host" ]] || host="${token#HOST=}" ;;
@@ -24,7 +29,11 @@ service_endpoint() {
   printf 'http://%s:%s' "$host" "$port"
 }
 
-DEFAULT_ENDPOINT="$(service_endpoint)"
+if [[ -n "${MOBIUP_HEALTH_URL:-}" ]]; then
+  DEFAULT_ENDPOINT="${MOBIUP_HEALTH_URL%/api/health}"
+else
+  DEFAULT_ENDPOINT="$(service_endpoint)" || exit 2
+fi
 HEALTH_URL="${MOBIUP_HEALTH_URL:-$DEFAULT_ENDPOINT/api/health}"
 # Preserve the existing override contract: a custom health endpoint also defines
 # the default readiness endpoint unless readiness is overridden explicitly.
@@ -75,7 +84,7 @@ switch_link() {
 healthy() {
   local attempt
   for ((attempt=1; attempt<=HEALTH_ATTEMPTS; attempt++)); do
-    if "$CURL" -fsS --max-time 2 "$HEALTH_URL" >/dev/null && "$CURL" -fsS --max-time 2 "$READY_URL" >/dev/null; then return 0; fi
+    if "$CURL" --noproxy "*" -fsS --max-time 2 "$HEALTH_URL" >/dev/null && "$CURL" --noproxy "*" -fsS --max-time 2 "$READY_URL" >/dev/null; then return 0; fi
     [[ "$attempt" -lt "$HEALTH_ATTEMPTS" ]] && sleep "$HEALTH_DELAY"
   done
   return 1

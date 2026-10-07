@@ -24,7 +24,7 @@
     "pretypecheck": "node tools/prepare-public-data.mjs",
     "precheck": "node tools/prepare-public-data.mjs && npm run check:privacy",
     "build:private": "node tools/build-private.mjs",
-    "check:privacy": "node .github/test-public-data.mjs && node .github/check-public-data.mjs",
+    "check:privacy": "node .github/test-public-data.mjs && node .github/test-public-history.mjs && node .github/check-public-data.mjs",
     "prepare": "node .github/install-hooks.mjs",
     "test:client-sales": "node tools/test-client-sales.mjs",
     "test:client-sales:browser": "node tools/test-client-sales-browser.mjs",

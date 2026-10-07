@@ -303,8 +303,17 @@ export async function duePartnerFollowUps(user:User,params=new URLSearchParams()
   const selection=await managerFilter(user,params),selectedAgents=selection?` AND v.agent_id IN (SELECT value FROM json_each(?))`:'';
   const agentScope=user.role==='agent'?'v.agent_id=?':isGlobalManager(user)?'1=1':'EXISTS(SELECT 1 FROM manager_agents ma JOIN users a ON a.id=ma.agent_id AND a.active=1 WHERE ma.manager_id=? AND ma.agent_id=v.agent_id)';
   const agentArgs=user.role==='agent'||!isGlobalManager(user)?[user.id]:[];
-  const rows=await db().prepare(`SELECT v.id visitId,v.customer_id customerId,json_extract(c.data,'$.name') customerName,v.agent_id agentId,v.agent_name agentName,v.follow_up_date followUpDate,v.next_step nextStep FROM partner_visits v JOIN customers c ON c.id=v.customer_id WHERE v.follow_up_date IS NOT NULL AND v.follow_up_date<=? AND c.active=1 AND ${s.sql} AND ${agentScope}${selectedAgents} AND NOT EXISTS(SELECT 1 FROM partner_visits newer WHERE newer.customer_id=v.customer_id AND newer.agent_id=v.agent_id AND (newer.visited_at>v.visited_at OR (newer.visited_at=v.visited_at AND newer.id>v.id))) ORDER BY v.follow_up_date,v.customer_id,v.agent_id LIMIT 20`).bind(today,...s.args,...agentArgs,...selection?[JSON.stringify(selection.agentIds)]:[]).all<PartnerFollowUp>();
-  return {today,followUps:rows.results};
+  let cursor:string[]|null=null;
+  if(params.has('cursor')){
+    try{cursor=JSON.parse(params.get('cursor')!);}catch{fail(400,'Invalid follow-up cursor');}
+    if(!Array.isArray(cursor)||cursor.length!==3||cursor.some(value=>typeof value!=='string'||!value.length||value.length>256))fail(400,'Invalid follow-up cursor');
+  }
+  // Seek after immutable ordering values, not a shifting row count. A newer
+  // visit can retire an earlier item between requests without skipping a row.
+  const after=cursor?' AND (v.follow_up_date,v.customer_id,v.agent_id)>(?,?,?)':'';
+  const rows=await db().prepare(`SELECT v.id visitId,v.customer_id customerId,json_extract(c.data,'$.name') customerName,v.agent_id agentId,v.agent_name agentName,v.follow_up_date followUpDate,v.next_step nextStep FROM partner_visits v JOIN customers c ON c.id=v.customer_id WHERE v.follow_up_date IS NOT NULL AND v.follow_up_date<=? AND c.active=1 AND ${s.sql} AND ${agentScope}${selectedAgents} AND NOT EXISTS(SELECT 1 FROM partner_visits newer WHERE newer.customer_id=v.customer_id AND newer.agent_id=v.agent_id AND (newer.visited_at>v.visited_at OR (newer.visited_at=v.visited_at AND newer.id>v.id))) ${after} ORDER BY v.follow_up_date,v.customer_id,v.agent_id LIMIT 21`).bind(today,...s.args,...agentArgs,...(selection?[JSON.stringify(selection.agentIds)]:[]),...(cursor??[])).all<PartnerFollowUp>();
+  const followUps=rows.results.slice(0,20),last=followUps.at(-1);
+  return {today,followUps,nextCursor:rows.results.length>20&&last?JSON.stringify([last.followUpDate,last.customerId,last.agentId]):null};
 }
 
 export async function portfolioSummary(user:User,bbox?:import('./partner-map-types').MapBounds,warehouseIds?:string[]){

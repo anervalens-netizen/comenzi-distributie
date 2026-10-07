@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Cumulative monthly uploads. Private inputs stay outside the source repository."""
-import calendar, collections, contextlib, datetime as dt, fcntl, hashlib, json, os, pathlib, sqlite3, sys, uuid, zipfile
+import calendar, collections, datetime as dt, fcntl, hashlib, json, os, pathlib, sqlite3, sys, zipfile
 from zoneinfo import ZoneInfo
 import client_sales_history as h
 
@@ -24,6 +24,20 @@ def source_identity(c):
  # must not invalidate a preview. Actual authority is fingerprinted below.
  st=database_path(c).stat()
  return [st.st_dev,st.st_ino]
+
+def source_generation_digest(c):
+ # Same pathname/inode/WAL generation used by the Node snapshot readers.
+ # A private digest proves the base without exposing filesystem paths on HTTP.
+ path=database_path(c).resolve(strict=True)
+ parts=[]
+ for suffix in ('','-wal'):
+  try:
+   st=pathlib.Path(str(path)+suffix).stat()
+   parts.append('-' if suffix and st.st_size==0 else ':'.join(str(x) for x in (st.st_dev,st.st_ino,st.st_size,st.st_mtime_ns,st.st_ctime_ns)))
+  except FileNotFoundError:
+   if not suffix:raise
+   parts.append('-')
+ return h.sha((str(path)+'|'+'|'.join(parts)).encode())
 
 def facts_revision(c,start,end):
  digest=hashlib.sha256()
@@ -137,28 +151,6 @@ def archive_projection(c,old,start,end,root):
  c.execute('INSERT INTO history_rows SELECT ?,'+','.join(columns)+' FROM history_rows WHERE import_id=? AND date>=? AND date<=?',(imp,old['id'],start,end))
  c.execute('INSERT INTO history_import_projections VALUES(?,?,?)',(imp,old['id'],raw))
 
-def copy_recovery(source,backup):
- # A separate reader is necessary: Connection.backup on the connection holding
- # BEGIN IMMEDIATE can wait forever. The reserved writer lock pins this source.
- with contextlib.closing(sqlite3.connect(source.as_uri()+'?mode=ro',uri=True)) as reader:
-  with contextlib.closing(sqlite3.connect(backup)) as out:reader.backup(out)
-
-def verify_recovery(backup,c,start,end):
- try:
-  with contextlib.closing(sqlite3.connect(backup.resolve().as_uri()+'?mode=ro',uri=True)) as check:
-   check.row_factory=sqlite3.Row
-   if [r[0] for r in check.execute('PRAGMA integrity_check')]!=['ok']:
-    raise UploadError('Copia de recuperare nu a trecut verificarea integrității.')
-   if check.execute('PRAGMA foreign_key_check').fetchone():
-    raise UploadError('Copia de recuperare conține asocieri invalide.')
-   required=('history_meta','history_references','history_imports','history_rows','history_identities','history_allocations')
-   for table in required:
-    if check.execute('SELECT COUNT(*) FROM '+table).fetchone()[0]!=c.execute('SELECT COUNT(*) FROM '+table).fetchone()[0]:
-     raise UploadError('Copia de recuperare este incompletă.')
-   if facts_revision(check,start,end)!=facts_revision(c,start,end):
-    raise UploadError('Copia de recuperare nu corespunde istoricului curent.')
- except sqlite3.Error as error:raise UploadError('Verificarea copiei de recuperare a eșuat.') from error
-
 def sync_file(path):
  with open(path,'rb') as f:os.fsync(f.fileno())
 
@@ -174,23 +166,21 @@ def apply(c,rows,summary,month_end,request,root):
  except sqlite3.Error as error:raise UploadError('Istoricul este ocupat sau datele s-au schimbat. Reia previzualizarea.') from error
  try:
   source_generation=source_identity(c)
+  previous_generation=source_generation_digest(c)
   current=preview(c,rows,summary,month_end)
   if current['alreadyImported']:
    c.rollback()
-   return {**current,'status':'already_imported'}
+   return {**current,'status':'already_imported','previousSourceDigest':previous_generation}
   if request.get('revision')!=current['revision'] or request.get('fileHash')!=summary['fileHash']:
    raise UploadError('Datele s-au schimbat după previzualizare. Încarcă fișierul din nou.')
   if current['requiresAcknowledgement'] and request.get('allowRegression') is not True:
    raise UploadError('Confirmă explicit corecțiile sau reducerea perioadei din previzualizare.')
-  emit('backup','Se păstrează și se verifică copia de recuperare…')
-  backup_dir=root/'upload-backups';backup_dir.mkdir(exist_ok=True,mode=0o700)
-  backup=backup_dir/(str(uuid.UUID(request['jobId']))+'.sqlite')
-  if not backup.exists():
-   try:copy_recovery(database_path(c),backup)
-   except (sqlite3.Error,OSError) as error:raise UploadError('Crearea copiei de recuperare a eșuat.') from error
-   os.chmod(backup,0o600)
-  verify_recovery(backup,c,summary['from'],month_end)
-  sync_file(backup);sync_directory(backup_dir)
+  # The history store is append/supersede: prior generations and archived XLSX
+  # sources remain intact. BEGIN IMMEDIATE is the rollback boundary for this
+  # current-month replacement; the scheduled project backup remains the
+  # disaster-recovery layer. Cloning the multi-year database on every daily
+  # upload is redundant and makes latency scale with all historical data.
+  emit('import','Se pregătește actualizarea lunii curente…')
   if source_identity(c)!=source_generation:raise UploadError('Datele s-au schimbat după previzualizare.')
   digest,archived=h.archive_source(request['source'],root/'client-sales-originals')
   if digest!=summary['fileHash']:raise UploadError('Fișierul s-a schimbat după previzualizare.')
@@ -237,9 +227,7 @@ def apply(c,rows,summary,month_end,request,root):
   sync_directory(root/'client-sales-originals')
   c.commit()
  except BaseException:c.rollback();raise
- # Retain two local recovery generations; archived originals and scheduled backups remain.
- for path in sorted(backup_dir.glob('*.sqlite'),key=lambda p:p.stat().st_mtime,reverse=True)[2:]:path.unlink()
- return {**current,'status':'imported','importId':imp}
+ return {**current,'status':'imported','importId':imp,'previousSourceDigest':previous_generation}
 
 def main():
  request=json.loads(pathlib.Path(sys.argv[1]).read_text())

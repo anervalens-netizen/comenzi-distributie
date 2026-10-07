@@ -34,13 +34,15 @@ try{
  for(let i=0;i<10000;i++)insert.run('lab-order-'+i,'LAB-'+i,JSON.stringify({customerName:'Synthetic customer',customerCui:'',items:[],standItems:[],serials:[],notes:'Synthetic draft'}));sql.exec('COMMIT');sql.close();
  await stop();await start();
  for(const role of ['manager','agent']){
-  const cold=await b.measure('bootstrap',role,'first role access after process restart',1,()=>get('/api/bootstrap',cookies[role]));sizeLater(cold);assert.equal(JSON.parse(cold.result).orders.length,10000);
-  const warm=await b.measure('bootstrap',role,'warm',samples,()=>get('/api/bootstrap',cookies[role]));sizeLater(warm);
+  const compact=await b.measure('bootstrap-compact',role,'current startup; first role access',1,()=>get('/api/bootstrap?compact=1',cookies[role]));sizeLater(compact);assert.ok(JSON.parse(compact.result).orders.length<=40);
+  const compactWarm=await b.measure('bootstrap-compact',role,'warm',samples,()=>get('/api/bootstrap?compact=1',cookies[role]));sizeLater(compactWarm);
+  const cold=await b.measure('bootstrap-legacy',role,'legacy full bootstrap after compact startup',1,()=>get('/api/bootstrap',cookies[role]));sizeLater(cold);assert.equal(JSON.parse(cold.result).orders.length,10000);
+  const warm=await b.measure('bootstrap-legacy',role,'warm',samples,()=>get('/api/bootstrap',cookies[role]));sizeLater(warm);
   const search=await b.measure('portfolio-search',role,'first query',1,()=>get('/api/partner/browse?q=demonstrativ',cookies[role]));sizeLater(search);
   const repeated=await b.measure('portfolio-search',role,'warm',samples,()=>get('/api/partner/browse?q=demonstrativ',cookies[role]));sizeLater(repeated);
  }
  // Synchronous offline compression can outlast HTTP keep-alive. Do it only
  // after all requests so the LAB cannot reuse an idle socket closed during compression.
  for(const {record,result} of payloads)record.bytes=payloadBytes(result);
- b.save({limits:'Loopback HTTP API/document timings include transfer and body read, exclude JS/CSS execution, UI render and real network. Compression is offline estimate. T11 bootstrap behavior is measured, not changed.'});
+ b.save({limits:'Loopback HTTP API/document timings include transfer and body read, exclude JS/CSS execution, UI render and real network. Compression is offline estimate. Current compact startup and legacy full bootstrap are labeled separately.'});
 }finally{await stop();rmSync(root,{recursive:true,force:true});}

@@ -4,6 +4,7 @@ import {dirname,join} from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {createInterface} from 'node:readline';
 import {buildActivitySnapshot} from './partner-activity-snapshot';
+import {refreshActivitySnapshotMonth} from './partner-activity-incremental';
 import {importRoot,readJob,processIdentity,cleanupStaging} from './client-history-import-jobs';
 import type {HistoryPreview} from './client-history-import-types';
 const path=process.argv[2],dir=dirname(path);
@@ -41,9 +42,14 @@ try{
  const result=await parse(request);
  if(job.operation==='preview'){job.preview=result;job.state='ready';job.phase='preview';job.message='Previzualizarea este pregătită.';save();}
  else{
-  job.result=result;job.phase='rebuilding';job.message='Datele au fost aplicate. Se recalculează centralizările…';save();
-  buildActivitySnapshot(job.directory);
-  job.state='completed';job.phase='done';job.message=result.status==='already_imported'?'Fișierul era deja importat. Centralizările sunt actualizate.':'Vânzările pe clienți și centralizările au fost actualizate.';save();
+  job.result=result;job.phase='rebuilding';job.message='Datele au fost aplicate. Se actualizează centralizările lunii…';save();
+  // Normal daily cumulative uploads keep existing identity allocations stable.
+  // Patch only the replaced month in the derived snapshot. A reference extension
+  // with only new identities stays incremental; changed prior semantics falls
+  // back to the full rebuild for correctness.
+  const incremental=refreshActivitySnapshotMonth(job.directory,result.month,undefined,result.previousSourceDigest);
+  if(!incremental)buildActivitySnapshot(job.directory);
+  job.state='completed';job.phase='done';job.message=result.status==='already_imported'?'Fișierul era deja importat. Centralizările sunt actualizate.':incremental?'Vânzările pe clienți și centralizările lunii au fost actualizate.':'Vânzările pe clienți au fost actualizate; referințele s-au schimbat, iar centralizarea completă a fost reconstruită.';save();
  }
 }catch(error){job.state='failed';job.error=error instanceof Error?error.message:'Importul nu a putut fi finalizat.';save();process.exitCode=1;}
 

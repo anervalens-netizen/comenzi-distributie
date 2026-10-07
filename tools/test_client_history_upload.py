@@ -165,43 +165,22 @@ class UploadTests(unittest.TestCase):
   self.assertEqual(pinned['previous']['valueCents'],2000)
   self.assertEqual(pinned['revision'],p['revision'])
   self.assert_stale_without_effects((rows,summary,end,req,pinned))
- def test_commit_reserves_writer_through_backup_verification(self):
-  data=self.upload([row(Data='02.02.2024')]);verify=u.verify_recovery
+ def test_commit_reserves_writer_through_archive_and_commit(self):
+  data=self.upload([row(Data='02.02.2024')]);archive=h.archive_source
   def locked(*args):
    with sqlite3.connect(self.root/'client-sales-history.sqlite',timeout=0) as other:
     with self.assertRaisesRegex(sqlite3.OperationalError,'locked'):other.execute("UPDATE history_rows SET value_cents=1111")
-   return verify(*args)
-  with mock.patch.object(u,'verify_recovery',side_effect=locked):self.commit(data,True)
- def test_backup_damage_or_copy_failure_never_archives_or_changes_source(self):
-  copy=u.copy_recovery
-  for fault in ('corrupt','foreign_key','missing_rows','wrong_facts','missing_table','copy_error'):
-   with self.subTest(fault=fault):
-    data=self.upload([row(Data='02.02.2024')]);before=self.facts()
-    def damage(source,path):
-     if fault=='copy_error':raise sqlite3.OperationalError('Synthetic backup failure')
-     copy(source,path)
-     if fault=='corrupt':path.write_bytes(b'not a database');return
-     with sqlite3.connect(path) as bad:
-      if fault=='foreign_key':bad.execute('UPDATE history_rows SET identity_id=99999')
-      if fault=='missing_rows':bad.execute("DELETE FROM history_rows WHERE date='2024-02-01'")
-      if fault=='wrong_facts':bad.execute('UPDATE history_rows SET value_cents=123')
-      if fault=='missing_table':bad.execute('DROP TABLE history_allocations')
-    with mock.patch.object(u,'copy_recovery',side_effect=damage),mock.patch.object(h,'archive_source',side_effect=AssertionError('Unverified backup must not archive')):
-     with self.assertRaisesRegex(u.UploadError,'recuperare'):self.commit(data,True)
-    self.assertEqual(self.facts(),before);self.assertFalse(self.c.in_transaction)
- def test_existing_corrupt_backup_rejected(self):
-  data=self.upload([row(Data='02.02.2024')]);backup=self.root/'upload-backups';backup.mkdir()
-  (backup/(data[3]['jobId']+'.sqlite')).write_bytes(b'damaged')
-  with mock.patch.object(u,'copy_recovery',side_effect=AssertionError('Do not replace existing recovery')),mock.patch.object(h,'archive_source',side_effect=AssertionError('Do not archive')):
-   with self.assertRaisesRegex(u.UploadError,'recuperare'):self.commit(data,True)
- def test_backup_is_reopenable_and_matches_precommit_facts(self):
-  data=self.upload([row(Data='02.02.2024')]);before=self.facts();result=self.commit(data,True)
-  backup=self.root/'upload-backups'/(data[3]['jobId']+'.sqlite')
-  with sqlite3.connect(backup.as_uri()+'?mode=ro',uri=True) as restored:
-   self.assertEqual(restored.execute('PRAGMA integrity_check').fetchall(),[('ok',)])
-   self.assertEqual(restored.execute('PRAGMA foreign_key_check').fetchall(),[])
-   self.assertEqual(restored.execute('SELECT date,quantity_micros,value_cents FROM history_current ORDER BY date,value_cents').fetchall(),before)
-  self.assertEqual(result['status'],'imported')
+   return archive(*args)
+  with mock.patch.object(h,'archive_source',side_effect=locked):self.commit(data,True)
+ def test_daily_commit_uses_append_supersede_without_full_database_clone(self):
+  data=self.upload([row(Data='02.02.2024')]);before_rows=self.c.execute('SELECT COUNT(*) FROM history_rows').fetchone()[0]
+  old_ids=[r[0] for r in self.c.execute("SELECT id FROM history_imports WHERE state='active'")]
+  result=self.commit(data,True)
+  self.assertEqual(result['status'],'imported');self.assertFalse((self.root/'upload-backups').exists())
+  self.assertGreater(self.c.execute('SELECT COUNT(*) FROM history_rows').fetchone()[0],before_rows,'new generation is appended')
+  for old in old_ids:self.assertEqual(self.c.execute('SELECT COUNT(*) FROM history_rows WHERE import_id=?',(old,)).fetchone()[0]>0,True,'superseded source rows remain recoverable')
+  self.assertTrue(any(r[0]=='superseded' for r in self.c.execute('SELECT state FROM history_imports WHERE id IN ('+','.join('?'*len(old_ids))+')',old_ids)))
+  archived=self.root/'client-sales-originals'/(data[-1]['fileHash']+'.xlsx');self.assertTrue(archived.is_file());self.assertEqual(h.file_sha(archived),data[-1]['fileHash'])
  def test_declared_empty_replaces_only_month_with_verified_zero_coverage(self):
   data=self.upload([],True);p=data[-1]
   self.assertEqual((p['rows'],p['valueCents'],p['quantityMicros'],p['missingValues']),(0,0,0,0))
@@ -217,7 +196,7 @@ class UploadTests(unittest.TestCase):
   self.assertEqual(tuple(coverage),('2024-02-01','2024-02-29',0,0,0))
   self.assertEqual(self.c.execute("SELECT COUNT(*) FROM history_current WHERE date LIKE '2024-02-%'").fetchone()[0],0)
   self.assertEqual(h.file_sha(self.root/'client-sales-originals'/(p['fileHash']+'.xlsx')),p['fileHash'])
-  self.assertTrue((self.root/'upload-backups'/(data[3]['jobId']+'.sqlite')).is_file())
+  self.assertFalse((self.root/'upload-backups').exists())
   self.assertEqual(self.commit(data,True)['status'],'already_imported')
  def test_empty_inferred_and_invalid_declared_periods_rejected(self):
   with self.assertRaisesRegex(u.UploadError,'explicit'):self.upload([])

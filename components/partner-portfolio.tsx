@@ -341,7 +341,7 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='', active=
           ? 'Se încarcă portofoliul…'
           : `${data?.total || 0} puncte de lucru · ${data?.located || 0} pe hartă · ${(data?.total || 0) - (data?.located || 0)} fără poziție`}
       </p>
-      {current&&<PartnerAttention userId={userId} manager={manager} scopeQuery={scopeQuery} partners={filtered} onOpen={openPartner} onPlanning={()=>{if(!manager){setCatalogLoading(true);setCatalogError('');setPlanning(true);}}} onSales={onOpenSales}/>}
+      {current&&<PartnerAttention key={`${userId}:${manager}:${scopeQuery}`} userId={userId} manager={manager} scopeQuery={scopeQuery} partners={filtered} onOpen={openPartner} onPlanning={()=>{if(!manager){setCatalogLoading(true);setCatalogError('');setPlanning(true);}}} onSales={onOpenSales}/>}
       <div className={manager?'manager-partner-grid':undefined}>
       <div className={manager?'manager-partner-map-pane':undefined}>
       <Suspense fallback={<div className="partner-map">Se încarcă harta…</div>}>

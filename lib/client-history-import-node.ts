@@ -73,6 +73,6 @@ export async function historyImportCommit(req:Request,user:User){
  worker();
  try{writeFileSync(join(dir,'commit.json'),JSON.stringify({revision:job.preview.revision,fileHash:job.preview.fileHash,allowRegression:body.allowRegression===true}),{flag:'wx',mode:0o600});}
  catch(error){if((error as NodeJS.ErrnoException).code==='EEXIST')fail(409,'Confirmarea acestui import a fost deja transmisă. Verifică progresul.');throw error;}
- job.operation='import';job.state='running';job.phase='backup';job.message='Se pregătește importul…';job.updatedAt=new Date().toISOString();delete job.pid;delete job.processIdentity;delete job.attempt;
+ job.operation='import';job.state='running';job.phase='import';job.message='Se actualizează luna curentă…';job.updatedAt=new Date().toISOString();delete job.pid;delete job.processIdentity;delete job.attempt;
  atomic(join(dir,'status.json'),job);return response({job:launch(job)},202);
 }

@@ -26,6 +26,7 @@ node tools/test-client-import-worker.mjs
 node tools/test-partner-sales-health.mjs
 node tools/test-partner-sales-store.mjs
 node tools/test-partner-activity.mjs
+node tools/test-client-history-incremental.mjs
 node tools/test-activity-source-cooperative.mjs
 node tools/test-client-sales.mjs
 node tools/test-partner-billing-period.mjs
@@ -42,6 +43,7 @@ node tools/test-stock-cloudflare.mjs
 npm run build:server
 node tools/test-client-sales-remediation.mjs
 node tools/test-pagination-revision.mjs
+node tools/test-review-findings.mjs
 node tools/test-company-resolved-evidence.mjs
 node tools/test-source-guards.mjs
 node tools/test-partner-detail-remediation.mjs
