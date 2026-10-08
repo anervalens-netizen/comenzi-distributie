@@ -71,7 +71,7 @@ class BackupTests(unittest.TestCase):
         (root / 'client-sales-originals').mkdir(parents=True)
         original = root / 'client-sales-originals/example.xlsx'
         original.write_bytes(b'synthetic customer source')
-        with sqlite3.connect(root / 'client-sales-history.sqlite') as c:
+        with contextlib.closing(sqlite3.connect(root / 'client-sales-history.sqlite')) as c, c:
             c.execute('CREATE TABLE history_imports(sha256 TEXT,original_path TEXT)')
             c.execute('INSERT INTO history_imports VALUES(?,?)',(backup.digest(original),'client-sales-originals/example.xlsx'))
         return original
@@ -125,14 +125,14 @@ class BackupTests(unittest.TestCase):
         self.assertEqual(list(self.local.glob('*.sha256')), [])
 
     def test_application_foreign_key_orphan_prevents_publication(self):
-        with sqlite3.connect(self.data / 'mobiup.sqlite') as db:
+        with contextlib.closing(sqlite3.connect(self.data / 'mobiup.sqlite')) as db, db:
             db.executescript('CREATE TABLE fk_parent(id INTEGER PRIMARY KEY); CREATE TABLE fk_child(parent_id INTEGER REFERENCES fk_parent(id)); INSERT INTO fk_child VALUES(99);')
         with self.assertRaisesRegex(RuntimeError, 'Application snapshot foreign key check failed'):
             self.run_backup()
         self.assert_no_published_backup()
 
     def test_sales_foreign_key_orphan_prevents_publication(self):
-        with sqlite3.connect(self.data / 'sales.sqlite') as db:
+        with contextlib.closing(sqlite3.connect(self.data / 'sales.sqlite')) as db, db:
             db.executescript('CREATE TABLE fk_parent(id INTEGER PRIMARY KEY); CREATE TABLE fk_child(parent_id INTEGER REFERENCES fk_parent(id)); INSERT INTO fk_child VALUES(99);')
         with self.assertRaisesRegex(RuntimeError, 'Sales snapshot foreign key check failed'):
             self.run_backup()
@@ -140,7 +140,7 @@ class BackupTests(unittest.TestCase):
 
     def test_history_foreign_key_orphan_prevents_publication(self):
         self.history_fixture()
-        with sqlite3.connect(self.data / 'client-history' / 'client-sales-history.sqlite') as db:
+        with contextlib.closing(sqlite3.connect(self.data / 'client-history' / 'client-sales-history.sqlite')) as db, db:
             db.executescript('CREATE TABLE fk_parent(id INTEGER PRIMARY KEY); CREATE TABLE fk_child(parent_id INTEGER REFERENCES fk_parent(id)); INSERT INTO fk_child VALUES(99);')
         with self.assertRaisesRegex(RuntimeError, 'Customer history snapshot foreign key check failed'):
             self.run_backup()

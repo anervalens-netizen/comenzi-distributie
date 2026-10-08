@@ -14,3 +14,7 @@ await build({entryPoints:['lib/stock-parser-worker.ts'],outfile:'dist/standalone
 
 await build({entryPoints:['lib/client-history-import-worker.ts'],outfile:'dist/standalone/client-history-import-worker.mjs',bundle:true,platform:'node',format:'esm',packages:'external'});
 for(const name of ['client_sales_history.py','client_history_upload.py'])copyFileSync('tools/'+name,'dist/standalone/'+name);
+
+// Workers must be emitted before tracing so their dependencies are included.
+const {packageRuntime} = await import('./package-runtime.mjs');
+await packageRuntime('dist/standalone');

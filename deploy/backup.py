@@ -1,6 +1,7 @@
 """Consistent application and sales snapshots, with immutable source/export files."""
 from contextlib import closing
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -23,6 +24,26 @@ def prune_backups(folder: Path, cutoff: datetime) -> None:
             continue
         saved = datetime.strptime(old.name[15:-7], '%Y%m%dT%H%M%SZ').replace(tzinfo=timezone.utc)
         if saved < cutoff:
+            old.unlink()
+            old.with_suffix(old.suffix + '.sha256').unlink(missing_ok=True)
+
+
+def prune_nas_latest(folder: Path, current: Path, validation_root: Path | None = None) -> None:
+    """Retain the latest complete verified recovery generation when configured."""
+    if current.parent != folder or current.is_symlink():
+        raise RuntimeError('Unsafe NAS generation')
+    expected = current.with_suffix(current.suffix + '.sha256').read_text().split()
+    if expected != [digest(current), current.name]:
+        raise RuntimeError('NAS retention checksum mismatch')
+    # Before deleting the last offsite fallback, exercise the same supported
+    # restore gates (budget, paths, resources, runtime and database integrity).
+    spec = importlib.util.spec_from_file_location('backup_retention_restore', Path(__file__).with_name('restore.py'))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    with tempfile.TemporaryDirectory(prefix='retention-verify-', dir=validation_root) as temporary:
+        module.restore(current, Path(temporary) / 'restored')
+    for old in folder.glob('mobiup-comenzi-????????T??????Z.tar.gz'):
+        if old.name < current.name and old.is_file() and not old.is_symlink():
             old.unlink()
             old.with_suffix(old.suffix + '.sha256').unlink(missing_ok=True)
 
@@ -123,6 +144,7 @@ def run_backup(
     nas_mount: Path = Path('/mnt/nas'),
     release: Path = Path('/opt/Mobiup/comenzi-distributie/runtime/current/RELEASE.json'),
     recovery: dict[str, Path] | None = None,
+    nas_latest_only: bool = False,
 ) -> Path:
     """Publish locally first; an offsite failure still exits unsuccessfully.
 
@@ -228,7 +250,10 @@ def run_backup(
             raise RuntimeError('NAS backup checksum mismatch')
         temporary_copy.replace(nas / name)
         shutil.copyfile(checksum_file, nas / checksum_file.name)
-        prune_backups(nas, cutoff)
+        if nas_latest_only:
+            prune_nas_latest(nas, nas / name, local)
+        else:
+            prune_backups(nas, cutoff)
     except (OSError, RuntimeError) as error:
         temporary_copy.unlink(missing_ok=True)
         # Preserve the verified local generation, but let systemd report failure.
@@ -242,4 +267,5 @@ if __name__ == '__main__':
     configured = {name: os.environ.get('MOBIUP_RECOVERY_' + name.upper(), '') for name in ('runtime', 'resources', 'products')}
     if any(configured.values()) and not all(configured.values()):
         raise RuntimeError('Incomplete recovery configuration')
-    run_backup(recovery={name: Path(value) for name, value in configured.items()} if all(configured.values()) else None)
+    run_backup(recovery={name: Path(value) for name, value in configured.items()} if all(configured.values()) else None,
+               nas_latest_only=os.environ.get('MOBIUP_NAS_LATEST_ONLY') == '1')

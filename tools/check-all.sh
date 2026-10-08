@@ -41,6 +41,7 @@ npm run build
 node tools/test-cloudflare-module-graph.mjs
 node tools/test-stock-cloudflare.mjs
 npm run build:server
+node tools/test-runtime-packaging.mjs
 node tools/test-client-sales-remediation.mjs
 node tools/test-pagination-revision.mjs
 node tools/test-review-findings.mjs

@@ -57,6 +57,35 @@ Read AGENTS.md. Use a GitHub noreply author address. Keep public issues and comm
 
 The resource files used by builds are generated and ignored by Git. `npm run prepare:public` creates synthetic CI inputs only and refuses to overwrite unclassified existing resources. Production builds must use a separately stored, explicitly classified private resource set; synthetic builds must never be activated in production. See tools/build-private.mjs.
 
+## Standalone dependency boundary
+
+`build:server` traces every emitted server chunk and worker with `@vercel/nft`
+under both SSR and React Server Component conditions. It reconstructs the
+standalone dependency directory from the installed source tree, preserving
+nested package versions, instead of shipping Vinext's complete build-tool tree.
+Unresolved trace warnings fail the build. `runtime-dependencies.json` records
+entry points, copied files and package versions. The full check relocates the
+artifact outside the checkout and consumes complete bootstrap, HTML and RSC
+responses; this prevents missing dependencies from resolving through the source
+checkout. Application and worker regression tests exercise the resulting build.
+
+`shadcn` is a development dependency because its CSS is consumed during the
+build. Vinext remains a runtime dependency: the standalone server imports its
+production server. Source audits therefore include Vinext's build dependency
+chain even though unreachable files are excluded from release artifacts.
+The upstream braces advisory GHSA-vfj7-8cjw-p6xm has no patched version at the
+time of this change. Do not use forced downgrades to hide this finding. Its
+remaining source-tree use is build tooling processing repository-controlled
+patterns, not request input. Keep build jobs isolated from production credentials;
+verify each installed artifact's actual inventory independently of source audit.
+
+Optional `MOBIUP_NAS_LATEST_ONLY=1` retains one NAS generation only after the
+supported restore command successfully restores that generation to an isolated
+local temporary directory. Restore failure preserves previous NAS generations.
+The default fourteen-day retention remains available. Local backup space must
+also accommodate the temporary restored generation. Install `backup.py` and
+`restore.py` together so the retention gate uses the current restore contract.
+
 ## Manager access
 
 All managers can view national activity, partners, orders, stock, inventory and sales, with region and agent filters. Regional assignments still govern account changes and operational writes. Managers change their own password from their profile; regional managers reset assigned agents' passwords under Team → Passwords and accounts (the default subtab). Regional managers cannot change other regions' accounts or manager assignments.

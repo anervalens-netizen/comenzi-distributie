@@ -40,6 +40,50 @@ class RecoveryTests(unittest.TestCase):
     def make_backup(self):
         with patch.object(backup.os.path,'ismount',return_value=True),contextlib.redirect_stdout(io.StringIO()):
             return backup.run_backup(**self.kwargs)
+    def test_latest_nas_retention_preserves_current_and_unrelated_files(self):
+        archive = self.make_backup()
+        nas = self.root / 'nas'
+        old = nas / 'mobiup-comenzi-20000101T000000Z.tar.gz'
+        old.write_bytes(b'old generation')
+        old.with_suffix(old.suffix + '.sha256').write_text('old')
+        unrelated = nas / 'manual-recovery.tar.gz'
+        unrelated.write_bytes(b'keep')
+        backup.prune_nas_latest(nas, nas / archive.name)
+        self.assertFalse(old.exists())
+        self.assertFalse(old.with_suffix(old.suffix + '.sha256').exists())
+        self.assertTrue((nas / archive.name).exists())
+        self.assertTrue(unrelated.exists())
+
+    def test_latest_nas_retention_preserves_old_when_restore_rejects(self):
+        archive = self.make_backup()
+        nas = self.root / 'nas'
+        old = nas / 'mobiup-comenzi-20000101T000000Z.tar.gz'
+        old.write_bytes(b'keep')
+        # Corrupt the inner manifest but retain a valid outer checksum.
+        broken = nas / archive.name
+        with tarfile.open(broken, 'r:gz') as source:
+            members = [(entry, source.extractfile(entry).read() if entry.isfile() else None) for entry in source]
+        with tarfile.open(broken, 'w:gz') as target:
+            for entry, content in members:
+                if entry.name == 'recovery/manifest.json':
+                    content = b'{"schema":1,"files":{}}'
+                    entry.size = len(content)
+                target.addfile(entry, io.BytesIO(content) if content is not None else None)
+        broken.with_suffix(broken.suffix + '.sha256').write_text(backup.digest(broken) + '  ' + broken.name)
+        with self.assertRaisesRegex(RuntimeError, 'manifest'):
+            backup.prune_nas_latest(nas, broken)
+        self.assertTrue(old.exists())
+
+    def test_latest_nas_retention_fails_before_deleting_on_bad_checksum(self):
+        archive = self.make_backup()
+        nas = self.root / 'nas'
+        old = nas / 'mobiup-comenzi-20000101T000000Z.tar.gz'
+        old.write_bytes(b'keep')
+        (nas / archive.name).with_suffix('.gz.sha256').write_text('bad')
+        with self.assertRaisesRegex(RuntimeError, 'checksum'):
+            backup.prune_nas_latest(nas, nas / archive.name)
+        self.assertTrue(old.exists())
+
     def test_roundtrip_includes_runtime_and_private_inputs(self):
         archive=self.make_backup(); result=recovery.restore(archive,self.root/'restored')
         self.assertEqual(result['databases'],{'mobiup.sqlite':'ok'})
@@ -53,7 +97,7 @@ class RecoveryTests(unittest.TestCase):
     def test_customer_history_roundtrip(self):
         root=self.data/'client-history';(root/'client-sales-originals').mkdir(parents=True)
         original=root/'client-sales-originals/example.xlsx';original.write_bytes(b'synthetic historical source')
-        with sqlite3.connect(root/'client-sales-history.sqlite') as db:
+        with contextlib.closing(sqlite3.connect(root/'client-sales-history.sqlite')) as db, db:
             db.execute('CREATE TABLE history_imports(sha256 TEXT,original_path TEXT)')
             db.execute('INSERT INTO history_imports VALUES(?,?)',(backup.digest(original),'client-sales-originals/example.xlsx'))
         result=recovery.restore(self.make_backup(),self.root/'history-restored')
