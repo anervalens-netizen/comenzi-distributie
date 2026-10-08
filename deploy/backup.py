@@ -17,15 +17,29 @@ def digest(path: Path) -> str:
         return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 
-def prune_backups(folder: Path, cutoff: datetime) -> None:
-    # Retain fourteen days of this application's own backup generations.
-    for old in folder.glob('mobiup-comenzi-????????T??????Z.tar.gz'):
-        if old.is_symlink() or not old.resolve().is_relative_to(folder.resolve()):
+def prune_backups(folder: Path, keep_count: int = 2) -> None:
+    """Keep only the newest complete local generations for bounded recovery."""
+    if keep_count < 1:
+        raise ValueError('Backup retention must keep at least one generation')
+    root = folder.resolve()
+    complete = []
+    for archive in sorted(folder.glob('mobiup-comenzi-????????T??????Z.tar.gz'), reverse=True):
+        if archive.is_symlink() or not archive.resolve().is_relative_to(root):
             continue
-        saved = datetime.strptime(old.name[15:-7], '%Y%m%dT%H%M%SZ').replace(tzinfo=timezone.utc)
-        if saved < cutoff:
-            old.unlink()
-            old.with_suffix(old.suffix + '.sha256').unlink(missing_ok=True)
+        checksum_file = archive.with_suffix(archive.suffix + '.sha256')
+        try:
+            expected = checksum_file.read_text().split()
+        except (OSError, UnicodeError):
+            expected = []
+        if (len(expected) != 2 or expected[1] != archive.name or len(expected[0]) != 64
+                or expected[0] != digest(archive)):
+            archive.unlink(missing_ok=True)
+            checksum_file.unlink(missing_ok=True)
+            continue
+        complete.append(archive)
+    for old in complete[keep_count:]:
+        old.unlink()
+        old.with_suffix(old.suffix + '.sha256').unlink(missing_ok=True)
 
 
 def prune_nas_latest(folder: Path, current: Path, validation_root: Path | None = None) -> None:
@@ -235,8 +249,7 @@ def run_backup(
     checksum_file.write_text(f'{checksum}  {name}\n')
     print(f'Verified local backup: {name}; exports={len(keys)}; sales_sources={len(sales_sources)}; sha256={checksum}', flush=True)
     # Local retention must not depend on NAS availability or write permissions.
-    cutoff = datetime.now(timezone.utc) - timedelta(days=14)
-    prune_backups(local, cutoff)
+    prune_backups(local)
 
     temporary_copy = nas / (name + '.partial')
     try:
@@ -253,7 +266,7 @@ def run_backup(
         if nas_latest_only:
             prune_nas_latest(nas, nas / name, local)
         else:
-            prune_backups(nas, cutoff)
+            prune_backups(nas)
     except (OSError, RuntimeError) as error:
         temporary_copy.unlink(missing_ok=True)
         # Preserve the verified local generation, but let systemd report failure.

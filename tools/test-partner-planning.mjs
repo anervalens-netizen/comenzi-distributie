@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
 import {createHash,randomUUID} from 'node:crypto';
 const db=new DatabaseSync('work/qa/mobiup.sqlite'),root='http://127.0.0.1:3000/api/partner/planning',sessions={};
+db.exec('PRAGMA busy_timeout=5000');
 for(const id of ['qa-agent1','qa-agent2','qa-manager']){const token=randomUUID();db.prepare('UPDATE users SET active=1,must_change_password=0 WHERE id=?').run(id);db.prepare('INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,?,?)').run(createHash('sha256').update(token).digest('hex'),id,Date.now()+3600000);sessions[id]=token;}
 let checks=0;
 async function call(user,method='GET',body,expected=200,week='2026-10-19'){

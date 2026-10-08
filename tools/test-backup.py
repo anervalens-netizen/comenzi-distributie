@@ -152,7 +152,7 @@ class BackupTests(unittest.TestCase):
         archive = folder / f'mobiup-comenzi-{stamp}.tar.gz'
         archive.write_bytes(b'older synthetic backup')
         checksum = archive.with_suffix(archive.suffix + '.sha256')
-        checksum.write_text('older synthetic checksum')
+        checksum.write_text(f'{backup.digest(archive)}  {archive.name}\n')
         return archive, checksum
 
     def test_email_only_stand_notice_preserves_payload_without_export(self):
@@ -280,10 +280,27 @@ class BackupTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'Local backup verified:.*NAS write failed'):
                 self.run_backup()
         archive = self.assert_local_snapshot()
-        self.assertTrue(all(not path.exists() for path in old_local))
+        self.assertTrue(all(path.exists() for path in old_local))
         self.assertTrue(all(path.exists() for path in old_nas))
         self.assertFalse((self.nas / archive.name).exists())
         self.assertNotIn('Verified local and NAS backup:', self.output.getvalue())
+
+    def test_retention_removes_archive_with_mismatched_checksum(self):
+        self.local.mkdir(parents=True, exist_ok=True)
+        archive, checksum = self.old_generation(self.local, 30)
+        checksum.write_text(f"{'0' * 64}  {archive.name}\n")
+        self.run_backup()
+        self.assertFalse(archive.exists())
+        self.assertFalse(checksum.exists())
+        self.assert_local_snapshot()
+
+    def test_retention_removes_incomplete_archive_without_sidecar(self):
+        self.local.mkdir(parents=True, exist_ok=True)
+        orphan = self.local / 'mobiup-comenzi-20000101T000000Z.tar.gz'
+        orphan.write_bytes(b'incomplete archive')
+        self.run_backup()
+        self.assertFalse(orphan.exists())
+        self.assert_local_snapshot()
 
     def test_checksum_mismatch_never_publishes_corrupt_nas_archive(self):
         def corrupt_copy(source, destination):

@@ -6,6 +6,7 @@ CURRENT_LINK="${MOBIUP_CURRENT_LINK:-$RUNTIME_ROOT/current}"
 SERVICE="${MOBIUP_SERVICE:-mobiup-comenzi-distributie.service}"
 SYSTEMCTL="${MOBIUP_SYSTEMCTL:-systemctl}"
 CURL="${MOBIUP_CURL:-curl}"
+RELEASE_PRUNE="${MOBIUP_RELEASE_PRUNE:-1}"
 
 service_endpoint() {
   local env_line env_files token host="${MOBIUP_HEALTH_HOST:-}" port="${MOBIUP_HEALTH_PORT:-}"
@@ -73,12 +74,27 @@ fi
 [[ -L "$CURRENT_LINK" ]] || fail "current release link is missing; refusing activation without rollback target"
 previous="$(readlink -f "$CURRENT_LINK")"
 [[ -d "$previous" ]] || fail "previous release target is invalid: $previous"
+[[ "$previous" == "$releases_root/"* ]] || fail "previous release must be inside $releases_root"
 
 switch_link() {
   local target="$1" next="${CURRENT_LINK}.next.$$"
   rm -f "$next"
   ln -s "$target" "$next"
   mv -Tf "$next" "$CURRENT_LINK"
+}
+
+prune_releases() {
+  local active="$1" fallback="$2" candidate resolved
+  [[ "$RELEASE_PRUNE" == "1" ]] || return 0
+  [[ "$active" != "$fallback" ]] || { log "release retention skipped: active and fallback are identical"; return 0; }
+  for candidate in "$releases_root"/*; do
+    [[ -d "$candidate" && ! -L "$candidate" ]] || continue
+    [[ "$(basename "$candidate")" =~ ^[0-9a-f]{40}$ ]] || continue
+    resolved="$(realpath -e "$candidate")" || continue
+    [[ "$resolved" == "$releases_root/"* ]] || continue
+    [[ "$resolved" == "$active" || "$resolved" == "$fallback" ]] && continue
+    rm -rf -- "$resolved"
+  done
 }
 
 healthy() {
@@ -100,7 +116,9 @@ rollback() {
 log "activating sha=$release_sha release=$release previous=$previous"
 switch_link "$release" || fail "atomic symlink switch failed"
 if "$SYSTEMCTL" restart "$SERVICE" && healthy; then
-  log "active sha=$release_sha release=$(readlink -f "$CURRENT_LINK")"
+  active="$(readlink -f "$CURRENT_LINK")"
+  prune_releases "$active" "$previous" || fail "release retention failed"
+  log "active sha=$release_sha release=$active fallback=$previous"
   exit 0
 fi
 if rollback; then

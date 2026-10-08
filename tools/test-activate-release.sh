@@ -38,6 +38,7 @@ export MOBIUP_SYSTEMCTL="$root/systemctl" MOBIUP_CURL="$root/curl"
 export MOBIUP_TEST_SYSTEMCTL_LOG="$log" MOBIUP_TEST_CURL_LOG="$curl_log" MOBIUP_TEST_HEALTH_MODE="$mode"
 export MOBIUP_TEST_SERVICE_ENV='HOST=10.44.0.9 PORT=39222'
 export MOBIUP_HEALTH_ATTEMPTS=2 MOBIUP_HEALTH_DELAY=0
+export MOBIUP_RELEASE_PRUNE=0
 script="$(cd "$(dirname "$0")/.." && pwd)/deploy/activate-release.sh"
 checks=0; check(){ [[ "$1" == "$2" ]] || { echo "FAIL: $3 ($1 != $2)" >&2; exit 1; }; checks=$((checks+1)); }
 "$script" "$new" >/dev/null
@@ -80,4 +81,18 @@ check "$(readlink -f "$runtime/current")" "$before" 'unknown effective endpoint 
 export MOBIUP_HEALTH_HOST='10.44.0.10' MOBIUP_HEALTH_PORT='39223'
 "$script" "$new" >/dev/null
 check "$(tail -1 "$curl_log")" 'http://10.44.0.10:39223/api/bootstrap' 'explicit effective endpoint supports EnvironmentFiles'
+
+# A successful new activation retains exactly the active release and its fallback.
+unset MOBIUP_RELEASE_PRUNE MOBIUP_HEALTH_HOST MOBIUP_HEALTH_PORT
+export MOBIUP_TEST_ENV_FILES='' MOBIUP_TEST_SERVICE_ENV='HOST=10.44.0.9 PORT=39222'
+extra=4444444444444444444444444444444444444444
+mkdir -p "$releases/$extra"
+printf 'console.log("qa")\n' > "$releases/$extra/server.js"
+printf '{"sha":"%s","resourceMode":"private"}\n' "$extra" > "$releases/$extra/RELEASE.json"
+ln -sfn "$releases/$old" "$runtime/current"
+"$script" "$new" >/dev/null
+check "$(find "$releases" -mindepth 1 -maxdepth 1 -type d | wc -l)" "2" 'successful activation retains exactly two releases'
+check "$(test -d "$releases/$new" && echo yes)" "yes" 'retention preserves active release'
+check "$(test -d "$releases/$old" && echo yes)" "yes" 'retention preserves rollback release'
+check "$(test ! -e "$releases/$extra" && echo yes)" "yes" 'retention removes obsolete releases'
 printf 'PASS: %s activation/rollback checks.\n' "$checks"
