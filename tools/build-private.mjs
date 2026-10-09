@@ -30,6 +30,7 @@ for(const name of names){
 const git=(argv)=>execFileSync('git',argv,{cwd:root,encoding:'utf8',maxBuffer:20*1024*1024});
 if(git(['status','--porcelain','--untracked-files=no']).trim())throw new Error('Commit the reviewed source before creating a release.');
 const sha=git(['rev-parse','HEAD']).trim();
+if(!/^https:\/\/[a-zA-Z0-9]+@[^/]+\/\d+$/.test(process.env.VITE_GLITCHTIP_DSN??''))throw new Error('Private releases require the existing public VITE_GLITCHTIP_DSN.');
 const stage=mkdtempSync(join(parent,'.private-build-'));
 const stagedSource=join(stage,'source');mkdirSync(stagedSource,{mode:0o700});
 const tar=join(stage,'source.tar');
@@ -53,7 +54,7 @@ try{
  }
  const release=join(stagedSource,'dist/standalone');
  if(!existsSync(join(release,'server.js')))throw new Error('Build did not produce the server entry point.');
- const metadata={sha,builtAt:new Date().toISOString(),resourceMode:'private',resourceSchema:1,resourceDigest:createHash('sha256').update(JSON.stringify(hashes)).digest('hex')};
+ const metadata={sha,builtAt:new Date().toISOString(),resourceMode:'private',resourceSchema:1,sourceMaps:{schema:1},resourceDigest:createHash('sha256').update(JSON.stringify(hashes)).digest('hex')};
  writeFileSync(join(release,'RELEASE.json'),JSON.stringify(metadata)+'\n',{mode:0o600});
  if(existsSync(out))throw new Error('Output was created concurrently; refusing to replace it.');
  renameSync(release,out);published=true;

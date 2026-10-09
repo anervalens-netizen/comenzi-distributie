@@ -67,3 +67,5 @@ __pycache__/
 
 # Private local coordination handoff
 /BACKEND.md
+
+.private-source-maps/

@@ -71,6 +71,15 @@ release_sha="$(node -e "const f=require('fs');const p=process.argv[1];const x=JS
 if [[ "$input" =~ ^[0-9a-f]{40}$ && "$release_sha" != "$input" ]]; then
   fail "release metadata SHA does not match requested SHA"
 fi
+# New private-map releases must pass the owner-provisioned receiver gate before
+# any active link or service changes. Historical releases retain rollback support.
+if node -e 'const x=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.exit(x.sourceMaps?.schema===1?0:1)' "$release/RELEASE.json"; then
+  [[ -n "${MOBIUP_SOURCE_MAP_GATE:-}" && -x "$MOBIUP_SOURCE_MAP_GATE" ]] || fail "private source-map gate is not provisioned"
+  [[ -n "${MOBIUP_SOURCE_MAP_PROJECT:-}" && -n "${MOBIUP_PUBLIC_ORIGIN:-}" ]] || fail "source-map project and public origin are required"
+  "$MOBIUP_SOURCE_MAP_GATE" "$release/dist/client" "$release/.private-source-maps/client" "$release_sha" \
+    "$MOBIUP_SOURCE_MAP_PROJECT" --origin "$MOBIUP_PUBLIC_ORIGIN" --probe-source error-reporting-browser.ts || fail "source-map receiver verification failed"
+fi
+
 [[ -L "$CURRENT_LINK" ]] || fail "current release link is missing; refusing activation without rollback target"
 previous="$(readlink -f "$CURRENT_LINK")"
 [[ -d "$previous" ]] || fail "previous release target is invalid: $previous"

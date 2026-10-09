@@ -152,3 +152,12 @@ active release changes.
 Set `GLITCHTIP_DSN` in private runtime configuration. Browser builds use `VITE_GLITCHTIP_DSN` (Next.js: `NEXT_PUBLIC_GLITCHTIP_DSN`). Rebuild assets when the destination changes, and preserve the exact source release identifier.
 
 New integrations retain stack locations, SDK version, component and release, while removing request payloads, user data, breadcrumbs and private exception messages. Synthetic acceptance events must carry `glitchtip.synthetic=true` and a unique `validation.run`; verify receipt at the destination. The operational collector excludes these test events from alerts. Validation must not crash the application or modify business data.
+
+Private Node releases keep hidden browser and compiled backend maps under
+`.private-source-maps/`, outside `dist/client` and `public`. The private build
+records map support in `RELEASE.json`. Before activation, configure the existing
+receiver gate with `MOBIUP_SOURCE_MAP_GATE`, `MOBIUP_SOURCE_MAP_PROJECT` and
+`MOBIUP_PUBLIC_ORIGIN`; it must validate the exact manifest, upload once and verify
+a received source frame. Retain the complete private release for recovery.
+Backend maps are retained separately; receiver limitations for duplicate script
+basenames must be evaluated before claiming backend symbolication coverage.

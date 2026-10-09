@@ -36,6 +36,7 @@ node tools/test-partner-position.mjs
 node tools/test-partner-geocode-worker.mjs
 node tools/test-public-resources.mjs
 node tools/test-error-reporting.mjs
+node tools/test-private-source-maps.mjs
 npm run typecheck
 npm run lint
 npm run build

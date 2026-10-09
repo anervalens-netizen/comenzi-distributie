@@ -52,6 +52,7 @@ export default defineConfig(async ({mode}) => {
   const { cloudflare } = await import('@cloudflare/vite-plugin');
 
   return {
+    build: { sourcemap: "hidden" as const },
     define: {
       '__GLITCHTIP_DSN__': JSON.stringify(process.env.VITE_GLITCHTIP_DSN || env.VITE_GLITCHTIP_DSN || ''),
       '__GLITCHTIP_RELEASE__': JSON.stringify(process.env.GLITCHTIP_RELEASE || execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim()),

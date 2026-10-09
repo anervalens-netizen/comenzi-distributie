@@ -1,0 +1,114 @@
+import fs from "node:fs";
+import { execFileSync } from "node:child_process";
+import path from "node:path";
+import crypto from "node:crypto";
+import { pathToFileURL } from "node:url";
+
+const hash = (file) =>
+  crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+const walk = (root) =>
+  fs
+    .readdirSync(root, { withFileTypes: true })
+    .flatMap((e) =>
+      e.isDirectory()
+        ? walk(path.join(root, e.name))
+        : [path.join(root, e.name)],
+    );
+export function exportPrivateMaps(publicRoot, privateRoot, release) {
+  publicRoot = path.resolve(publicRoot);
+  privateRoot = path.resolve(privateRoot);
+  if (
+    privateRoot === publicRoot ||
+    privateRoot.startsWith(publicRoot + path.sep)
+  )
+    throw Error("Maps must be outside the served root");
+  const scripts = walk(publicRoot).filter(
+    (f) =>
+      f.endsWith(".js") &&
+      (f.includes(path.sep + "assets" + path.sep) ||
+        f.includes(path.sep + "_next" + path.sep + "static" + path.sep) ||
+        f.endsWith(path.sep + "mcp" + path.sep + "widget.js")),
+  );
+  if (!scripts.length) throw Error("No release scripts");
+  // Rolldown emits this compiler-only helper without a source map. Its exact
+  // generated text is the source of an identity map, never claimed as app TS.
+  const generated = [];
+  for (const file of scripts) {
+    const existing = fs.existsSync(file + ".map") ? JSON.parse(fs.readFileSync(file + ".map", "utf8")) : null;
+    const compilerOnly = existing && existing.sources?.length === 0 && existing.mappings === "";
+    if (compilerOnly || (!existing && /^(rolldown-runtime-[A-Za-z0-9_-]+|_buildManifest|_ssgManifest)\.js$/.test(path.basename(file)))) {
+      const text = fs.readFileSync(file, "utf8");
+      fs.writeFileSync(
+        file + ".map",
+        JSON.stringify({
+          version: 3,
+          file: path.basename(file),
+          sources: ["generated/" + path.basename(file)],
+          sourcesContent: [text],
+          names: [],
+          mappings: text
+            .split("\n")
+            .map((_, i) => (i ? "AACA" : "AAAA"))
+            .join(";"),
+        }),
+      );
+      generated.push(path.relative(publicRoot, file));
+    }
+  }
+  // Validate the entire build before moving any maps.
+  for (const file of scripts) {
+    const map = JSON.parse(fs.readFileSync(file + ".map", "utf8"));
+    if (!map.sources?.length || !map.sourcesContent?.length)
+      throw Error("Missing source contents");
+    if (fs.readFileSync(file, "utf8").includes("sourceMappingURL="))
+      throw Error("Maps must be hidden");
+  }
+  if (fs.existsSync(privateRoot)) {
+    if (fs.lstatSync(privateRoot).isSymbolicLink() || !fs.existsSync(path.join(privateRoot, "manifest.json")))
+      throw Error("Refusing to replace an unmanaged private artifact");
+    // Only remove generated release files, never unrelated data. Otherwise a
+    // second build can upload stale scripts from an earlier release.
+    for (const file of walk(privateRoot)) {
+      if (file.endsWith(".js") || file.endsWith(".map") || ["receiver.json", "probe.json", "upload-attempt.json"].includes(path.basename(file)))
+        fs.rmSync(file);
+    }
+  }
+  fs.mkdirSync(privateRoot, { recursive: true, mode: 0o700 });
+  const files = {};
+  for (const file of scripts) {
+    const relative = path.relative(publicRoot, file);
+    const target = path.join(privateRoot, relative);
+    fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+    fs.copyFileSync(file, target);
+    fs.renameSync(file + ".map", target + ".map");
+    files[relative] = { js: hash(file), map: hash(target + ".map") };
+  }
+  for (const file of walk(publicRoot).filter(f => f.endsWith(".css.map"))) {
+    const target = path.join(privateRoot, path.relative(publicRoot, file));
+    fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+    fs.renameSync(file, target);
+  }
+  if (walk(publicRoot).some((f) => f.endsWith(".map")))
+    throw Error("Public source maps remain");
+  const manifest = { release, files, generatedSources: generated };
+  fs.writeFileSync(
+    path.join(privateRoot, "manifest.json"),
+    JSON.stringify(manifest, null, 2),
+    { mode: 0o600 },
+  );
+  fs.writeFileSync(
+    path.join(publicRoot, "release.json"),
+    JSON.stringify({ release }),
+  );
+  return manifest;
+}
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
+  exportPrivateMaps(
+    process.argv[2] ?? "apps/web/dist",
+    process.argv[3] ?? "artifacts/private-source-maps",
+    process.env.GLITCHTIP_RELEASE ?? execFileSync("git", ["rev-parse", "HEAD"], {encoding:"utf8"}).trim(),
+  );
+}
