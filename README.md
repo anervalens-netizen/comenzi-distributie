@@ -161,3 +161,5 @@ receiver gate with `MOBIUP_SOURCE_MAP_GATE`, `MOBIUP_SOURCE_MAP_PROJECT` and
 a received source frame. Retain the complete private release for recovery.
 Backend maps are retained separately; receiver limitations for duplicate script
 basenames must be evaluated before claiming backend symbolication coverage.
+
+The same activation gate validates all four backend worker maps (including `.mjs` support). Framework/RSC maps remain private; duplicate index basenames and upstream transform warnings require separate proven resolution before claiming complete framework-frame coverage.

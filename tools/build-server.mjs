@@ -40,3 +40,17 @@ for(const map of globSync('**/*.{js,mjs}.map',{cwd:backendRoot,exclude:['node_mo
 }
 mkdirSync(backendPrivate,{recursive:true,mode:0o700});
 writeFileSync(join(backendPrivate,'manifest.json'),JSON.stringify({release:sourceRelease,files:backendFiles})+'\n',{mode:0o600});
+
+// Worker names are unique and their esbuild maps are independent of the
+// framework's duplicate index.js and upstream RSC map limitations.
+const workersPrivate=join(backendRoot,'.private-source-maps/workers');
+mkdirSync(workersPrivate,{recursive:true,mode:0o700});
+const workerFiles={};
+for(const [name,hashes] of Object.entries(backendFiles)) {
+ if(!name.endsWith('-worker.mjs')||name.includes('/'))continue;
+ cpSync(join(backendPrivate,name),join(workersPrivate,name));
+ cpSync(join(backendPrivate,name+'.map'),join(workersPrivate,name+'.map'));
+ workerFiles[name]=hashes;
+}
+if(Object.keys(workerFiles).length!==4)throw new Error('Expected four mapped application workers');
+writeFileSync(join(workersPrivate,'manifest.json'),JSON.stringify({release:sourceRelease,files:workerFiles})+'\n',{mode:0o600});

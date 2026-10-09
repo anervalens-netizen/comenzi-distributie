@@ -78,6 +78,10 @@ if node -e 'const x=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"
   [[ -n "${MOBIUP_SOURCE_MAP_PROJECT:-}" && -n "${MOBIUP_PUBLIC_ORIGIN:-}" ]] || fail "source-map project and public origin are required"
   "$MOBIUP_SOURCE_MAP_GATE" "$release/dist/client" "$release/.private-source-maps/client" "$release_sha" \
     "$MOBIUP_SOURCE_MAP_PROJECT" --origin "$MOBIUP_PUBLIC_ORIGIN" --probe-source error-reporting-browser.ts || fail "source-map receiver verification failed"
+  "$MOBIUP_SOURCE_MAP_GATE" "$release" "$release/.private-source-maps/workers" "$release_sha" \
+    "$MOBIUP_SOURCE_MAP_PROJECT" --origin app:///workers --backend \
+    --probe-source sales-parser-worker.ts --probe-source sales-view-worker.ts \
+    --probe-source stock-parser-worker.ts --probe-source client-history-import-worker.ts || fail "worker source-map receiver verification failed"
 fi
 
 [[ -L "$CURRENT_LINK" ]] || fail "current release link is missing; refusing activation without rollback target"
