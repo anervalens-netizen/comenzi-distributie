@@ -36,8 +36,13 @@ try{
  await a("online();await m.api('bootstrap');await m.api('auth/session')");
  check(await a("!(await m.sessionFence()).rejected"),'fresh validated positive clears only its current rejection');
  await a("m.setLocalWorkUserId('')");
+ // Observe the other tab's restoration before removing localStorage access.
+ // Reading localStorage itself is synchronous, but its storage event is queued;
+ // a pending event would legitimately invalidate the following request mid-flight.
+ await a("window.restoreObserved=new Promise(resolve=>{const listener=event=>{if(event.detail.userId==='synthetic'){removeEventListener(m.LOCAL_WORK_USER_EVENT,listener);resolve(true)}};addEventListener(m.LOCAL_WORK_USER_EVENT,listener)});void 0");
  const d=await browser.newTab();await init(d);await d.evaluate('offline()');
  check(await d.evaluate("(await m.api('bootstrap')).user.id==='synthetic'&&m.currentLocalWorkUserId()==='synthetic'"),'genuine offline boot still restores remembered account');
+ check(await a('await restoreObserved'),'rejecting tab has observed the prior restoration before the storage capability fault');
  // Even if the rejecting tab cannot publish localStorage events, the shared
  // IndexedDB tombstone fences a still-bound reader in another tab.
  await a("window.storageDescriptor=Object.getOwnPropertyDescriptor(window,'localStorage');Object.defineProperty(window,'localStorage',{configurable:true,get(){throw new DOMException('Synthetic unavailable','SecurityError')}});window.fetch=async()=>new Response(JSON.stringify({user:null}));await m.api('bootstrap');void 0");
