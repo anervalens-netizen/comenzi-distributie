@@ -1,4 +1,5 @@
 'use client';
+import "@/lib/error-reporting-browser";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { ArrowRight, Boxes, ScanBarcode, History, LockKeyhole, LogOut, Users, Settings2, Plus, Package, CalendarDays, Search, RefreshCw, Clock3, LoaderCircle, KeyRound, WifiOff, TrendingUp, Store, Bell, LayoutDashboard } from 'lucide-react';
 import Image from 'next/image';

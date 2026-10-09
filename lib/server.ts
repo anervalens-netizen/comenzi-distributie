@@ -1,3 +1,4 @@
+import { captureError } from "./error-reporting";
 import { env } from '@/lib/runtime';
 import { randomBytes, scrypt, timingSafeEqual, createHash } from 'node:crypto';
 import seed from '@/resources/seed.json';
@@ -174,6 +175,7 @@ export async function settingsForOrder(order:Pick<Order,'userId'>):Promise<Setti
 export function response(data: unknown,status=200,extra?: HeadersInit) { const headers=new Headers(extra);headers.set('Cache-Control','no-store');headers.set('X-Content-Type-Options','nosniff');return Response.json(data,{status,headers}); }
 export function handleError(err: unknown) {
   if(err instanceof AppError) return response({error:err.message,...(err.currentRevision!==undefined?{currentRevision:err.currentRevision}:{})},err.status);
+  captureError(err);
   console.error('Request failed',err instanceof Error?err.message:'unknown');
   return response({error:'Operațiunea nu a reușit. Datele salvate rămân disponibile; încearcă din nou.'},500);
 }

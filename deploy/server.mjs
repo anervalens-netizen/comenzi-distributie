@@ -1,3 +1,4 @@
+import { captureError, flushErrors } from "./error-reporting.mjs";
 import { join } from 'node:path';
 import { bindConfig, waitForBindAddress } from './bind-ready.mjs';
 
@@ -11,6 +12,8 @@ try {
   // systemd may retry. No catch-all listener or interface fallback is installed.
   await startProdServer({ port, host: config.host, outDir: join(import.meta.dirname, 'dist') });
 } catch (error) {
+  captureError(error);
+  await flushErrors(2000);
   console.error('[startup]', error.code ?? 'STARTUP_FAILED', error.message);
   process.exit(1);
 }

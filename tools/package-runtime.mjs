@@ -40,7 +40,7 @@ export async function packageRuntime(directory) {
       if (!file.startsWith('node_modules/')) continue;
       const target = join(staging, file.slice('node_modules/'.length));
       mkdirSync(dirname(target), {recursive: true});
-      cpSync(join(source, file), target, {dereference: true});
+      cpSync(join(source, file), target, {dereference: true, recursive: true});
     }
     
     renameSync(staging, join(base, 'node_modules'));

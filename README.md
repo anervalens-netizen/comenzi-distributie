@@ -146,3 +146,9 @@ activation requires an explicit effective MOBIUP_HEALTH_URL or both
 MOBIUP_HEALTH_HOST and MOBIUP_HEALTH_PORT; it does not guess values hidden by
 systemctl's Environment property. Missing endpoint evidence fails before the
 active release changes.
+
+## Error reporting
+
+Set `GLITCHTIP_DSN` in private runtime configuration. Browser builds use `VITE_GLITCHTIP_DSN` (Next.js: `NEXT_PUBLIC_GLITCHTIP_DSN`). Rebuild assets when the destination changes, and preserve the exact source release identifier.
+
+New integrations retain stack locations, SDK version, component and release, while removing request payloads, user data, breadcrumbs and private exception messages. Synthetic acceptance events must carry `glitchtip.synthetic=true` and a unique `validation.run`; verify receipt at the destination. The operational collector excludes these test events from alerts. Validation must not crash the application or modify business data.

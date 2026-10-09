@@ -45,7 +45,7 @@ try{
   if(inside(root,products))throw new Error('Product images must come from a private directory outside Git.');
   cpSync(products,join(stagedSource,'public/products'),{recursive:true,errorOnExist:true,force:false,dereference:false});
  }
- const env={...process.env,MOBIUP_RESOURCE_MODE:'private'};
+ const env={...process.env,MOBIUP_RESOURCE_MODE:'private',GLITCHTIP_RELEASE:sha};
  for(const argv of [['ci','--no-audit','--no-fund'],['run','build:server']]){
   const result=spawnSync('npm',argv,{cwd:stagedSource,env,stdio:'inherit'});
   if(result.error)throw result.error;

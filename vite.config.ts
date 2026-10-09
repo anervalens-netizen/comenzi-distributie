@@ -2,7 +2,8 @@ import {buildOfflineShell} from './tools/build-offline-shell.mjs';
 import { sites } from '@openai/sites-vite-plugin';
 import tailwindcss from '@tailwindcss/postcss';
 import vinext from 'vinext';
-import { defineConfig } from 'vite';
+import { defineConfig, loadEnv } from 'vite';
+import { execFileSync } from 'node:child_process';
 import hostingConfig from './.openai/hosting.json';
 import { resolve } from 'node:path';
 
@@ -38,7 +39,8 @@ const localBindingConfig = {
     : [],
 };
 
-export default defineConfig(async () => {
+export default defineConfig(async ({mode}) => {
+  const env=loadEnv(mode,process.cwd(),"VITE_");
   const nodeTarget = process.env.MOBIUP_RUNTIME === 'node';
   // Keep Wrangler and Miniflare state project-local. These are non-secret tool
   // settings; application environment belongs in ignored `.env*` files.
@@ -50,6 +52,10 @@ export default defineConfig(async () => {
   const { cloudflare } = await import('@cloudflare/vite-plugin');
 
   return {
+    define: {
+      '__GLITCHTIP_DSN__': JSON.stringify(process.env.VITE_GLITCHTIP_DSN || env.VITE_GLITCHTIP_DSN || ''),
+      '__GLITCHTIP_RELEASE__': JSON.stringify(process.env.GLITCHTIP_RELEASE || execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim()),
+    },
     css: { postcss: { plugins: [tailwindcss()] } },
     resolve: { alias: { '#mobiup-client-history-import': resolve(nodeTarget ? 'lib/client-history-import-node.ts' : 'lib/client-history-import-cloudflare.ts'), '#mobiup-runtime': resolve(nodeTarget ? 'lib/runtime-node.ts' : 'lib/runtime-cloudflare.ts'), '#mobiup-sales-parser': resolve(nodeTarget ? 'lib/sales-parser-node.ts' : 'lib/sales-parser-cloudflare.ts'), '#mobiup-stock-parser': resolve(nodeTarget ? 'lib/stock-parser-node.ts' : 'lib/stock-parser-cloudflare.ts'), '#mobiup-sales-view': resolve(nodeTarget ? 'lib/sales-view-node.ts' : 'lib/sales-view-direct.ts') } },
     server: isCodexSeatbeltSandbox
