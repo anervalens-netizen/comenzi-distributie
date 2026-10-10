@@ -77,12 +77,33 @@ map_mode="$(node -e 'const x=JSON.parse(require("fs").readFileSync(process.argv[
 if [[ "$map_mode" == "mapped" ]]; then
   [[ -n "${MOBIUP_SOURCE_MAP_GATE:-}" && -x "$MOBIUP_SOURCE_MAP_GATE" ]] || fail "private source-map gate is not provisioned"
   [[ -n "${MOBIUP_SOURCE_MAP_PROJECT:-}" && -n "${MOBIUP_PUBLIC_ORIGIN:-}" ]] || fail "source-map project and public origin are required"
+  backend_identified=0
+  if [[ -f "$release/backend-frame-identity.mjs" ]]; then
+    node --input-type=module - "$release" "$release_sha" <<'JS' || fail "invalid backend artifact identity"
+import fs from 'node:fs';
+import path from 'node:path';
+import {pathToFileURL} from 'node:url';
+const [root,release]=process.argv.slice(2);
+const {createBackendFrameNormalizer}=await import(pathToFileURL(path.join(root,'backend-frame-identity.mjs')).href);
+const manifest=JSON.parse(fs.readFileSync(path.join(root,'.private-source-maps/backend/manifest.json'),'utf8'));
+if (!Object.keys(manifest.files??{}).length) throw new Error('Missing backend maps');
+createBackendFrameNormalizer({root,release,manifest});
+JS
+    backend_identified=1
+  fi
   "$MOBIUP_SOURCE_MAP_GATE" "$release/dist/client" "$release/.private-source-maps/client" "$release_sha" \
     "$MOBIUP_SOURCE_MAP_PROJECT" --origin "$MOBIUP_PUBLIC_ORIGIN" --probe-source error-reporting-browser.ts || fail "source-map receiver verification failed"
   "$MOBIUP_SOURCE_MAP_GATE" "$release" "$release/.private-source-maps/workers" "$release_sha" \
     "$MOBIUP_SOURCE_MAP_PROJECT" --origin app:///workers --backend \
     --probe-source sales-parser-worker.ts --probe-source sales-view-worker.ts \
     --probe-source stock-parser-worker.ts --probe-source client-history-import-worker.ts || fail "worker source-map receiver verification failed"
+  if [[ "$backend_identified" == 1 ]]; then
+    "$MOBIUP_SOURCE_MAP_GATE" "$release" "$release/.private-source-maps/backend" "$release_sha" \
+      "$MOBIUP_SOURCE_MAP_PROJECT" --origin app:///backend --backend \
+      --probe-source vinext/dist/server/app-route-request-built-ins.js \
+      --probe-source vinext/dist/server/http-error-responses.js \
+      --probe-source lib/history-source-generation.ts || fail "backend source-map receiver verification failed"
+  fi
 fi
 
 [[ -L "$CURRENT_LINK" ]] || fail "current release link is missing; refusing activation without rollback target"

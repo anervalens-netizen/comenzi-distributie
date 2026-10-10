@@ -51,6 +51,14 @@ and activity models are rebuildable and do not replace authoritative history.
 Synthetic recovery tests are not evidence of a production restore or a real
 reboot, and cannot establish production RPO/RTO.
 
+Backend source maps remain private and use a release-bound Debug ID for each
+server bundle. Full relative paths distinguish RSC and SSR bundles sharing a
+basename. The runtime reports an ID only for an artifact in its matching
+manifest; missing or mismatched evidence retains the original frame. Worker
+maps retain their existing identity. This identifies artifacts; it does not
+repair missing mappings in upstream transforms. Verify received frames before
+activating a release, and preserve the private artifact and receiver receipt.
+
 ## Contributions
 
 Read AGENTS.md. Use a GitHub noreply author address. Keep public issues and comments limited to generic code behavior; exclude private logs, screenshots, addresses and account information. Run the public-data guard before committing.

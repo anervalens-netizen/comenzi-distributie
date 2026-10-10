@@ -92,6 +92,49 @@ for metadata in '{"schema":2}' '{"schema":"1"}' '{}' 'null' '[]' 'true'; do
   check "$(wc -l < "$log")" "$before_restarts" 'invalid metadata never restarts service'
 done
 
+# New backend identities require their receiver gate before switching/restarting.
+mkdir -p "$releases/$bad/.private-source-maps/backend"
+cp "$(dirname "$script")/backend-frame-identity.mjs" "$releases/$bad/backend-frame-identity.mjs"
+node - "$releases/$bad" "$bad" <<'JS'
+const fs=require('fs'),p=require('path'),[root,release]=process.argv.slice(2);
+const hashes={js:'a'.repeat(64),map:'b'.repeat(64)};
+fs.writeFileSync(p.join(root,'RELEASE.json'),JSON.stringify({sha:release,resourceMode:'private',sourceMaps:{schema:1}}));
+fs.writeFileSync(p.join(root,'.private-source-maps/backend/manifest.json'),JSON.stringify({release,files:{
+ 'dist/server/index.js':{...hashes,debug_id:'11111111-1111-5111-8111-111111111111'},
+ 'dist/server/ssr/index.js':{...hashes,debug_id:'22222222-2222-5222-8222-222222222222'}}}));
+JS
+cat > "$root/map-gate" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$2" >> "$MOBIUP_TEST_MAP_LOG"
+if [[ "$2" == */backend && "$MOBIUP_TEST_BACKEND_FAIL" == 1 ]]; then exit 1; fi
+EOF
+chmod +x "$root/map-gate"
+export MOBIUP_SOURCE_MAP_GATE="$root/map-gate" MOBIUP_SOURCE_MAP_PROJECT='synthetic-project'
+export MOBIUP_PUBLIC_ORIGIN='https://example.invalid' MOBIUP_TEST_MAP_LOG="$root/maps.log"
+export MOBIUP_TEST_BACKEND_FAIL=1 MOBIUP_RELEASE_PRUNE=0
+before="$(readlink -f "$runtime/current")"; before_restarts="$(wc -l < "$log")"
+set +e; "$script" "$bad" >/dev/null 2>&1; rc=$?; set -e
+check "$rc" "2" 'failed backend receiver prevents activation'
+check "$(readlink -f "$runtime/current")" "$before" 'backend gate failure preserves active release'
+check "$(wc -l < "$log")" "$before_restarts" 'backend gate failure never restarts service'
+check "$(tail -1 "$root/maps.log")" "$releases/$bad/.private-source-maps/backend" 'backend maps use their separate receiver gate'
+export MOBIUP_TEST_BACKEND_FAIL=0
+"$script" "$bad" >/dev/null
+check "$(readlink -f "$runtime/current")" "$releases/$bad" 'qualified backend release activates'
+ln -sfn "$releases/$old" "$runtime/current"
+node - "$releases/$bad/.private-source-maps/backend/manifest.json" <<'JS'
+const fs=require('fs'),file=process.argv[2],data=JSON.parse(fs.readFileSync(file));
+data.files['dist/server/ssr/index.js'].debug_id=data.files['dist/server/index.js'].debug_id;
+fs.writeFileSync(file,JSON.stringify(data));
+JS
+before_restarts="$(wc -l < "$log")"; before_maps="$(wc -l < "$root/maps.log")"
+set +e; "$script" "$bad" >/dev/null 2>&1; rc=$?; set -e
+check "$rc" "2" 'duplicate backend identity is refused'
+check "$(readlink -f "$runtime/current")" "$releases/$old" 'corrupt backend identity never switches release'
+check "$(wc -l < "$log")" "$before_restarts" 'corrupt backend identity never restarts'
+check "$(wc -l < "$root/maps.log")" "$before_maps" 'corrupt backend identity refuses before uploads'
+unset MOBIUP_SOURCE_MAP_GATE MOBIUP_SOURCE_MAP_PROJECT MOBIUP_PUBLIC_ORIGIN MOBIUP_TEST_MAP_LOG MOBIUP_TEST_BACKEND_FAIL
+
 # A successful new activation retains exactly the active release and its fallback.
 unset MOBIUP_RELEASE_PRUNE MOBIUP_HEALTH_HOST MOBIUP_HEALTH_PORT
 export MOBIUP_TEST_ENV_FILES='' MOBIUP_TEST_SERVICE_ENV='HOST=10.44.0.9 PORT=39222'

@@ -38,6 +38,8 @@ node tools/test-partner-geocode-worker.mjs
 node tools/test-public-resources.mjs
 node tools/test-release-dsn.mjs
 node tools/test-error-reporting.mjs
+node tools/test-backend-frame-identity.mjs
+node tools/test-backend-source-maps.mjs
 node tools/test-private-source-maps.mjs
 npm run typecheck
 npm run lint
