@@ -82,6 +82,16 @@ export MOBIUP_HEALTH_HOST='10.44.0.10' MOBIUP_HEALTH_PORT='39223'
 "$script" "$new" >/dev/null
 check "$(tail -1 "$curl_log")" 'http://10.44.0.10:39223/api/bootstrap' 'explicit effective endpoint supports EnvironmentFiles'
 
+# Present but corrupt/new metadata must never use the historical rollback lane.
+for metadata in '{"schema":2}' '{"schema":"1"}' '{}' 'null' '[]' 'true'; do
+  printf '{"sha":"%s","resourceMode":"private","sourceMaps":%s}\n' "$bad" "$metadata" > "$releases/$bad/RELEASE.json"
+  before="$(readlink -f "$runtime/current")"; before_restarts="$(wc -l < "$log")"
+  set +e; "$script" "$bad" >/dev/null 2>&1; rc=$?; set -e
+  check "$rc" "2" 'present unsupported maps metadata is refused'
+  check "$(readlink -f "$runtime/current")" "$before" 'invalid metadata never switches active release'
+  check "$(wc -l < "$log")" "$before_restarts" 'invalid metadata never restarts service'
+done
+
 # A successful new activation retains exactly the active release and its fallback.
 unset MOBIUP_RELEASE_PRUNE MOBIUP_HEALTH_HOST MOBIUP_HEALTH_PORT
 export MOBIUP_TEST_ENV_FILES='' MOBIUP_TEST_SERVICE_ENV='HOST=10.44.0.9 PORT=39222'

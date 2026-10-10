@@ -35,6 +35,7 @@ node tools/test-partner-geocode.mjs
 node tools/test-partner-position.mjs
 node tools/test-partner-geocode-worker.mjs
 node tools/test-public-resources.mjs
+node tools/test-release-dsn.mjs
 node tools/test-error-reporting.mjs
 node tools/test-private-source-maps.mjs
 npm run typecheck
@@ -44,6 +45,7 @@ node tools/test-cloudflare-module-graph.mjs
 node tools/test-stock-cloudflare.mjs
 npm run build:server
 node tools/test-runtime-packaging.mjs
+node tools/test-real-worker-maps.mjs
 node tools/test-client-sales-remediation.mjs
 node tools/test-pagination-revision.mjs
 node tools/test-review-findings.mjs

@@ -3,6 +3,7 @@ import {resolve,relative,dirname,join,isAbsolute,sep} from 'node:path';
 import {execFileSync,spawnSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
+import {validatePublicDsn} from './release-dsn.mjs';
 
 // A private build is always isolated from the public checkout and never deploys.
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');
@@ -30,7 +31,7 @@ for(const name of names){
 const git=(argv)=>execFileSync('git',argv,{cwd:root,encoding:'utf8',maxBuffer:20*1024*1024});
 if(git(['status','--porcelain','--untracked-files=no']).trim())throw new Error('Commit the reviewed source before creating a release.');
 const sha=git(['rev-parse','HEAD']).trim();
-if(!/^https:\/\/[a-zA-Z0-9]+@[^/]+\/\d+$/.test(process.env.VITE_GLITCHTIP_DSN??''))throw new Error('Private releases require the existing public VITE_GLITCHTIP_DSN.');
+validatePublicDsn(process.env.VITE_GLITCHTIP_DSN);
 const stage=mkdtempSync(join(parent,'.private-build-'));
 const stagedSource=join(stage,'source');mkdirSync(stagedSource,{mode:0o700});
 const tar=join(stage,'source.tar');

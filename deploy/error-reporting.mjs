@@ -1,5 +1,17 @@
 import * as Sentry from "@sentry/node";
 import { readFileSync } from "node:fs";
+import { basename, isAbsolute } from "node:path";
+import { fileURLToPath } from "node:url";
+const mappedWorkers = new Set(["sales-parser-worker.mjs", "sales-view-worker.mjs", "stock-parser-worker.mjs", "client-history-import-worker.mjs"]);
+
+export function normalizeWorkerFrame(frame) {
+  const value = frame.abs_path || frame.filename;
+  if (typeof value !== "string") return;
+  let local; try { local = value.startsWith("file://") ? fileURLToPath(value) : isAbsolute(value) ? value : undefined; } catch { return; }
+  if (!local || !mappedWorkers.has(basename(local))) return;
+  const mapped = "app:///workers/" + basename(local);
+  frame.filename = mapped; frame.abs_path = mapped;
+}
 
 export function scrubErrorEvent(event) {
   delete event.request;
@@ -14,6 +26,7 @@ export function scrubErrorEvent(event) {
   for (const exception of event.exception?.values ?? []) {
     exception.value = "Application error (private message omitted)";
     for (const frame of exception.stacktrace?.frames ?? []) {
+      normalizeWorkerFrame(frame);
       delete frame.vars;
       delete frame.pre_context;
       delete frame.post_context;

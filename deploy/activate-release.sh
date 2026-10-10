@@ -73,7 +73,8 @@ if [[ "$input" =~ ^[0-9a-f]{40}$ && "$release_sha" != "$input" ]]; then
 fi
 # New private-map releases must pass the owner-provisioned receiver gate before
 # any active link or service changes. Historical releases retain rollback support.
-if node -e 'const x=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.exit(x.sourceMaps?.schema===1?0:1)' "$release/RELEASE.json"; then
+map_mode="$(node -e 'const x=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));if(!Object.hasOwn(x,"sourceMaps")){process.stdout.write("legacy");}else if(x.sourceMaps && typeof x.sourceMaps==="object" && !Array.isArray(x.sourceMaps) && x.sourceMaps.schema===1){process.stdout.write("mapped");}else process.exit(2)' "$release/RELEASE.json")" || fail "unsupported or invalid sourceMaps metadata"
+if [[ "$map_mode" == "mapped" ]]; then
   [[ -n "${MOBIUP_SOURCE_MAP_GATE:-}" && -x "$MOBIUP_SOURCE_MAP_GATE" ]] || fail "private source-map gate is not provisioned"
   [[ -n "${MOBIUP_SOURCE_MAP_PROJECT:-}" && -n "${MOBIUP_PUBLIC_ORIGIN:-}" ]] || fail "source-map project and public origin are required"
   "$MOBIUP_SOURCE_MAP_GATE" "$release/dist/client" "$release/.private-source-maps/client" "$release_sha" \
