@@ -6,6 +6,8 @@ import {browserFixture,waitFor,delay} from './offline-browser-fixture.mjs';
 
 const source=String.raw`
 import React from 'react';import{createRoot}from'react-dom/client';import App from './app/distribution-app';import * as work from './lib/offline-work';
+// Pin the fixture clock: finalized rows must not age out of the default seven-day filter.
+const FixtureDate=Date;globalThis.Date=class extends FixtureDate{constructor(...args){super(...(args.length?args:[FixtureDate.UTC(2026,9,3,12)]));}static now(){return FixtureDate.UTC(2026,9,3,12);}};
 const user={id:'page-agent',name:'Agent paginare',username:'page.agent',role:'agent',managerScope:'assigned',warehouseId:'w',warehouseName:'Gestiune',active:1,mustChangePassword:false};
 const product={id:'p1',code:'P1',name:'Produs sintetic',brand:'Brand',category:'Accesorii',kind:'accessories',price:10,netPrice:8,sourceRow:1,image:null};
 const make=(i,extra={})=>({id:'o'+String(i).padStart(3,'0'),number:'ORDER-'+String(i).padStart(3,'0'),kind:'accessories',userId:user.id,agentName:user.name,warehouseId:'w',warehouseName:'Gestiune',status:i%3?'finalized':'draft',items:[],serials:[],client:null,notes:'',createdAt:new Date(Date.UTC(2026,9,3,12,0,-i)).toISOString(),finalizedAt:i%3?new Date(Date.UTC(2026,9,3,12,0,-i)).toISOString():null,sourceOrderId:null,revision:1,total:i,pieces:i,...extra});
