@@ -89,9 +89,22 @@ const manifest=fs.existsSync(manifestPath) ? JSON.parse(fs.readFileSync(manifest
 const needsHelper=fs.existsSync(wrapper) && fs.readFileSync(wrapper,'utf8').includes('backend-frame-identity.mjs');
 const identified=fs.existsSync(helper) || needsHelper || Object.values(manifest?.files??{}).some(entry=>entry?.debug_id);
 if (identified) {
-  if (!fs.existsSync(helper) || !Object.keys(manifest?.files??{}).length) throw new Error('Incomplete backend artifact identity');
+  if (!needsHelper || !fs.existsSync(helper) || !Object.keys(manifest?.files??{}).length) throw new Error('Incomplete backend artifact identity');
   const {createBackendFrameNormalizer}=await import(pathToFileURL(helper).href);
   createBackendFrameNormalizer({root,release,manifest});
+  // Verify the actual wrapper; a stale file or a comment mentioning the helper
+  // cannot qualify a release which never attaches backend identities.
+  delete process.env.GLITCHTIP_DSN;
+  process.env.GLITCHTIP_RELEASE=release;
+  const {scrubErrorEvent}=await import(pathToFileURL(wrapper).href);
+  const name=Object.keys(manifest.files).find(name=>name.startsWith('dist/server/'));
+  const frame={filename:path.join(root,name),lineno:1,colno:1};
+  const event=scrubErrorEvent({release,exception:{values:[{stacktrace:{frames:[frame]}}]}});
+  const expected={filename:path.join(root,name),lineno:1,colno:1};
+  const image=createBackendFrameNormalizer({root,release,manifest})(expected);
+  if (!image || frame.abs_path!==image.code_file || frame.lineno!==1 || frame.colno!==1
+      || !event.debug_meta?.images?.some(i=>i.code_file===image.code_file && i.debug_id===image.debug_id))
+    throw new Error('Reporting wrapper does not attach backend identity');
 }
 process.stdout.write(identified ? '1' : '0');
 JS

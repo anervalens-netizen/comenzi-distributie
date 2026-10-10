@@ -95,8 +95,10 @@ done
 # New backend identities require their receiver gate before switching/restarting.
 mkdir -p "$releases/$bad/.private-source-maps/backend"
 cp "$(dirname "$script")/backend-frame-identity.mjs" "$releases/$bad/backend-frame-identity.mjs"
-node - "$releases/$bad" "$bad" <<'JS'
-const fs=require('fs'),p=require('path'),[root,release]=process.argv.slice(2);
+node - "$releases/$bad" "$bad" "$(dirname "$script")/.." <<'JS'
+const fs=require('fs'),p=require('path'),[root,release,repo]=process.argv.slice(2);
+fs.copyFileSync(p.join(repo,'deploy/error-reporting.mjs'),p.join(root,'error-reporting.mjs'));
+fs.symlinkSync(p.join(repo,'node_modules'),p.join(root,'node_modules'),'dir');
 const crypto=require('crypto'),files={};
 const ids={'dist/server/index.js':'11111111-1111-5111-8111-111111111111','dist/server/ssr/index.js':'22222222-2222-5222-8222-222222222222'};
 for (const [name,debug_id] of Object.entries(ids)) {
@@ -128,6 +130,23 @@ check "$(readlink -f "$runtime/current")" "$before" 'backend gate failure preser
 check "$(wc -l < "$log")" "$before_restarts" 'backend gate failure never restarts service'
 check "$(tail -1 "$root/maps.log")" "$releases/$bad/.private-source-maps/backend" 'backend maps use their separate receiver gate'
 export MOBIUP_TEST_BACKEND_FAIL=0
+before_maps="$(wc -l < "$root/maps.log")"
+cp "$releases/$bad/error-reporting.mjs" "$root/wrapper.mjs"
+for wrapper in stale absent spoofed; do
+ if [[ "$wrapper" == absent ]]; then
+  rm "$releases/$bad/error-reporting.mjs"
+ elif [[ "$wrapper" == spoofed ]]; then
+  printf "// backend-frame-identity.mjs\nexport function scrubErrorEvent(e){return e;}\n" > "$releases/$bad/error-reporting.mjs"
+ else
+  printf "export function scrubErrorEvent(e){return e;}\n" > "$releases/$bad/error-reporting.mjs"
+ fi
+ set +e; "$script" "$bad" >/dev/null 2>&1; rc=$?; set -e
+ check "$rc" "2" "$wrapper reporting wrapper is refused"
+ check "$(readlink -f "$runtime/current")" "$before" "$wrapper wrapper preserves current"
+ check "$(wc -l < "$log")" "$before_restarts" "$wrapper wrapper never restarts"
+ check "$(wc -l < "$root/maps.log")" "$before_maps" "$wrapper wrapper refuses before uploads"
+ cp "$root/wrapper.mjs" "$releases/$bad/error-reporting.mjs"
+done
 # Partial transfer must fail before any upload, link change or restart.
 before_maps="$(wc -l < "$root/maps.log")"
 mv "$releases/$bad/backend-frame-identity.mjs" "$root/identity.mjs"
@@ -146,6 +165,7 @@ check "$(wc -l < "$log")" "$before_restarts" 'missing identity files never resta
 check "$(wc -l < "$root/maps.log")" "$before_maps" 'missing identity files refuse before uploads'
 mv "$root/manifest.json" "$releases/$bad/.private-source-maps/backend/manifest.json"
 mv "$root/identity.mjs" "$releases/$bad/backend-frame-identity.mjs"
+cp "$root/wrapper.mjs" "$releases/$bad/error-reporting.mjs"
 cp "$releases/$bad/dist/server/index.js" "$root/bundle.js"
 printf '// altered bytes\n' >> "$releases/$bad/dist/server/index.js"
 set +e; "$script" "$bad" >/dev/null 2>&1; rc=$?; set -e
