@@ -10,6 +10,9 @@ import {createClientSalesFixture} from './client-sales-fixture.mjs';
 const root=resolve('work/qa'),historyDir=join(root,'client-history'),temp=mkdtempSync(join(tmpdir(),'client-sales-http-'));
 if(existsSync(historyDir))throw new Error('Test requires absent isolated history fixture.');
 const app=new DatabaseSync(join(root,'mobiup.sqlite')),sessions={},hashes=[];
+// The live isolated server can finish a background projection transaction.
+// Wait for that writer without reducing any API or cleanup assertions.
+app.exec('PRAGMA busy_timeout=5000');
 try{
  for(const id of ['qa-agent1','qa-agent2','qa-manager','qa-regional']){const token=randomUUID(),hash=createHash('sha256').update(token).digest('hex');hashes.push(hash);sessions[id]='mobiup_session='+token;app.prepare('INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,?,?)').run(hash,id,Date.now()+3600000);}
  createClientSalesFixture(root,true);
