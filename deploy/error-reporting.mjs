@@ -25,11 +25,12 @@ export function scrubErrorEvent(event) {
   event.tags = Object.fromEntries(Object.entries(event.tags ?? {}).filter(([key]) =>
     ["application", "component", "request_id", "error_id", "validation.run", "glitchtip.synthetic"].includes(key)));
   const backendImages = new Map();
+  const backendVerification = new Map();
   for (const exception of event.exception?.values ?? []) {
     exception.value = "Application error (private message omitted)";
     for (const frame of exception.stacktrace?.frames ?? []) {
       normalizeWorkerFrame(frame);
-      const image = normalizeBackendFrame(frame);
+      const image = normalizeBackendFrame(frame,backendVerification);
       if (image) backendImages.set(image.code_file,image);
       delete frame.vars;
       delete frame.pre_context;

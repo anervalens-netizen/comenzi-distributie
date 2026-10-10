@@ -50,7 +50,7 @@ export function createBackendFrameNormalizer({root,release,manifest}) {
       ids.add(entry.debug_id); scripts.set(name,entry);
     }
   }
-  return frame => {
+  return (frame,verificationCache) => {
     const value = frame.abs_path || frame.filename;
     if (typeof value !== 'string') return;
     let local;
@@ -61,7 +61,13 @@ export function createBackendFrameNormalizer({root,release,manifest}) {
     const name = relative(releaseRoot,resolve(local)).split(sep).join('/');
     const entry = scripts.get(name);
     // Lazy bundles may change after process start; never use an ID for new bytes.
-    if (!entry || !verified(name,entry)) return;
+    if (!entry) return;
+    // Share only within one captured event. A later event rechecks changed bytes.
+    const cache=verificationCache instanceof Map ? verificationCache : undefined;
+    let matches;
+    if (cache?.has(name)) matches=cache.get(name);
+    else { matches=verified(name,entry);cache?.set(name,matches); }
+    if (!matches) return;
     frame.filename = backendFrameCodeFile(name,entry.debug_id);
     frame.abs_path = frame.filename;
     return {type:'sourcemap',code_file:frame.filename,debug_id:entry.debug_id};

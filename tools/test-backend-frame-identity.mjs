@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {tmpdir} from 'node:os';
+import {syncBuiltinESMExports} from 'node:module';
 import {createHash} from 'node:crypto';
 import {createBackendFrameNormalizer,backendFrameCodeFile} from '../deploy/backend-frame-identity.mjs';
 const release='a'.repeat(40),root=fs.mkdtempSync(path.join(tmpdir(),'backend-identity-'));
@@ -57,6 +58,15 @@ try {
   {release,files:{...files,'dist/server/index.js':{...hashes,debug_id:'44444444-4444-5444-8444-444444444444'}}},
  ])assert.throws(()=>createBackendFrameNormalizer({root,release,manifest:bad}));
  assert.throws(()=>createBackendFrameNormalizer({root:'relative',release,manifest:{release,files}}));
+ // Repeated frames hash the artifact once in this event, never across events.
+ const read=fs.readFileSync;let reads=0;
+ try {
+  fs.readFileSync=(...args)=>{reads++;return read(...args);};syncBuiltinESMExports();
+  const eventCache=new Map(),frame=()=>({filename:root+'/dist/server/index.js'});
+  normalize(frame(),eventCache);normalize(frame(),eventCache);
+  assert.equal(reads,3,'one runtime/private/map read per event artifact');
+  normalize(frame(),new Map());assert.equal(reads,6,'a new event re-verifies bytes');
+ } finally {fs.readFileSync=read;syncBuiltinESMExports();}
  const target=path.join(root,'dist/server/index.js'),original=fs.readFileSync(target);
  fs.appendFileSync(target,"console.log('changed after startup');\n");
  assert.throws(()=>createBackendFrameNormalizer({root,release,manifest:{release,files}}));
