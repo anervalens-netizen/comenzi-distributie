@@ -14,6 +14,7 @@ def open_history(directory):
  if not path.is_file():raise UploadError('Istoricul pe clienți nu este încă inițializat.')
  c=sqlite3.connect(path,timeout=30);c.row_factory=sqlite3.Row
  c.execute('PRAGMA foreign_keys=ON')
+ h.ensure_history_revision(c)
  return c
 
 def database_path(c):
@@ -167,10 +168,12 @@ def apply(c,rows,summary,month_end,request,root):
  try:
   source_generation=source_identity(c)
   previous_generation=source_generation_digest(c)
+  logical=h.logical_revision(c)
+  previous_logical=h.sha(logical.encode()) if logical else None
   current=preview(c,rows,summary,month_end)
   if current['alreadyImported']:
    c.rollback()
-   return {**current,'status':'already_imported','previousSourceDigest':previous_generation}
+   return {**current,'status':'already_imported','previousSourceDigest':previous_generation,'previousLogicalDigest':previous_logical,'sourceLogicalDigest':previous_logical}
   if request.get('revision')!=current['revision'] or request.get('fileHash')!=summary['fileHash']:
    raise UploadError('Datele s-au schimbat după previzualizare. Încarcă fișierul din nou.')
   if current['requiresAcknowledgement'] and request.get('allowRegression') is not True:
@@ -225,9 +228,11 @@ def apply(c,rows,summary,month_end,request,root):
   if c.execute('PRAGMA foreign_key_check').fetchone():raise UploadError('Validarea asocierilor a eșuat.')
   if source_identity(c)!=source_generation:raise UploadError('Datele s-au schimbat după previzualizare.')
   sync_directory(root/'client-sales-originals')
+  logical=h.logical_revision(c)
+  applied_logical=h.sha(logical.encode()) if logical else None
   c.commit()
  except BaseException:c.rollback();raise
- return {**current,'status':'imported','importId':imp,'previousSourceDigest':previous_generation}
+ return {**current,'status':'imported','importId':imp,'previousSourceDigest':previous_generation,'previousLogicalDigest':previous_logical,'sourceLogicalDigest':applied_logical}
 
 def main():
  request=json.loads(pathlib.Path(sys.argv[1]).read_text())

@@ -47,9 +47,11 @@ try{
   // Patch only the replaced month in the derived snapshot. A reference extension
   // with only new identities stays incremental; changed prior semantics falls
   // back to the full rebuild for correctness.
-  const incremental=refreshActivitySnapshotMonth(job.directory,result.month,undefined,result.previousSourceDigest);
+  let fallbackReason:string|undefined;
+  const incremental=refreshActivitySnapshotMonth(job.directory,result.month,undefined,result.previousSourceDigest,result.previousLogicalDigest,result.sourceLogicalDigest,reason=>{fallbackReason=reason;});
+  result.activityRefresh={mode:incremental?'incremental':'full',...(fallbackReason?{reason:fallbackReason}:{})};save();
   if(!incremental)buildActivitySnapshot(job.directory);
-  job.state='completed';job.phase='done';job.message=result.status==='already_imported'?'Fișierul era deja importat. Centralizările sunt actualizate.':incremental?'Vânzările pe clienți și centralizările lunii au fost actualizate.':'Vânzările pe clienți au fost actualizate; referințele s-au schimbat, iar centralizarea completă a fost reconstruită.';save();
+  job.state='completed';job.phase='done';job.message=result.status==='already_imported'?'Fișierul era deja importat. Centralizările sunt actualizate.':incremental?'Vânzările pe clienți și centralizările lunii au fost actualizate.':'Vânzările pe clienți au fost actualizate; centralizarea completă a fost reconstruită.';save();
  }
 }catch(error){job.state='failed';job.error=error instanceof Error?error.message:'Importul nu a putut fi finalizat.';save();process.exitCode=1;}
 

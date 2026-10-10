@@ -8,7 +8,7 @@ import {normalizedCui,type CompanyAlias} from './partner-company-identity';
 export {normalizedCui} from './partner-company-identity';
 import {historyCompanyLinks} from './partner-company-links';
 import {derivedOutputTarget} from './derived-output-target';
-import {fileGeneration,historyFileGeneration} from './history-source-generation';
+import {fileGeneration,historyFileGeneration,historyLogicalRevision,sameHistoryRevision} from './history-source-generation';
 import {cooperativeStamp,type VerifiedHistoryStamp} from './history-source-stamp';
 import {salesYield} from './client-sales-cooperative';
 import {buildDetailLinks} from './partner-detail-snapshot';
@@ -28,7 +28,7 @@ export function historyStamp(c:DatabaseSync) {
   const reference=String(c.prepare("SELECT value FROM history_meta WHERE key='current_reference'").get()?.value||'');
   const referenceContent=c.prepare('SELECT * FROM history_references WHERE id=?').get(reference);
   const referenceDigest=createHash('sha256').update(String(referenceContent?.master_json||'')).update(String(referenceContent?.partners_json||'')).digest('hex');
-  return completeHistoryStamp(c,reference,referenceDigest);
+  return {...completeHistoryStamp(c,reference,referenceDigest),sourceLogicalRevision:historyLogicalRevision(c)};
 }
 /** The same fingerprint without one reference-sized JS string/allocation. Yielding
  * between bounded UTF-8 byte chunks keeps unrelated HTTP work responsive. */
@@ -45,7 +45,7 @@ export function* historyStampSteps(c:DatabaseSync){
       if(!chunk||chunk.length<size)break;
     }
   }
-  return completeHistoryStamp(c,reference,hash.digest('hex'));
+  return {...completeHistoryStamp(c,reference,hash.digest('hex')),sourceLogicalRevision:historyLogicalRevision(c)};
 }
 export type ActivitySnapshotRow={id:string;cui:string;activity:PartnerActivity;billingYears:string[];recentCents:number;previousCents:number;missingValues:number;coverageComplete:boolean;scope?:'point'|'company';movementYears?:string[];lastMovement?:string};
 export type PartnerPeriodMetrics={valueCents:number|null;documents:number;lastBilling:string|null;missingValues:number};
@@ -168,8 +168,8 @@ export function readActivitySnapshot(partners:{id:string;cui:string}[],directory
   const c=new DatabaseSync(history,{readOnly:true}),snapshot=new DatabaseSync(path,{readOnly:true});
   try{
     c.exec('BEGIN');snapshot.exec('BEGIN');
-    const stamp=historyStamp(c),meta=JSON.parse(String(snapshot.prepare("SELECT value FROM meta WHERE key='snapshot'").get()?.value||'null')) as {signature:string;version:string;sourceGeneration?:string;builtAt:string;asOf:string;recentStart:string;previousStart:string}|null;
-    if(!sourceGeneration||generation!==fileGeneration(directory)||!meta||meta.sourceGeneration!==sourceGeneration||meta.version!==activityVersion||meta.signature!==stamp.signature||meta.asOf!==(today<stamp.through?today:stamp.through))return stale();
+    const stamp=historyStamp(c),meta=JSON.parse(String(snapshot.prepare("SELECT value FROM meta WHERE key='snapshot'").get()?.value||'null')) as {signature:string;version:string;sourceGeneration?:string;sourceLogicalRevision?:string|null;builtAt:string;asOf:string;recentStart:string;previousStart:string}|null;
+    if(!sourceGeneration||generation!==fileGeneration(directory)||!meta||!sameHistoryRevision(meta,{...stamp,sourceGeneration})||meta.version!==activityVersion||meta.signature!==stamp.signature||meta.asOf!==(today<stamp.through?today:stamp.through))return stale();
     const allowed=new Map(partners.map(p=>[p.id,normalizedCui(p.cui)]));
     const rows=new Map<string,ActivitySnapshotRow>();
     const lag=Math.max(0,Math.floor((Date.parse(today)-Date.parse(stamp.through))/86400000));
@@ -238,7 +238,7 @@ function* activitySnapshotSteps(partners:{id:string;cui:string}[],directory:stri
   try{
     snapshot.exec('BEGIN');
     const meta=JSON.parse(String(snapshot.prepare("SELECT value FROM meta WHERE key='snapshot'").get()?.value||'null'));
-    if(stamp.generation!==fileGeneration(directory)||!meta||meta.sourceGeneration!==stamp.sourceGeneration||meta.reference!==stamp.reference||meta.version!==activityVersion||meta.signature!==stamp.signature||meta.asOf!==(today<stamp.through?today:stamp.through))return activityUnavailable();
+    if(stamp.generation!==fileGeneration(directory)||!meta||!sameHistoryRevision(meta,stamp)||meta.reference!==stamp.reference||meta.version!==activityVersion||meta.signature!==stamp.signature||meta.asOf!==(today<stamp.through?today:stamp.through))return activityUnavailable();
     const lag=Math.max(0,Math.floor((Date.parse(today)-Date.parse(stamp.through))/86400000));
     const range=activityRange(options?.period||'',stamp.start,meta.asOf),rows=new Map<string,ActivitySnapshotRow>(),metrics=new Map<string,PartnerPeriodMetrics>();
     const company=options?.scope==='company',column=company?'company_id':'partner_id',table=company?'company_activity':'activity',daily=company?'company_daily':'daily';

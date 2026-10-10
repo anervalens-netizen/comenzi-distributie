@@ -26,7 +26,11 @@ class UploadTests(unittest.TestCase):
   return rows,summary,end,req,p
  def commit(self,data,ack=False):
   rows,summary,end,req,p=data;req['allowRegression']=ack
-  return u.apply(self.c,rows,summary,end,req,self.root)
+  before=h.sha(h.logical_revision(self.c).encode())
+  result=u.apply(self.c,rows,summary,end,req,self.root)
+  self.assertEqual(result['previousLogicalDigest'],before)
+  self.assertEqual(result['sourceLogicalDigest'],h.sha(h.logical_revision(self.c).encode()))
+  return result
  def facts(self):return [tuple(r) for r in self.c.execute('SELECT date,quantity_micros,value_cents FROM history_current ORDER BY date,value_cents')]
  def test_incompatible_header_explains_expected_customer_report(self):
   path=self.directory/'incompatible.xlsx';fixture(path,[row(Data='01.02.2024')],'2024-02-01','2024-02-29')

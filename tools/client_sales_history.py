@@ -187,6 +187,42 @@ CREATE INDEX IF NOT EXISTS history_rows_hash ON history_rows(import_id,row_hash)
 CREATE INDEX IF NOT EXISTS history_allocations_point ON history_allocations(reference_id,point_key,identity_id);
 CREATE VIEW IF NOT EXISTS history_current AS SELECT r.*,i.client_code,i.franchise_code,a.status allocation_status,a.point_key,a.partner_ids_json,a.reason allocation_reason FROM history_rows r JOIN history_imports b ON b.id=r.import_id AND b.state='active' JOIN history_identities i ON i.id=r.identity_id JOIN history_allocations a ON a.identity_id=r.identity_id AND a.reference_id=(SELECT value FROM history_meta WHERE key='current_reference');
 """
+
+# Transactional revision of all source facts, including writes from other
+# connections. File metadata and WAL checkpoints do not advance this revision.
+REVISION_TABLES=('history_meta','history_references','history_imports','history_identities','history_allocations','history_rows')
+def revision_triggers():
+ return {f'history_revision_{table}_{op.lower()}':
+  f'CREATE TRIGGER history_revision_{table}_{op.lower()} AFTER {op} ON {table} BEGIN UPDATE history_revision SET revision=revision+1 WHERE id=1; END'
+  for table in REVISION_TABLES for op in ('INSERT','UPDATE','DELETE')}
+def ensure_history_revision(c):
+ if c.in_transaction:raise ValueError('Revision setup requires its own transaction')
+ c.execute('BEGIN IMMEDIATE')
+ try:
+  c.execute('CREATE TABLE IF NOT EXISTS history_revision(id INTEGER PRIMARY KEY CHECK(id=1),epoch TEXT NOT NULL,revision INTEGER NOT NULL CHECK(revision>=0))')
+  existing={r[0]:r[1] for r in c.execute("SELECT name,sql FROM sqlite_master WHERE type='trigger'")}
+  expected=revision_triggers()
+  valid=all(existing.get(name)==sql for name,sql in expected.items())
+  row=c.execute('SELECT epoch,revision FROM history_revision WHERE id=1').fetchone()
+  if not valid or not row:
+   # Repairing coverage starts a new epoch; never certify writes while a
+   # trigger was absent. A previous derivative must be rebuilt once.
+   for name in expected:c.execute(f'DROP TRIGGER IF EXISTS {name}')
+   c.execute('DELETE FROM history_revision')
+   c.execute('INSERT INTO history_revision VALUES(1,?,0)',(os.urandom(16).hex(),))
+   for sql in expected.values():c.execute(sql)
+  c.commit()
+ except BaseException:c.rollback();raise
+def logical_revision(c):
+ expected=revision_triggers()
+ existing={r[0]:r[1] for r in c.execute("SELECT name,sql FROM sqlite_master WHERE type='trigger'")}
+ if not all(existing.get(name)==sql for name,sql in expected.items()):return None
+ row=c.execute('SELECT epoch,revision FROM history_revision WHERE id=1').fetchone()
+ if not row:return None
+ path=pathlib.Path(c.execute('PRAGMA database_list').fetchone()[2]).resolve(strict=True)
+ st=path.stat();schema=c.execute('PRAGMA schema_version').fetchone()[0]
+ return ':'.join(map(str,(st.st_dev,st.st_ino,row[0],row[1],schema)))
+
 def connect(path):
  p=pathlib.Path(path).resolve()
  # Refuse both names and any existing unrelated schema, including copies/symlinks.
@@ -197,7 +233,7 @@ def connect(path):
  if tables and ('history_meta' not in tables or any(not t.startswith('history_') and t!='sqlite_sequence' for t in tables)):
   c.close();raise ValueError('Refusing unrelated/application database')
  if tables and c.execute("select value from history_meta where key='schema_version'").fetchone()[0]!='1':raise ValueError('Unsupported schema version')
- c.execute('PRAGMA foreign_keys=ON');c.execute('PRAGMA journal_mode=WAL');c.executescript(SCHEMA);c.commit()
+ c.execute('PRAGMA foreign_keys=ON');c.execute('PRAGMA journal_mode=WAL');c.executescript(SCHEMA);c.commit();ensure_history_revision(c)
  return c
 def store_reference(c,partners_path,master_path):
  partners=json.loads(pathlib.Path(partners_path).read_text());master=json.loads(pathlib.Path(master_path).read_text())

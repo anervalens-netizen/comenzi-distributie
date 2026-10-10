@@ -220,13 +220,14 @@ function recomputeActivity(
  * place. Returns null when prior allocation semantics, older-month coverage or
  * the snapshot schema changed; caller must then run the full rebuild.
  */
-export function refreshActivitySnapshotMonth(directory:string,month:string,today=bucharestToday(),previousSourceDigest?:string){
+export function refreshActivitySnapshotMonth(directory:string,month:string,today=bucharestToday(),previousSourceDigest?:string,previousLogicalDigest?:string,sourceLogicalDigest?:string,onFallback?:(reason:string)=>void){
+  const fallback=(reason:string)=>{onFallback?.(reason);return null;};
   const root=resolve(directory),history=resolve(root,'client-history','client-sales-history.sqlite'),catalogPath=resolve(root,'mobiup.sqlite');
   const output=derivedOutputTarget(resolve(root,'client-history','partner-activity.sqlite'),[history,catalogPath,resolve(root,'sales.sqlite')]);
   const {target}=output;
-  if(!existsSync(history)||!existsSync(target))return null;
+  if(!existsSync(history)||!existsSync(target))return fallback('source_or_snapshot_missing');
   const start=month+'-01',end=monthEnd(month),sourceGeneration=historyFileGeneration(history),snapshotGeneration=historyFileGeneration(target),catalogGeneration=historyFileGeneration(catalogPath);
-  if(!sourceGeneration||!snapshotGeneration||!catalogGeneration)return null;
+  if(!sourceGeneration||!snapshotGeneration||!catalogGeneration)return fallback('physical_generation_unavailable');
 
   const source=new DatabaseSync(history,{readOnly:true});
   const read=new DatabaseSync(target,{readOnly:true});
@@ -234,30 +235,39 @@ export function refreshActivitySnapshotMonth(directory:string,month:string,today
   try{
     source.exec('BEGIN');read.exec('BEGIN');
     const stamp=historyStamp(source);
-    if(!stamp.reference||!stamp.through)return null;
+    if(!stamp.reference||!stamp.through)return fallback('active_history_missing');
     const required=['meta','activity','daily','company_activity','company_daily','revenue_daily','company_identity','company_unresolved','company_identity_links','company_code_aliases','company_detail_identity','point_identity_links','point_unresolved_codes','point_unresolved_candidates'];
     const available=new Set(read.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(row=>String(row.name)));
-    if(required.some(table=>!available.has(table)))return null;
+    if(required.some(table=>!available.has(table)))return fallback('snapshot_tables_missing');
     const previous=JSON.parse(String(read.prepare("SELECT value FROM meta WHERE key='snapshot'").get()?.value||'null'));
-    if(!previous||previous.version!==activityVersion||!read.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='revenue_daily'").get())return null;
+    if(!previous||previous.version!==activityVersion||!read.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='revenue_daily'").get())return fallback('snapshot_version_changed');
     // Only the importer can attest to the exact source generation it replaced.
     // Import IDs/hashes alone cannot detect older in-place numeric corrections.
-    if(previous.sourceGeneration!==sourceGeneration&&(!previous.sourceGeneration||createHash('sha256').update(String(previous.sourceGeneration)).digest('hex')!==previousSourceDigest))return null;
+    if(stamp.sourceLogicalRevision){
+      if(!previous.sourceLogicalRevision)return fallback('logical_revision_baseline_missing');
+      if(previous.sourceLogicalRevision!==stamp.sourceLogicalRevision){
+        if(createHash('sha256').update(String(previous.sourceLogicalRevision)).digest('hex')!==previousLogicalDigest)return fallback('unattested_logical_change');
+        if(createHash('sha256').update(stamp.sourceLogicalRevision).digest('hex')!==sourceLogicalDigest)return fallback('source_changed_after_import');
+      }
+    }else{
+      if(previous.sourceLogicalRevision)return fallback('logical_revision_coverage_missing');
+      if(previous.sourceGeneration!==sourceGeneration&&(!previous.sourceGeneration||createHash('sha256').update(String(previous.sourceGeneration)).digest('hex')!==previousSourceDigest))return fallback('unattested_source_change');
+    }
     const sourceImports=activitySourceImports(source);
-    if(!sameImportsOutsideMonth(previous.sourceImports,sourceImports,start,end))return null;
-    if(!Array.isArray(previous.coverage))return null;
+    if(!sameImportsOutsideMonth(previous.sourceImports,sourceImports,start,end))return fallback('historical_imports_changed');
+    if(!Array.isArray(previous.coverage))return fallback('coverage_missing');
     const coverage=[...previous.coverage.filter((row:{start:string;declaredEnd:string})=>!(row.start>=start&&row.declaredEnd<=end)),...sourceCoverage(source,start,end)].sort((a,b)=>a.start.localeCompare(b.start));
     const changedReference=previous.reference!==stamp.reference;
     const freshIndex=changedReference?compatibleReferenceChange(source,String(previous.reference||''),stamp.reference):null;
-    if(changedReference&&!freshIndex)return null;
+    if(changedReference&&!freshIndex)return fallback('prior_allocation_changed');
     if(changedReference){
       // A newly allocated identity can already have historical unresolved facts.
       // Those older partitions cannot be fixed by replacing the requested month.
       const oldAlloc=allocationSemantics(source,String(previous.reference)),newAlloc=allocationSemantics(source,stamp.reference);
       const added=[...newAlloc.keys()].filter(id=>!oldAlloc.has(id));
-      for(const values of batch(added))if(read.prepare('SELECT 1 FROM revenue_daily WHERE identity_id IN (SELECT CAST(value AS INTEGER) FROM json_each(?)) AND (date<? OR date>?) LIMIT 1').get(JSON.stringify(values),start,end))return null;
+      for(const values of batch(added))if(read.prepare('SELECT 1 FROM revenue_daily WHERE identity_id IN (SELECT CAST(value AS INTEGER) FROM json_each(?)) AND (date<? OR date>?) LIMIT 1').get(JSON.stringify(values),start,end))return fallback('new_identity_has_older_facts');
     }
-    if(sourceGeneration!==historyFileGeneration(history)||snapshotGeneration!==historyFileGeneration(target))return null;
+    if(sourceGeneration!==historyFileGeneration(history)||snapshotGeneration!==historyFileGeneration(target))return fallback('source_or_snapshot_race');
     read.close();
 
     temp=target+'.incremental-'+randomUUID();
@@ -267,12 +277,12 @@ export function refreshActivitySnapshotMonth(directory:string,month:string,today
     out.exec('BEGIN IMMEDIATE');catalog.exec('BEGIN');
 
     const currentMeta=JSON.parse(String(out.prepare("SELECT value FROM meta WHERE key='snapshot'").get()?.value||'null'));
-    if(!currentMeta||currentMeta.version!==activityVersion||currentMeta.reference!==previous.reference)return null;
+    if(!currentMeta||currentMeta.version!==activityVersion||currentMeta.reference!==previous.reference)return fallback('snapshot_copy_changed');
     if(changedReference)replaceReferenceTables(source,out,stamp.reference,freshIndex!);
 
     const catalogPartners=catalog.prepare("SELECT id,json_extract(data,'$.cui') cui FROM customers").all();
     const canonical=(rows:typeof catalogPartners)=>JSON.stringify(rows.map(row=>[String(row.id),row.cui]).sort((a,b)=>String(a[0]).localeCompare(String(b[0]))));
-    if(!Array.isArray(previous.catalogPartners)||canonical(previous.catalogPartners)!==canonical(catalogPartners))return null;
+    if(!Array.isArray(previous.catalogPartners)||canonical(previous.catalogPartners)!==canonical(catalogPartners))return fallback('catalog_membership_changed');
     const partners=new Map<string,string>();
     for(const row of catalogPartners)partners.set(String(row.id),normalizedCui(String(row.cui||'')));
     const master=JSON.parse(String(source.prepare('SELECT master_json FROM history_references WHERE id=?').get(stamp.reference)?.master_json||'[]'));
@@ -337,10 +347,10 @@ export function refreshActivitySnapshotMonth(directory:string,month:string,today
       try{
         liveCatalog.exec('BEGIN');
         const livePartners=liveCatalog.prepare("SELECT id,json_extract(data,'$.cui') cui FROM customers").all();
-        if(canonical(livePartners)!==canonical(catalogPartners)||!currentCatalogGeneration||currentCatalogGeneration!==historyFileGeneration(catalogPath))return null;
+        if(canonical(livePartners)!==canonical(catalogPartners)||!currentCatalogGeneration||currentCatalogGeneration!==historyFileGeneration(catalogPath))return fallback('catalog_changed_during_refresh');
       }finally{liveCatalog.close();}
     }
-    if(sourceGeneration!==historyFileGeneration(history)||snapshotGeneration!==historyFileGeneration(target)){rmSync(temp,{force:true});return null;}
+    if(sourceGeneration!==historyFileGeneration(history)||snapshotGeneration!==historyFileGeneration(target)){rmSync(temp,{force:true});return fallback('source_or_snapshot_race');}
     output.check();
     renameSync(temp,target);temp='';
     return {...metadata,mode:'incremental' as const,month,rawRows:sourceRows.length};

@@ -27,6 +27,7 @@ node tools/test-partner-sales-health.mjs
 node tools/test-partner-sales-store.mjs
 node tools/test-partner-activity.mjs
 node tools/test-client-history-incremental.mjs
+node tools/test-history-logical-revision.mjs
 node tools/test-activity-source-cooperative.mjs
 node tools/test-client-sales.mjs
 node tools/test-partner-billing-period.mjs
