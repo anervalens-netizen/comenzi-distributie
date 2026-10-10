@@ -97,11 +97,20 @@ mkdir -p "$releases/$bad/.private-source-maps/backend"
 cp "$(dirname "$script")/backend-frame-identity.mjs" "$releases/$bad/backend-frame-identity.mjs"
 node - "$releases/$bad" "$bad" <<'JS'
 const fs=require('fs'),p=require('path'),[root,release]=process.argv.slice(2);
-const hashes={js:'a'.repeat(64),map:'b'.repeat(64)};
+const crypto=require('crypto'),files={};
+const ids={'dist/server/index.js':'11111111-1111-5111-8111-111111111111','dist/server/ssr/index.js':'22222222-2222-5222-8222-222222222222'};
+for (const [name,debug_id] of Object.entries(ids)) {
+ const js='console.log("synthetic");\n//# debugId='+debug_id+'\n';
+ const map=JSON.stringify({version:3,file:p.basename(name),sources:['fixture.ts'],sourcesContent:['console.log("synthetic");'],names:[],mappings:'AAAA',debug_id});
+ for (const file of [p.join(root,name),p.join(root,'.private-source-maps/backend',name)]) {
+  fs.mkdirSync(p.dirname(file),{recursive:true});fs.writeFileSync(file,js);
+ }
+ fs.writeFileSync(p.join(root,'.private-source-maps/backend',name+'.map'),map);
+ const hash=x=>crypto.createHash('sha256').update(x).digest('hex');
+ files[name]={js:hash(js),map:hash(map),debug_id};
+}
 fs.writeFileSync(p.join(root,'RELEASE.json'),JSON.stringify({sha:release,resourceMode:'private',sourceMaps:{schema:1}}));
-fs.writeFileSync(p.join(root,'.private-source-maps/backend/manifest.json'),JSON.stringify({release,files:{
- 'dist/server/index.js':{...hashes,debug_id:'11111111-1111-5111-8111-111111111111'},
- 'dist/server/ssr/index.js':{...hashes,debug_id:'22222222-2222-5222-8222-222222222222'}}}));
+fs.writeFileSync(p.join(root,'.private-source-maps/backend/manifest.json'),JSON.stringify({release,files}));
 JS
 cat > "$root/map-gate" <<'EOF'
 #!/usr/bin/env bash
@@ -119,6 +128,32 @@ check "$(readlink -f "$runtime/current")" "$before" 'backend gate failure preser
 check "$(wc -l < "$log")" "$before_restarts" 'backend gate failure never restarts service'
 check "$(tail -1 "$root/maps.log")" "$releases/$bad/.private-source-maps/backend" 'backend maps use their separate receiver gate'
 export MOBIUP_TEST_BACKEND_FAIL=0
+# Partial transfer must fail before any upload, link change or restart.
+before_maps="$(wc -l < "$root/maps.log")"
+mv "$releases/$bad/backend-frame-identity.mjs" "$root/identity.mjs"
+set +e; "$script" "$bad" >/dev/null 2>&1; rc=$?; set -e
+check "$rc" "2" 'identified backend release requires its helper'
+check "$(readlink -f "$runtime/current")" "$before" 'missing helper preserves current'
+check "$(wc -l < "$log")" "$before_restarts" 'missing helper never restarts'
+check "$(wc -l < "$root/maps.log")" "$before_maps" 'missing helper refuses before uploads'
+# An importing wrapper also identifies an incomplete release with no manifest.
+mv "$releases/$bad/.private-source-maps/backend/manifest.json" "$root/manifest.json"
+printf "import './backend-frame-identity.mjs';\n" > "$releases/$bad/error-reporting.mjs"
+set +e; "$script" "$bad" >/dev/null 2>&1; rc=$?; set -e
+check "$rc" "2" 'wrapper import requires helper even without manifest'
+check "$(readlink -f "$runtime/current")" "$before" 'missing identity files preserve current'
+check "$(wc -l < "$log")" "$before_restarts" 'missing identity files never restart'
+check "$(wc -l < "$root/maps.log")" "$before_maps" 'missing identity files refuse before uploads'
+mv "$root/manifest.json" "$releases/$bad/.private-source-maps/backend/manifest.json"
+mv "$root/identity.mjs" "$releases/$bad/backend-frame-identity.mjs"
+cp "$releases/$bad/dist/server/index.js" "$root/bundle.js"
+printf '// altered bytes\n' >> "$releases/$bad/dist/server/index.js"
+set +e; "$script" "$bad" >/dev/null 2>&1; rc=$?; set -e
+check "$rc" "2" 'manifest must match actual runtime bundle bytes'
+check "$(readlink -f "$runtime/current")" "$before" 'changed bundle preserves current'
+check "$(wc -l < "$log")" "$before_restarts" 'changed bundle never restarts'
+check "$(wc -l < "$root/maps.log")" "$before_maps" 'changed bundle refuses before uploads'
+mv "$root/bundle.js" "$releases/$bad/dist/server/index.js"
 "$script" "$bad" >/dev/null
 check "$(readlink -f "$runtime/current")" "$releases/$bad" 'qualified backend release activates'
 ln -sfn "$releases/$old" "$runtime/current"

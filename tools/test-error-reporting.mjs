@@ -30,8 +30,17 @@ try {
  const release='a'.repeat(40);
  writeFileSync(join(fixture,'RELEASE.json'),JSON.stringify({sha:release}));
  mkdirSync(join(fixture,'.private-source-maps/backend'),{recursive:true});
- const files={'dist/server/index.js':{js:'b'.repeat(64),map:'c'.repeat(64),debug_id:'11111111-1111-5111-8111-111111111111'},
-  'dist/server/ssr/index.js':{js:'d'.repeat(64),map:'e'.repeat(64),debug_id:'22222222-2222-5222-8222-222222222222'}};
+ const files={};
+ const {createHash}=await import('node:crypto');
+ for(const [name,id] of [['dist/server/index.js','11111111-1111-5111-8111-111111111111'],['dist/server/ssr/index.js','22222222-2222-5222-8222-222222222222']]) {
+  const script="console.log('synthetic');\n//# debugId="+id+'\n';
+  const map=JSON.stringify({version:3,sources:['synthetic.ts'],sourcesContent:["console.log('synthetic');"],names:[],mappings:'AAAA',debug_id:id});
+  mkdirSync(join(fixture,name,'..'),{recursive:true});
+  mkdirSync(join(fixture,'.private-source-maps/backend',name,'..'),{recursive:true});
+  writeFileSync(join(fixture,name),script);writeFileSync(join(fixture,'.private-source-maps/backend',name),script);
+  writeFileSync(join(fixture,'.private-source-maps/backend',name+'.map'),map);
+  files[name]={js:createHash('sha256').update(script).digest('hex'),map:createHash('sha256').update(map).digest('hex'),debug_id:id};
+ }
  writeFileSync(join(fixture,'.private-source-maps/backend/manifest.json'),JSON.stringify({release,files}));
  const {scrubErrorEvent:runtimeScrub}=await import(pathToFileURL(join(fixture,'error-reporting.mjs')).href);
  const input={request:{url:'https://example.invalid/private'},exception:{values:[{value:'private',

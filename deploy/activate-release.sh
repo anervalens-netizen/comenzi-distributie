@@ -77,20 +77,25 @@ map_mode="$(node -e 'const x=JSON.parse(require("fs").readFileSync(process.argv[
 if [[ "$map_mode" == "mapped" ]]; then
   [[ -n "${MOBIUP_SOURCE_MAP_GATE:-}" && -x "$MOBIUP_SOURCE_MAP_GATE" ]] || fail "private source-map gate is not provisioned"
   [[ -n "${MOBIUP_SOURCE_MAP_PROJECT:-}" && -n "${MOBIUP_PUBLIC_ORIGIN:-}" ]] || fail "source-map project and public origin are required"
-  backend_identified=0
-  if [[ -f "$release/backend-frame-identity.mjs" ]]; then
-    node --input-type=module - "$release" "$release_sha" <<'JS' || fail "invalid backend artifact identity"
+  backend_identified="$(node --input-type=module - "$release" "$release_sha" <<'JS'
 import fs from 'node:fs';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 const [root,release]=process.argv.slice(2);
-const {createBackendFrameNormalizer}=await import(pathToFileURL(path.join(root,'backend-frame-identity.mjs')).href);
-const manifest=JSON.parse(fs.readFileSync(path.join(root,'.private-source-maps/backend/manifest.json'),'utf8'));
-if (!Object.keys(manifest.files??{}).length) throw new Error('Missing backend maps');
-createBackendFrameNormalizer({root,release,manifest});
+const helper=path.join(root,'backend-frame-identity.mjs');
+const manifestPath=path.join(root,'.private-source-maps/backend/manifest.json');
+const wrapper=path.join(root,'error-reporting.mjs');
+const manifest=fs.existsSync(manifestPath) ? JSON.parse(fs.readFileSync(manifestPath,'utf8')) : null;
+const needsHelper=fs.existsSync(wrapper) && fs.readFileSync(wrapper,'utf8').includes('backend-frame-identity.mjs');
+const identified=fs.existsSync(helper) || needsHelper || Object.values(manifest?.files??{}).some(entry=>entry?.debug_id);
+if (identified) {
+  if (!fs.existsSync(helper) || !Object.keys(manifest?.files??{}).length) throw new Error('Incomplete backend artifact identity');
+  const {createBackendFrameNormalizer}=await import(pathToFileURL(helper).href);
+  createBackendFrameNormalizer({root,release,manifest});
+}
+process.stdout.write(identified ? '1' : '0');
 JS
-    backend_identified=1
-  fi
+)" || fail "invalid or incomplete backend artifact identity"
   "$MOBIUP_SOURCE_MAP_GATE" "$release/dist/client" "$release/.private-source-maps/client" "$release_sha" \
     "$MOBIUP_SOURCE_MAP_PROJECT" --origin "$MOBIUP_PUBLIC_ORIGIN" --probe-source error-reporting-browser.ts || fail "source-map receiver verification failed"
   "$MOBIUP_SOURCE_MAP_GATE" "$release" "$release/.private-source-maps/workers" "$release_sha" \
