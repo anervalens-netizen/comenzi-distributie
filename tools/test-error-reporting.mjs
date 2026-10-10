@@ -20,6 +20,7 @@ const {mkdtempSync,copyFileSync,mkdirSync,writeFileSync,symlinkSync,rmSync}=awai
 const {tmpdir}=await import('node:os');
 
 const {pathToFileURL}=await import('node:url');
+const {backendFrameCodeFile}=await import('../deploy/backend-frame-identity.mjs');
 const fixture=mkdtempSync(join(tmpdir(),'backend-frame-integration-'));
 const savedDsn=process.env.GLITCHTIP_DSN,savedRelease=process.env.GLITCHTIP_RELEASE;
 delete process.env.GLITCHTIP_DSN;delete process.env.GLITCHTIP_RELEASE;
@@ -47,9 +48,9 @@ try {
   stacktrace:{frames:Object.keys(files).map(name=>({filename:'index.js',abs_path:pathToFileURL(join(fixture,name)).href,lineno:12,colno:3,context_line:'private context'}))}}]}};
  const result=runtimeScrub(input);
  assert.equal(result.request,undefined);
- assert.deepEqual(result.debug_meta.images,Object.entries(files).map(([name,value])=>({type:'sourcemap',code_file:'app:///backend/'+name,debug_id:value.debug_id})));
+ assert.deepEqual(result.debug_meta.images,Object.entries(files).map(([name,value])=>({type:'sourcemap',code_file:backendFrameCodeFile(name,value.debug_id),debug_id:value.debug_id})));
  assert.deepEqual(result.exception.values[0].stacktrace.frames,Object.keys(files).map(name=>({
-  filename:'app:///backend/'+name,abs_path:'app:///backend/'+name,lineno:12,colno:3})));
+  filename:backendFrameCodeFile(name,files[name].debug_id),abs_path:backendFrameCodeFile(name,files[name].debug_id),lineno:12,colno:3})));
  process.env.GLITCHTIP_RELEASE='f'.repeat(40);
  const {scrubErrorEvent:mismatchScrub}=await import(pathToFileURL(join(fixture,'error-reporting.mjs')).href+'?mismatch');
  const frame={filename:pathToFileURL(join(fixture,'dist/server/index.js')).href};

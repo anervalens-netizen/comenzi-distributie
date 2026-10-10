@@ -21,6 +21,7 @@ try {
  assert.deepEqual(Object.keys(result.backend).sort(),scripts.slice(0,2).sort());
  assert.deepEqual(Object.keys(result.workers).sort(),scripts.slice(2).sort());
  assert.equal(new Set(Object.values(result.backend).map(x=>x.debug_id)).size,2);
+ assert.equal(new Set(Object.values(result.backend).map(x=>path.basename(x.code_file))).size,2);
  for(const relative of scripts) {
   assert.ok(!fs.existsSync(path.join(root,relative+'.map')));
   const worker=relative.endsWith('-worker.mjs'),original=originals.get(relative);

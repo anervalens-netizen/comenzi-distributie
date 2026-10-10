@@ -11,6 +11,15 @@ const safeScript = value => typeof value === 'string'
   && !value.startsWith('/')
   && value.split('/').every(part => part !== '' && part !== '.' && part !== '..');
 
+// A unique basename also supports receivers whose fallback ignores directories.
+// Runtime filenames and generated coordinates stay unchanged.
+export function backendFrameCodeFile(name,debugId) {
+  if (!safeScript(name) || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(debugId))
+    throw new Error('Invalid backend frame alias');
+  const suffix=name.endsWith('.mjs')?'.mjs':'.js';
+  return 'app:///backend/'+name.slice(0,-suffix.length)+'-'+debugId+suffix;
+}
+
 // Paths, not basenames, identify artifacts: RSC and SSR both emit index.js.
 // Both the runtime bytes and private evidence must match the exact manifest.
 export function createBackendFrameNormalizer({root,release,manifest}) {
@@ -36,6 +45,7 @@ export function createBackendFrameNormalizer({root,release,manifest}) {
     if (name.startsWith('dist/server/')) {
       if (typeof entry.debug_id !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(entry.debug_id) || ids.has(entry.debug_id))
         throw new Error('Invalid or duplicate backend debug identity');
+      if (entry.code_file !== undefined && entry.code_file !== backendFrameCodeFile(name,entry.debug_id)) throw new Error('Invalid backend frame alias');
       if (!verified(name,entry)) throw new Error('Backend artifact bytes do not match manifest');
       ids.add(entry.debug_id); scripts.set(name,entry);
     }
@@ -52,7 +62,7 @@ export function createBackendFrameNormalizer({root,release,manifest}) {
     const entry = scripts.get(name);
     // Lazy bundles may change after process start; never use an ID for new bytes.
     if (!entry || !verified(name,entry)) return;
-    frame.filename = 'app:///backend/' + name;
+    frame.filename = backendFrameCodeFile(name,entry.debug_id);
     frame.abs_path = frame.filename;
     return {type:'sourcemap',code_file:frame.filename,debug_id:entry.debug_id};
   };

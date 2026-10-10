@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import {backendFrameCodeFile} from '../deploy/backend-frame-identity.mjs';
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 
 // Append-only identity metadata preserves every original generated coordinate.
@@ -43,7 +44,7 @@ export function exportBackendMaps(root,release) {
   fs.copyFileSync(path.join(root,relative),target);
   fs.renameSync(path.join(root,map),target+'.map');
   const entry={js:sha(fs.readFileSync(target)),map:sha(fs.readFileSync(target+'.map'))};
-  if(debugId)entry.debug_id=debugId;
+  if(debugId){entry.debug_id=debugId;entry.code_file=backendFrameCodeFile(relative,debugId);}
   (worker?workerFiles:backendFiles)[relative]=entry;
  }
  if(Object.keys(workerFiles).length!==4||Object.keys(backendFiles).length===0)

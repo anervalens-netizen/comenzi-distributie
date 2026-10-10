@@ -51,6 +51,9 @@ and activity models are rebuildable and do not replace authoritative history.
 Synthetic recovery tests are not evidence of a production restore or a real
 reboot, and cannot establish production RPO/RTO.
 
+Backend frame URLs use unique basenames derived from the Debug ID, so basename
+fallback cannot confuse RSC and SSR entries. Runtime filenames stay unchanged.
+
 Backend source maps remain private and use a release-bound Debug ID for each
 server bundle. Full relative paths distinguish RSC and SSR bundles sharing a
 basename. The runtime reports an ID only for an artifact in its matching

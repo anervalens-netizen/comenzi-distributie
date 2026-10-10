@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {tmpdir} from 'node:os';
 import {createHash} from 'node:crypto';
-import {createBackendFrameNormalizer} from '../deploy/backend-frame-identity.mjs';
+import {createBackendFrameNormalizer,backendFrameCodeFile} from '../deploy/backend-frame-identity.mjs';
 const release='a'.repeat(40),root=fs.mkdtempSync(path.join(tmpdir(),'backend-identity-'));
 const sha = value => createHash('sha256').update(value).digest('hex');
 const files={};
@@ -14,7 +14,7 @@ function artifact(name,id) {
   fs.mkdirSync(path.dirname(target),{recursive:true});fs.writeFileSync(target,js);
  }
  fs.writeFileSync(path.join(root,'.private-source-maps/backend',name+'.map'),map);
- return {js:sha(js),map:sha(map),debug_id:id};
+ return {js:sha(js),map:sha(map),debug_id:id,code_file:backendFrameCodeFile(name,id)};
 }
 try {
  files['dist/server/index.js']=artifact('dist/server/index.js','11111111-1111-5111-8111-111111111111');
@@ -24,12 +24,22 @@ try {
  const normalize=createBackendFrameNormalizer({root,release,manifest:{release,files}});
  const frames=Object.keys(files).map(name=>({filename:'index.js',abs_path:'file://'+root+'/'+name,lineno:42,colno:7}));
  for(const frame of frames)normalize(frame);
- assert.deepEqual(frames.map(x=>x.filename),Object.keys(files).map(x=>'app:///backend/'+x));
- assert.equal(new Set(frames.map(x=>x.filename)).size,3);
+ assert.deepEqual(frames.map(x=>x.filename),Object.keys(files).map(x=>files[x].code_file));
+ assert.equal(new Set(frames.map(x=>path.basename(x.filename))).size,3);
+ // Model a receiver which falls back to basename before checking the next ID.
+ // No runtime basename is renamed, but event aliases cannot hit that fallback.
+ const images=Object.fromEntries(Object.values(files).map(e=>[path.basename(e.code_file),e.debug_id]));
+ const bundles=Object.entries(files).map(([name,e])=>({name:path.basename(name),id:e.debug_id}));
+ for(const frame of frames) {
+  const basename=path.basename(frame.abs_path),id=images[basename];
+  const found=bundles.find(bundle=>bundle.id===id || bundle.name===basename);
+  assert.equal(found.id,id);
+ }
+ assert.throws(()=>backendFrameCodeFile('../index.js','not-an-id'));
  assert.ok(frames.every(x=>x.abs_path===x.filename&&x.lineno===42&&x.colno===7));
  for(const frame of frames){const before=structuredClone(frame);normalize(frame);assert.deepEqual(frame,before);}
  const absolute={filename:root+'/dist/server/ssr/index.js',lineno:11};normalize(absolute);
- assert.equal(absolute.filename,'app:///backend/dist/server/ssr/index.js');
+ assert.equal(absolute.filename,files['dist/server/ssr/index.js'].code_file);
  for(const filename of [
   root+'-other/dist/server/index.js','/another/release/dist/server/index.js',
   root+'/../other/dist/server/index.js',root+'/dist/server/unknown.js',
@@ -41,7 +51,7 @@ try {
  normalize(foreign);assert.equal(foreign.filename,root+'/dist/server/index.js');
  for(const bad of [
   {release,files:{...files,'dist/server/ssr/index.js':hashes}},
-  {release:'d'.repeat(40),files},{release,files:[]},{release,files:{'../index.js':hashes}},
+  {release:'d'.repeat(40),files},{release,files:[]},{release,files:{...files,'dist/server/index.js':{...hashes,code_file:'app:///backend/index.js'}}},{release,files:{'../index.js':hashes}},
   {release,files:{'/index.js':hashes}},{release,files:{'dist/server/../index.js':hashes}},
   {release,files:{'dist/server/index.js':{js:'bad',map:hashes.map}}},
   {release,files:{...files,'dist/server/index.js':{...hashes,debug_id:'44444444-4444-5444-8444-444444444444'}}},
