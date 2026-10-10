@@ -53,6 +53,8 @@ reboot, and cannot establish production RPO/RTO.
 
 Backend frame URLs use unique basenames derived from the Debug ID, so basename
 fallback cannot confuse RSC and SSR entries. Runtime filenames stay unchanged.
+Receiver uploads must also use those unique basenames for the private JS/map
+pairs and verify their bytes; matching names and Debug IDs alone is insufficient.
 
 Backend source maps remain private and use a release-bound Debug ID for each
 server bundle. Full relative paths distinguish RSC and SSR bundles sharing a
