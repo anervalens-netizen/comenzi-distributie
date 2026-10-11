@@ -14,6 +14,7 @@ node tools/test-bind-ready.mjs
 node tools/test-operational-status.mjs
 python3 tools/test_client_sales_history.py
 python3 tools/test_client_history_upload.py
+python3 -W error::ResourceWarning tools/test_history_revision_backup.py
 node tools/test-client-history-import-isolated.mjs
 python3 tools/test_client_catalog_plan.py
 python3 tools/test_client_catalog_apply.py

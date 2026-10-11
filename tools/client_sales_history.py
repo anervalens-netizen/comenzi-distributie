@@ -3,7 +3,7 @@
 Python standard library only. Input XLSX snapshots are immutable; repeated lines are facts.
 """
 from __future__ import annotations
-import argparse, collections, datetime as dt, decimal, hashlib, json, os, pathlib, re, shutil, sqlite3, tempfile, unicodedata, zipfile
+import argparse, collections, datetime as dt, decimal, hashlib, json, os, pathlib, re, shutil, sqlite3, tempfile, time, unicodedata, zipfile
 import xml.etree.ElementTree as ET
 D=decimal.Decimal
 NS={'s':'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
@@ -195,16 +195,89 @@ def revision_triggers():
  return {f'history_revision_{table}_{op.lower()}':
   f'CREATE TRIGGER history_revision_{table}_{op.lower()} AFTER {op} ON {table} BEGIN UPDATE history_revision SET revision=revision+1 WHERE id=1; END'
   for table in REVISION_TABLES for op in ('INSERT','UPDATE','DELETE')}
+def verify_revision_backup(folder,receipt):
+ backup=folder/receipt['backup']
+ if backup.is_symlink() or not backup.is_file() or backup.stat().st_size!=receipt['bytes'] or file_sha(backup)!=receipt['sha256']:
+  raise ValueError('Revision recovery copy checksum mismatch')
+ if json.loads((folder/'receipt.json').read_text())!=receipt:
+  raise ValueError('Revision recovery receipt mismatch')
+ saved=sqlite3.connect(backup.as_uri()+'?mode=ro',uri=True)
+ try:
+  if saved.execute('PRAGMA integrity_check').fetchone()[0]!='ok':
+   raise ValueError('Revision recovery copy integrity check failed')
+ finally:saved.close()
+
+def preserve_revision_backup(c):
+ # The caller holds BEGIN IMMEDIATE without any writes. A separate read-only
+ # connection can use SQLite backup (including committed WAL) while all other
+ # writers remain excluded; backup on the reserved writer would deadlock.
+ name=c.execute('PRAGMA database_list').fetchone()[2]
+ if not name:raise ValueError('Revision recovery requires a persistent history database')
+ source=pathlib.Path(name).resolve(strict=True)
+ identity=lambda:(source.stat().st_dev,source.stat().st_ino)
+ before=identity();schema=c.execute('PRAGMA schema_version').fetchone()[0]
+ folder=source.parent/'migration-backups'
+ pending=None
+ def sync(path):
+  fd=os.open(path,os.O_RDONLY)
+  try:os.fsync(fd)
+  finally:os.close(fd)
+ try:
+  if folder.is_symlink():raise ValueError('Revision backup directory must not be a symlink')
+  folder.mkdir(mode=0o700,exist_ok=True)
+  if folder.stat().st_uid!=os.geteuid():raise ValueError('Revision backup directory has a different owner')
+  os.chmod(folder,0o700)
+  pending=pathlib.Path(tempfile.mkdtemp(prefix='.history-revision-',dir=folder))
+  backup=pending/'client-sales-history.sqlite'
+  fd=os.open(backup,os.O_CREAT|os.O_EXCL|os.O_WRONLY,0o600);os.close(fd)
+  reader=sqlite3.connect(source.as_uri()+'?mode=ro',uri=True,timeout=30)
+  try:
+   reader.execute('BEGIN')
+   if reader.execute('PRAGMA schema_version').fetchone()[0]!=schema:
+    raise ValueError('History changed before its recovery snapshot')
+   target=sqlite3.connect(backup)
+   try:
+    deadline=time.monotonic()+300
+    def progress(status,remaining,total):
+     if time.monotonic()>deadline:raise ValueError('Revision recovery snapshot timed out')
+    reader.backup(target,pages=1024,progress=progress)
+    target.execute('PRAGMA journal_mode=DELETE')
+   finally:target.close()
+  finally:reader.close()
+  if identity()!=before or c.execute('PRAGMA schema_version').fetchone()[0]!=schema:
+   raise ValueError('History changed during its recovery snapshot')
+  sync(backup)
+  receipt={'kind':'history_revision_recovery_v1','backup':backup.name,'createdAt':now(),
+   'sourceIdentity':list(before),'sourceSchemaVersion':schema,
+   'bytes':backup.stat().st_size,'sha256':file_sha(backup)}
+  manifest=pending/'receipt.json'
+  fd=os.open(manifest,os.O_CREAT|os.O_EXCL|os.O_WRONLY,0o600)
+  with os.fdopen(fd,'w') as f:f.write(dump(receipt));f.flush();os.fsync(f.fileno())
+  verify_revision_backup(pending,receipt)
+  sync(pending)
+  complete=folder/pending.name[1:]
+  os.rename(pending,complete);pending=None
+  sync(folder);sync(folder.parent)
+  verify_revision_backup(complete,receipt)
+  if identity()!=before:raise ValueError('History replaced before revision migration')
+  return receipt
+ except (OSError,sqlite3.Error,ValueError) as error:
+  raise ValueError('History revision migration stopped: a verified recovery copy could not be preserved.') from error
+ finally:
+  if pending is not None:shutil.rmtree(pending)
+
 def ensure_history_revision(c):
  if c.in_transaction:raise ValueError('Revision setup requires its own transaction')
  c.execute('BEGIN IMMEDIATE')
  try:
-  c.execute('CREATE TABLE IF NOT EXISTS history_revision(id INTEGER PRIMARY KEY CHECK(id=1),epoch TEXT NOT NULL,revision INTEGER NOT NULL CHECK(revision>=0))')
   existing={r[0]:r[1] for r in c.execute("SELECT name,sql FROM sqlite_master WHERE type='trigger'")}
   expected=revision_triggers()
   valid=all(existing.get(name)==sql for name,sql in expected.items())
-  row=c.execute('SELECT epoch,revision FROM history_revision WHERE id=1').fetchone()
+  table=c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='history_revision'").fetchone()
+  row=c.execute('SELECT epoch,revision FROM history_revision WHERE id=1').fetchone() if table else None
   if not valid or not row:
+   preserve_revision_backup(c)
+   c.execute('CREATE TABLE IF NOT EXISTS history_revision(id INTEGER PRIMARY KEY CHECK(id=1),epoch TEXT NOT NULL,revision INTEGER NOT NULL CHECK(revision>=0))')
    # Repairing coverage starts a new epoch; never certify writes while a
    # trigger was absent. A previous derivative must be rebuilt once.
    for name in expected:c.execute(f'DROP TRIGGER IF EXISTS {name}')
@@ -233,8 +306,12 @@ def connect(path):
  if tables and ('history_meta' not in tables or any(not t.startswith('history_') and t!='sqlite_sequence' for t in tables)):
   c.close();raise ValueError('Refusing unrelated/application database')
  if tables and c.execute("select value from history_meta where key='schema_version'").fetchone()[0]!='1':raise ValueError('Unsupported schema version')
- c.execute('PRAGMA foreign_keys=ON');c.execute('PRAGMA journal_mode=WAL');c.executescript(SCHEMA);c.commit();ensure_history_revision(c)
- return c
+ try:
+  # Existing history must be protected before any connection-time setup writes.
+  if tables:ensure_history_revision(c)
+  c.execute('PRAGMA foreign_keys=ON');c.execute('PRAGMA journal_mode=WAL');c.executescript(SCHEMA);c.commit();ensure_history_revision(c)
+  return c
+ except BaseException:c.close();raise
 def store_reference(c,partners_path,master_path):
  partners=json.loads(pathlib.Path(partners_path).read_text());master=json.loads(pathlib.Path(master_path).read_text())
  rows=partners['partners'] if isinstance(partners,dict) else partners

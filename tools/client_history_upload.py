@@ -14,7 +14,8 @@ def open_history(directory):
  if not path.is_file():raise UploadError('Istoricul pe clienți nu este încă inițializat.')
  c=sqlite3.connect(path,timeout=30);c.row_factory=sqlite3.Row
  c.execute('PRAGMA foreign_keys=ON')
- h.ensure_history_revision(c)
+ try:h.ensure_history_revision(c)
+ except BaseException:c.close();raise
  return c
 
 def database_path(c):
