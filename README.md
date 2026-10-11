@@ -84,8 +84,10 @@ checkout. Application and worker regression tests exercise the resulting build.
 
 `shadcn` is a development dependency because its CSS is consumed during the
 build. Vinext remains a runtime dependency: the standalone server imports its
-production server. Source audits therefore include Vinext's build dependency
-chain even though unreachable files are excluded from release artifacts.
+production server. The stable framework is pinned to 1.1.0. Its Satori dependency
+uses the compatible fflate 0.7.5 security backport through a scoped override,
+avoiding the vulnerable ZIP64 parser without downgrading the framework. Source
+audits therefore include Vinext's build dependency chain even though unreachable files are excluded from release artifacts.
 The upstream braces advisory GHSA-vfj7-8cjw-p6xm has no patched version at the
 time of this change. Do not use forced downgrades to hide this finding. Its
 remaining source-tree use is build tooling processing repository-controlled
