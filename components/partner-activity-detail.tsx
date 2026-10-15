@@ -55,16 +55,16 @@ export function PartnerActivityDetail({view,month,loading,focusRequestId,onBack,
       <button className="back-link" onClick={onBack}><ArrowLeft size={17}/> {workspace?'Înapoi la portofoliu':'Înapoi la Activitate'}</button>
       <div className="activity-toolbar"><label>Luna<input type="month" value={month} onChange={event=>onMonthChange(event.target.value)}/></label><button className="icon-button" aria-label="Actualizează partenerii" onClick={onRefresh}><RefreshCw size={18}/></button></div>
     </div>
-    <div className="page-heading activity-detail-title"><div><span className="eyebrow">ACTIVITATE</span><h1>{workspace?'Solicitări de partener':'Parteneri noi'}</h1><p>Solicitările echipei, grupate pe agent.</p></div></div>
+    <div className="page-heading activity-detail-title"><div><span className="eyebrow">ACTIVITATE</span><h1>{workspace?'Clienți noi':'Parteneri noi'}</h1><p>Clienții adăugați de echipă, grupați pe agent.</p></div></div>
     {error&&<p className="error-banner" role="alert">{error}</p>}
     <div className="activity-detail-summary">
       <div><span>TOTAL</span><strong>{view.totals.partnerRequests}</strong></div>
       <div><span>ÎN AȘTEPTARE</span><strong>{pending}</strong></div>
-      <div><span>CONFIRMAȚI</span><strong>{view.totals.partnerConfirmed}</strong></div>
+      <div><span>ADĂUGAȚI</span><strong>{view.totals.partnerConfirmed}</strong></div>
     </div>
     <section className="panel partner-detail-panel">
       <div className="partner-detail-filters">
-        <div className="status-filter" aria-label="Filtrează după status">{([['all','Toate'],['requested','În așteptare'],['confirmed','Confirmați']] as const).map(([value,label])=><button key={value} className={status===value?'active':''} aria-pressed={status===value} onClick={()=>setStatus(value)}>{label}</button>)}</div>
+        <div className="status-filter" aria-label="Filtrează după status">{([['all','Toate'],['requested','În așteptare'],['confirmed','Adăugați']] as const).map(([value,label])=><button key={value} className={status===value?'active':''} aria-pressed={status===value} onClick={()=>setStatus(value)}>{label}</button>)}</div>
         <label className="partner-agent-filter">Agent<select value={agentId} onChange={event=>setAgentId(event.target.value)}><option value="all">Toți agenții</option>{view.agents.map(agent=><option value={agent.agentId} key={agent.agentId}>{agent.agentName}</option>)}</select></label>
       </div>
       {loading?<p className="activity-inline-loading">Se actualizează…</p>:null}
@@ -75,7 +75,7 @@ export function PartnerActivityDetail({view,month,loading,focusRequestId,onBack,
             <span className="activity-agent-avatar">{group.agent.agentName.split(' ').slice(0,2).map(part=>part[0]).join('')}</span>
             <span className="partner-agent-name"><strong>{group.agent.agentName}</strong><small>{group.agent.warehouseName}{group.agent.active?'':' · cont dezactivat'}</small></span>
             <span className="partner-agent-count"><strong>{group.all.length}</strong><small>{group.all.length===1?'partener':'parteneri'} {workspace?'în selecție':'luna aceasta'}</small></span>
-            <span className="partner-agent-badges"><small>{group.confirmed} confirmați</small><small>{group.pending} în așteptare</small></span>
+            <span className="partner-agent-badges"><small>{group.confirmed} adăugați</small><small>{group.pending} în așteptare</small></span>
             <ChevronDown size={18}/>
           </summary>
           <div className="partner-agent-requests">
@@ -90,7 +90,7 @@ export function PartnerActivityDetail({view,month,loading,focusRequestId,onBack,
                   {item.existingLocations.length>0&&<small className="existing-company">Firmă existentă · {item.existingLocations.length} punct{item.existingLocations.length===1?'':'e'} de lucru în bază</small>}
                   {item.status==='requested'&&resolution&&<label className="partner-location-resolution">Rezolvă punctul de lucru<select disabled={canConfirm?.(item)!==true} aria-label={`Rezolvă punctul de lucru pentru ${item.company}`} value={selected} onChange={event=>setResolutions(current=>({...current,[item.id]:event.target.value}))}><option value="">Alege explicit…</option>{resolution.candidates.map(location=><option key={location.id} value={location.id}>{location.city} · {location.county||'județ lipsă'} · {location.address}</option>)}{resolution.allowNew&&<option value="new">Creează punct nou · {item.county}</option>}</select></label>}
                 </div>
-                <div className="partner-request-action"><span className={'badge '+(item.status==='confirmed'?'finalized':'draft')}>{item.status==='confirmed'?'Confirmat':'Solicitat'}</span>{item.status==='requested'&&<button className="primary" disabled={canConfirm?.(item)!==true||!!confirming||Boolean(resolution&&!selected)} onClick={()=>void confirm(item)}>{confirming===item.id?<LoaderCircle className="spin" size={16}/>:<Check size={16}/>} Confirmă</button>}</div>
+                <div className="partner-request-action"><span className={'badge '+(item.status==='confirmed'?'finalized':'draft')}>{item.status==='confirmed'?'Adăugat':'Cerere veche'}</span>{item.status==='requested'&&<button className="primary" disabled={canConfirm?.(item)!==true||!!confirming||Boolean(resolution&&!selected)} onClick={()=>void confirm(item)}>{confirming===item.id?<LoaderCircle className="spin" size={16}/>:<Check size={16}/>} Confirmă</button>}</div>
               </div>;
             }):<p className="portfolio-message">Nicio solicitare pentru filtrul selectat.</p>}
           </div>

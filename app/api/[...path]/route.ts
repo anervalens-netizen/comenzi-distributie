@@ -22,7 +22,7 @@ import { salesImportStatus, salesView, salesUpload } from '@/lib/sales-server';
 import { inventories } from '@/lib/inventory-server';
 import { partnerMail } from '@/lib/partner-mail';
 import { confirmPartnerRequest, getPartnerRequest, listPartnerRequests, partnerLocations, teamActivity, managerActivity } from '@/lib/partner-requests';
-import { managerRequestInbox, pushPublicConfig, removePushSubscription, upsertPushSubscription } from '@/lib/push-notifications';
+import { readPartnerNotifications, managerRequestInbox, pushPublicConfig, removePushSubscription, upsertPushSubscription } from '@/lib/push-notifications';
 import { importClients } from '@/lib/client-import-server';
 import { selectUsersWithClientCounts } from '@/lib/customer-counts';
 import { bucharestDayStartUtc } from '@/lib/bucharest-month';
@@ -286,6 +286,7 @@ async function dispatch(req: Request) {
   if(path.join('/')==='usage/pulse'&&req.method==='POST')return response(await usagePulse(req,user));
   if(path.join('/')==='usage/report'&&req.method==='GET')return response(await usageReport(readUser,new URL(req.url).searchParams));
   if(path.join('/')==='notifications/inbox'&&req.method==='GET')return response(await managerRequestInbox(user));
+  if(path.join('/')==='notifications/inbox/read'&&req.method==='POST')return response(await readPartnerNotifications(user,await jsonBody(req)));
   if(path.join('/')==='notifications/push'&&req.method==='GET')return response(await pushPublicConfig(user));
   if(path.join('/')==='notifications/push'&&req.method==='POST')return response(await upsertPushSubscription(user,await jsonBody(req)));
   if(path.join('/')==='notifications/push'&&req.method==='DELETE')return response(await removePushSubscription(user,await jsonBody(req)));

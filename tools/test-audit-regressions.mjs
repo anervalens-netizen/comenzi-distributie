@@ -86,12 +86,26 @@ try {
 
   const casId=randomUUID(),casBase={...partner,requestId:casId,company:'PARTNER CAS INITIAL',cui:'9900172099',address:'Strada CAS 1'};
   const casInitial=(await call('partner/mail','POST',casBase,a)).data.request;
-  const casA=(await call('partner/mail','POST',{...casBase,revision:casInitial.revision,company:'PARTNER CAS EDIT A'},a)).data.request;
-  await call('partner/mail','POST',{...casBase,revision:casInitial.revision,company:'PARTNER CAS STALE B'},a,409);
-  const casCurrent=(await call(`partner/requests?month=${casA.createdAt.slice(0,7)}`,'GET',null,a)).data.requests.find(item=>item.id===casId);
-  check(casCurrent?.company==='PARTNER CAS EDIT A'&&casCurrent.revision===casA.revision,'Stale partner form cannot overwrite a newer revision');
-  const casRetry=(await call('partner/mail','POST',{...casBase,revision:casInitial.revision,company:'PARTNER CAS EDIT A'},a)).data.request;
-  check(casRetry.revision===casA.revision,'Retrying the same partner payload is idempotent after a lost response');
+  await call('partner/mail','POST',{...casBase,revision:casInitial.revision,company:'PARTNER CAS EDIT A'},a,409);
+  const casCurrent=(await call('partner/requests/'+casId,'GET',null,a)).data.request;
+  check(casCurrent.company==='PARTNER CAS INITIAL'&&casCurrent.status==='confirmed','Registration is active and cannot be silently overwritten by an edited mail form');
+  const casRetry=(await call('partner/mail','POST',casBase,a)).data.request;
+  check(casRetry.revision===casInitial.revision&&casRetry.customerId===casInitial.customerId,'Retrying a registration after a lost response is idempotent');
+  const raceBase={...casBase,requestId:randomUUID(),cui:'9900172098',address:'Strada Concurrent 1'};
+  const raced=await Promise.all([call('partner/mail','POST',raceBase,a),call('partner/mail','POST',raceBase,a)]);
+  check(raced[0].data.request.customerId===raced[1].data.request.customerId,'Parallel retry of the same registration returns the same customer');
+  const first={...raceBase,requestId:randomUUID(),cui:'9900172097'};
+  const second={...first,requestId:randomUUID()};
+  const attempts=await Promise.all([first,second].map(body=>fetch(origin+'/api/partner/mail',{method:'POST',headers:{Cookie:a,'Content-Type':'application/json'},body:JSON.stringify(body)})));
+  for(let i=0;i<attempts.length;i++){if(attempts[i].status===409)await call('partner/mail','POST',[first,second][i],a);else check(attempts[i].status===200,'Parallel registration succeeds or requests a clean retry');}
+  const firstSaved=(await call('partner/requests/'+first.requestId,'GET',null,a)).data.request;
+  const secondSaved=(await call('partner/requests/'+second.requestId,'GET',null,a)).data.request;
+  check(firstSaved.customerId===secondSaved.customerId,'Concurrent requests for the same point never duplicate the customer');
+  const failureBody={...casBase,requestId:randomUUID(),cui:'9900172096',address:'Strada Rollback 1'};
+  db.exec("CREATE TRIGGER qa_registration_failure BEFORE UPDATE OF status ON partner_requests WHEN NEW.cui_key='9900172096' BEGIN SELECT RAISE(ABORT,'synthetic registration failure'); END;");
+  await call('partner/mail','POST',failureBody,a,500);
+  check(!db.prepare('SELECT 1 FROM partner_requests WHERE id=?').get(failureBody.requestId)&&!db.prepare('SELECT 1 FROM customers WHERE id=?').get('partner-'+failureBody.requestId),'A failed registration rolls back both request and customer atomically');
+  db.exec('DROP TRIGGER qa_registration_failure');
 
   for(const mutation of ['password','deactivate','profile']){
     db.prepare('UPDATE users SET active=1,password_hash=?,profile_revision=profile_revision+1 WHERE id=?').run(hash,'reg-race');

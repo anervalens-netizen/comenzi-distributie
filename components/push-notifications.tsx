@@ -43,13 +43,13 @@ export function PushNotifications(){
   }
   const enabled=state==='enabled';
   return <section className="panel push-settings">
-    <div className="section-heading">{enabled?<BellRing size={22}/>:<BellOff size={22}/>}<div><h2>Notificări push</h2><p>Primești alerte native când un agent trimite o solicitare de partener nou, inclusiv când PWA este închisă.</p></div></div>
+    <div className="section-heading">{enabled?<BellRing size={22}/>:<BellOff size={22}/>}<div><h2>Notificări push</h2><p>Primești alerte native când un agent adaugă un client nou, inclusiv când PWA este închisă.</p></div></div>
     <div className="push-settings-status"><span className={'badge '+(enabled?'finalized':'draft')}>{state==='checking'?'Se verifică…':state==='unsupported'?'Indisponibil':state==='denied'?'Blocat în browser':enabled?'Active':'Inactive'}</span>
       {state==='unsupported'&&<small>Browserul sau modul curent nu oferă Web Push. Pe iPhone este necesară instalarea PWA pe ecranul principal.</small>}
       {state==='denied'&&<small>Permisiunea a fost refuzată. Reactiveaz-o din setările browserului/PWA, apoi revino aici.</small>}
       {state==='default'&&<small>Activarea va cere permisiunea sistemului o singură dată.</small>}
       {state==='disabled'&&<small>Poți activa notificările pe acest dispozitiv.</small>}
-      {enabled&&<small>Acest dispozitiv este abonat la solicitările din aria ta.</small>}
+      {enabled&&<small>Acest dispozitiv este abonat la notificările din aria ta.</small>}
     </div>
     {error&&<p className="error-banner" role="alert">{error}</p>}
     {!['checking','unsupported','denied'].includes(state)&&<button type="button" className={enabled?'secondary':'primary'} disabled={busy} onClick={()=>void (enabled?disable():enable())}>{busy?<LoaderCircle className="spin" size={18}/>:enabled?<BellOff size={18}/>:<BellRing size={18}/>} {busy?'Se actualizează…':enabled?'Dezactivează pe acest dispozitiv':'Activează notificările'}</button>}

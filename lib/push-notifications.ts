@@ -39,12 +39,13 @@ function parseSubscription(value:unknown):PushSubscriptionData{
 }
 export async function managerRequestInbox(user:User):Promise<ManagerRequestInbox>{
   requireManager(user);
-  const where=isGlobalManager(user)
-    ?"pr.status='requested'"
-    :"pr.status='requested' AND EXISTS (SELECT 1 FROM manager_agents ma WHERE ma.manager_id=? AND ma.agent_id=pr.agent_id)";
+  const scope=isGlobalManager(user)
+    ?"(pr.status='requested' OR (pr.status='confirmed' AND pr.confirmed_by=pr.agent_id))"
+    :"(pr.status='requested' OR (pr.status='confirmed' AND pr.confirmed_by=pr.agent_id)) AND EXISTS (SELECT 1 FROM manager_agents ma WHERE ma.manager_id=? AND ma.agent_id=pr.agent_id)";
+  const where=scope+" AND NOT EXISTS (SELECT 1 FROM settings WHERE key='partner-read:'||?||':'||pr.id)";
   const countSql='SELECT COUNT(*) count FROM partner_requests pr WHERE '+where;
   const rowsSql="SELECT pr.id,pr.agent_id,u.name agent_name,pr.created_at,pr.payload FROM partner_requests pr JOIN users u ON u.id=pr.agent_id WHERE "+where+' ORDER BY pr.created_at DESC LIMIT 20';
-  const countArgs=isGlobalManager(user)?[]:[user.id],rowArgs=isGlobalManager(user)?[]:[user.id];
+  const countArgs=isGlobalManager(user)?[user.id]:[user.id,user.id],rowArgs=countArgs;
   const [countRow,rows]=await Promise.all([
     db().prepare(countSql).bind(...countArgs).first<{count:number}>(),
     db().prepare(rowsSql).bind(...rowArgs).all<InboxRow>(),
@@ -56,6 +57,15 @@ export async function managerRequestInbox(user:User):Promise<ManagerRequestInbox
     }catch{return [];}
   });
   return {count:Number(countRow?.count||0),items};
+}
+/** Read state is private to each manager and never changes client availability. */
+export async function readPartnerNotifications(user:User,input:unknown){
+  requireManager(user);
+  const ids=(input as {ids?:unknown})?.ids;
+  if(!Array.isArray(ids)||ids.length<1||ids.length>20||ids.some(id=>typeof id!=='string'||!/^[0-9a-f-]{36}$/i.test(id)))fail(400,'Notificările selectate sunt invalide.');
+  const now=new Date().toISOString();
+  await db().batch([...new Set(ids as string[])].map(id=>db().prepare("INSERT OR IGNORE INTO settings(key,value) SELECT 'partner-read:'||?||':'||pr.id,? FROM partner_requests pr WHERE pr.id=? AND pr.status='confirmed' AND pr.confirmed_by=pr.agent_id AND (?=1 OR EXISTS (SELECT 1 FROM manager_agents ma WHERE ma.manager_id=? AND ma.agent_id=pr.agent_id))").bind(user.id,now,id,isGlobalManager(user)?1:0,user.id)));
+  return managerRequestInbox(user);
 }
 export async function pushPublicConfig(user:User){
   requireManager(user);const cfg=await vapid();return {publicKey:cfg.publicKey};
@@ -77,7 +87,7 @@ export async function sendPartnerRequestPush(agent:User,requestId:string,partner
     if(!rows.results.length)return;
     const cfg=await vapid(),subscriptions=rows.results.map(row=>({endpoint:row.endpoint,keys:{p256dh:row.p256dh,auth:row.auth}}));
     const topic=await topicFromString('partner-request:'+requestId);
-    const result=await sendPushBatch(subscriptions,{title:`Partener nou · ${partner.company}`,body:`Solicitare trimisă de ${agent.name}`,url:`/?request=${requestId}`,tag:`partner-request-${requestId}`},cfg,{ttl:86400,urgency:'high',topic,timeoutMs:5000,concurrency:8});
+    const result=await sendPushBatch(subscriptions,{title:`Partener nou · ${partner.company}`,body:`Client adăugat în portofoliu de ${agent.name}`,url:`/?request=${requestId}`,tag:`partner-request-${requestId}`},cfg,{ttl:86400,urgency:'high',topic,timeoutMs:5000,concurrency:8});
     if(result.gone.length)await db().batch(result.gone.map(endpoint=>db().prepare('DELETE FROM push_subscriptions WHERE endpoint=?').bind(endpoint)));
     for(const failure of result.failed){
       const err=failure.error;

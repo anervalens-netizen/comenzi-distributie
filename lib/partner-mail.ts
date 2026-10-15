@@ -86,6 +86,6 @@ export async function partnerMail(req: Request, user: User) {
   const mailto = `mailto:${encodeURIComponent(to)}?cc=${encodeURIComponent(cc.join(','))}&subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
   const slug = partner.company.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9.-]+/gi, '_').replace(/^_+|_+$/g, '').slice(0, 80) || 'partener';
   const mail: PartnerMail = { to, cc, subject, body, mailto, emlFilename: `creare-partener-${slug}.eml` };
-  const request=await savePartnerRequest(user,input.requestId,input.revision,partner);
+  const request=await savePartnerRequest(user,input.requestId,input.revision,partner,input.locationResolution);
   return response({ partner, request, mail, eml: emlForPartner(mail, htmlFor(partner)) });
 }

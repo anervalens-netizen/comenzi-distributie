@@ -24,24 +24,44 @@ function summarizeInventory(record:InventoryRecord):InventoryDifference{return r
 export async function partnerLocations(cui:string){const key=normalizeCui(cui);if(!key)return [];const rows=await allActiveCustomers();return rows.filter(row=>normalizeCui(customerFromRow(row).cui)===key).map(location);}
 async function decorate(rows:RequestRow[]){if(!rows.length)return [];const keys=new Set(rows.map(row=>row.cui_key)),customers=await allActiveCustomers();const byKey=new Map<string,PartnerLocation[]>();for(const row of customers){const item=location(row),key=normalizeCui(item.cui);if(!keys.has(key))continue;byKey.set(key,[...(byKey.get(key)||[]),item]);}return rows.map(row=>{const partner=requestPayload(row);return {...partner,id:row.id,agentId:row.agent_id,agentName:row.agent_name||'',warehouseId:row.warehouse_id,warehouseName:row.warehouse_name||'',status:row.status==='confirmed'?'confirmed':'requested',createdAt:row.created_at,updatedAt:row.updated_at,confirmedAt:row.confirmed_at,confirmedBy:row.confirmed_by,customerId:row.customer_id,revision:Number(row.revision),existingLocations:byKey.get(row.cui_key)||[]} satisfies PartnerRequestRecord;});}
 
-export async function savePartnerRequest(user:User,requestId:unknown,revisionInput:unknown,partner:PartnerRequest){
-  if(user.role!=='agent'||!user.warehouseId)fail(403,'Cererea de partener nou se salvează din contul agentului.');
+/** Register and associate a point atomically. confirmed_by=agent_id identifies self-registration. */
+export async function savePartnerRequest(user:User,requestId:unknown,revisionInput:unknown,partner:PartnerRequest,locationResolutionInput?:unknown){
+  if(user.role!=='agent'||!user.warehouseId)fail(403,'Clientul nou se adaugă din contul agentului.');
   let id=textField(requestId,80);if(!id)id=crypto.randomUUID();if(!uuid.test(id))fail(400,'Identificatorul cererii este invalid.');
   const existing=await db().prepare('SELECT * FROM partner_requests WHERE id=?').bind(id).first<RequestRow>();
-  let created=false;
   const now=new Date().toISOString(),payload=JSON.stringify(partner),cuiKey=normalizeCui(partner.cui);if(!cuiKey)fail(400,'CUI/CIF invalid.');
   if(existing){
     if(existing.agent_id!==user.id)fail(409,'Identificatorul cererii este deja folosit.');
-    if(existing.status==='confirmed')fail(409,'Cererea a fost deja confirmată. Pornește o cerere nouă.');
-    const expected=Number(revisionInput);
-    if(existing.payload===payload&&existing.cui_key===cuiKey&&existing.warehouse_id===user.warehouseId)return (await decorate([existing]))[0];
-    if(!Number.isSafeInteger(expected)||expected!==Number(existing.revision))fail(409,'Cererea s-a modificat în altă fereastră. Păstrează datele curente și reîncarcă istoricul.');
-    const result=await db().prepare("UPDATE partner_requests SET warehouse_id=?,cui_key=?,payload=?,updated_at=?,revision=revision+1 WHERE id=? AND agent_id=? AND status='requested' AND revision=?").bind(user.warehouseId,cuiKey,payload,now,id,user.id,expected).run();
-    if(!result.meta.changes)fail(409,'Cererea s-a modificat în altă fereastră. Păstrează datele curente și reîncarcă istoricul.');
-  } else {await db().prepare("INSERT INTO partner_requests(id,agent_id,warehouse_id,cui_key,status,payload,created_at,updated_at,revision) VALUES (?,?,?,?,'requested',?,?,?,1)").bind(id,user.id,user.warehouseId,cuiKey,payload,now,now).run();created=true;}
-  const row=await db().prepare("SELECT pr.*,u.name agent_name,COALESCE(u.warehouse_name,'') warehouse_name FROM partner_requests pr JOIN users u ON u.id=pr.agent_id WHERE pr.id=?").bind(id).first<RequestRow>();
-  if(created)void sendPartnerRequestPush(user,id,partner);
-  return (await decorate([row!]))[0];
+    if(existing.status==='confirmed'){
+      if(existing.payload===payload&&existing.cui_key===cuiKey&&existing.warehouse_id===user.warehouseId)return getPartnerRequest(user,id);
+      fail(409,'Clientul a fost deja adăugat. Modifică fișa din Parteneri sau pornește un client nou.');
+    }
+    if(!Number.isSafeInteger(Number(revisionInput))||Number(revisionInput)!==Number(existing.revision))fail(409,'Cererea s-a modificat în altă fereastră. Păstrează datele curente și reîncarcă istoricul.');
+  }
+  // Reject a changed customer snapshot before any write, including parallel registration.
+  const version=await db().prepare('SELECT data_revision FROM portfolio_revision WHERE id=1').first<{data_revision:number}>();
+  if(!version)fail(503,'Portofoliul se actualizează. Reîncearcă.');
+  const samePoint=await resolveRequestCustomer(partner,cuiKey,locationResolutionInput);
+  const customerId=samePoint?.id||'partner-'+id,expected=existing?Number(existing.revision)+1:1;
+  const requestStatement=existing
+    ?db().prepare("UPDATE partner_requests SET warehouse_id=?,cui_key=?,payload=?,updated_at=?,revision=revision+1 WHERE id=? AND agent_id=? AND status='requested' AND revision=? AND (SELECT data_revision FROM portfolio_revision WHERE id=1)=?").bind(user.warehouseId,cuiKey,payload,now,id,user.id,existing.revision,version.data_revision)
+    :db().prepare("INSERT OR IGNORE INTO partner_requests(id,agent_id,warehouse_id,cui_key,status,payload,created_at,updated_at,revision) SELECT ?,?,?,?,'requested',?,?,?,1 WHERE (SELECT data_revision FROM portfolio_revision WHERE id=1)=?").bind(id,user.id,user.warehouseId,cuiKey,payload,now,now,version.data_revision);
+  const guard="EXISTS (SELECT 1 FROM partner_requests WHERE id=? AND agent_id=? AND status='requested' AND revision=? AND updated_at=? AND payload=?)";
+  const args=[id,user.id,expected,now,payload];
+  let customerStatement;
+  if(samePoint)customerStatement=db().prepare("UPDATE customers SET data=json_set(data,'$.warehouseIds',json_insert(COALESCE(json_extract(data,'$.warehouseIds'),json_array(warehouse_id)),'$[#]',?)) WHERE id=? AND active=1 AND NOT EXISTS (SELECT 1 FROM json_each(COALESCE(json_extract(data,'$.warehouseIds'),json_array(warehouse_id))) WHERE value=?) AND "+guard).bind(user.warehouseId,customerId,user.warehouseId,...args);
+  else {
+    const client:Client={id:customerId,warehouseId:user.warehouseId,warehouseIds:[user.warehouseId],name:partner.company,cui:partner.cui,city:partner.location,county:partner.county,address:partner.address,route:''};
+    customerStatement=db().prepare("INSERT INTO customers(id,warehouse_id,data,active) SELECT ?,?,?,1 WHERE "+guard).bind(customerId,user.warehouseId,JSON.stringify(client),...args);
+  }
+  const results=await db().batch([requestStatement,customerStatement,db().prepare("UPDATE partner_requests SET status='confirmed',confirmed_at=?,confirmed_by=?,customer_id=?,revision=revision+1 WHERE id=? AND agent_id=? AND status='requested' AND revision=? AND updated_at=? AND payload=? AND EXISTS (SELECT 1 FROM customers WHERE id=? AND active=1)").bind(now,user.id,customerId,...args,customerId)]);
+  if(!results[2]?.meta.changes){
+    const current=await db().prepare('SELECT * FROM partner_requests WHERE id=?').bind(id).first<RequestRow>();
+    if(current?.agent_id===user.id&&current.status==='confirmed'&&current.payload===payload&&current.warehouse_id===user.warehouseId)return getPartnerRequest(user,id);
+    fail(409,'Portofoliul sau cererea s-a modificat. Reîncearcă adăugarea clientului.');
+  }
+  void sendPartnerRequestPush(user,id,partner);
+  return getPartnerRequest(user,id);
 }
 
 export async function getPartnerRequest(user:User,id:string){
@@ -63,12 +83,8 @@ export async function listPartnerRequests(user:User,monthInput:string|null){
   return {month,requests:await decorate(rows)};
 }
 
-export async function confirmPartnerRequest(user:User,id:string,revision:unknown,locationResolutionInput?:unknown){
-  requireManager(user);if(!uuid.test(id))fail(400,'Identificatorul cererii este invalid.');
-  const row=await db().prepare('SELECT * FROM partner_requests WHERE id=?').bind(id).first<RequestRow>();if(!row)fail(404,'Cererea nu a fost găsită.');await requireAgentAccess(user,row.agent_id);
-  if(row.status==='confirmed'){const full=await db().prepare("SELECT pr.*,u.name agent_name,COALESCE(u.warehouse_name,'') warehouse_name FROM partner_requests pr JOIN users u ON u.id=pr.agent_id WHERE pr.id=?").bind(id).first<RequestRow>();return (await decorate([full!]))[0];}
-  const expected=Number(revision);if(!Number.isSafeInteger(expected)||expected!==Number(row.revision))fail(409,'Cererea s-a modificat. Actualizează lista.');
-  const partner=requestPayload(row),customers=await allActiveCustomers(),sameFirm=customers.filter(item=>normalizeCui(customerFromRow(item).cui)===row.cui_key);
+async function resolveRequestCustomer(partner:PartnerRequest,cuiKey:string,locationResolutionInput?:unknown){
+  const customers=await allActiveCustomers(),sameFirm=customers.filter(item=>normalizeCui(customerFromRow(item).cui)===cuiKey);
   const wantedPoint=partnerPointKey(partner.location,partner.county,partner.address),wantedLegacy=partnerLegacyPointKey(partner.location,partner.address),locationResolution=textField(locationResolutionInput,100);
   const exact=sameFirm.filter(item=>{const client=customerFromRow(item);return partnerPointKey(client.city,client.county,client.address)===wantedPoint;});
   const incompleteLegacy=sameFirm.filter(item=>{const client=customerFromRow(item);return !hasPartnerCounty(client.county)&&partnerLegacyPointKey(client.city,client.address)===wantedLegacy;});
@@ -77,6 +93,15 @@ export async function confirmPartnerRequest(user:User,id:string,revision:unknown
   else if(exact.length>1){samePoint=exact.find(item=>item.id===locationResolution);if(!samePoint)fail(409,'Există mai multe puncte identice în datele vechi. Alege explicit punctul care trebuie asociat.');}
   else if(incompleteLegacy.length){if(locationResolution==='new')samePoint=undefined;else {samePoint=incompleteLegacy.find(item=>item.id===locationResolution);if(!samePoint)fail(409,'Punctul existent are județul incomplet. Alege explicit punctul existent sau creează unul nou.');}}
   else if(locationResolution&&locationResolution!=='new')fail(409,'Alegerea punctului de lucru nu mai este valabilă. Actualizează lista.');
+  return samePoint;
+}
+
+export async function confirmPartnerRequest(user:User,id:string,revision:unknown,locationResolutionInput?:unknown){
+  requireManager(user);if(!uuid.test(id))fail(400,'Identificatorul cererii este invalid.');
+  const row=await db().prepare('SELECT * FROM partner_requests WHERE id=?').bind(id).first<RequestRow>();if(!row)fail(404,'Cererea nu a fost găsită.');await requireAgentAccess(user,row.agent_id);
+  if(row.status==='confirmed'){const full=await db().prepare("SELECT pr.*,u.name agent_name,COALESCE(u.warehouse_name,'') warehouse_name FROM partner_requests pr JOIN users u ON u.id=pr.agent_id WHERE pr.id=?").bind(id).first<RequestRow>();return (await decorate([full!]))[0];}
+  const expected=Number(revision);if(!Number.isSafeInteger(expected)||expected!==Number(row.revision))fail(409,'Cererea s-a modificat. Actualizează lista.');
+  const partner=requestPayload(row),samePoint=await resolveRequestCustomer(partner,row.cui_key,locationResolutionInput);
   const customerId=samePoint?.id||`partner-${id}`,now=new Date().toISOString();
   let customerStatement;
   if(samePoint)customerStatement=db().prepare("UPDATE customers SET data=json_set(data,'$.warehouseIds',json_insert(COALESCE(json_extract(data,'$.warehouseIds'),json_array(warehouse_id)),'$[#]',?)) WHERE id=? AND active=1 AND NOT EXISTS (SELECT 1 FROM json_each(COALESCE(json_extract(data,'$.warehouseIds'),json_array(warehouse_id))) WHERE value=?) AND EXISTS (SELECT 1 FROM partner_requests WHERE id=? AND status='requested' AND revision=?)").bind(row.warehouse_id,customerId,row.warehouse_id,id,expected);

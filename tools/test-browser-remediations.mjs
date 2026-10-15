@@ -373,51 +373,31 @@ try {
   const savedRequests=(await api('partner/requests',cookie)).requests;
   check(savedRequests.find(r=>r.id===idA)?.company==='DELAYED A'&&savedRequests.find(r=>r.id===idB)?.company==='DELAYED B','Both submitted requests survive separately in server history');
 
-  // R1: a successful save response must acknowledge its new revision even if
-  // the same form was edited again before that response reached the browser.
-  const r1Id=await newPartner(cdp);await fillPartner(cdp,'R1 BASE');
+  // Registration is immutable after commit; a delayed response still preserves newer local input.
+  const r1Id=await newPartner(cdp);await fillPartner(cdp,'R1 SAVED');
   await cdp.evaluate("document.querySelector('.partner-form').requestSubmit()");
-  await waitFor(()=>cdp.evaluate('window.partnerReleases.length===1'),'R1 initial response pending');
-  await cdp.evaluate('window.partnerReleases.shift()();true');
-  await waitFor(()=>cdp.evaluate("document.querySelector('.partner-result')?.textContent.includes('R1 BASE')"),'R1 initial result');
-  const r1Revision=Number(await cdp.evaluate("document.querySelector('[name=revision]').value"));
-  await fillPartner(cdp,'R1 SERVER ACK');
-  await cdp.evaluate("document.querySelector('.partner-form').requestSubmit()");
-  await waitFor(()=>cdp.evaluate('window.partnerReleases.length===1'),'R1 update committed with response pending');
+  await waitFor(()=>cdp.evaluate('window.partnerReleases.length===1'),'R1 registration response pending');
   await fillPartner(cdp,'R1 LOCAL NEWER');
   await cdp.evaluate('window.partnerReleases.shift()();true');
-  await waitFor(()=>cdp.evaluate("!document.querySelector('.partner-generate').disabled"),'R1 delayed response released');
-  check(Number(await cdp.evaluate("document.querySelector('[name=revision]').value"))===r1Revision+1,'Delayed acknowledged save advances revision despite newer local edits');
-  check(await cdp.evaluate("document.querySelector('[name=company]').value==='R1 LOCAL NEWER'&&!document.querySelector('.partner-result')"),'Delayed acknowledged save preserves newer fields and keeps stale mail hidden');
-  check(await cdp.evaluate(`(()=>{const value=JSON.parse(localStorage.getItem(${JSON.stringify(partnerKey)})).value;return value.company==='R1 LOCAL NEWER'&&Number(value.revision)===${r1Revision+1};})()`),'Newer partner draft persists with acknowledged revision');
-  await cdp.send('Page.reload',{ignoreCache:true});
-  await waitFor(()=>cdp.evaluate("document.body?.innerText.includes('Comenzi')"),'R1 reload');
-  await clickTab(cdp,'Parteneri');await waitFor(()=>cdp.evaluate("!!document.querySelector('[name=requestId]')||[...document.querySelectorAll('button')].some(b=>b.textContent.includes('Adaugă partener'))"),'partner hub');await cdp.evaluate("[...document.querySelectorAll('button')].find(b=>b.textContent.includes('Adaugă partener'))?.click()");await waitFor(()=>cdp.evaluate("!!document.querySelector('[name=requestId]')"),'R1 partner form after reload');
-  check(await cdp.evaluate(`document.querySelector('[name=requestId]').value===${JSON.stringify(r1Id)}&&document.querySelector('[name=company]').value==='R1 LOCAL NEWER'&&Number(document.querySelector('[name=revision]').value)===${r1Revision+1}`),'Reload restores newer local fields with acknowledged revision');
+  await waitFor(()=>cdp.evaluate("!document.querySelector('.partner-generate').disabled"),'R1 response released');
+  check(await cdp.evaluate("document.querySelector('[name=company]').value==='R1 LOCAL NEWER'&&!document.querySelector('.partner-result')"),'Delayed registration preserves newer local input and hides stale mail');
+  const r1Saved=(await api('partner/requests/'+r1Id,cookie)).request;
+  check(r1Saved.status==='confirmed'&&!!r1Saved.customerId,'Client is available without manager approval');
+  await cdp.evaluate('window.fetch=window.originalFetch;true');
   await cdp.evaluate("document.querySelector('.partner-form').requestSubmit()");
-  await waitFor(()=>cdp.evaluate("document.querySelector('.partner-result')?.textContent.includes('R1 LOCAL NEWER')"),'R1 retry succeeds after reload');
-  let r1Saved=(await api('partner/requests',cookie)).requests.find(r=>r.id===r1Id);
-  check(r1Saved?.company==='R1 LOCAL NEWER'&&r1Saved.revision===r1Revision+2,'R1 retry persists newer fields without a 409 loop');
-
-  // A genuine external conflict keeps CAS and presents an explicit reconciliation action.
-  await fillPartner(cdp,'R1 LOCAL CONFLICT');
-  const external=(await api('partner/mail',cookie,'POST',{requestId:r1Id,revision:r1Saved.revision,company:'R1 EXTERNAL',location:'Bucuresti',cui:'99170926',storeType:'MAGAZIN',contact:'QA',phone:'0700000000',email:'',address:'Strada QA 1',county:'Bucuresti'})).request;
+  await waitFor(()=>cdp.evaluate("!!document.querySelector('.partner-conflict')"),'Editing an already added client is explained');
+  check(await cdp.evaluate("document.querySelector('.partner-conflict').textContent.includes('deja în portofoliu')&&![...document.querySelectorAll('.partner-conflict button')].some(b=>b.textContent.includes('Păstrează modificările mele'))"),'Registered client cannot be overwritten through an old creation form');
+  await cdp.evaluate("window.confirm=()=>true;[...document.querySelectorAll('.partner-conflict button')].find(b=>b.textContent.includes('Încarcă versiunea serverului')).click();true");
+  await waitFor(()=>cdp.evaluate("document.querySelector('[name=company]').value==='R1 SAVED'"),'Server registration restored');
   await cdp.evaluate("document.querySelector('.partner-form').requestSubmit()");
-  await waitFor(()=>cdp.evaluate("document.querySelector('.partner-conflict')?.textContent.includes('versiune mai nouă')"),'R1 genuine conflict offers reconciliation');
-  check(await cdp.evaluate("[...document.querySelectorAll('.partner-conflict button')].some(b=>b.textContent.includes('Păstrează modificările mele'))"),'R1 conflict exposes keep-local reconciliation');
-  await cdp.evaluate("[...document.querySelectorAll('.partner-conflict button')].find(b=>b.textContent.includes('Păstrează modificările mele')).click();true");
-  check(await cdp.evaluate(`document.querySelector('[name=company]').value==='R1 LOCAL CONFLICT'&&Number(document.querySelector('[name=revision]').value)===${external.revision}`),'R1 reconciliation keeps local fields and rebases only revision');
-  await cdp.evaluate("document.querySelector('.partner-form').requestSubmit()");
-  await waitFor(()=>cdp.evaluate("document.querySelector('.partner-result')?.textContent.includes('R1 LOCAL CONFLICT')"),'R1 reconciled retry succeeds');
-  r1Saved=(await api('partner/requests',cookie)).requests.find(r=>r.id===r1Id);
-  check(r1Saved?.company==='R1 LOCAL CONFLICT'&&r1Saved.revision===external.revision+1,'R1 explicit reconciliation preserves CAS and saves chosen local version');
+  await waitFor(()=>cdp.evaluate("document.querySelector('.partner-result')?.textContent.includes('Disponibil în portofoliu')"),'Idempotent retry shows registered result');
+  check((await api('partner/requests/'+r1Id,cookie)).request.customerId===r1Saved.customerId,'Retrying the saved form preserves customer identity');
 
   // R3: a delayed conflict lookup for A must never attach to a newly-started request B.
   const r3Id=await newPartner(cdp);await fillPartner(cdp,'R3 REQUEST A');
   await cdp.evaluate("document.querySelector('.partner-form').requestSubmit()");
   await waitFor(()=>cdp.evaluate("document.querySelector('.partner-result')?.textContent.includes('R3 REQUEST A')"),'R3 A initial save');
-  const r3Revision=Number(await cdp.evaluate("document.querySelector('[name=revision]').value"));
-  const r3External=(await api('partner/mail',cookie,'POST',{requestId:r3Id,revision:r3Revision,company:'R3 A EXTERNAL',location:'Bucuresti',cui:'99170926',storeType:'MAGAZIN',contact:'QA',phone:'0700000000',email:'',address:'Strada QA 1',county:'Bucuresti'})).request;
+  const r3External=(await api('partner/requests/'+r3Id,cookie)).request;
   await fillPartner(cdp,'R3 A LOCAL STALE');
   await cdp.evaluate(`window.originalFetch=window.fetch;window.conflictReleases=[];window.fetch=async(...args)=>{const response=await window.originalFetch(...args);const url=String(args[0]);if(url.includes('/api/partner/requests/')&&!url.endsWith('/confirm')&&(!args[1]||!args[1].method||args[1].method==='GET'))await new Promise(resolve=>window.conflictReleases.push(resolve));return response;};true`);
   await cdp.evaluate("document.querySelector('.partner-form').requestSubmit()");
@@ -428,7 +408,7 @@ try {
   check(await cdp.evaluate(`document.querySelector('[name=requestId]').value===${JSON.stringify(r3B)}&&document.querySelector('[name=company]').value==='R3 REQUEST B'&&!document.querySelector('.partner-conflict')`),'R3 delayed conflict for A cannot attach to request B');
   check(await cdp.evaluate(`(()=>{const value=JSON.parse(localStorage.getItem(${JSON.stringify(partnerKey)})).value;return value.requestId===${JSON.stringify(r3B)}&&value.company==='R3 REQUEST B'&&value.cui==='887172002';})()`),'R3 delayed conflict cannot rewrite B localStorage');
   const r3AAfter=(await api(`partner/requests/${r3Id}`,cookie)).request;
-  check(r3AAfter.company==='R3 A EXTERNAL'&&r3AAfter.revision===r3External.revision,'R3 request A remains at the external version while B is being edited');
+  check(r3AAfter.company==='R3 REQUEST A'&&r3AAfter.revision===r3External.revision,'R3 request A remains at the external version while B is being edited');
   await cdp.evaluate('window.fetch=window.originalFetch;true');
   await cdp.evaluate("document.querySelector('.partner-form').requestSubmit()");
   await waitFor(()=>cdp.evaluate("document.querySelector('.partner-result')?.textContent.includes('R3 REQUEST B')"),'R3 B saves independently');
@@ -441,18 +421,15 @@ try {
   await waitFor(()=>cdp.evaluate("document.querySelector('.partner-result')?.textContent.includes('R4 PREVIOUS MONTH')"),'R4 initial save');
   const r4Revision=Number(await cdp.evaluate("document.querySelector('[name=revision]').value"));
   const now=new Date(),previousMonthDate=new Date(Date.UTC(now.getUTCFullYear(),now.getUTCMonth()-1,15,10,0,0)).toISOString();
-  const r4Db=new DatabaseSync('work/stock-qa-20260914/mobiup.sqlite');r4Db.prepare('UPDATE partner_requests SET created_at=?,updated_at=? WHERE id=?').run(previousMonthDate,previousMonthDate,r4Id);r4Db.close();
-  const r4External=(await api('partner/mail',cookie,'POST',{requestId:r4Id,revision:r4Revision,company:'R4 EXTERNAL',location:'Bucuresti',cui:'99170926',storeType:'MAGAZIN',contact:'QA',phone:'0700000000',email:'',address:'Strada QA 1',county:'Bucuresti'})).request;
+  const r4Db=new DatabaseSync('work/stock-qa-20260914/mobiup.sqlite');r4Db.prepare('UPDATE partner_requests SET created_at=?,updated_at=?,confirmed_at=? WHERE id=?').run(previousMonthDate,previousMonthDate,previousMonthDate,r4Id);r4Db.close();
   await fillPartner(cdp,'R4 LOCAL CHOICE');
   await cdp.evaluate("document.querySelector('.partner-form').requestSubmit()");
-  await waitFor(()=>cdp.evaluate("document.querySelector('.partner-conflict')?.textContent.includes('versiune mai nouă')"),'R4 previous-month conflict offers reconciliation');
-  check(Number(await cdp.evaluate("document.querySelector('[name=revision]').value"))===r4Revision,'R4 stale local revision is preserved until the user chooses reconciliation');
-  await cdp.evaluate("[...document.querySelectorAll('.partner-conflict button')].find(b=>b.textContent.includes('Păstrează modificările mele')).click();true");
-  check(await cdp.evaluate(`document.querySelector('[name=requestId]').value===${JSON.stringify(r4Id)}&&document.querySelector('[name=company]').value==='R4 LOCAL CHOICE'&&Number(document.querySelector('[name=revision]').value)===${r4External.revision}`),'R4 keep-local rebases the prior-month request by ID');
-  await cdp.evaluate("document.querySelector('.partner-form').requestSubmit()");
-  await waitFor(()=>cdp.evaluate("document.querySelector('.partner-result')?.textContent.includes('R4 LOCAL CHOICE')"),'R4 reconciled previous-month save succeeds');
-  const r4Saved=(await api(`partner/requests/${r4Id}`,cookie)).request;
-  check(r4Saved.company==='R4 LOCAL CHOICE'&&r4Saved.revision===r4External.revision+1,'R4 saves the same prior-month request without duplication');
+  await waitFor(()=>cdp.evaluate("!!document.querySelector('.partner-conflict')"),'Previous-month registration conflict is found by ID');
+  check(Number(await cdp.evaluate("document.querySelector('[name=revision]').value"))===r4Revision,'Local revision is preserved until explicit reconciliation');
+  await cdp.evaluate("window.confirm=()=>true;[...document.querySelectorAll('.partner-conflict button')].find(b=>b.textContent.includes('Încarcă versiunea serverului')).click();true");
+  await waitFor(()=>cdp.evaluate("document.querySelector('[name=company]').value==='R4 PREVIOUS MONTH'"),'Previous-month saved client restored');
+  const r4Saved=(await api('partner/requests/'+r4Id,cookie)).request;
+  check(r4Saved.company==='R4 PREVIOUS MONTH'&&r4Saved.revision===r4Revision,'Previous-month registration is not duplicated or overwritten');
 
   await cdp.evaluate(`window.originalFetch=window.fetch;window.partnerReleases=[];window.fetch=async(...args)=>{const response=await window.originalFetch(...args);if(String(args[0]).endsWith('/partner/mail'))await new Promise(resolve=>window.partnerReleases.push(resolve));return response;};true`);
   await newPartner(cdp);await fillPartner(cdp,'DELAYED C');
@@ -469,7 +446,7 @@ try {
   check(managerLogin,'Manager browser login');await cdp.send('Page.reload',{ignoreCache:true});
   await waitFor(()=>cdp.evaluate("document.querySelector('.manager-overview h1')?.textContent==='Sinteză'"),'manager default activity dashboard');
   check(await cdp.evaluate("(()=>{const tabs=[...document.querySelectorAll('.main-nav [role=tab]')];return tabs.length===5&&['Sinteză','Parteneri','Vânzări','Echipă','Operațiuni'].every((label,index)=>tabs[index]?.textContent?.includes(label))&&tabs[0]?.getAttribute('aria-selected')==='true';})()"),'Manager defaults to Sinteză with exactly five approved destinations');
-  check(await cdp.evaluate("document.querySelectorAll('.manager-summary-grid .manager-metric').length===6&&!document.querySelector('.activity-partners-card')"),'Manager overview has six compact metrics instead of dominant partner card');
+  check(await cdp.evaluate("document.querySelectorAll('.manager-summary-grid .manager-metric').length===5&&!document.querySelector('.activity-partners-card')"),'Manager overview has five compact metrics without an approval queue instead of dominant partner card');
 
   await cdp.send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
   await cdp.send('Page.reload',{ignoreCache:true});
@@ -499,11 +476,18 @@ try {
   await cdp.send('Emulation.clearDeviceMetricsOverride');
   await cdp.send('Page.reload',{ignoreCache:true});
   await waitFor(()=>cdp.evaluate("document.querySelector('.manager-overview h1')?.textContent==='Sinteză'"),'manager activity after mobile viewport regression');
-  await waitFor(()=>cdp.evaluate("document.querySelectorAll('.manager-summary-grid .manager-metric').length===6"),'activity partner card ready after viewport reset');
+  await waitFor(()=>cdp.evaluate("document.querySelectorAll('.manager-summary-grid .manager-metric').length===5"),'activity partner card ready after viewport reset');
 
-  await cdp.evaluate("document.querySelector('.manager-attention .secondary').click();true");
-  await waitFor(()=>cdp.evaluate("document.querySelector('.partner-activity-detail h1')?.textContent==='Solicitări de partener'"),'partner activity drill-down');
-  check(await cdp.evaluate("['Toate','În așteptare','Confirmați'].every(label=>[...document.querySelectorAll('.status-filter button')].some(button=>button.textContent===label))"),'Partner drill-down exposes real status filters');
+  const unreadBefore=await cdp.evaluate("fetch('/api/notifications/inbox').then(r=>r.json()).then(r=>r.count)");
+  await cdp.evaluate("document.querySelector('.request-bell').click();true");
+  await waitFor(()=>cdp.evaluate("!!document.querySelector('.request-inbox-item')"),'Informational client notification');
+  check(await cdp.evaluate("document.querySelector('.request-inbox-dialog').textContent.includes('notificări necitite')&&!document.querySelector('.request-inbox-dialog').textContent.includes('așteaptă confirmarea')"),'Inbox describes informational unread notifications, not approvals');
+  await cdp.evaluate("[...document.querySelectorAll('.request-inbox-item button')].find(b=>b.textContent==='Marchează citită').click();true");
+  await waitFor(()=>cdp.evaluate("fetch('/api/notifications/inbox').then(r=>r.json()).then(r=>r.count)") .then(count=>count===unreadBefore-1),'Read state saved without approval');
+  checks++;
+  await cdp.evaluate("[...document.querySelectorAll('.request-inbox-item button')].find(b=>b.textContent==='Deschide').click();true");
+  await waitFor(()=>cdp.evaluate("document.querySelector('.partner-activity-detail h1')?.textContent==='Clienți noi'"),'partner activity drill-down');
+  check(await cdp.evaluate("['Toate','În așteptare','Adăugați'].every(label=>[...document.querySelectorAll('.status-filter button')].some(button=>button.textContent===label))"),'Partner drill-down exposes real status filters');
   check(await cdp.evaluate("document.querySelectorAll('.partner-agent-group').length>0"),'Partner drill-down groups requests by agent');
   await cdp.evaluate("document.querySelector('.activity-detail-head .back-link').click();true");
   await waitFor(()=>cdp.evaluate("!!document.querySelector('.manager-partner-hub')&&!document.querySelector('.manager-requests')"),'back to manager portfolio');
@@ -530,9 +514,9 @@ try {
   await cdp.evaluate("window.kpiOriginalFetch=window.fetch;window.fetch=async(...args)=>{const response=await window.kpiOriginalFetch(...args);if(String(args[0]).startsWith('/api/sales?')&&response.ok){const data=await response.json();data.filename='synthetic-kpi.xlsx';data.summary.value=1426066.81;return new Response(JSON.stringify(data),{status:200,headers:{'Content-Type':'application/json'}});}return response;};true");
   await clickTab(cdp,'Sinteză');
   await waitFor(()=>cdp.evaluate("!!document.querySelector('.manager-sales-amount')&&!!document.querySelector('.manager-agent-table')"),'manager summary data and synthetic large sales value');
-  check(await cdp.evaluate("(()=>{const labels=[...document.querySelectorAll('.manager-summary-grid .manager-metric>span')].map(node=>node.textContent);return JSON.stringify(labels)===JSON.stringify(['VÂNZĂRI','CLIENȚI NOI','SOLICITĂRI ÎN AȘTEPTARE','INVENTARE FINALIZATE','COMENZI FINALIZATE','AVIZE FINALIZATE']);})()"),'Manager summary shows approved six KPI labels');
+  check(await cdp.evaluate("(()=>{const labels=[...document.querySelectorAll('.manager-summary-grid .manager-metric>span')].map(node=>node.textContent);return JSON.stringify(labels)===JSON.stringify(['VÂNZĂRI','CLIENȚI NOI','INVENTARE FINALIZATE','COMENZI FINALIZATE','AVIZE FINALIZATE']);})()"),'Manager summary shows five KPI labels without an approval counter');
   check(await cdp.evaluate("(()=>{const headings=[...document.querySelectorAll('.manager-agent-table thead th')].map(node=>node.textContent);return headings.includes('Clienți noi')&&!headings.includes('Confirmați');})()"),'New clients replaces confirmation terminology in agent table');
-  check(await cdp.evaluate("(async()=>{const month=document.querySelector('.activity-toolbar input[type=month]').value;const data=await fetch('/api/manager/activity?month='+month).then(response=>response.json());const cards=document.querySelectorAll('.manager-summary-grid .manager-metric');return cards[4].querySelector('strong').textContent===String(data.finalizedOrders)&&cards[5].querySelector('strong').textContent===String(data.finalizedNotices);})()"),'Finalized document cards display actual scoped API totals');
+  check(await cdp.evaluate("(async()=>{const month=document.querySelector('.activity-toolbar input[type=month]').value;const data=await fetch('/api/manager/activity?month='+month).then(response=>response.json());const cards=document.querySelectorAll('.manager-summary-grid .manager-metric');return cards[3].querySelector('strong').textContent===String(data.finalizedOrders)&&cards[4].querySelector('strong').textContent===String(data.finalizedNotices);})()"),'Finalized document cards display actual scoped API totals');
   for(const width of [320,390,768,1440]){
     await cdp.send('Emulation.setDeviceMetricsOverride',{width,height:900,deviceScaleFactor:1,mobile:width<1024});
     await sleep(120);
@@ -541,7 +525,7 @@ try {
     check(geometry.count===5&&geometry.left>=0&&geometry.right<=width+1,`All five manager destinations fit at ${width}px`);
     if(width<1024)check(geometry.bottom<=900&&geometry.bottom>=830,`Manager navigation stays at viewport bottom at ${width}px`);
     const metrics=await cdp.evaluate("(()=>{const grid=document.querySelector('.manager-summary-grid'),amount=document.querySelector('.manager-sales-amount'),currency=document.querySelector('.manager-sales-currency');return {columns:getComputedStyle(grid).gridTemplateColumns.split(' ').length,count:grid.children.length,amountFits:amount.scrollWidth<=amount.clientWidth+1,currencyFits:currency.scrollWidth<=currency.clientWidth+1,currencyText:currency.textContent,currencyOnNextLine:currency.getBoundingClientRect().top>=amount.getBoundingClientRect().bottom};})()");
-    check(metrics.count===6&&metrics.columns===(width>1100?3:2),`Six manager cards use balanced responsive columns at ${width}px`);
+    check(metrics.count===5&&metrics.columns===(width>1100?3:2),`Five manager cards use responsive columns at ${width}px`);
     check(metrics.amountFits&&metrics.currencyFits&&metrics.currencyText==='RON'&&metrics.currencyOnNextLine,`Large sales amount and RON remain readable without splitting at ${width}px`);
     if(process.env.MANAGER_SCREENSHOT_DIR&&(width===390||width===1440)){const shot=await cdp.send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});writeFileSync(join(process.env.MANAGER_SCREENSHOT_DIR,`manager-summary-${width}.png`),Buffer.from(shot.data,'base64'));}
   }
