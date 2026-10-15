@@ -15,6 +15,27 @@ type SalesActor = { id: string; name: string; siteCode: string; warehouseName: s
 async function mappingSnapshot() {
   const result = await db().prepare("SELECT id,name,role,site_code,warehouse_name FROM users WHERE active=1 AND (role='agent' OR (role='manager' AND TRIM(site_code)<>'')) ORDER BY name,id").all<{ id: string; name: string; role: string; site_code: string | null; warehouse_name: string | null }>();
   const actors: SalesActor[] = result.results.map(row => ({ id: String(row.id), name: String(row.name), siteCode: row.site_code?.trim() || '', warehouseName: row.role === 'agent' ? row.warehouse_name?.trim() || '' : '' }));
+  // Owner-maintained aliases preserve explicit historical identity across renames.
+  // Raw imports remain unchanged; aliases never resurrect inactive accounts.
+  const aliasRow = await db().prepare("SELECT value FROM settings WHERE key='sales-agent-aliases-v1'").first<{value:string}>();
+  if (aliasRow) {
+    let aliases: unknown;
+    try { aliases = JSON.parse(aliasRow.value); } catch { fail(503, 'Asocierile istorice de vânzări sunt invalide.'); }
+    if (!Array.isArray(aliases) || aliases.length > 1000) fail(503, 'Asocierile istorice de vânzări sunt invalide.');
+    const current = new Map(actors.map(actor => [actor.id, actor]));
+    const identity = (actor: SalesActor) => JSON.stringify([actor.id, mappingKey(actor.siteCode), salesLocationKey(actor.warehouseName)]);
+    const seen = new Set(actors.map(identity));
+    for (const alias of aliases) {
+      if (!alias || typeof alias !== 'object' || typeof alias.userId !== 'string' || typeof alias.siteCode !== 'string' || typeof alias.warehouseName !== 'string' ||
+          alias.userId.length > 128 || alias.siteCode.length > 80 || alias.warehouseName.length > 200 || !mappingKey(alias.siteCode) || !salesLocationKey(alias.warehouseName))
+        fail(503, 'Asocierile istorice de vânzări sunt invalide.');
+      const owner = current.get(alias.userId);
+      if (!owner) continue;
+      const actor = {...owner, siteCode: alias.siteCode.trim(), warehouseName: alias.warehouseName.trim()};
+      const key = identity(actor);
+      if (!seen.has(key)) { seen.add(key); actors.push(actor); }
+    }
+  }
   const grouped = new Map<string, SalesActor[]>(), locations = new Map<string, SalesActor[]>();
   for (const actor of actors) {
     for (const [key, index] of [[mappingKey(actor.siteCode), grouped], [salesLocationKey(actor.warehouseName), locations]] as const) {

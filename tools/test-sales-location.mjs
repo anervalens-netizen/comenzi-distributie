@@ -11,7 +11,8 @@ const root = process.cwd(), directory = mkdtempSync(resolve(tmpdir(), 'sales-loc
 process.env.MOBIUP_DATA_DIR = directory;
 const app = new DatabaseSync(resolve(directory, 'app.sqlite'));
 app.exec(`CREATE TABLE users(id TEXT PRIMARY KEY,name TEXT,role TEXT,active INTEGER,site_code TEXT,warehouse_name TEXT,warehouse_id TEXT,manager_scope TEXT);
-CREATE TABLE manager_agents(manager_id TEXT,agent_id TEXT);`);
+CREATE TABLE manager_agents(manager_id TEXT,agent_id TEXT);
+CREATE TABLE settings(key TEXT PRIMARY KEY,value TEXT);`);
 const add = (id, role, site, warehouse, scope = 'assigned', active = 1) => app.prepare('INSERT INTO users VALUES(?,?,?,?,?,?,?,?)').run(id, `Synthetic ${id}`, role, active, site, warehouse, warehouse ? `warehouse-${id}` : null, scope);
 add('north', 'agent', 'OLD-NORTH', 'TR Oraș Nord 01');
 add('south', 'agent', 'SHARED', 'TR Oras Sud 01');
@@ -198,6 +199,36 @@ try {
   app.prepare("UPDATE users SET site_code=' ' WHERE id='shared-b'").run();
   await assert.rejects(read('shared-b'), /409/);
   await assert.rejects(read('global', '&managerId=shared-region'), /409/);
+  // An owner-approved identity alias restores history without rewriting imported rows.
+  add('renamed', 'agent', 'CURRENT', 'TR Current Place');
+  const renamedRows = [...sharedRows, row('LEGACY', 'TR Former Place'), row('CURRENT', 'TR Current Place')].map((r,i)=>({...r,rowNumber:i+2}));
+  await apply(renamedRows, await preview(renamedRows));
+  assert.equal((await read('renamed')).summary.rows, 1);
+  const beforeAlias = await preview(renamedRows);
+  assert.equal(beforeAlias.mappings.find(m=>m.siteCode==='LEGACY').status,'missing');
+  const aliases = [{userId:'renamed',siteCode:'LEGACY',warehouseName:'TR Former Place'}];
+  const setAliases = value => app.prepare("INSERT INTO settings VALUES('sales-agent-aliases-v1',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(JSON.stringify(value));
+  setAliases([...aliases,...aliases]);
+  const renamed = await read('renamed');
+  assert.equal(renamed.summary.rows,2,'Explicit alias must include old and current sales for the same account');
+  assert.equal(renamed.summary.value,2.38);
+  assert.ok(renamed.sites.every(s=>s.agent==='Synthetic renamed'));
+  assert.deepEqual((await read('global','&agentId=renamed')).summary,renamed.summary);
+  assert.equal((await preview(renamedRows)).mappings.find(m=>m.siteCode==='LEGACY').userId,'renamed');
+  await assert.rejects(apply(renamedRows,beforeAlias),/Maparea/);
+  assert.equal((await read('global')).summary.rows,renamedRows.length,'Aliases cannot duplicate national totals');
+  // A duplicate identity claim must fail closed, never broaden another account.
+  setAliases([...aliases,{...aliases[0],userId:'south'}]);
+  assert.equal((await preview(renamedRows)).mappings.find(m=>m.siteCode==='LEGACY').status,'duplicate');
+  await assert.rejects(read('renamed'),/409/);
+  setAliases(aliases);
+  app.prepare("UPDATE users SET active=0 WHERE id='renamed'").run();
+  assert.equal((await preview(renamedRows)).mappings.find(m=>m.siteCode==='LEGACY').status,'missing');
+  app.prepare("UPDATE users SET active=1 WHERE id='renamed'").run();
+  app.prepare("UPDATE settings SET value='invalid' WHERE key='sales-agent-aliases-v1'").run();
+  await assert.rejects(read('renamed'),/503/);
+  setAliases(aliases);
+  assert.equal((await read('renamed')).summary.rows,2);
   console.log('PASS: exact location attribution, grouped co-manager sellers, constrained duplicate warehouse/site scopes, collision rejection, worker cache, historical/inactive isolation, preview freshness, authoritative totals and location replacement protection.');
 } finally {
   process.chdir(root); app.close(); rmSync(directory, { recursive: true, force: true });
