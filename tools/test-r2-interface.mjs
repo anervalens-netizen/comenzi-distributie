@@ -26,7 +26,7 @@ const stubs={
   'stock-server':`export const stockForWarehouse=async()=>({importedAt:'2026-09-01T00:00:00Z',filename:'synthetic.xlsx',rows:[{code:'SYNTHETIC',name:'Synthetic product',quantity:10}]});${unused(['stockImportStatus','stockView','stockUpload'])}`,
   'sales-server':unused(['salesImportStatus','salesView','salesUpload']),
   exports:unused(['templateExport','combinedExport','repairOrderExport','simExport','mailFor','emlFor']),
-  'push-notifications':unused(['managerRequestInbox','pushPublicConfig','removePushSubscription','upsertPushSubscription','sendPartnerRequestPush']),
+  'push-notifications':unused(['managerRequestInbox','readPartnerNotifications','pushPublicConfig','removePushSubscription','upsertPushSubscription','sendPartnerRequestPush']),
   'partner-mail':unused(['partnerMail']),
   'partner-planning':unused(['visitWeek','saveDayPlan']),
   'partner-map-api':unused(['browsePartners','mapPartners']),
