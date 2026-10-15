@@ -1,3 +1,4 @@
+import {usageAuth,usagePulse,usageReport} from '@/lib/usage-api';
 import { managerFilter } from '@/lib/manager-scope';
 import {historyImportStatus,historyImportPreview,historyImportCommit} from '@/lib/client-history-import-runtime';
 import {clientSalesReconciliation} from '@/lib/client-sales-reconciliation';
@@ -263,6 +264,7 @@ async function dispatch(req: Request) {
     const token=Buffer.from(randomBytes(32)).toString('base64url');
     const sessionResults=await db().batch([db().prepare('INSERT INTO sessions (token_hash,user_id,expires_at) SELECT ?,id,? FROM users WHERE id=? AND active=1 AND username=? AND password_hash=? AND profile_revision=?').bind(sha256(token),now+SESSION_TTL_MS,row.id,row.username,row.password_hash,row.profile_revision),db().prepare('DELETE FROM login_attempts WHERE key=? AND EXISTS (SELECT 1 FROM sessions WHERE token_hash=?)').bind(keys[0],sha256(token)),db().prepare('DELETE FROM sessions WHERE expires_at<?').bind(now)]);
     if(!sessionResults[0]?.meta.changes)fail(401,'Datele de acces s-au modificat. Autentifică-te din nou.');
+    usageAuth(req,String(row.id),'login',token);
     return response({user:userView(row)},200,{'Set-Cookie':cookie(req,token)});
   }
   if((path[0]==='bootstrap'||path.join('/')==='auth/session') && req.method==='GET') {
@@ -281,6 +283,8 @@ async function dispatch(req: Request) {
   }
   const user=await requireUser(req,path[0]==='auth'||(path[0]==='admin'&&path[1]==='templates'));
   const readUser=nationalReadScope(user);
+  if(path.join('/')==='usage/pulse'&&req.method==='POST')return response(await usagePulse(req,user));
+  if(path.join('/')==='usage/report'&&req.method==='GET')return response(await usageReport(readUser,new URL(req.url).searchParams));
   if(path.join('/')==='notifications/inbox'&&req.method==='GET')return response(await managerRequestInbox(user));
   if(path.join('/')==='notifications/push'&&req.method==='GET')return response(await pushPublicConfig(user));
   if(path.join('/')==='notifications/push'&&req.method==='POST')return response(await upsertPushSubscription(user,await jsonBody(req)));
@@ -345,6 +349,7 @@ async function dispatch(req: Request) {
   if(path.join('/')==='admin/stock/import'&&req.method==='POST')return stockUpload(req,user,true);
   if(path.join('/')==='auth/logout' && req.method==='POST') {
     await db().prepare('DELETE FROM sessions WHERE token_hash=?').bind(sha256(sessionToken(req))).run();
+    usageAuth(req,user.id,'logout');
     return response({ok:true},200,{'Set-Cookie':cookie(req,'',0)});
   }
   if(path.join('/')==='auth/password' && req.method==='POST') {

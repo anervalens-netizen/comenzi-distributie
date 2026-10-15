@@ -21,6 +21,7 @@ globalThis.__r2Db=adapter;
 const unused=names=>names.map(name=>`export const ${name}=()=>{throw new Error('Unexpected infrastructure call: ${name}');};`).join('\n');
 const stubs={
   runtime:'export const env={DB:globalThis.__r2Db};export const runtimeKind="standalone";'+unused(['operationalStatus']),
+  'usage-store':'export const recordUsageAuth=()=>false;export const recordUsagePulse=()=>false;'+unused(['readUsage']),
   catalog:'export const readCatalog=async()=>({products:[]});'+unused(['changeProduct']),
   'stock-server':`export const stockForWarehouse=async()=>({importedAt:'2026-09-01T00:00:00Z',filename:'synthetic.xlsx',rows:[{code:'SYNTHETIC',name:'Synthetic product',quantity:10}]});${unused(['stockImportStatus','stockView','stockUpload'])}`,
   'sales-server':unused(['salesImportStatus','salesView','salesUpload']),

@@ -178,3 +178,11 @@ Backend maps are retained separately; receiver limitations for duplicate script
 basenames must be evaluated before claiming backend symbolication coverage.
 
 The same activation gate validates all four backend worker maps (including `.mjs` support). Framework/RSC maps remain private; duplicate index basenames and upstream transform warnings require separate proven resolution before claiming complete framework-frame coverage.
+
+## Usage analytics
+
+Managers: Echipă → Utilizare aplicație, with the existing national read scope and region/agent filters. Shows per-account logins, app openings, days with measured use, visible time and active estimated time, plus IP/browser audit detail and CSV summary. Tracking always belongs to the authenticated actor, including a manager acting for an agent. Successful password logins and explicit logout are server events; persistent authentication alone is not usage.
+
+The native collector sends a bounded pulse every 30 seconds while visible and flushes on hiding/closing. Active time means visible with an interaction during the last 120 seconds; no typed text, document content, mouse coordinates or screen recordings are collected. Timer gaps over 45 seconds are discarded. Durations are estimates from acknowledged recent foreground intervals; overlapping tabs/devices are unioned per account/day in Europe/Bucharest. Network outages, old app versions, blocked collection and abrupt termination can leave gaps. No historical time is inferred from documents or session expiry.
+
+Node stores analytics separately in MOBIUP_DATA_DIR/usage.sqlite (WAL). Retention is 90 days, pruned on next analytics activity. Include this file and committed WAL in private backup/recovery procedures; use a SQLite online backup, not a live file copy. IP uses only the trusted ingress-sanitized CF-Connecting-IP header; direct origin access must remain restricted. The report retains last 100 detail rows per selected account and period; narrow dates for older details. The disabled/read-only Cloudflare preview does not collect. MOBIUP_USAGE_DISABLED=1 disables storage/reporting; collector failures never block application operations. No new package, permission prompt, PWA identity change or forced reload is needed. Existing PWA update rules apply.

@@ -190,6 +190,13 @@ def run_backup(
                 if not isinstance(key, str) or not key:
                     raise RuntimeError('Finalized order is missing its required export key')
                 keys.append(key)
+        usage_snapshot = Path(temporary) / 'usage.sqlite'
+        if (data / 'usage.sqlite').exists():
+            if (data / 'usage.sqlite').is_symlink():
+                raise RuntimeError('Invalid usage database location')
+            with closing(sqlite3.connect(f'file:{data / "usage.sqlite"}?mode=ro', uri=True)) as source, closing(sqlite3.connect(usage_snapshot)) as copy:
+                source.backup(copy)
+                verify_sqlite_snapshot(copy, 'Usage snapshot')
         sales_snapshot = Path(temporary) / 'sales.sqlite'
         if (data / 'sales.sqlite').exists():
             with closing(sqlite3.connect(f'file:{data / "sales.sqlite"}?mode=ro', uri=True)) as source, closing(sqlite3.connect(sales_snapshot)) as copy:
@@ -218,6 +225,8 @@ def run_backup(
         try:
             with tarfile.open(local_partial, 'w:gz', compresslevel=2) as output:
                 output.add(snapshot, arcname='mobiup.sqlite')
+                if usage_snapshot.exists():
+                    output.add(usage_snapshot, arcname='usage.sqlite')
                 if sales_snapshot.exists():
                     output.add(sales_snapshot, arcname='sales.sqlite')
                 if history_snapshot.exists():

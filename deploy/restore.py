@@ -86,7 +86,7 @@ def restore(archive: Path, destination: Path, checksum: Path | None = None) -> d
         if not any(name.startswith('recovery/products/') for name in manifest['files']):
             raise RuntimeError('Required recovery products are missing')
         databases = {}
-        for name in ('mobiup.sqlite', 'sales.sqlite', 'client-history/client-sales-history.sqlite'):
+        for name in ('mobiup.sqlite', 'sales.sqlite', 'usage.sqlite', 'client-history/client-sales-history.sqlite'):
             path = temporary / name
             if not path.exists():
                 if name == 'mobiup.sqlite':

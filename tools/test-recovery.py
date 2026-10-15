@@ -84,6 +84,16 @@ class RecoveryTests(unittest.TestCase):
             backup.prune_nas_latest(nas, nas / archive.name)
         self.assertTrue(old.exists())
 
+    def test_usage_database_roundtrip(self):
+        with contextlib.closing(sqlite3.connect(self.data / 'usage.sqlite')) as db:
+            db.execute('CREATE TABLE usage_days (user_id TEXT)')
+            db.execute("INSERT INTO usage_days VALUES ('synthetic-user')")
+            db.commit()
+        archive=self.make_backup(); result=recovery.restore(archive,self.root/'usage-restored')
+        self.assertEqual(result['databases']['usage.sqlite'], 'ok')
+        with contextlib.closing(sqlite3.connect(self.root/'usage-restored/usage.sqlite')) as db:
+            self.assertEqual(db.execute('SELECT user_id FROM usage_days').fetchall(), [('synthetic-user',)])
+
     def test_roundtrip_includes_runtime_and_private_inputs(self):
         archive=self.make_backup(); result=recovery.restore(archive,self.root/'restored')
         self.assertEqual(result['databases'],{'mobiup.sqlite':'ok'})

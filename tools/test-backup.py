@@ -66,6 +66,19 @@ class BackupTests(unittest.TestCase):
             check.assert_called_once_with(self.mount)
             return result
 
+    def test_usage_snapshot_includes_committed_wal(self):
+        with contextlib.closing(sqlite3.connect(self.data / 'usage.sqlite')) as db:
+            db.execute('PRAGMA journal_mode=WAL')
+            db.execute('CREATE TABLE usage_events (event TEXT)')
+            db.execute("INSERT INTO usage_events VALUES ('synthetic login')")
+            db.commit()
+            archive = self.run_backup()
+            with tarfile.open(archive) as source:
+                target = self.root / 'usage-copy.sqlite'
+                target.write_bytes(source.extractfile('usage.sqlite').read())
+            with contextlib.closing(sqlite3.connect(target)) as copy:
+                self.assertEqual(copy.execute('SELECT event FROM usage_events').fetchall(), [('synthetic login',)])
+
     def history_fixture(self):
         root = self.data / 'client-history'
         (root / 'client-sales-originals').mkdir(parents=True)

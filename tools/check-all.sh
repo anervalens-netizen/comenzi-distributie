@@ -73,6 +73,8 @@ node tools/test-order-read-consistency.mjs
 node tools/test-interaction-backend.mjs
 node tools/test-interaction-pwa.mjs
 node tools/test-interaction-offline.mjs
+node tools/test-usage.mjs
+node tools/test-usage-http.mjs
 node tools/test-client-api.mjs
 node tools/test-partner-map-health.mjs
 node tools/test-local-work.mjs
@@ -122,6 +124,7 @@ node tools/test-stock.mjs --api
 node tools/test-inventory.mjs
 CHROME_BIN="${CHROME_BIN:-$(command -v google-chrome || command -v chromium || true)}"
 if [ -n "$CHROME_BIN" ]; then
+  CHROME_BIN="$CHROME_BIN" node tools/test-usage-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-offline-cross-tab-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-private-fence-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-pwa-cross-tab-browser.mjs
