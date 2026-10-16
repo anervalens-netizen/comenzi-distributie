@@ -309,6 +309,10 @@ try {
     check(html.includes('Synthetic added')&&!html.includes('Synthetic incomplete'),'stale incomplete records are excluded without hiding added clients');
     check(html.includes('TOTAL ADĂUGAȚI')&&html.includes('Adăugat'),'added-client summary and record remain visible');
   }
+  const workspaceHtml=render(PartnerActivityDetail,{...requestProps,workspace:true},['obsolete-local-selection']);
+  check(!workspaceHtml.includes('partner-agent-filter')&&!workspaceHtml.includes('partner-detail-filters'),'workspace has one agent filter, supplied by the global manager selection');
+  check(workspaceHtml.includes('Synthetic added'),'workspace ignores a stale component-local agent selection');
+  check(render(PartnerActivityDetail,requestProps).includes('partner-agent-filter'),'standalone detail retains its required agent selector');
   console.log(`PASS: ${checks} focused R2 interface API, KPI, scope and rendered UI assertions.`);
 } finally {
   sqlite.close();rmSync(dir,{recursive:true,force:true});delete globalThis.__r2Db;delete globalThis.__r2States;delete globalThis.__r2Selection;

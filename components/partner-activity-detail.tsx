@@ -13,9 +13,9 @@ export function PartnerActivityDetail({view,month,loading,focusRequestId,onBack,
   },[focusRequestId,view]);
   // Ignore incomplete legacy records, including snapshots cached by an older client.
   const registrations=useMemo(()=>view.partnerRequests.filter(item=>item.status==='confirmed'),[view.partnerRequests]);
-  const groups=useMemo(()=>view.agents.filter(agent=>agentId==='all'||agent.agentId===agentId).map(agent=>({
+  const groups=useMemo(()=>view.agents.filter(agent=>workspace||agentId==='all'||agent.agentId===agentId).map(agent=>({
     agent,items:registrations.filter(item=>item.agentId===agent.agentId),
-  })),[view.agents,registrations,agentId]);
+  })),[view.agents,registrations,agentId,workspace]);
   return <div className="partner-activity-detail">
     <div className="activity-detail-head">
       <button className="back-link" onClick={onBack}><ArrowLeft size={17}/> {workspace?'Înapoi la portofoliu':'Înapoi la Activitate'}</button>
@@ -24,9 +24,9 @@ export function PartnerActivityDetail({view,month,loading,focusRequestId,onBack,
     <div className="page-heading activity-detail-title"><div><span className="eyebrow">ACTIVITATE</span><h1>Clienți noi</h1><p>Clienții adăugați de echipă, grupați pe agent.</p></div></div>
     <div className="activity-detail-summary"><div><span>TOTAL ADĂUGAȚI</span><strong>{registrations.length}</strong></div></div>
     <section className="panel partner-detail-panel">
-      <div className="partner-detail-filters">
+      {!workspace&&<div className="partner-detail-filters">
         <label className="partner-agent-filter">Agent<select value={agentId} onChange={event=>setAgentId(event.target.value)}><option value="all">Toți agenții</option>{view.agents.map(agent=><option value={agent.agentId} key={agent.agentId}>{agent.agentName}</option>)}</select></label>
-      </div>
+      </div>}
       {loading?<p className="activity-inline-loading">Se actualizează…</p>:null}
       {groups.length?<div className="partner-agent-groups">{groups.map(group=>{
         const focused=Boolean(focusRequestId&&group.items.some(item=>item.id===focusRequestId));

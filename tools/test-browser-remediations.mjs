@@ -488,7 +488,7 @@ try {
   await cdp.evaluate("[...document.querySelectorAll('.request-inbox-item button')].find(b=>b.textContent==='Deschide').click();true");
   await waitFor(()=>cdp.evaluate("document.querySelector('.partner-activity-detail h1')?.textContent==='Clienți noi'"),'partner activity drill-down');
   check(await cdp.evaluate("!document.querySelector('.partner-detail-panel .status-filter')&&!document.querySelector('.partner-activity-detail').textContent.includes('așteptare')&&![...document.querySelectorAll('.partner-activity-detail button')].some(button=>button.textContent.includes('Confirmă'))"),'New clients have no approval filters, counters or actions');
-  check(await cdp.evaluate("document.querySelector('.activity-detail-summary').textContent.includes('TOTAL ADĂUGAȚI')&&!!document.querySelector('.partner-agent-filter select')"),'Added-client count and agent filtering remain available');
+  check(await cdp.evaluate("document.querySelector('.activity-detail-summary').textContent.includes('TOTAL ADĂUGAȚI')&&!document.querySelector('.partner-agent-filter')"),'Added-client count remains available without a duplicate local agent filter');
   check(await cdp.evaluate("document.querySelectorAll('.partner-agent-group').length>0"),'Partner drill-down groups requests by agent');
   for(const width of [390,768,1440]){
     await cdp.send('Emulation.setDeviceMetricsOverride',{width,height:900,deviceScaleFactor:1,mobile:width===390});await sleep(150);
