@@ -94,7 +94,10 @@ There are no payable totals. Coverage of all activation months cannot be inferre
 from the nominal year of the latest file. Full-history import does not establish
 that the upstream reports include all movements.
 
-Before any future production promotion, add the new database and originals to the
-supported backup/restore contract, package the importer, and validate runtime
-identity and permissions. Do not deploy a development database by copying it over
-production data. Online SQLite backup is required for consistent live recovery.
+For production, keep the ledger, report and `activation-originals` together in
+the `activations` subdirectory of the configured data directory and set
+`MOBIUP_ACTIVATIONS_DIR` to that directory. Backup/restore includes both SQLite
+snapshots and verifies original workbook checksums. Validate isolated recovery,
+runtime identity and permissions during promotion. Never overwrite existing
+production data with a development database. Use online SQLite backup to provision
+a verified new ledger or preserve live recovery.

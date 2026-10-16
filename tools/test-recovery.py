@@ -113,6 +113,30 @@ class RecoveryTests(unittest.TestCase):
         result=recovery.restore(self.make_backup(),self.root/'history-restored')
         self.assertEqual(result['databases']['client-history/client-sales-history.sqlite'],'ok')
         self.assertEqual((self.root/'history-restored/client-history/client-sales-originals/example.xlsx').read_bytes(),original.read_bytes())
+    def activation_fixture(self):
+        root=self.data/'activations';(root/'activation-originals').mkdir(parents=True)
+        payload=b'synthetic activation original';sha=hashlib.sha256(payload).hexdigest()
+        original=root/'activation-originals'/(sha+'.xlsx');original.write_bytes(payload)
+        with contextlib.closing(sqlite3.connect(root/'activations.sqlite')) as db, db:
+            db.execute('CREATE TABLE activation_imports(sha256 TEXT,status TEXT)')
+            db.execute('INSERT INTO activation_imports VALUES(?,?)',(sha,'complete'))
+        with contextlib.closing(sqlite3.connect(root/'activation-report.sqlite')) as db, db:
+            db.execute('CREATE TABLE monthly(month TEXT,count INTEGER)')
+            db.execute("INSERT INTO monthly VALUES('2026-10',3)")
+        return original
+    def test_activation_roundtrip(self):
+        original=self.activation_fixture()
+        result=recovery.restore(self.make_backup(),self.root/'activation-restored')
+        self.assertEqual(result['databases']['activations/activations.sqlite'],'ok')
+        self.assertEqual(result['databases']['activations/activation-report.sqlite'],'ok')
+        self.assertEqual((self.root/'activation-restored/activations/activation-originals'/original.name).read_bytes(),original.read_bytes())
+    def test_missing_activation_original_rejects_backup(self):
+        self.activation_fixture().unlink()
+        with self.assertRaisesRegex(RuntimeError,'Activation original'):self.make_backup()
+    def test_activation_original_tampering_rejects_restore(self):
+        original=self.activation_fixture()
+        archive=self.rewrite_archive(lambda files:files.update({'activations/activation-originals/'+original.name:b'corrupt'}))
+        self.assert_restore_rejected(archive,'activation original')
     def test_hardlinked_products_restore_as_regular_files(self):
         (self.products/'second.png').hardlink_to(self.products/'image.png')
         archive=self.make_backup()

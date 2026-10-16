@@ -221,6 +221,30 @@ def run_backup(
                     if path.is_symlink() or not path.resolve().is_relative_to(history_root.resolve()) or not path.is_file() or digest(path) != expected:
                         raise RuntimeError('Customer history original missing or checksum mismatch')
                     history_sources.append((path, relative, expected))
+        activation_root = data / 'activations'
+        activation_db = activation_root / 'activations.sqlite'
+        activation_snapshots = []
+        activation_sources = []
+        if activation_db.exists():
+            if activation_root.is_symlink() or activation_db.is_symlink():
+                raise RuntimeError('Invalid activation database location')
+            for activation_name in ('activations.sqlite', 'activation-report.sqlite'):
+                original = activation_root / activation_name
+                if original.is_symlink() or not original.is_file():
+                    raise RuntimeError('Missing or invalid activation database')
+                snapshot_path = Path(temporary) / activation_name
+                with closing(sqlite3.connect(original.as_uri() + '?mode=ro', uri=True)) as source, closing(sqlite3.connect(snapshot_path)) as copy:
+                    source.backup(copy)
+                    verify_sqlite_snapshot(copy, 'Activation snapshot')
+                    if activation_name == 'activations.sqlite':
+                        for (expected,) in copy.execute("SELECT sha256 FROM activation_imports WHERE status='complete'"):
+                            if len(expected) != 64 or any(c not in '0123456789abcdef' for c in expected):
+                                raise RuntimeError('Invalid activation source checksum')
+                            path = activation_root / 'activation-originals' / (expected + '.xlsx')
+                            if path.is_symlink() or not path.resolve().is_relative_to(activation_root.resolve()) or not path.is_file() or digest(path) != expected:
+                                raise RuntimeError('Activation original missing or checksum mismatch')
+                            activation_sources.append((path, expected))
+                activation_snapshots.append((snapshot_path, activation_name))
         captured_release = release.read_bytes()
         try:
             with tarfile.open(local_partial, 'w:gz', compresslevel=2) as output:
@@ -231,6 +255,12 @@ def run_backup(
                     output.add(sales_snapshot, arcname='sales.sqlite')
                 if history_snapshot.exists():
                     output.add(history_snapshot, arcname='client-history/client-sales-history.sqlite')
+                for path, activation_name in activation_snapshots:
+                    output.add(path, arcname='activations/' + activation_name)
+                for path, expected in activation_sources:
+                    output.add(path, arcname='activations/activation-originals/' + path.name)
+                    if digest(path) != expected:
+                        raise RuntimeError('Activation source changed during backup')
                 for path, relative, expected in history_sources:
                     output.add(path, arcname='client-history/' + relative)
                     if digest(path) != expected:
