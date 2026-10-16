@@ -1,0 +1,37 @@
+import assert from 'node:assert/strict';
+import {build} from 'esbuild';
+import {mkdtempSync,rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+const dir=mkdtempSync(join(tmpdir(),'partner-match-'));
+try {
+ await build({entryPoints:['lib/partner-matching.ts'],outfile:join(dir,'match.mjs'),bundle:true,platform:'node',format:'esm'});
+ const {normalizeAddress,rankPartnerCandidates:rank,choosePartnerCandidate:choose}=await import(join(dir,'match.mjs'));
+ const point={id:'synthetic-a',cui:'RO 900000001',city:'Sat Exemplu',county:'BV',address:'Str. Main Nr. 22'};
+ const category=(patch)=>rank(point,[{...point,...patch}])[0].category;
+ assert.equal(category({address:'STRADA MAIN 22',county:'Brașov'}),'exact');
+ assert.equal(category({address:'Main nr24'}),'near');
+ assert.equal(category({address:'Main Nr22, Exemplu'}),'exact');
+ assert.equal(normalizeAddress('Strada 1 Decembrie 1918','Exemplu').house,'');
+ assert.equal(normalizeAddress('Strada 1 Decembrie Nr 22','Exemplu').house,'22');
+ assert.equal(rank({...point,address:'Strada Principala 22'},[{...point,address:'Principla Nr22'}])[0].category,'near');
+ assert.equal(rank({...point,address:'B-dul Exemplului Nr22'},[{...point,address:'Bulevardul Exemplului 22'}])[0].category,'exact');
+ assert.equal(category({address:'Main'}),'incomplete');
+ assert.equal(category({address:'Sat Exemplu Nr 22'}),'incomplete');
+ for(const legacy of ['--   22 - Sat Exemplu','-22 - Exemplu','-- 22 - Exemplu'])assert.equal(category({address:legacy}),'incomplete','Legacy leading house number without street must trigger duplicate warning');
+ assert.equal(category({address:'Main 22A'}),'near');
+ assert.equal(rank({...point,address:'Main 22A'},[{...point,address:'Main 22B'}])[0].category,'near');
+ assert.equal(category({county:'AB'}),'county-conflict');
+ assert.equal(category({city:''}),'incomplete');
+ assert.equal(category({address:'Other 22'}),'distinct');
+ for(const [a,b] of [['1-3','13'],['1/2','12'],['22A','22B']])assert.notEqual(rank({...point,address:'Main '+a},[{...point,address:'Main '+b}])[0].category,'exact');
+ assert.notEqual(category({address:'Main 22 Ap 2'}),'exact');
+ assert.equal(rank(point,[{...point,cui:'900000002'}]).length,0);
+ assert.equal(choose(point,[point],'').id,point.id);
+ assert.throws(()=>choose(point,[point,{...point,id:'synthetic-b'}],''));
+ assert.throws(()=>choose(point,[{...point,address:'Main 24'}],''));
+ assert.equal(choose(point,[{...point,address:'Main 24'}],'new'),undefined);
+ assert.throws(()=>choose(point,[point],'other-company-id'));
+ assert.equal(rank(point,[{...point,address:'Other 22'},point])[0].point.id,point.id);
+ console.log('Partner matching regression checks passed');
+} finally {rmSync(dir,{recursive:true,force:true});}

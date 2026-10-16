@@ -57,9 +57,16 @@ def snapshot(c):
  c.row_factory=sqlite3.Row
  tables={r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
  profiles=[dict(r) for r in c.execute('SELECT * FROM partner_profiles ORDER BY customer_id')] if 'partner_profiles' in tables else []
- return {'customers':read_customers(c),'agents':read_agents(c),'profiles':profiles}
+ return {'customers':read_customers(c),'agents':read_agents(c),'profiles':profiles, 'countyOverrides':[dict(r) for r in c.execute('SELECT * FROM location_county_overrides')] if 'location_county_overrides' in tables else [], 'identityAliases':[dict(r) for r in c.execute('SELECT * FROM customer_identity_aliases')] if 'customer_identity_aliases' in tables else []}
 def company_key(r):return cui_key(r['CIF'] or r['PartnerCode'])
 def build_plan(snap,master,roster,source_hash,source_path):
+ # Apply owner corrections to effective values only; original workbook evidence remains intact.
+ master=json.loads(json.dumps(master))
+ overrides={(r['kind'],r['id']):r['county'] for r in snap.get('countyOverrides',[])}
+ alias_ids={r['alias_id'] for r in snap.get('identityAliases',[])}
+ for item in master:
+  r=item['value']
+  if ('crm',r['PartnerAddressId']) in overrides:r['Judet']=overrides['crm',r['PartnerAddressId']]
  territories,_=roster_map(roster,snap['agents'])
  original={r['id']:r for r in snap['customers']}
  values={k:json.loads(v['data']) for k,v in original.items()}
@@ -80,6 +87,7 @@ def build_plan(snap,master,roster,source_hash,source_path):
   return ({code_key(v) for v in p.get('historyFranchises',[])}|{code_key(p.get('historyCatalog',{}).get('franchiseCode'))})-{''}
  by_code=collections.defaultdict(list);by_address=collections.defaultdict(list);by_company=collections.defaultdict(list)
  for id,p in values.items():
+  if id in alias_ids:continue
   pid=owner(p)
   if pid:by_company[pid].append(id)
   for f in codes(p):by_code[f].append(id)
@@ -141,6 +149,7 @@ def build_plan(snap,master,roster,source_hash,source_path):
  # Enrich other company-only shells only when *all* known CRM locations agree.
  # Never assign a multi-location firm's arbitrary first address to a no-code record.
  for id,p in values.items():
+  if id in alias_ids:continue
   if id in matched_ids or owner(p) is None:continue
   pid=owner(p)
   cp=dict(p);cp['crmCompany']={'partnerId':pid,'partnerCode':companies[pid]['PartnerCode'],'cif':companies[pid]['CIF'],'registration':companies[pid]['J'],'sourceHash':source_hash}
@@ -154,6 +163,7 @@ def build_plan(snap,master,roster,source_hash,source_path):
    key=address_key(p['county'],p['city'],p['address'])
    known[entity(p)][key]=(id,{k:p[k] for k in ['address','city','county']})
  for id,p0 in values.items():
+  if id in alias_ids:continue
   p=updates.get(id,p0)
   if id in profiles or codes(p) or address_good(p.get('address')):continue
   candidates=known.get(entity(p),{})
@@ -166,6 +176,12 @@ def build_plan(snap,master,roster,source_hash,source_path):
   wh=territories.get(county_key(p['county']),[])
   if wh:p['warehouseIds']=wh;p['warehouseId']=wh[0]
   updates[id]=p
+ # County-only repairs must not silently reallocate the owner's portfolio.
+ for id,p in updates.items():
+  if ('customer',id) in overrides:p['county']=overrides['customer',id]
+  if ('customer',id) in overrides or ('crm',p.get('crm',{}).get('partnerAddressId')) in overrides:
+   p['warehouseId']=values[id].get('warehouseId','')
+   p['warehouseIds']=values[id].get('warehouseIds',[p['warehouseId']])
  # Build every active unresolved address into an explicit queue.
  expected={id:dict(v) for id,v in original.items()}
  for id,p in updates.items():expected[id]={**original[id],'warehouse_id':p.get('warehouseId',''),'data':dump(p)}
@@ -178,7 +194,7 @@ def build_plan(snap,master,roster,source_hash,source_path):
  changed=[{'before':original[id],'after':r} for id,r in expected.items() if id in original and r!=original[id]]
  before_missing=sum(r['active'] and not address_good(json.loads(r['data']).get('address')) for r in original.values())
  after_missing=sum(r['active'] and not address_good(json.loads(r['data']).get('address')) for r in expected.values())
- return {'version':1,'createdAt':now(),'sourceHash':source_hash,'sourcePath':str(source_path),'sourceSnapshotHash':digest(snap['customers']),'sourceAgentsHash':digest(snap['agents']),'sourceProfilesHash':sha(dump(snap['profiles']).encode()),'expectedHash':digest(list(expected.values())),'companies':list(companies.values()),'master':master,'links':links,'changes':changed,'additions':[expected[id] for id in additions],'issues':issues,'addressReview':kept_position_addresses,'missingAddresses':missing,'summary':{'crmRows':len(master),'crmCompanies':len(companies),'existingUpdated':len(changed),'newRecords':len(additions),'linkedLocations':len({x['addressId'] for x in links}),'linkedExistingRecords':len(matched_ids-set(additions)),'beforeMissingStreet':before_missing,'afterMissingStreet':after_missing,'existingStreetCompleted':sum(not address_good(json.loads(x['before']['data']).get('address')) and address_good(json.loads(x['after']['data']).get('address')) for x in changed),'savedPositionAddressesPreserved':len(kept_position_addresses),'addressQueue':len(missing),'conflicts':len(issues)}}
+ return {'version':1,'createdAt':now(),'sourceHash':source_hash,'sourcePath':str(source_path),'repairStateHash':sha(dump([snap.get('countyOverrides',[]),snap.get('identityAliases',[])]).encode()),'sourceSnapshotHash':digest(snap['customers']),'sourceAgentsHash':digest(snap['agents']),'sourceProfilesHash':sha(dump(snap['profiles']).encode()),'expectedHash':digest(list(expected.values())),'companies':list(companies.values()),'master':master,'links':links,'changes':changed,'additions':[expected[id] for id in additions],'issues':issues,'addressReview':kept_position_addresses,'missingAddresses':missing,'summary':{'crmRows':len(master),'crmCompanies':len(companies),'existingUpdated':len(changed),'newRecords':len(additions),'linkedLocations':len({x['addressId'] for x in links}),'linkedExistingRecords':len(matched_ids-set(additions)),'beforeMissingStreet':before_missing,'afterMissingStreet':after_missing,'existingStreetCompleted':sum(not address_good(json.loads(x['before']['data']).get('address')) and address_good(json.loads(x['after']['data']).get('address')) for x in changed),'savedPositionAddressesPreserved':len(kept_position_addresses),'addressQueue':len(missing),'conflicts':len(issues)}}
 def protected(c):
  out={}
  for table, in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name!='customers' AND name NOT LIKE 'crm_%' ORDER BY name"):
@@ -198,6 +214,7 @@ def apply_plan(path,plan,receipt):
     return {'state':'already_applied'}
   def check():
    s=snapshot(c)
+   if plan.get('repairStateHash',sha(dump([[],[]]).encode()))!=sha(dump([s['countyOverrides'],s['identityAliases']]).encode()):raise ValueError('Repair overrides changed; regenerate plan')
    if digest(s['customers'])!=plan['sourceSnapshotHash'] or digest(s['agents'])!=plan['sourceAgentsHash'] or sha(dump(s['profiles']).encode())!=plan['sourceProfilesHash']:raise ValueError('Concurrent catalog/roster/profile change; regenerate plan')
   check()
   folder.mkdir(mode=0o700,parents=True,exist_ok=False)

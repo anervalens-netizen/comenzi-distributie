@@ -142,6 +142,9 @@ try {
   const samePointConfirmed=(await call(`partner/requests/${samePointId}/confirm`,'POST',{revision:samePointRequest.revision},regional)).data.request;
   const afterSamePoint=(await call('clients','GET',null,agent)).data.clients;
   ok(samePointConfirmed.status==='confirmed'&&samePointConfirmed.customerId===clients[0].id&&afterSamePoint.length===beforeSamePoint,'Confirming an existing CUI at the same location reuses the existing point without duplication');
+  // Direct POST cannot bypass normalized address warnings.
+  await call('partner/mail','POST',{...samePointBody,requestId:randomUUID(),county:'SYNTHETIC OTHER COUNTY'},agent,409);
+  await call('partner/mail','POST',{...samePointBody,requestId:randomUUID(),locationResolution:'synthetic-unknown-id'},agent,409);
   const newPointId=randomUUID();
   const newPointBody={...samePointBody,requestId:newPointId,company:clients[0].name+' PUNCT NOU',address:'STRADA QA PUNCT NOU NR 999'};
   const newPointRequest=(await call('partner/mail','POST',newPointBody,agent)).data.request;
@@ -177,7 +180,8 @@ try {
   ok((await call('clients','GET',null,agent)).data.clients.some(c=>c.id===dashboardRequest.customerId),'Reading a notification leaves the registered customer available');
   await call(`activity/team?month=${partnerMonth}`,'GET',null,agent,403);
   const countyPointId=randomUUID(),countyPointBody={...samePointBody,requestId:countyPointId,county:`${clients[0].county||'PRAHOVA'} QA DISTINCT`};
-  const countyPointRequest=(await call('partner/mail','POST',countyPointBody,agent)).data.request;
+  await call('partner/mail','POST',countyPointBody,agent,409);
+  const countyPointRequest=(await call('partner/mail','POST',{...countyPointBody,locationResolution:'new'},agent)).data.request;
   const countyPointConfirmed=(await call(`partner/requests/${countyPointId}/confirm`,'POST',{revision:countyPointRequest.revision},regional)).data.request;
   const countyPointClient=(await call('clients','GET',null,agent)).data.clients.find(item=>item.id===countyPointConfirmed.customerId);
   ok(countyPointConfirmed.customerId!==clients[0].id&&countyPointClient?.county===countyPointBody.county&&countyPointClient.address===clients[0].address,'Same CUI, city and address in a different county creates a distinct work location');

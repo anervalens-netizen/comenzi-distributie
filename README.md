@@ -190,3 +190,12 @@ Node stores analytics separately in MOBIUP_DATA_DIR/usage.sqlite (WAL). Retentio
 Historical sales identity aliases are explicit owner-maintained records in the private application settings key `sales-agent-aliases-v1`: a JSON array of `{userId, siteCode, warehouseName}`. Use them only after confirming continuity of the account/portfolio. They participate in report scopes and import preview revisions, retain the current account name, and preserve raw imported rows. Exact duplicate aliases are deduplicated, inactive accounts remain excluded, conflicting ownership fails closed, and invalid configuration returns an error. Account renaming alone does not automatically claim a historical location.
 
 New partner registration activates the work location atomically with the agent record. Exact company/location/county/address matches reuse the existing point; ambiguous legacy points require explicit selection by the submitting agent. Retries of the same saved payload are idempotent. Managers receive informational push/inbox notifications, with independent read state per manager; reading a notification never changes the portfolio. Legacy pending requests retain their compatibility resolution route. Preparing the operational email remains separate from sending it.
+
+Partner registration uses shared conservative Romanian address matching. Complete,
+unambiguous points are reused; incomplete addresses, nearby numbers, county
+conflicts and ambiguous legacy points require an explicit location choice. The
+server repeats the decision for direct API submissions. CUI lookup prefilters in
+SQLite and verifies normalized values in application code; it adds no startup index.
+See [offline CRM location repair](tools/CRM_LOCATION_REPAIR.md) for backup-verified
+county overrides and evidence-preserving aliases. Historical payloads remain immutable;
+existing history screens do not combine activity across retired aliases.

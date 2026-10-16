@@ -1,7 +1,8 @@
 import { db, fail, isGlobalManager, requireAgentAccess, requireManager, textField } from './server';
 import { bucharestMonthKey, bucharestMonthUtcRange } from './bucharest-month';
 import { managerFilter, type ManagerFilter } from './manager-scope';
-import { hasPartnerCounty, normalizeCui, partnerLegacyPointKey, partnerPointKey } from './partner-identity';
+import { normalizeCui } from './partner-identity';
+import { choosePartnerCandidate } from './partner-matching';
 import { sendPartnerRequestPush } from './push-notifications';
 import { selectUsersWithClientCounts } from './customer-counts';
 import type { Client, PartnerLocation, PartnerRequest, PartnerRequestRecord, TeamActivityAgent, TeamActivityView, User } from './types';
@@ -21,7 +22,7 @@ async function allActiveCustomers(){return (await db().prepare('SELECT id,wareho
 function requestPayload(row:RequestRow){return JSON.parse(row.payload) as PartnerRequest;}
 function summarizeInventory(record:InventoryRecord):InventoryDifference{return record.lines.reduce((summary,line)=>{const diff=(line.counted??0)-line.expected;if(diff<0)summary.shortage+=-diff;else if(diff>0)summary.surplus+=diff;if(diff!==0)summary.discrepantLines++;summary.delta+=diff;return summary;},{delta:0,shortage:0,surplus:0,discrepantLines:0});}
 
-export async function partnerLocations(cui:string){const key=normalizeCui(cui);if(!key)return [];const rows=await allActiveCustomers();return rows.filter(row=>normalizeCui(customerFromRow(row).cui)===key).map(location);}
+export async function partnerLocations(cui:string){const key=normalizeCui(cui);if(!key)return [];const pattern='*'+key.split('').join('*')+'*';const rows=(await db().prepare("SELECT id,warehouse_id,data FROM customers WHERE active=1 AND upper(json_extract(data,'$.cui')) GLOB ?").bind(pattern).all<CustomerRow>()).results;return rows.filter(row=>normalizeCui(customerFromRow(row).cui)===key).map(location);}
 async function decorate(rows:RequestRow[]){if(!rows.length)return [];const keys=new Set(rows.map(row=>row.cui_key)),customers=await allActiveCustomers();const byKey=new Map<string,PartnerLocation[]>();for(const row of customers){const item=location(row),key=normalizeCui(item.cui);if(!keys.has(key))continue;byKey.set(key,[...(byKey.get(key)||[]),item]);}return rows.map(row=>{const partner=requestPayload(row);return {...partner,id:row.id,agentId:row.agent_id,agentName:row.agent_name||'',warehouseId:row.warehouse_id,warehouseName:row.warehouse_name||'',status:row.status==='confirmed'?'confirmed':'requested',createdAt:row.created_at,updatedAt:row.updated_at,confirmedAt:row.confirmed_at,confirmedBy:row.confirmed_by,customerId:row.customer_id,revision:Number(row.revision),existingLocations:byKey.get(row.cui_key)||[]} satisfies PartnerRequestRecord;});}
 
 /** Register and associate a point atomically. confirmed_by=agent_id identifies self-registration. */
@@ -84,16 +85,11 @@ export async function listPartnerRequests(user:User,monthInput:string|null){
 }
 
 async function resolveRequestCustomer(partner:PartnerRequest,cuiKey:string,locationResolutionInput?:unknown){
-  const customers=await allActiveCustomers(),sameFirm=customers.filter(item=>normalizeCui(customerFromRow(item).cui)===cuiKey);
-  const wantedPoint=partnerPointKey(partner.location,partner.county,partner.address),wantedLegacy=partnerLegacyPointKey(partner.location,partner.address),locationResolution=textField(locationResolutionInput,100);
-  const exact=sameFirm.filter(item=>{const client=customerFromRow(item);return partnerPointKey(client.city,client.county,client.address)===wantedPoint;});
-  const incompleteLegacy=sameFirm.filter(item=>{const client=customerFromRow(item);return !hasPartnerCounty(client.county)&&partnerLegacyPointKey(client.city,client.address)===wantedLegacy;});
-  let samePoint:CustomerRow|undefined;
-  if(exact.length===1)samePoint=exact[0];
-  else if(exact.length>1){samePoint=exact.find(item=>item.id===locationResolution);if(!samePoint)fail(409,'Există mai multe puncte identice în datele vechi. Alege explicit punctul care trebuie asociat.');}
-  else if(incompleteLegacy.length){if(locationResolution==='new')samePoint=undefined;else {samePoint=incompleteLegacy.find(item=>item.id===locationResolution);if(!samePoint)fail(409,'Punctul existent are județul incomplet. Alege explicit punctul existent sau creează unul nou.');}}
-  else if(locationResolution&&locationResolution!=='new')fail(409,'Alegerea punctului de lucru nu mai este valabilă. Actualizează lista.');
-  return samePoint;
+  const points=await partnerLocations(cuiKey);
+  try {
+    const selected=choosePartnerCandidate({cui:partner.cui,city:partner.location,county:partner.county,address:partner.address},points,textField(locationResolutionInput,100));
+    return selected ? await db().prepare('SELECT id,warehouse_id,data FROM customers WHERE id=? AND active=1').bind(selected.id).first<CustomerRow>() : undefined;
+  } catch(error) { fail(409,error instanceof Error?error.message:'Verifică punctul de lucru.'); }
 }
 
 export async function confirmPartnerRequest(user:User,id:string,revision:unknown,locationResolutionInput?:unknown){

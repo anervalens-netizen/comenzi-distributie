@@ -25,6 +25,27 @@ class CRMTests(unittest.TestCase):
   r={k:'' for k in FIELDS};r.update(Cod_Franciza=code,PartnerAddressId=aid,PartnerId=pid,CIF=cif,PartnerCode=client,PartnerName='Example Company',SyntheticName='Example shop',Street=address,Oras='Iasi',Judet='Iasi',ManagerZona='obsolete',ASMM='obsolete',TradeReprezentative='historical creator')
   return {'row':2,'raw':dict(r),'value':r}
  def plan(self,rows):return build_plan(snapshot(self.c),rows,self.roster,'a'*64,'source.xlsx')
+ def test_county_override_survives_reconciliation(self):
+  self.customer(code='TR001',address='Example Street 1')
+  self.c.execute('CREATE TABLE location_county_overrides(kind TEXT,id TEXT,county TEXT,PRIMARY KEY(kind,id))')
+  self.c.executemany('INSERT INTO location_county_overrides VALUES(?,?,?)',[('crm','21','Brasov'),('customer','old','Brasov')])
+  self.c.commit()
+  p=self.plan([self.row()]);apply_plan(self.db,p,self.root/'receipt')
+  saved=json.loads(self.c.execute('SELECT data FROM customers').fetchone()[0])
+  self.assertEqual(saved['county'],'Brasov');self.assertEqual(saved['warehouseIds'],['old-w'])
+  raw=json.loads(self.c.execute('SELECT source_json FROM crm_locations').fetchone()[0])
+  self.assertEqual(raw['Judet'],'Iasi')
+  self.assertEqual(self.c.execute('SELECT county FROM crm_locations').fetchone()[0],'Brasov')
+ def test_merged_alias_does_not_reactivate_or_spawn_point(self):
+  self.customer(id='old',code='TR001',address='Example Street 1',active=0)
+  self.customer(id='canonical',code='TR001',address='Example Street 1')
+  self.c.execute('CREATE TABLE customer_identity_aliases(alias_id TEXT PRIMARY KEY,canonical_id TEXT,original_data TEXT)')
+  self.c.execute("INSERT INTO customer_identity_aliases VALUES('old','canonical','{}')")
+  self.c.commit()
+  p=self.plan([self.row()]);self.assertEqual(p['summary']['newRecords'],0)
+  self.assertTrue(all(x['customerId']=='canonical' for x in p['links']))
+  apply_plan(self.db,p,self.root/'receipt')
+  self.assertEqual(self.c.execute("SELECT active FROM customers WHERE id='old'").fetchone()[0],0)
  def test_address_completion_and_replay(self):
   self.customer(code='TR001');p=self.plan([self.row()])
   self.assertEqual(p['summary']['existingStreetCompleted'],1);self.assertEqual(p['summary']['newRecords'],0)
