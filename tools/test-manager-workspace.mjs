@@ -86,11 +86,11 @@ try {
   check(empty.total===0,'Combined locality/county and agent filters intersect');
   const globalActivity=await call('manager/activity?month=2026-01');
   check(globalActivity.finalizedOrders-baseline.finalizedOrders===5&&globalActivity.finalizedNotices-baseline.finalizedNotices===4,'Global document counts include all scoped agents and each document once');
-  check(!globalActivity.activity.partnerRequests.some(item=>item.id===oldPending)&&!('pending' in globalActivity)&&!('pendingByAgent' in globalActivity),'Incomplete legacy records never create approval queues or metrics');
+  check(!globalActivity.activity.partnerRequests.some(item=>item.id===oldPending)&&globalActivity.pending===0&&Object.values(globalActivity.pendingByAgent).every(count=>count===0),'Incomplete legacy records never create approval queues or metrics');
   check(globalActivity.confirmedByAgent['mui-agent-a']===1&&globalActivity.confirmedByAgent['mui-agent-b']===1,'Confirmation event is attributed to actual confirmation month');
   const scopedActivity=await call('manager/activity?month=2026-01&managerId=mui-region-a','mui-region-b');
   check(scopedActivity.finalizedOrders===4&&scopedActivity.finalizedNotices===3,'Region counts finalized orders/notices by completion month, excluding drafts and deleted rows');
-  check(!('pending' in scopedActivity)&&scopedActivity.confirmed===1,'Regional added-location KPI has no approval state');
+  check(scopedActivity.pending===0&&scopedActivity.confirmed===1,'Regional added-location KPI has no approval state');
   check(scopedActivity.activity.totals.finalizedInventories===1,'Inventory KPI uses finalizedAt, not createdAt');
   check(scopedActivity.activity.agents.length===1&&!scopedActivity.activity.partnerRequests.some(item=>item.id===otherPending),'Summary and requests exclude other regions');
   const onlyA=await call('manager/activity?month=2026-01&agentId=mui-agent-a','mui-region-a');

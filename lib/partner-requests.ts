@@ -153,5 +153,7 @@ export async function managerActivity(user: User, params: URLSearchParams) {
     confirmedByAgent[agent.agentId] = new Set(confirmed.filter(request => request.agentId === agent.agentId).map(request => request.customerId || request.id)).size;
   }
   const activity: TeamActivityView = {month, agents: agents.map(agent => ({...agent, partnerRequests: requests.filter(request => request.agentId === agent.agentId).length, partnerConfirmed: requests.filter(request => request.agentId === agent.agentId && request.status === 'confirmed').length})), partnerRequests: requests, totals: {partnerRequests: requests.length, partnerConfirmed: requests.filter(request => request.status === 'confirmed').length, activeAgents: agents.filter(agent => agent.active).length, agentsWithInventory: agents.filter(agent => agent.inventories > 0).length, finalizedInventories: original.totals.finalizedInventories, inventoryDelta: original.totals.inventoryDelta, inventoryShortage: original.totals.inventoryShortage, inventorySurplus: original.totals.inventorySurplus, inventoryDiscrepantLines: original.totals.inventoryDiscrepantLines}};
-  return {activity, confirmed: new Set(confirmed.map(request => request.customerId || request.id)).size, confirmedByAgent, finalizedOrders:documents?.finalizedOrders??0, finalizedNotices:documents?.finalizedNotices??0};
+  // Zero-valued compatibility fields keep already-open PWA clients safe; no approval queue exists.
+  const pendingByAgent=Object.fromEntries(agents.map(agent=>[agent.agentId,0]));
+  return {activity, pending:0, pendingByAgent, confirmed: new Set(confirmed.map(request => request.customerId || request.id)).size, confirmedByAgent, finalizedOrders:documents?.finalizedOrders??0, finalizedNotices:documents?.finalizedNotices??0};
 }

@@ -82,8 +82,9 @@ try {
   const partner={requestId:randomUUID(),company:'REG PARTNER',cui:distinct[0].cui,location:point.city,county:point.county,address:'Strada Test 13',storeType:'MAGAZIN',contact:'QA',phone:'0700000000',email:''};
   await call('partner/mail','POST',partner,a,409);
   const request=(await call('partner/mail','POST',{...partner,locationResolution:shared.id},a)).data.request;
-  const confirmed=(await call(`partner/requests/${request.id}/confirm`,'POST',{revision:request.revision},regional)).data.request;
-  check(confirmed.customerId===shared.id&&(await clients(a,'g-5')).find(c=>c.id===confirmed.customerId)?.address===partner.address,'Confirmation chooses 13, not the existing 1-3 locations, and restores shared coverage');
+  await call(`partner/requests/${request.id}/confirm`,'POST',{revision:request.revision},regional,410);
+  const confirmed=(await call(`partner/requests/${request.id}`,'GET',null,a)).data.request;
+  check(confirmed.customerId===shared.id&&(await clients(a,'g-5')).find(c=>c.id===confirmed.customerId)?.address===partner.address,'Immediate registration chooses 13, not the existing 1-3 locations, and restores shared coverage');
 
   const casId=randomUUID(),casBase={...partner,requestId:casId,company:'PARTNER CAS INITIAL',cui:'9900172099',address:'Strada CAS 1'};
   const casInitial=(await call('partner/mail','POST',casBase,a)).data.request;
