@@ -19,7 +19,7 @@ import xml.etree.ElementTree as ET
 HEADERS = 'Firma DataVDF Regional TR SiteCode ItemCode ItemName Cantitate Pret Valoare PretFD'.split() + ['Denumire Client', 'CIF', 'PunctDeLucru', 'CodPunctDeLucru', 'Oras', 'Judet', 'Nr', 'TRVechi', 'ItemType', 'IMEI', 'Qtty', 'Activat', 'DataActivare', 'HandSetType', 'JudetActivare', 'ItemCodeA', 'ItemNameA', 'Furnizor', 'DocumentDetailId', 'DocumentId', 'SiteId', 'DataVDFFormat']
 NS = {'s': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
 TR = re.compile(r'(^|[^A-Z0-9])TR([^A-Z0-9]|$)')
-VERSION = 1
+VERSION = 2
 MAX_ROWS = 1_000_000
 
 class ImportError(ValueError):
@@ -139,7 +139,7 @@ SCHEMA = '''
 CREATE TABLE IF NOT EXISTS activation_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS activation_imports(
  id INTEGER PRIMARY KEY, sha256 TEXT NOT NULL UNIQUE, filename TEXT NOT NULL,
- nominal_period TEXT NOT NULL, parser_version INTEGER NOT NULL, imported_at TEXT NOT NULL,
+ operator TEXT NOT NULL, nominal_period TEXT NOT NULL, parser_version INTEGER NOT NULL, imported_at TEXT NOT NULL,
  row_count INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL CHECK(status IN ('loading','complete')));
 CREATE TABLE IF NOT EXISTS activation_movements(
  id INTEGER PRIMARY KEY, movement_key TEXT NOT NULL, payload_hash TEXT NOT NULL,
@@ -186,7 +186,7 @@ def connect(directory):
     return c
 
 
-def normalized(raw, file_hash, rn):
+def normalized(raw, file_hash, rn, operator):
     issues = []
     dates = []
     for name in ('DataVDF', 'DataActivare'):
@@ -202,7 +202,7 @@ def normalized(raw, file_hash, rn):
         issues.append('missing_activation_date')
     if any(raw[k] and (raw[k] != raw[k].strip() or not re.fullmatch('[0-9]+', raw[k])) for k in ('IMEI', 'Activat')):
         issues.append('invalid_serial_text')
-    if not raw['IMEI'] or not raw['Firma'] or not raw['Furnizor']:
+    if not raw['IMEI'] or not raw['Firma']:
         issues.append('missing_identity')
     # Validate this known SIM relationship; never manufacture W from U.
     if raw['ItemType'] == 'SIM' and raw['Activat'] and not (
@@ -217,13 +217,13 @@ def normalized(raw, file_hash, rn):
     if quantity is None:
         issues.append('unsupported_quantity')
     customer = dump([raw['CIF'], raw['CodPunctDeLucru']]) if raw['CIF'] and raw['CodPunctDeLucru'] else ''
-    identity = [raw['Firma'], raw['Furnizor'], raw['DocumentDetailId'], raw['IMEI']]
+    identity = [raw['Firma'], operator, raw['DocumentDetailId'], raw['IMEI']]
     if not raw['DocumentDetailId'] or not raw['IMEI']:
         issues.append('missing_movement_identity')
         identity += [file_hash, rn]
     key = hashlib.sha256(dump(identity).encode()).hexdigest()
     payload = dump(raw)
-    return (key, hashlib.sha256(payload.encode()).hexdigest(), raw['Firma'], raw['Furnizor'], raw['IMEI'], raw['Activat'] if raw['Activat'].strip() else '',
+    return (key, hashlib.sha256(payload.encode()).hexdigest(), raw['Firma'], operator, raw['IMEI'], raw['Activat'] if raw['Activat'].strip() else '',
             *dates, raw['SiteCode'], raw['TR'], int(bool(TR.search(raw['TR'].upper()))), raw['ItemCode'], raw['ItemType'],
             customer, quantity, dump(sorted(set(issues))), payload)
 
@@ -321,7 +321,9 @@ def summary(c):
     }
 
 
-def import_files(c, directory, paths, nominal_period=''):
+def import_files(c, directory, paths, *, operator, nominal_period=''):
+    if not re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,63}', operator):
+        raise ImportError('Explicit stable operator namespace required')
     root = Path(directory).resolve()
     database = Path(c.execute('PRAGMA database_list').fetchone()[2]).resolve()
     if database != root / 'activations.sqlite':
@@ -339,8 +341,10 @@ def import_files(c, directory, paths, nominal_period=''):
                     shutil.copyfileobj(stream, staged)
                 staged.flush(); os.fsync(staged.fileno())
                 sha = digest(staged.name)
-                existing = c.execute('SELECT id FROM activation_imports WHERE sha256=?', (sha,)).fetchone()
+                existing = c.execute('SELECT id,operator FROM activation_imports WHERE sha256=?', (sha,)).fetchone()
                 if existing:
+                    if existing['operator'] != operator:
+                        raise ImportError('Source already bound to another operator')
                     archived = originals / (sha + '.xlsx')
                     if not archived.is_file() or digest(archived) != sha:
                         raise ImportError('Archived source missing or checksum mismatch')
@@ -357,11 +361,11 @@ def import_files(c, directory, paths, nominal_period=''):
                         os.fsync(fd)
                     finally:
                         os.close(fd)
-                batch = c.execute("INSERT INTO activation_imports(sha256,filename,nominal_period,parser_version,imported_at,status) VALUES(?,?,?,?,?,'loading')",
-                                  (sha, source.name, nominal_period, VERSION, dt.datetime.now(dt.timezone.utc).isoformat())).lastrowid
+                batch = c.execute("INSERT INTO activation_imports(sha256,filename,operator,nominal_period,parser_version,imported_at,status) VALUES(?,?,?,?,?,?,'loading')",
+                                  (sha, source.name, operator, nominal_period, VERSION, dt.datetime.now(dt.timezone.utc).isoformat())).lastrowid
                 count = 0
                 for rn, raw in workbook(staged.name):
-                    values = normalized(raw, sha, rn)
+                    values = normalized(raw, sha, rn, operator)
                     c.execute('INSERT OR IGNORE INTO activation_movements(movement_key,payload_hash,company,provider,imei,serial,movement_date,activation_date,site,agent,is_tr,item_code,item_type,customer_key,quantity,issues,raw_json) VALUES(' + ','.join('?' * 17) + ')', values)
                     movement = c.execute('SELECT id FROM activation_movements WHERE movement_key=? AND payload_hash=?', values[:2]).fetchone()[0]
                     c.execute('INSERT INTO activation_occurrences VALUES(?,?,?)', (batch, rn, movement))
@@ -380,6 +384,7 @@ def import_files(c, directory, paths, nominal_period=''):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--data-dir', required=True, type=Path)
+    parser.add_argument('--operator', required=True, help='Stable network/operator namespace, not the source supplier')
     parser.add_argument('--nominal-period', default='')
     parser.add_argument('--preview', action='store_true', help='Use a disposable copy; no changes to target data')
     parser.add_argument('files', nargs='+', type=Path)
@@ -397,13 +402,13 @@ def main():
                     source.close(); target.close()
             c = connect(temp)
             try:
-                print(dump({'preview': True, **import_files(c, temp, args.files, args.nominal_period)}))
+                print(dump({'preview': True, **import_files(c, temp, args.files, operator=args.operator, nominal_period=args.nominal_period)}))
             finally:
                 c.close()
     else:
         c = connect(args.data_dir)
         try:
-            print(dump(import_files(c, args.data_dir, args.files, args.nominal_period)))
+            print(dump(import_files(c, args.data_dir, args.files, operator=args.operator, nominal_period=args.nominal_period)))
         finally:
             c.close()
 

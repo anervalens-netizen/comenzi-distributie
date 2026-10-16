@@ -62,7 +62,7 @@ class ActivationsTests(unittest.TestCase):
     def load(self, rows, **kwargs):
         self.n += 1
         path = fixture(self.root / f'input-{self.n}.xlsx', rows, **kwargs)
-        return a.import_files(self.c, self.root / 'data', [path]), path
+        return a.import_files(self.c, self.root / 'data', [path], operator='example-network'), path
 
     def fact(self):
         return dict(self.c.execute('SELECT * FROM activation_facts').fetchone())
@@ -98,7 +98,7 @@ class ActivationsTests(unittest.TestCase):
     def test_overlap_reupload_and_cross_file_returns(self):
         _, p = self.load([row()])
         before = a.summary(self.c)
-        a.import_files(self.c, self.root / 'data', [p])
+        a.import_files(self.c, self.root / 'data', [p], operator='example-network')
         self.assertEqual(a.summary(self.c), before)
         result, _ = self.load([row(), row(DocumentDetailId='RETURN', DataVDF='20250101', TR='SEDIU CENTRAL', Qtty='-1')])
         self.assertEqual(result['sourceRows'], 3)
@@ -129,7 +129,7 @@ class ActivationsTests(unittest.TestCase):
             with self.subTest(change=change):
                 rows = [row(), row(DocumentDetailId='RETURN', DataVDF='20250101', Qtty='-1', **{k:v for k,v in change.items() if k != 'DataVDF'})]
                 rows[1].update(change)
-                facts = a.reconcile_group([dict(zip(['movement_key','payload_hash','company','provider','imei','serial','movement_date','activation_date','site','agent','is_tr','item_code','item_type','customer_key','quantity','issues','raw_json'], a.normalized(r, 'hash', i)), id=i) for i,r in enumerate(rows)], set())
+                facts = a.reconcile_group([dict(zip(['movement_key','payload_hash','company','provider','imei','serial','movement_date','activation_date','site','agent','is_tr','item_code','item_type','customer_key','quantity','issues','raw_json'], a.normalized(r, 'hash', i, 'example-network')), id=i) for i,r in enumerate(rows)], set())
                 self.assertIn('ambiguous_or_unmatched_return', facts[0][9])
 
     def test_tr_is_a_distinct_token_and_companies_remain_separate(self):
@@ -154,7 +154,7 @@ class ActivationsTests(unittest.TestCase):
         good = fixture(self.root / 'good.xlsx', [row()])
         bad = fixture(self.root / 'bad.xlsx', [row()], headers=a.HEADERS[:-1] + ['Firma'])
         with self.assertRaisesRegex(a.ImportError, 'headers'):
-            a.import_files(self.c, self.root / 'data', [good, bad])
+            a.import_files(self.c, self.root / 'data', [good, bad], operator='example-network')
         self.assertEqual(a.summary(self.c)['imports'], 0)
         self.assertEqual(a.summary(self.c)['movementVersions'], 0)
         self.assertEqual(self.c.execute('PRAGMA integrity_check').fetchone()[0], 'ok')
@@ -163,7 +163,7 @@ class ActivationsTests(unittest.TestCase):
         _, p = self.load([row()])
         before = a.summary(self.c)
         new = fixture(self.root / 'preview.xlsx', [row(DocumentDetailId='NEW')])
-        result = subprocess.run([sys.executable, str(Path(a.__file__)), '--preview', '--data-dir', str(self.root / 'data'), str(new)], check=True, capture_output=True, text=True)
+        result = subprocess.run([sys.executable, str(Path(a.__file__)), '--preview', '--operator', 'example-network', '--data-dir', str(self.root / 'data'), str(new)], check=True, capture_output=True, text=True)
         self.assertTrue(json.loads(result.stdout)['preview'])
         self.assertEqual(a.summary(self.c), before)
         self.assertEqual(len(list((self.root / 'data' / 'activation-originals').glob('*.xlsx'))), 1)
@@ -204,7 +204,7 @@ class ActivationsTests(unittest.TestCase):
         self.assertEqual(a.summary(self.c)['facts'], 0)
 
     def test_bad_signed_quantity_and_missing_identity_not_candidates(self):
-        self.load([row(Qtty='2', Furnizor='', DocumentDetailId='')])
+        self.load([row(Qtty='2', Firma='', DocumentDetailId='')])
         f = self.fact()
         self.assertIn('unsupported_quantity', f['reasons'])
         self.assertIn('missing_identity', f['reasons'])
@@ -217,13 +217,13 @@ class ActivationsTests(unittest.TestCase):
         archived.unlink()
         before = a.summary(self.c)
         with self.assertRaisesRegex(a.ImportError, 'Archived source'):
-            a.import_files(self.c, self.root / 'data', [path])
+            a.import_files(self.c, self.root / 'data', [path], operator='example-network')
         self.assertEqual(a.summary(self.c), before)
 
     def test_directory_mismatch_refused(self):
         path = fixture(self.root / 'input.xlsx', [row()])
         with self.assertRaisesRegex(a.ImportError, 'directory'):
-            a.import_files(self.c, self.root / 'other', [path])
+            a.import_files(self.c, self.root / 'other', [path], operator='example-network')
 
     def test_exact_decimal_quantity_without_float_coercion(self):
         self.load([row(Qtty='1.0')])
@@ -231,8 +231,23 @@ class ActivationsTests(unittest.TestCase):
         self.assertEqual(self.fact()['candidate_site'], 'SITE-A')
         for value in ('NaN', 'Infinity', '1.000000000000001', '0'):
             with self.subTest(value=value):
-                parsed = a.normalized(row(Qtty=value), 'hash', 6)
+                parsed = a.normalized(row(Qtty=value), 'hash', 6, 'example-network')
                 self.assertIsNone(parsed[14])
+
+    def test_supplier_change_does_not_split_operator_identity_or_hide_returns(self):
+        self.load([row(Furnizor='Supplier-A'),
+                   row(DocumentDetailId='RETURN', DataVDF='20250101', Qtty='-1', Furnizor='', TR='SEDIU CENTRAL'),
+                   row(DocumentDetailId='RESALE', DataVDF='20250201', Furnizor='Supplier-B', SiteCode='SITE-B')])
+        self.assertEqual(a.summary(self.c)['facts'], 1)
+        self.assertEqual(self.fact()['candidate_site'], 'SITE-B')
+        self.assertEqual(self.fact()['provider'], 'example-network')
+        raw = [json.loads(r[0])['Furnizor'] for r in self.c.execute('SELECT raw_json FROM activation_movements ORDER BY id')]
+        self.assertEqual(raw, ['Supplier-A', '', 'Supplier-B'])
+
+    def test_source_cannot_be_relabelled_to_another_operator(self):
+        _, path = self.load([row()])
+        with self.assertRaisesRegex(a.ImportError, 'another operator'):
+            a.import_files(self.c, self.root / 'data', [path], operator='other-network')
 
     def test_unknown_schema_refused(self):
         self.c.execute("UPDATE activation_meta SET value='999'")

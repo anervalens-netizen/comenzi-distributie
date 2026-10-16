@@ -8,8 +8,8 @@ use existing authenticated roles and organizational visibility, keep historical
 site identities, and package the importer explicitly in the supported release.
 
 ```sh
-python3 tools/activations.py --preview --data-dir /private/dev-activations /private/example.xlsx
-python3 tools/activations.py --data-dir /private/dev-activations /private/example.xlsx
+python3 tools/activations.py --preview --operator example-network --data-dir /private/dev-activations /private/example.xlsx
+python3 tools/activations.py --operator example-network --data-dir /private/dev-activations /private/example.xlsx
 npm run test:activations
 ```
 
@@ -22,22 +22,28 @@ must bind file hashes, database revision, actor and reviewed impact.
 
 ## Data and provenance
 
-One `activations.sqlite` covers every year. Schema/parser version 1 is explicit;
+One `activations.sqlite` covers every year. Schema/parser version 2 is explicit;
 unknown database schemas are refused. SQLite WAL and foreign keys are enabled.
 
-- `activation_imports`: SHA256, original filename, optional nominal period,
+- `activation_imports`: SHA256, original filename, explicit operator namespace, optional nominal period,
   parser version, timestamp, completion status and source-row count.
 - `activation_movements`: immutable raw row JSON plus parsed fields. Signed
   per-serial `Qtty` supplies quantity; document-line `Cantitate` never does.
-  Company, supplier, document detail and exact IMEI identify a source movement.
+  Company, operator, document detail and exact IMEI identify a source movement.
   A changed payload creates another version and blocks automatic attribution.
   Missing identities are retained as source-specific quarantined movements.
 - `activation_occurrences`: each file/row points to a movement version. Exact
   overlap does not multiply quantity; every source coordinate remains available.
-- `activation_facts`: replaceable derivation keyed by company, supplier and exact
+- `activation_facts`: replaceable derivation keyed by company, operator and exact
   nonblank `Activat`, with actual activation date/month, product, candidate site,
   reasons and movement/return evidence. This is a provisional identity convention;
   reuse/reactivation semantics still require business confirmation.
+
+The operator namespace is mandatory and must identify the network consistently
+across imports. `Furnizor` is a raw supplier field and may change or be blank; it
+never partitions an activation identity. A previously imported source cannot be
+relabelled to another operator. Operator namespace configuration is an integration
+responsibility, not inferred from a filename.
 
 Original XLSX files are kept under their SHA256 in `activation-originals`, with
 private permissions. Files are copied, fsynced and hashed before parsing. A failed
@@ -61,7 +67,7 @@ and 18-digit Activat relation is validated for SIM, never used to generate an
 identity or applied by truncating arbitrary identifiers.
 
 All source movements are retained, including non-TR and head-office returns,
-and movements without Activat. Exact company/supplier/IMEI groups are reconciled
+and movements without Activat. Exact company/operator/IMEI groups are reconciled
 before a distinct TR token is considered. A negative movement links only to a
 unique earlier positive for the same product and nonempty exact company customer
 and workpoint codes. Same-day order, unmatched or ambiguous returns stay unresolved.
