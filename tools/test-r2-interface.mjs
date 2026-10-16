@@ -22,6 +22,7 @@ const unused=names=>names.map(name=>`export const ${name}=()=>{throw new Error('
 const stubs={
   runtime:'export const env={DB:globalThis.__r2Db};export const runtimeKind="standalone";'+unused(['operationalStatus']),
   'usage-store':'export const recordUsageAuth=()=>false;export const recordUsagePulse=()=>false;'+unused(['readUsage']),
+  'activation-store':unused(['readActivations']),
   catalog:'export const readCatalog=async()=>({products:[]});'+unused(['changeProduct']),
   'stock-server':`export const stockForWarehouse=async()=>({importedAt:'2026-09-01T00:00:00Z',filename:'synthetic.xlsx',rows:[{code:'SYNTHETIC',name:'Synthetic product',quantity:10}]});${unused(['stockImportStatus','stockView','stockUpload'])}`,
   'sales-server':unused(['salesImportStatus','salesView','salesUpload']),
@@ -36,6 +37,7 @@ const stubs={
   'client-history-import-runtime':unused(['historyImportStatus','historyImportPreview','historyImportCommit']),
 };
 const serverPlugin={name:'synthetic-infrastructure',setup(b){
+  b.onResolve({filter:/^#mobiup-activation-store$/},()=>({path:'activation-store',namespace:'fixture'}));
   b.onResolve({filter:/^(?:@\/lib\/|\.\/)([^/]+)$/},args=>{const name=args.path.split('/').at(-1);if(name in stubs)return {path:name,namespace:'fixture'};});
   b.onResolve({filter:/^@\/resources\//},args=>({path:args.path.split('/').at(-1),namespace:'resource'}));
   b.onLoad({filter:/.*/,namespace:'fixture'},args=>({loader:'js',contents:stubs[args.path]}));
