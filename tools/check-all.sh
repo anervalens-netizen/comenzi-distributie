@@ -16,6 +16,7 @@ python3 tools/test_crm_location_repair.py
 python3 tools/test_crm_master_reconcile.py
 node tools/test-bind-ready.mjs
 node tools/test-operational-status.mjs
+python3 -W error::ResourceWarning tools/test_activations.py
 python3 tools/test_client_sales_history.py
 python3 tools/test_client_history_upload.py
 python3 -W error::ResourceWarning tools/test_history_revision_backup.py

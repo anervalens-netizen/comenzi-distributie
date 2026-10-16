@@ -199,3 +199,12 @@ SQLite and verifies normalized values in application code; it adds no startup in
 See [offline CRM location repair](tools/CRM_LOCATION_REPAIR.md) for backup-verified
 county overrides and evidence-preserving aliases. Historical payloads remain immutable;
 existing history screens do not combine activity across retired aliases.
+
+## Activation ledger (development)
+
+The separate activation database and offline XLSX importer are documented in
+[Activation ledger foundation](tools/ACTIVATIONS.md). They preserve all source
+movements, reconcile returns before proposing a TR site, and derive months only
+from activation dates. This foundation is not yet connected to the application's
+UI or payroll. It requires an explicit private development data directory and
+does not deploy or initialize production storage.
