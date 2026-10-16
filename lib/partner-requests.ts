@@ -78,9 +78,9 @@ export async function getPartnerRequest(user:User,id:string){
 export async function listPartnerRequests(user:User,monthInput:string|null){
   const month=monthValue(monthInput),{start,end}=bucharestMonthUtcRange(month),select="SELECT pr.*,u.name agent_name,COALESCE(u.warehouse_name,'') warehouse_name FROM partner_requests pr JOIN users u ON u.id=pr.agent_id";
   let rows:RequestRow[];
-  if(user.role==='agent')rows=(await db().prepare(select+' WHERE pr.agent_id=? AND pr.created_at>=? AND pr.created_at<? ORDER BY pr.created_at DESC').bind(user.id,start,end).all<RequestRow>()).results;
-  else if(isGlobalManager(user))rows=(await db().prepare(select+' WHERE pr.created_at>=? AND pr.created_at<? ORDER BY pr.created_at DESC').bind(start,end).all<RequestRow>()).results;
-  else rows=(await db().prepare(select+' WHERE pr.created_at>=? AND pr.created_at<? AND EXISTS (SELECT 1 FROM manager_agents ma WHERE ma.manager_id=? AND ma.agent_id=pr.agent_id) ORDER BY pr.created_at DESC').bind(start,end,user.id).all<RequestRow>()).results;
+  if(user.role==='agent')rows=(await db().prepare(select+' WHERE pr.status=\'confirmed\' AND pr.agent_id=? AND pr.created_at>=? AND pr.created_at<? ORDER BY pr.created_at DESC').bind(user.id,start,end).all<RequestRow>()).results;
+  else if(isGlobalManager(user))rows=(await db().prepare(select+' WHERE pr.status=\'confirmed\' AND pr.created_at>=? AND pr.created_at<? ORDER BY pr.created_at DESC').bind(start,end).all<RequestRow>()).results;
+  else rows=(await db().prepare(select+' WHERE pr.status=\'confirmed\' AND pr.created_at>=? AND pr.created_at<? AND EXISTS (SELECT 1 FROM manager_agents ma WHERE ma.manager_id=? AND ma.agent_id=pr.agent_id) ORDER BY pr.created_at DESC').bind(start,end,user.id).all<RequestRow>()).results;
   return {month,requests:await decorate(rows)};
 }
 
@@ -90,21 +90,6 @@ async function resolveRequestCustomer(partner:PartnerRequest,cuiKey:string,locat
     const selected=choosePartnerCandidate({cui:partner.cui,city:partner.location,county:partner.county,address:partner.address},points,textField(locationResolutionInput,100));
     return selected ? await db().prepare('SELECT id,warehouse_id,data FROM customers WHERE id=? AND active=1').bind(selected.id).first<CustomerRow>() : undefined;
   } catch(error) { fail(409,error instanceof Error?error.message:'Verifică punctul de lucru.'); }
-}
-
-export async function confirmPartnerRequest(user:User,id:string,revision:unknown,locationResolutionInput?:unknown){
-  requireManager(user);if(!uuid.test(id))fail(400,'Identificatorul cererii este invalid.');
-  const row=await db().prepare('SELECT * FROM partner_requests WHERE id=?').bind(id).first<RequestRow>();if(!row)fail(404,'Cererea nu a fost găsită.');await requireAgentAccess(user,row.agent_id);
-  if(row.status==='confirmed'){const full=await db().prepare("SELECT pr.*,u.name agent_name,COALESCE(u.warehouse_name,'') warehouse_name FROM partner_requests pr JOIN users u ON u.id=pr.agent_id WHERE pr.id=?").bind(id).first<RequestRow>();return (await decorate([full!]))[0];}
-  const expected=Number(revision);if(!Number.isSafeInteger(expected)||expected!==Number(row.revision))fail(409,'Cererea s-a modificat. Actualizează lista.');
-  const partner=requestPayload(row),samePoint=await resolveRequestCustomer(partner,row.cui_key,locationResolutionInput);
-  const customerId=samePoint?.id||`partner-${id}`,now=new Date().toISOString();
-  let customerStatement;
-  if(samePoint)customerStatement=db().prepare("UPDATE customers SET data=json_set(data,'$.warehouseIds',json_insert(COALESCE(json_extract(data,'$.warehouseIds'),json_array(warehouse_id)),'$[#]',?)) WHERE id=? AND active=1 AND NOT EXISTS (SELECT 1 FROM json_each(COALESCE(json_extract(data,'$.warehouseIds'),json_array(warehouse_id))) WHERE value=?) AND EXISTS (SELECT 1 FROM partner_requests WHERE id=? AND status='requested' AND revision=?)").bind(row.warehouse_id,customerId,row.warehouse_id,id,expected);
-  else {const client:Client={id:customerId,warehouseId:row.warehouse_id,warehouseIds:[row.warehouse_id],name:partner.company,cui:partner.cui,city:partner.location,county:partner.county,address:partner.address,route:''};customerStatement=db().prepare("INSERT INTO customers(id,warehouse_id,data,active) SELECT ?,?,?,1 WHERE EXISTS (SELECT 1 FROM partner_requests WHERE id=? AND status='requested' AND revision=?)").bind(customerId,row.warehouse_id,JSON.stringify(client),id,expected);}
-  const results=await db().batch([customerStatement,db().prepare("UPDATE partner_requests SET status='confirmed',confirmed_at=?,confirmed_by=?,customer_id=?,updated_at=?,revision=revision+1 WHERE id=? AND status='requested' AND revision=? AND EXISTS (SELECT 1 FROM customers WHERE id=? AND active=1)").bind(now,user.id,customerId,now,id,expected,customerId)]);
-  if(!results[1]?.meta.changes)fail(409,'Cererea s-a modificat sau clientul nu a putut fi asociat. Actualizează lista.');
-  const full=await db().prepare("SELECT pr.*,u.name agent_name,COALESCE(u.warehouse_name,'') warehouse_name FROM partner_requests pr JOIN users u ON u.id=pr.agent_id WHERE pr.id=?").bind(id).first<RequestRow>();return (await decorate([full!]))[0];
 }
 
 export async function teamActivity(user:User,monthInput:string|null,selected:ManagerFilter|null=null):Promise<TeamActivityView>{
@@ -140,12 +125,12 @@ async function readTeamActivity(user:User,monthInput:string|null,selected:Manage
   return {month,agents,totals:{partnerRequests:partnerView.requests.length,partnerConfirmed:partnerView.requests.filter(item=>item.status==='confirmed').length,activeAgents:agents.filter(item=>item.active).length,agentsWithInventory:agents.filter(item=>item.inventories>0).length,finalizedInventories:finalized.length,inventoryDelta:difference.delta,inventoryShortage:difference.shortage,inventorySurplus:difference.surplus,inventoryDiscrepantLines:difference.discrepantLines},partnerRequests:partnerView.requests};
 }
 
-/** Manager workspace: all outstanding requests, with confirmation KPIs by event month. */
+/** Manager workspace: registrations with added-location KPIs by event month. */
 export async function managerActivity(user: User, params: URLSearchParams) {
   requireManager(user);
   const month = monthValue(params.get('month'));
   const selected = await managerFilter(user, params);
-  // This workspace uses all-time pending and confirmation-event months below.
+  // This workspace uses registration event months below.
   // Skip the unused creation-month request query/decorating of the team view.
   const original = await readTeamActivity(user, month, selected, false);
   const scopedAgents = original.agents.filter(agent => !selected || selected.agentIds.includes(agent.agentId));
@@ -160,15 +145,13 @@ export async function managerActivity(user: User, params: URLSearchParams) {
     .bind(start,end,JSON.stringify([...ids]))
     .first<{finalizedOrders:number;finalizedNotices:number}>();
   const agents=scopedAgents;
-  const rows = (await db().prepare("SELECT pr.*,u.name agent_name,COALESCE(u.warehouse_name,'') warehouse_name FROM partner_requests pr JOIN users u ON u.id=pr.agent_id WHERE (pr.status='requested' OR (pr.created_at>=? AND pr.created_at<?) OR (pr.confirmed_at>=? AND pr.confirmed_at<?)) AND (EXISTS (SELECT 1 FROM manager_agents ma WHERE ma.manager_id=? AND ma.agent_id=pr.agent_id) OR ?=1) ORDER BY pr.created_at DESC,pr.id DESC").bind(start,end,start,end,user.id,isGlobalManager(user)?1:0).all<RequestRow>()).results.filter(row => ids.has(row.agent_id));
+  const rows = (await db().prepare("SELECT pr.*,u.name agent_name,COALESCE(u.warehouse_name,'') warehouse_name FROM partner_requests pr JOIN users u ON u.id=pr.agent_id WHERE pr.status='confirmed' AND ((pr.created_at>=? AND pr.created_at<?) OR (pr.confirmed_at>=? AND pr.confirmed_at<?)) AND (EXISTS (SELECT 1 FROM manager_agents ma WHERE ma.manager_id=? AND ma.agent_id=pr.agent_id) OR ?=1) ORDER BY pr.created_at DESC,pr.id DESC").bind(start,end,start,end,user.id,isGlobalManager(user)?1:0).all<RequestRow>()).results.filter(row => ids.has(row.agent_id));
   const requests = await decorate(rows);
   const confirmed = requests.filter(request => request.status === 'confirmed' && request.confirmedAt && bucharestMonthKey(request.confirmedAt) === month);
-  const pendingByAgent: Record<string, number> = {}, confirmedByAgent: Record<string, number> = {};
+  const confirmedByAgent: Record<string, number> = {};
   for (const agent of agents) {
-    const own = requests.filter(request => request.agentId === agent.agentId);
-    pendingByAgent[agent.agentId] = own.filter(request => request.status === 'requested').length;
     confirmedByAgent[agent.agentId] = new Set(confirmed.filter(request => request.agentId === agent.agentId).map(request => request.customerId || request.id)).size;
   }
   const activity: TeamActivityView = {month, agents: agents.map(agent => ({...agent, partnerRequests: requests.filter(request => request.agentId === agent.agentId).length, partnerConfirmed: requests.filter(request => request.agentId === agent.agentId && request.status === 'confirmed').length})), partnerRequests: requests, totals: {partnerRequests: requests.length, partnerConfirmed: requests.filter(request => request.status === 'confirmed').length, activeAgents: agents.filter(agent => agent.active).length, agentsWithInventory: agents.filter(agent => agent.inventories > 0).length, finalizedInventories: original.totals.finalizedInventories, inventoryDelta: original.totals.inventoryDelta, inventoryShortage: original.totals.inventoryShortage, inventorySurplus: original.totals.inventorySurplus, inventoryDiscrepantLines: original.totals.inventoryDiscrepantLines}};
-  return {activity, pending: requests.filter(request => request.status === 'requested').length, confirmed: new Set(confirmed.map(request => request.customerId || request.id)).size, pendingByAgent, confirmedByAgent, finalizedOrders:documents?.finalizedOrders??0, finalizedNotices:documents?.finalizedNotices??0};
+  return {activity, confirmed: new Set(confirmed.map(request => request.customerId || request.id)).size, confirmedByAgent, finalizedOrders:documents?.finalizedOrders??0, finalizedNotices:documents?.finalizedNotices??0};
 }

@@ -40,8 +40,8 @@ function parseSubscription(value:unknown):PushSubscriptionData{
 export async function managerRequestInbox(user:User):Promise<ManagerRequestInbox>{
   requireManager(user);
   const scope=isGlobalManager(user)
-    ?"(pr.status='requested' OR (pr.status='confirmed' AND pr.confirmed_by=pr.agent_id))"
-    :"(pr.status='requested' OR (pr.status='confirmed' AND pr.confirmed_by=pr.agent_id)) AND EXISTS (SELECT 1 FROM manager_agents ma WHERE ma.manager_id=? AND ma.agent_id=pr.agent_id)";
+    ?"(pr.status='confirmed' AND pr.confirmed_by=pr.agent_id)"
+    :"(pr.status='confirmed' AND pr.confirmed_by=pr.agent_id) AND EXISTS (SELECT 1 FROM manager_agents ma WHERE ma.manager_id=? AND ma.agent_id=pr.agent_id)";
   const where=scope+" AND NOT EXISTS (SELECT 1 FROM settings WHERE key='partner-read:'||?||':'||pr.id)";
   const countSql='SELECT COUNT(*) count FROM partner_requests pr WHERE '+where;
   const rowsSql="SELECT pr.id,pr.agent_id,u.name agent_name,pr.created_at,pr.payload FROM partner_requests pr JOIN users u ON u.id=pr.agent_id WHERE "+where+' ORDER BY pr.created_at DESC LIMIT 20';

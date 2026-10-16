@@ -111,9 +111,9 @@ try {
   ok(partnerResult.eml.includes('X-Unsent: 1')&&partnerResult.eml.includes('multipart/alternative'),'Partner Outlook message is generated as an unsent HTML-capable EML');
   ok(partnerResult.request.id===partnerRequestId&&partnerResult.request.status==='confirmed'&&partnerResult.request.confirmedBy===partnerResult.request.agentId&&!!partnerResult.request.customerId,'Registration immediately activates the client with agent attribution');
   const regionalInbox=(await call('notifications/inbox','GET',null,regional)).data,globalInbox=(await call('notifications/inbox','GET',null,manager)).data;
-  ok(regionalInbox.count===1&&regionalInbox.items[0]?.id===partnerRequestId,'Regional inbox surfaces pending request for assigned agent');
-  ok(globalInbox.count===1&&globalInbox.items[0]?.id===partnerRequestId,'Global inbox surfaces all pending partner requests');
-  const scopeDb=new DatabaseSync('work/qa/mobiup.sqlite'),otherRequestId=randomUUID(),otherPayload={...partnerBody,requestId:otherRequestId,company:'OUT OF SCOPE QA',cui:'RO5500000000'};scopeDb.prepare("INSERT INTO partner_requests(id,agent_id,warehouse_id,cui_key,status,payload,created_at,updated_at,revision) VALUES (?,?,?,?,'requested',?,?,?,1)").run(otherRequestId,'qa-agent2','g-3','5500000000',JSON.stringify(otherPayload),new Date().toISOString(),new Date().toISOString());scopeDb.close();
+  ok(regionalInbox.count===1&&regionalInbox.items[0]?.id===partnerRequestId,'Regional inbox surfaces informational registration for assigned agent');
+  ok(globalInbox.count===1&&globalInbox.items[0]?.id===partnerRequestId,'Global inbox surfaces completed registrations');
+  const scopeDb=new DatabaseSync('work/qa/mobiup.sqlite'),otherRequestId=randomUUID(),otherPayload={...partnerBody,requestId:otherRequestId,company:'OUT OF SCOPE QA',cui:'RO5500000000'};scopeDb.prepare("INSERT INTO partner_requests(id,agent_id,warehouse_id,cui_key,status,payload,created_at,updated_at,revision) VALUES (?,?,?,?,'requested',?,?,?,1)").run(otherRequestId,'qa-agent2','g-3','5500000000',JSON.stringify(otherPayload),new Date().toISOString(),new Date().toISOString());scopeDb.prepare("UPDATE partner_requests SET status='confirmed',confirmed_by=agent_id,confirmed_at=created_at,customer_id=? WHERE id=?").run('synthetic-active-point',otherRequestId);scopeDb.close();
   const scopedInbox=(await call('notifications/inbox','GET',null,regional)).data,allInbox=(await call('notifications/inbox','GET',null,manager)).data;
   ok(scopedInbox.count===1&&!scopedInbox.items.some(item=>item.id===otherRequestId),'Regional inbox excludes requests outside assigned agents');
   ok(allInbox.count===2&&allInbox.items.some(item=>item.id===otherRequestId),'Global inbox includes request outside regional scope');
@@ -127,7 +127,7 @@ try {
   ok((await call(`partner/requests/${partnerRequestId}`,'GET',null,regional)).data.request.id===partnerRequestId,'Assigned regional manager can retrieve partner request by ID');
   const partnerRetry=(await call('partner/mail','POST',{...partnerBody,revision:partnerResult.request.revision},agent)).data;
   ok(partnerRetry.request.id===partnerRequestId&&partnerRetry.request.revision===partnerResult.request.revision,'Retrying the same registration is idempotent');
-  ok((await call('notifications/inbox','GET',null,regional)).data.count===1,'Regenerating the same request does not create a second pending alert');
+  ok((await call('notifications/inbox','GET',null,regional)).data.count===1,'Regenerating the same request does not create a second notification');
   await call('partner/mail','POST',{...partnerBody,revision:partnerResult.request.revision,contact:'CHANGED CONTACT'},agent,409);
   ok((await call('clients','GET',null,agent)).data.clients.some(c=>c.id===partnerResult.request.customerId),'New client is available before any manager action');
   await call('notifications/inbox/read','POST',{ids:[partnerRequestId]},agent,403);
@@ -139,16 +139,17 @@ try {
   const samePointRequest=(await call('partner/mail','POST',samePointBody,agent)).data.request;
   await call(`partner/requests/${samePointId}/confirm`,'POST',{revision:samePointRequest.revision},agent,403);
   const beforeSamePoint=(await call('clients','GET',null,agent)).data.clients.length;
-  const samePointConfirmed=(await call(`partner/requests/${samePointId}/confirm`,'POST',{revision:samePointRequest.revision},regional)).data.request;
+  await call(`partner/requests/${samePointId}/confirm`,'POST',{revision:samePointRequest.revision},regional,410);
+  const samePointConfirmed=(await call(`partner/requests/${samePointId}`,'GET',null,agent)).data.request;
   const afterSamePoint=(await call('clients','GET',null,agent)).data.clients;
-  ok(samePointConfirmed.status==='confirmed'&&samePointConfirmed.customerId===clients[0].id&&afterSamePoint.length===beforeSamePoint,'Confirming an existing CUI at the same location reuses the existing point without duplication');
+  ok(samePointConfirmed.status==='confirmed'&&samePointConfirmed.customerId===clients[0].id&&afterSamePoint.length===beforeSamePoint,'Registering an existing CUI at the same location reuses the existing point without duplication');
   // Direct POST cannot bypass normalized address warnings.
   await call('partner/mail','POST',{...samePointBody,requestId:randomUUID(),county:'SYNTHETIC OTHER COUNTY'},agent,409);
   await call('partner/mail','POST',{...samePointBody,requestId:randomUUID(),locationResolution:'synthetic-unknown-id'},agent,409);
   const newPointId=randomUUID();
   const newPointBody={...samePointBody,requestId:newPointId,company:clients[0].name+' PUNCT NOU',address:'STRADA QA PUNCT NOU NR 999'};
   const newPointRequest=(await call('partner/mail','POST',newPointBody,agent)).data.request;
-  const newPointConfirmed=(await call(`partner/requests/${newPointId}/confirm`,'POST',{revision:newPointRequest.revision},regional)).data.request;
+  const newPointConfirmed=newPointRequest;
   const afterNewPoint=(await call('clients','GET',null,agent)).data.clients;
   const newPointClient=afterNewPoint.find(item=>item.id===newPointConfirmed.customerId);
   ok(newPointConfirmed.status==='confirmed'&&newPointClient?.cui===clients[0].cui&&newPointClient.address===newPointBody.address&&afterNewPoint.length===beforeSamePoint+1,'Same CUI at a different address creates a distinct work location');
@@ -156,7 +157,7 @@ try {
   ok(lookupAfter.locations.length>=2,'CUI lookup shows all work locations for the same company');
   const partnerMonth=newPointRequest.createdAt.slice(0,7);
   const agentRequests=(await call(`partner/requests?month=${partnerMonth}`,'GET',null,agent)).data.requests;
-  ok(agentRequests.filter(item=>[partnerRequestId,samePointId,newPointId].includes(item.id)).length===3,'Agent monthly history contains requested and confirmed partner records');
+  ok(agentRequests.filter(item=>[partnerRequestId,samePointId,newPointId].includes(item.id)).length===3,'Agent monthly history contains completed registrations');
   const regionalActivity=(await call(`activity/team?month=${partnerMonth}`,'GET',null,regional)).data;
   const activityAgent=regionalActivity.agents.find(item=>item.agentId==='qa-agent1');
   ok(activityAgent.partnerRequests===3&&activityAgent.partnerConfirmed===3&&regionalActivity.partnerRequests.length===(await call(`activity/team?month=${partnerMonth}`,'GET',null,manager)).data.partnerRequests.length,'Regional activity aggregates assigned-agent partner requests');
@@ -170,9 +171,9 @@ try {
   const activityRestore=new DatabaseSync('work/qa/mobiup.sqlite');activityRestore.prepare('UPDATE users SET active=1 WHERE id=?').run('qa-agent2');activityRestore.close();
   const dashboardRequestId=randomUUID(),dashboardRequest=(await call('partner/mail','POST',{...partnerBody,requestId:dashboardRequestId,company:'DASHBOARD REFRESH QA',cui:'RO6677889900',address:'Strada Dashboard 7'},agent)).data.request;
   const dashboardBefore=(await call(`activity/team?month=${partnerMonth}`,'GET',null,regional)).data, inboxBefore=(await call('notifications/inbox','GET',null,regional)).data.count;
-  await call(`partner/requests/${dashboardRequestId}/confirm`,'POST',{revision:dashboardRequest.revision},regional);
+  await call(`partner/requests/${dashboardRequestId}/confirm`,'POST',{revision:dashboardRequest.revision},regional,410);
   const dashboardAfter=(await call(`activity/team?month=${partnerMonth}`,'GET',null,regional)).data, inboxAfter=(await call('notifications/inbox','GET',null,regional)).data.count;
-  ok(dashboardAfter.totals.partnerConfirmed===dashboardBefore.totals.partnerConfirmed&&dashboardAfter.totals.partnerRequests-dashboardAfter.totals.partnerConfirmed===0,'Legacy confirmation route is idempotent for an already active registration');
+  ok(dashboardAfter.totals.partnerConfirmed===dashboardBefore.totals.partnerConfirmed&&dashboardAfter.totals.partnerRequests-dashboardAfter.totals.partnerConfirmed===0,'Removed approval route cannot change an already active registration');
   ok(inboxAfter===inboxBefore,'Registration notification remains unread until read, independent of client availability');
   const readInbox=(await call('notifications/inbox/read','POST',{ids:[dashboardRequestId]},regional)).data;
   ok(readInbox.count===inboxBefore-1&&!readInbox.items.some(i=>i.id===dashboardRequestId),'Reading a registration removes its unread notification');
@@ -182,7 +183,7 @@ try {
   const countyPointId=randomUUID(),countyPointBody={...samePointBody,requestId:countyPointId,county:`${clients[0].county||'PRAHOVA'} QA DISTINCT`};
   await call('partner/mail','POST',countyPointBody,agent,409);
   const countyPointRequest=(await call('partner/mail','POST',{...countyPointBody,locationResolution:'new'},agent)).data.request;
-  const countyPointConfirmed=(await call(`partner/requests/${countyPointId}/confirm`,'POST',{revision:countyPointRequest.revision},regional)).data.request;
+  const countyPointConfirmed=countyPointRequest;
   const countyPointClient=(await call('clients','GET',null,agent)).data.clients.find(item=>item.id===countyPointConfirmed.customerId);
   ok(countyPointConfirmed.customerId!==clients[0].id&&countyPointClient?.county===countyPointBody.county&&countyPointClient.address===clients[0].address,'Same CUI, city and address in a different county creates a distinct work location');
   const legacyCustomerId='legacy-county-qa',legacyClient={id:legacyCustomerId,warehouseId:'g-5',warehouseIds:['g-5'],name:'LEGACY COUNTY QA',cui:'RO5566778899',city:'Dumbrava',county:'',address:'Strada Legacy 1',route:''};

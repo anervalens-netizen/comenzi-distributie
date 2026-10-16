@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
-import { ArrowRight, ClipboardCheck, RefreshCw, Store, TrendingUp, Bell, Users, Boxes, ScanBarcode } from 'lucide-react';
+import { ArrowRight, ClipboardCheck, RefreshCw, Store, TrendingUp, Users, Boxes, ScanBarcode } from 'lucide-react';
 import { api, errorMessage, money } from '@/lib/client-api';
 import { bucharestReportingMonthKey } from '@/lib/bucharest-month';
 import type { PartnerRequestRecord, TeamActivityView, User } from '@/lib/types';
@@ -10,7 +10,7 @@ import type { ManagerScope } from './manager-scope';
 import './manager-workspace.css';
 
 export type ManagerDestination = 'partner' | 'sales' | 'clients' | 'stock' | 'inventory' | 'orders';
-type Activity = {activity: TeamActivityView; pending: number; confirmed: number; pendingByAgent: Record<string, number>; confirmedByAgent: Record<string, number>; finalizedOrders: number; finalizedNotices: number};
+type Activity = {activity: TeamActivityView; confirmed: number; confirmedByAgent: Record<string, number>; finalizedOrders: number; finalizedNotices: number};
 export const managerCurrentMonth = () => bucharestReportingMonthKey(new Date());
 function useActivity(query: string, month: string, reload: number) {
   const [data, setData] = useState<{key: string; value: Activity} | null>(null);
@@ -61,25 +61,23 @@ export function ManagerOverview({scope,users,month,onMonth,onRequests,onAgent}: 
     <div className="manager-summary-grid">
       <button className="manager-metric" onClick={()=>onAgent(scope.agentId,'sales')}><TrendingUp size={19}/><span>VÂNZĂRI</span><strong className="manager-sales-value">{salesAvailable?<><span className="manager-sales-amount">{new Intl.NumberFormat('ro-RO',{minimumFractionDigits:2,maximumFractionDigits:2}).format(currentSales!.summary.value)}</span><span className="manager-sales-currency">RON</span></>:'—'}</strong><small>{salesAvailable?'Valoare în luna selectată':currentSalesError?'Încărcare nereușită':currentSales?'Fără import în această lună':'Se încarcă…'}</small></button>
       <button className="manager-metric" onClick={onRequests}><Store size={19}/><span>CLIENȚI NOI</span><strong>{data?data.confirmed:'—'}</strong><small>Puncte noi în portofoliu în luna selectată</small></button>
-      {!!data?.pending&&<button className="manager-metric" onClick={onRequests}><Bell size={19}/><span>SOLICITĂRI ÎN AȘTEPTARE</span><strong>{data?data.pending:'—'}</strong><small>Cereri din fluxul anterior</small></button>}
       <div className="manager-metric"><ClipboardCheck size={19}/><span>INVENTARE FINALIZATE</span><strong>{data?data.activity.totals.finalizedInventories:'—'}</strong><small>Finalizate în luna selectată</small></div>
       <div className="manager-metric"><Boxes size={19}/><span>COMENZI FINALIZATE</span><strong>{data?data.finalizedOrders:'—'}</strong><small>Finalizate în luna selectată, fără ciorne</small></div>
       <div className="manager-metric"><ScanBarcode size={19}/><span>AVIZE FINALIZATE</span><strong>{data?data.finalizedNotices:'—'}</strong><small>SIM și standuri la client, fără ciorne</small></div>
     </div>
-    {!!data?.pending&&<section className="panel manager-attention"><div><h2>Necesită atenție</h2>{!data?<p>{error?'Datele nu sunt disponibile.':'Se verifică solicitările…'}</p>:data.pending?<p><strong>{data.pending} solicitări</strong> așteaptă confirmarea punctului de lucru.</p>:<p>Nu există solicitări de partener în așteptare în selecție.</p>}</div><button className="secondary" onClick={onRequests}>Deschide cererile vechi <ArrowRight size={16}/></button></section>}
     <section className="panel manager-team-panel"><div className="panel-heading"><div><h2>Situația pe agent</h2><span className="count-pill">{data?.activity.agents.length??'—'}</span></div></div>
-      {!data?<p className="portfolio-message">{error?'Activitatea nu este disponibilă.':'Se încarcă activitatea…'}</p>:!data.activity.agents.length?<p className="portfolio-message">Nu există agenți în selecție.</p>:<div className="manager-table-scroll"><table className="manager-agent-table"><thead><tr><th>Agent / TR</th><th>Vânzări</th><th>Clienți noi</th><th>În așteptare</th><th>Inventare</th><th>Portofoliu</th></tr></thead><tbody>{data.activity.agents.map(agent=>{
+      {!data?<p className="portfolio-message">{error?'Activitatea nu este disponibilă.':'Se încarcă activitatea…'}</p>:!data.activity.agents.length?<p className="portfolio-message">Nu există agenți în selecție.</p>:<div className="manager-table-scroll"><table className="manager-agent-table"><thead><tr><th>Agent / TR</th><th>Vânzări</th><th>Clienți noi</th><th>Inventare</th><th>Portofoliu</th></tr></thead><tbody>{data.activity.agents.map(agent=>{
         const user=users.find(user=>user.id===agent.agentId);
         const sameSite=user?.siteCode?users.filter(other=>other.role==='agent'&&other.active!==0&&other.siteCode.toUpperCase()===user.siteCode.toUpperCase()):[];
         const site=sameSite.length===1?currentSales?.sites.find(site=>site.siteCode.toUpperCase()===user?.siteCode.toUpperCase()):undefined;
-        return <tr key={agent.agentId}><th><button className="manager-agent-name" onClick={()=>onAgent(agent.agentId,'sales')}>{agent.agentName}</button><small>{user?.siteCode||agent.warehouseName}{!agent.active?' · inactiv':''}</small></th><td>{salesAvailable&&site?money(site.value):'—'}</td><td>{data.confirmedByAgent[agent.agentId]||0}</td><td>{data.pendingByAgent[agent.agentId]||0}</td><td>{agent.finalizedInventories}</td><td><button className="quiet" aria-label={`Partenerii agentului ${agent.agentName}`} onClick={()=>onAgent(agent.agentId,'partner')}>{agent.clientCount} puncte <ArrowRight size={14}/></button></td></tr>;
+        return <tr key={agent.agentId}><th><button className="manager-agent-name" onClick={()=>onAgent(agent.agentId,'sales')}>{agent.agentName}</button><small>{user?.siteCode||agent.warehouseName}{!agent.active?' · inactiv':''}</small></th><td>{salesAvailable&&site?money(site.value):'—'}</td><td>{data.confirmedByAgent[agent.agentId]||0}</td><td>{agent.finalizedInventories}</td><td><button className="quiet" aria-label={`Partenerii agentului ${agent.agentName}`} onClick={()=>onAgent(agent.agentId,'partner')}>{agent.clientCount} puncte <ArrowRight size={14}/></button></td></tr>;
       })}</tbody></table></div>}
       <p className="manager-data-note">Inventarele pe agent sunt atribuite autorului; totalul include și inventarele create de manager, fiecare numărat o singură dată. Punctele comune pot apărea la mai mulți agenți; totalul de clienți noi le numără o singură dată. „—” înseamnă date indisponibile, nu vânzări zero.</p>
     </section>
   </div>;
 }
 
-export function ManagerRequests({scopeQuery,month,onMonth,focusRequestId,onBack,onChanged,canConfirm}: {scopeQuery:string;month:string;onMonth:(value:string)=>void;focusRequestId?:string;onBack:()=>void;onChanged:()=>void;canConfirm?:(item:PartnerRequestRecord)=>boolean}) {
+export function ManagerRequests({scopeQuery,month,onMonth,focusRequestId,onBack}: {scopeQuery:string;month:string;onMonth:(value:string)=>void;focusRequestId?:string;onBack:()=>void;}) {
   const [reload,setReload]=useState(0);
   const {data,error}=useActivity(scopeQuery,month,reload);
   useEffect(()=>{
@@ -92,9 +90,9 @@ export function ManagerRequests({scopeQuery,month,onMonth,focusRequestId,onBack,
   },[focusRequestId,onMonth]);
   const refresh=()=>setReload(value=>value+1);
   return <div className="manager-requests">
-    <p className="manager-data-note">Clienții noi sunt disponibili imediat, fără aprobare. Luna selectată include clienții adăugați atunci; eventualele cereri vechi rămân vizibile.</p>
+    <p className="manager-data-note">Clienții noi sunt disponibili imediat, fără aprobare. Luna selectată include clienții adăugați atunci.</p>
     {error&&<p className="error-banner" role="alert">{error} <button className="secondary" onClick={refresh}>Reîncearcă</button></p>}
-    {data?<PartnerActivityDetail canConfirm={canConfirm} key={`${scopeQuery}:${focusRequestId||''}`} workspace view={data.activity} month={month} loading={false} focusRequestId={focusRequestId} onBack={onBack} onMonthChange={onMonth} onRefresh={refresh} onRequestsChanged={()=>{refresh();onChanged();}}/>:!error&&<p className="portfolio-message">Se încarcă solicitările…</p>}
+    {data?<PartnerActivityDetail key={`${scopeQuery}:${focusRequestId||''}`} workspace view={data.activity} month={month} loading={false} focusRequestId={focusRequestId} onBack={onBack} onMonthChange={onMonth} onRefresh={refresh}/>:!error&&<p className="portfolio-message">Se încarcă clienții noi…</p>}
   </div>;
 }
 

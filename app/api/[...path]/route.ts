@@ -21,7 +21,7 @@ import { stockImportStatus, stockView, stockUpload } from '@/lib/stock-server';
 import { salesImportStatus, salesView, salesUpload } from '@/lib/sales-server';
 import { inventories } from '@/lib/inventory-server';
 import { partnerMail } from '@/lib/partner-mail';
-import { confirmPartnerRequest, getPartnerRequest, listPartnerRequests, partnerLocations, teamActivity, managerActivity } from '@/lib/partner-requests';
+import { getPartnerRequest, listPartnerRequests, partnerLocations, teamActivity, managerActivity } from '@/lib/partner-requests';
 import { readPartnerNotifications, managerRequestInbox, pushPublicConfig, removePushSubscription, upsertPushSubscription } from '@/lib/push-notifications';
 import { importClients } from '@/lib/client-import-server';
 import { selectUsersWithClientCounts } from '@/lib/customer-counts';
@@ -327,8 +327,9 @@ async function dispatch(req: Request) {
   }
   if(path[0]==='partner'&&path[1]==='requests'&&path[2]&&!path[3]&&req.method==='GET') return response({request:await getPartnerRequest(readUser,path[2])});
   if(path[0]==='partner'&&path[1]==='requests'&&path[2]&&path[3]==='confirm'&&req.method==='POST') {
-    const body=await jsonBody(req);
-    return response({request:await confirmPartnerRequest(user,path[2],body.revision,body.locationResolution)});
+    requireManager(user);
+    await getPartnerRequest(user,path[2]);
+    fail(410,'Aprobarea clienților nu mai este necesară. Reîncarcă aplicația; clienții noi se adaugă imediat.');
   }
   if(path.join('/')==='manager/activity'&&req.method==='GET') return response(await managerActivity(readUser,new URL(req.url).searchParams));
   if(path.join('/')==='activity/team'&&req.method==='GET') {

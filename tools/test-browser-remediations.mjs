@@ -487,15 +487,25 @@ try {
   checks++;
   await cdp.evaluate("[...document.querySelectorAll('.request-inbox-item button')].find(b=>b.textContent==='Deschide').click();true");
   await waitFor(()=>cdp.evaluate("document.querySelector('.partner-activity-detail h1')?.textContent==='Clienți noi'"),'partner activity drill-down');
-  check(await cdp.evaluate("['Toate','În așteptare','Adăugați'].every(label=>[...document.querySelectorAll('.status-filter button')].some(button=>button.textContent===label))"),'Partner drill-down exposes real status filters');
+  check(await cdp.evaluate("!document.querySelector('.partner-detail-panel .status-filter')&&!document.querySelector('.partner-activity-detail').textContent.includes('așteptare')&&![...document.querySelectorAll('.partner-activity-detail button')].some(button=>button.textContent.includes('Confirmă'))"),'New clients have no approval filters, counters or actions');
+  check(await cdp.evaluate("document.querySelector('.activity-detail-summary').textContent.includes('TOTAL ADĂUGAȚI')&&!!document.querySelector('.partner-agent-filter select')"),'Added-client count and agent filtering remain available');
   check(await cdp.evaluate("document.querySelectorAll('.partner-agent-group').length>0"),'Partner drill-down groups requests by agent');
+  for(const width of [390,768,1440]){
+    await cdp.send('Emulation.setDeviceMetricsOverride',{width,height:900,deviceScaleFactor:1,mobile:width===390});await sleep(150);
+    check(await cdp.evaluate('document.documentElement.scrollWidth<=innerWidth+1'),'New-client list fits '+width+'px');
+    if(width===390||width===1440){
+      const shot=await cdp.send('Page.captureScreenshot',{format:'png'});
+      writeFileSync('work/qa-new-clients-'+width+'.png',Buffer.from(shot.data,'base64'));
+    }
+  }
+  await cdp.send('Emulation.clearDeviceMetricsOverride');
+
   await cdp.evaluate("document.querySelector('.activity-detail-head .back-link').click();true");
   await waitFor(()=>cdp.evaluate("!!document.querySelector('.manager-partner-hub')&&!document.querySelector('.manager-requests')"),'back to manager portfolio');
   const expectedR4Month=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Bucharest',year:'numeric',month:'2-digit'}).format(new Date(previousMonthDate));
   await cdp.evaluate(`history.replaceState(null,'',${JSON.stringify('/?request='+r4Id)});location.reload();true`);
-  // Pending requests are present in every month. Their row can render before
-  // the independent deep-link request resolves the historical month. Wait for
-  // both outcomes; merely seeing the row does not mean navigation has settled.
+  // Historical registration deep links resolve their event month independently.
+  // Wait for both the row and selected month before checking focus.
   await waitFor(()=>cdp.evaluate(`!!document.getElementById(${JSON.stringify('partner-request-'+r4Id)})&&document.querySelector('.manager-requests .activity-toolbar input[type=month]')?.value===${JSON.stringify(expectedR4Month)}`),'historical partner deep-link and Bucharest month');
   check(await cdp.evaluate(`document.querySelector('.activity-toolbar input[type=month]')?.value===${JSON.stringify(expectedR4Month)}`),'Deep-link selects the request Bucharest month');
   check(await cdp.evaluate(`document.getElementById(${JSON.stringify('partner-request-'+r4Id)})?.classList.contains('request-focused')===true`),'Deep-link focuses the exact partner request');

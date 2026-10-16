@@ -86,11 +86,11 @@ try {
   check(empty.total===0,'Combined locality/county and agent filters intersect');
   const globalActivity=await call('manager/activity?month=2026-01');
   check(globalActivity.finalizedOrders-baseline.finalizedOrders===5&&globalActivity.finalizedNotices-baseline.finalizedNotices===4,'Global document counts include all scoped agents and each document once');
-  check(globalActivity.activity.partnerRequests.some(item=>item.id===oldPending),'Pending requests include previous months');
+  check(!globalActivity.activity.partnerRequests.some(item=>item.id===oldPending)&&!('pending' in globalActivity)&&!('pendingByAgent' in globalActivity),'Incomplete legacy records never create approval queues or metrics');
   check(globalActivity.confirmedByAgent['mui-agent-a']===1&&globalActivity.confirmedByAgent['mui-agent-b']===1,'Confirmation event is attributed to actual confirmation month');
   const scopedActivity=await call('manager/activity?month=2026-01&managerId=mui-region-a','mui-region-b');
   check(scopedActivity.finalizedOrders===4&&scopedActivity.finalizedNotices===3,'Region counts finalized orders/notices by completion month, excluding drafts and deleted rows');
-  check(scopedActivity.pending===1&&scopedActivity.confirmed===1,'Regional pending all-time and monthly confirmed location KPIs');
+  check(!('pending' in scopedActivity)&&scopedActivity.confirmed===1,'Regional added-location KPI has no approval state');
   check(scopedActivity.activity.totals.finalizedInventories===1,'Inventory KPI uses finalizedAt, not createdAt');
   check(scopedActivity.activity.agents.length===1&&!scopedActivity.activity.partnerRequests.some(item=>item.id===otherPending),'Summary and requests exclude other regions');
   const onlyA=await call('manager/activity?month=2026-01&agentId=mui-agent-a','mui-region-a');
@@ -103,7 +103,7 @@ try {
   check(emptyMonth.finalizedOrders===0&&emptyMonth.finalizedNotices===0,'Empty period returns explicit zero finalized documents');
   const february=await call('manager/activity?month=2026-02&agentId=mui-agent-a');
   check(february.finalizedOrders===1&&february.finalizedNotices===1,'Upper month boundary is exclusive; completion month wins over creation month');
-  check(onlyA.pendingByAgent['mui-agent-a']===1,'Regional agent selection works');
+  check(onlyA.activity.agents.length===1&&onlyA.activity.agents[0].agentId==='mui-agent-a','Regional agent selection works');
   await call('manager/activity?month=2026-01&agentId=mui-agent-b','mui-region-a');
   await call('manager/activity?month=2026-01','mui-agent-a',403);
   await call('manager/activity?month=2026-99','mui-global',400);
@@ -121,7 +121,7 @@ try {
   order('mui-agent-a','stand_client','finalized','2026-06-30T21:00:00.000Z');
   const summer=await call('manager/activity?month=2026-06&agentId=mui-agent-a');
   check(summer.finalizedOrders===1&&summer.finalizedNotices===1,'Document month boundaries follow daylight saving time');
-  check(combined.confirmed===1&&combined.pending===2,'Shared confirmed location is counted once across agents');
+  check(combined.confirmed===1&&combined.activity.partnerRequests.length===2,'Shared added location is counted once across agents');
   // National visibility must never grant account or operational mutation privileges.
   const password=randomUUID()+'Aa!',nextPassword=randomUUID()+'Bb!';
   const salt=randomBytes(16).toString('hex');
@@ -138,6 +138,10 @@ try {
   await mutate('admin/users',{action:'reset',id:'mui-region-b',version:version('mui-region-b'),password},404);
   await mutate('orders',{id:randomUUID(),kind:'accessories',agentId:'mui-agent-b'},404);
   await mutate('partner/requests/'+otherPending+'/confirm',{revision:1},404);
+  await mutate('partner/requests/'+oldPending+'/confirm',{revision:1},410);
+  check(db.prepare('SELECT status,customer_id FROM partner_requests WHERE id=?').get(oldPending).status==='requested','Removed approval endpoint leaves historical data unchanged');
+  const oldInbox=await call('notifications/inbox','mui-region-a');
+  check(!oldInbox.items.some(item=>item.id===oldPending),'Incomplete historical records are absent from informational notifications');
   await mutate('admin/users',{action:'reset',id:'mui-agent-a',version:version('mui-agent-a'),password});
   check(db.prepare('SELECT COUNT(*) n FROM sessions WHERE user_id=?').get('mui-agent-a').n===0,'Assigned-agent password reset invalidates old sessions');
   const login=await fetch(base+'/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:'mui-agent-a',password})});
