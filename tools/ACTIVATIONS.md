@@ -1,11 +1,11 @@
 # Activation ledger foundation
 
 `activations.py` is a development/offline importer using Python's standard library.
-It has no production path default, HTTP endpoint, permission bypass, UI, payroll
-writer or automatic deployment. Supply a dedicated private data directory. The
-application does not yet open this database. Future application integration must
-use existing authenticated roles and organizational visibility, keep historical
-site identities, and package the importer explicitly in the supported release.
+It has no production path default, payroll writer or automatic deployment.
+Supply a dedicated private data directory. The application reads a serial-free
+aggregate through its authenticated Activări pilot API; it never writes the
+ledger. The importer remains offline. The two pilot account IDs are configured
+privately; every other user receives 403 from the API and no navigation tab.
 
 ```sh
 python3 tools/activations.py --preview --operator example-network --data-dir /private/dev-activations /private/example.xlsx
@@ -87,7 +87,7 @@ carries `commissionStatus=rules_pending` and `employeeMapping=unconfirmed`.
 
 ## Remaining integration and business decisions
 
-Upload jobs, authenticated UI/API, historical site-to-user mapping, commission
+Upload jobs, confirmed historical site-to-user mapping, commission
 eligibility/rates, post-activation returns, period closing/corrections, source
 revision acceptance and reliable refresh of older inventory remain separate work.
 There are no payable totals. Coverage of all activation months cannot be inferred

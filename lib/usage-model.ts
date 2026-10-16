@@ -1,5 +1,5 @@
 /** Only coarse screen names and time intervals; never document content or keys. */
-export const USAGE_SCREENS = ['orders','sim','partner','sales','stock','catalog','activity','team','settings','editor','result'] as const;
+export const USAGE_SCREENS = ['orders','sim','partner','sales','activations','stock','catalog','activity','team','settings','editor','result'] as const;
 export type Interval = [number, number];
 export const USAGE_IDLE_MS = 120_000;
 export const USAGE_PULSE_MS = 30_000;

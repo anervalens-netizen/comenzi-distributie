@@ -1,3 +1,4 @@
+import {activationReport} from '@/lib/activation-api';
 import {usageAuth,usagePulse,usageReport} from '@/lib/usage-api';
 import { managerFilter } from '@/lib/manager-scope';
 import {historyImportStatus,historyImportPreview,historyImportCommit} from '@/lib/client-history-import-runtime';
@@ -284,6 +285,7 @@ async function dispatch(req: Request) {
   const user=await requireUser(req,path[0]==='auth'||(path[0]==='admin'&&path[1]==='templates'));
   const readUser=nationalReadScope(user);
   if(path.join('/')==='usage/pulse'&&req.method==='POST')return response(await usagePulse(req,user));
+  if(path.join('/')==='activations'&&req.method==='GET')return response(await activationReport(readUser,new URL(req.url).searchParams));
   if(path.join('/')==='usage/report'&&req.method==='GET')return response(await usageReport(readUser,new URL(req.url).searchParams));
   if(path.join('/')==='notifications/inbox'&&req.method==='GET')return response(await managerRequestInbox(user));
   if(path.join('/')==='notifications/inbox/read'&&req.method==='POST')return response(await readPartnerNotifications(user,await jsonBody(req)));

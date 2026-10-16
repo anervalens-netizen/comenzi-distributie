@@ -205,6 +205,17 @@ existing history screens do not combine activity across retired aliases.
 The separate activation database and offline XLSX importer are documented in
 [Activation ledger foundation](tools/ACTIVATIONS.md). They preserve all source
 movements, reconcile returns before proposing a TR site, and derive months only
-from activation dates. This foundation is not yet connected to the application's
-UI or payroll. It requires an explicit private development data directory and
-does not deploy or initialize production storage.
+from activation dates. The Activări tab follows Vânzări and offers current-month and monthly-history
+views without commissions. It is a closed two-account pilot: configure
+MOBIUP_ACTIVATIONS_PILOT_MANAGER_ID and MOBIUP_ACTIVATIONS_PILOT_AGENT_ID privately.
+Both navigation and API access default to denied. Agents receive only their
+unambiguously owned current site; managers can use the existing read filters.
+No user names or account IDs belong in the public source.
+
+Build the serial-free aggregate with `python3 tools/activation_report.py
+--data-dir /private/dev-activations` after an import. Set MOBIUP_ACTIVATIONS_DIR
+to that directory for the Node runtime. Reads never modify the source ledger,
+and changed import generations make an old aggregate unavailable until rebuilt.
+The aggregate counts distinct TR activation identities, includes unresolved
+attribution only in the national total, and never calculates commissions.
+This development module does not deploy or initialize production storage.

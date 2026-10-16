@@ -1,5 +1,5 @@
 export type Kind = 'accessories' | 'stands' | 'sim' | 'combined' | 'stand_client';
-export type User = { id: string; username: string; name: string; role: 'manager' | 'agent'; managerScope: 'global' | 'assigned'; warehouseId: string | null; warehouseName: string | null; siteCode: string; profileVersion: string; mustChangePassword: boolean; active?: number; clientCount?: number; managedAgentIds?: string[] };
+export type User = { canViewActivations?:boolean; id: string; username: string; name: string; role: 'manager' | 'agent'; managerScope: 'global' | 'assigned'; warehouseId: string | null; warehouseName: string | null; siteCode: string; profileVersion: string; mustChangePassword: boolean; active?: number; clientCount?: number; managedAgentIds?: string[] };
 export type Warehouse = { id: string; name: string };
 export type Product = { version?: string; ean?: string; eans?: string[]; id: string; code: string; name: string; brand: string; category: string; kind: string; price: number | null; netPrice: number | null; sourceRow: number; image: string | null };
 export type Client = { historyCatalog?: {kind?: string; franchiseCode?: string; countySource?: string}; warehouseIds?: string[]; id: string; warehouseId: string; name: string; cui: string; city: string; county: string; address: string; route: string };
