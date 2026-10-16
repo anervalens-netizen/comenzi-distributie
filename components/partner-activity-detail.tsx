@@ -15,7 +15,7 @@ export function PartnerActivityDetail({view,month,loading,focusRequestId,onBack,
   const registrations=useMemo(()=>view.partnerRequests.filter(item=>item.status==='confirmed'),[view.partnerRequests]);
   const groups=useMemo(()=>view.agents.filter(agent=>workspace||agentId==='all'||agent.agentId===agentId).map(agent=>({
     agent,items:registrations.filter(item=>item.agentId===agent.agentId),
-  })),[view.agents,registrations,agentId,workspace]);
+  })).filter(group=>group.items.length>0),[view.agents,registrations,agentId,workspace]);
   return <div className="partner-activity-detail">
     <div className="activity-detail-head">
       <button className="back-link" onClick={onBack}><ArrowLeft size={17}/> {workspace?'Înapoi la portofoliu':'Înapoi la Activitate'}</button>

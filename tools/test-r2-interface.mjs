@@ -313,6 +313,14 @@ try {
   check(!workspaceHtml.includes('partner-agent-filter')&&!workspaceHtml.includes('partner-detail-filters'),'workspace has one agent filter, supplied by the global manager selection');
   check(workspaceHtml.includes('Synthetic added'),'workspace ignores a stale component-local agent selection');
   check(render(PartnerActivityDetail,requestProps).includes('partner-agent-filter'),'standalone detail retains its required agent selector');
+  const withZeroAgent={...requestView,agents:[...requestView.agents,{agentId:'zero',agentName:'Synthetic zero additions',warehouseName:'Synthetic',active:true}]};
+  const positiveOnly=render(PartnerActivityDetail,{...requestProps,workspace:true,view:withZeroAgent});
+  equal((positiveOnly.match(/class="partner-agent-group"/g)||[]).length,1,'new clients list shows only agents with additions in the selected month');
+  check(positiveOnly.includes('Synthetic added')&&!positiveOnly.includes('Synthetic zero additions'),'zero-addition agent is excluded without changing actual registrations');
+  const emptyMonth=render(PartnerActivityDetail,{...requestProps,workspace:true,month:'2026-10',view:{...withZeroAgent,month:'2026-10',partnerRequests:[]}});
+  check(!emptyMonth.includes('class="partner-agent-group"')&&emptyMonth.includes('Niciun client adăugat în selecție.'),'month without additions shows an empty message instead of zero-count agents');
+  const emptyAgent=render(PartnerActivityDetail,{...requestProps,workspace:true,view:{...requestView,agents:[withZeroAgent.agents[1]],partnerRequests:[]}});
+  check(!emptyAgent.includes('class="partner-agent-group"')&&emptyAgent.includes('Niciun client adăugat în selecție.'),'global selection of an agent with no additions remains empty');
   console.log(`PASS: ${checks} focused R2 interface API, KPI, scope and rendered UI assertions.`);
 } finally {
   sqlite.close();rmSync(dir,{recursive:true,force:true});delete globalThis.__r2Db;delete globalThis.__r2States;delete globalThis.__r2Selection;
