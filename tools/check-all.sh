@@ -80,6 +80,8 @@ node tools/test-order-read-consistency.mjs
 node tools/test-interaction-backend.mjs
 node tools/test-interaction-pwa.mjs
 node tools/test-interaction-offline.mjs
+node tools/test-activation-access.mjs
+node tools/test-usage-access.mjs
 node tools/test-usage.mjs
 node tools/test-usage-http.mjs
 node tools/test-activation-http.mjs

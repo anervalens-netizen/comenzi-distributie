@@ -1,6 +1,6 @@
 import {isIP} from 'node:net';
-import {db,fail,readLimited,requireManager,sha256,sessionToken} from './server';
-import {managerFilter} from './manager-scope';
+import {db,fail,readLimited,sha256,sessionToken} from './server';
+import {canViewUsageReport} from './usage-access';
 import {bucharestDayStartUtc} from './bucharest-month';
 import {parseUsagePulse,USAGE_RETENTION_DAYS} from './usage-model';
 import {recordUsageAuth,recordUsagePulse,readUsage} from './usage-store';
@@ -23,7 +23,8 @@ export async function usagePulse(req:Request,user:User){
   return {recorded:recordUsagePulse(user.id,authKey(sessionToken(req)),pulse,ip,device)};
 }
 export async function usageReport(user:User,params:URLSearchParams){
-  requireManager(user);
+  if(!canViewUsageReport(user))fail(403,'Raportul de utilizare este disponibil numai administratorului.');
+  if(params.has('managerId')||params.has('agentId'))fail(400,'Filtrele regionale nu se aplică raportului global de utilizare.');
   const today=dayFormat.format(Date.now()),from=params.get('from')||dayFormat.format(Date.now()-6*86400000),to=params.get('to')||today;
   let fromAt:number,toAt:number;
   try{
@@ -34,9 +35,8 @@ export async function usageReport(user:User,params:URLSearchParams){
     toAt=Date.parse(bucharestDayStartUtc(next.toISOString().slice(0,10)));
   }catch{fail(400,'Perioada este invalidă.');}
   if(to<from||to>today||toAt-fromAt>(USAGE_RETENTION_DAYS*24+1)*3600000||from<dayFormat.format(Date.now()-(USAGE_RETENTION_DAYS-1)*86400000))fail(400,'Alege o perioadă din ultimele 90 de zile.');
-  const filter=await managerFilter(user,params);
   const rows=(await db().prepare('SELECT id,name,username,role,active FROM users ORDER BY name').all<{id:string;name:string;username:string;role:string;active:number}>()).results;
-  const users=filter?rows.filter(r=>filter.agentIds.includes(r.id)):rows;
+  const users=rows;
   const detail=params.get('userId')||undefined;if(detail&&!users.some(u=>u.id===detail))fail(404,'Contul nu este în selecție.');
   let snapshot;try{snapshot=readUsage(from,to,users.map(u=>u.id),detail,fromAt,toAt);}catch{fail(503,'Raportul de utilizare este temporar indisponibil.');}
   return {...snapshot,from,to,generatedAt:Date.now(),users:users.map(u=>{

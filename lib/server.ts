@@ -1,4 +1,5 @@
 import {canViewActivations} from './activation-access';
+import {canViewUsageReport} from './usage-access';
 import { captureError } from "./error-reporting";
 import { env } from '@/lib/runtime';
 import { randomBytes, scrypt, timingSafeEqual, createHash } from 'node:crypto';
@@ -43,7 +44,7 @@ export async function seedDatabase() {
 export function userView(row: Record<string, unknown>): User {
   const role = row.role as User['role'];
   const managerScope:User['managerScope']=role==='manager'&&row.manager_scope==='global'?'global':'assigned';
-  return {canViewActivations:canViewActivations({id:String(row.id),role,active:Number(row.active)}),id:String(row.id),username:String(row.username),name:String(row.name),role,managerScope,warehouseId:row.warehouse_id as string|null,warehouseName:(typeof row.warehouse_name==='string'&&row.warehouse_name?row.warehouse_name:warehouses.find(g=>g.id===row.warehouse_id)?.name)||null,siteCode:typeof row.site_code==='string'?row.site_code:'',profileVersion:String(Number(row.profile_revision||1)),mustChangePassword:role==='manager'&&!!row.must_change_password,active:Number(row.active)};
+  return {canViewUsageReport:canViewUsageReport({id:String(row.id),role,active:Number(row.active)}),canViewActivations:canViewActivations({id:String(row.id),role,active:Number(row.active)}),id:String(row.id),username:String(row.username),name:String(row.name),role,managerScope,warehouseId:row.warehouse_id as string|null,warehouseName:(typeof row.warehouse_name==='string'&&row.warehouse_name?row.warehouse_name:warehouses.find(g=>g.id===row.warehouse_id)?.name)||null,siteCode:typeof row.site_code==='string'?row.site_code:'',profileVersion:String(Number(row.profile_revision||1)),mustChangePassword:role==='manager'&&!!row.must_change_password,active:Number(row.active)};
 }
 export function sessionToken(req: Request) { return req.headers.get('Cookie')?.match(/(?:^|;\s*)mobiup_session=([^;]+)/)?.[1]||''; }
 export async function currentUser(req: Request) {
