@@ -24,7 +24,6 @@ export async function usagePulse(req:Request,user:User){
 }
 export async function usageReport(user:User,params:URLSearchParams){
   if(!canViewUsageReport(user))fail(403,'Raportul de utilizare este disponibil numai administratorului.');
-  if(params.has('managerId')||params.has('agentId'))fail(400,'Filtrele regionale nu se aplică raportului global de utilizare.');
   const today=dayFormat.format(Date.now()),from=params.get('from')||dayFormat.format(Date.now()-6*86400000),to=params.get('to')||today;
   let fromAt:number,toAt:number;
   try{
