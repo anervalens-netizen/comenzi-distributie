@@ -62,7 +62,6 @@ function PasswordForm({onDone}:{onDone:()=>void}) {
 }
 export default function DistributionApp() {
   const [data,setData]=useState<Bootstrap>({user:null}),[loading,setLoading]=useState(true),[error,setError]=useState(''),[busy,setBusy]=useState(false);
-  const [transferDirty,setTransferDirty]=useState(false),[transferOpened,setTransferOpened]=useState(false);
   const [partnerView,setPartnerView]=useState<'portfolio'|'requests'>('portfolio');
   const [partnerOpened,setPartnerOpened]=useState(false);
   const [stockMode,setStockMode]=useState<'stock'|'inventory'>('stock');
@@ -209,6 +208,7 @@ export default function DistributionApp() {
   const stockAgent=managerScope.agentId,setStockAgent=managerScope.selectAgent;
   useEffect(()=>{if(tab==='partner'&&user?.role==='manager')queueMicrotask(()=>setPartnerOpened(true));},[tab,user?.role]);
   const [salesView,setSalesView]=useState<'current'|'history'|'clients'|undefined>();
+  const [transferDirty,setTransferDirty]=useState(false),[transferOpened,setTransferOpened]=useState(false);
   function navigateAgent(id:string,destination:ManagerDestination){if(id&&id!==managerScope.agentId)managerScope.openAgent(id);if(destination==='clients'){setSalesView('clients');setTab('sales');}else if(destination==='inventory'){setStockMode('inventory');setTab('stock');}else {if(destination==='sales')setSalesView(undefined);if(destination==='stock')setStockMode('stock');if(destination==='partner')setPartnerView('portfolio');setTab(destination);}window.scrollTo(0,0);}
   const saved=useCallback((o:Order)=>{setData(d=>({...d,orders:[o,...(d.orders||[]).filter(x=>x.id!==o.id)].sort((a,b)=>b.createdAt.localeCompare(a.createdAt))}));},[]);
   async function deleteOrder() {
