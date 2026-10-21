@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
-import {mkdtempSync,rmSync,mkdirSync,writeFileSync} from 'node:fs';
+import {mkdtempSync,rmSync,mkdirSync,writeFileSync,readdirSync,readFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 
 export async function testTransferBrowser(origin,cookies){
- const profile=mkdtempSync(join(tmpdir(),'transfer-chrome-')),port=9467;
+ const profile=mkdtempSync(join(tmpdir(),'transfer-chrome-')),downloads=mkdtempSync(join(tmpdir(),'transfer-downloads-')),port=9467;
+ const downloaded=()=>readdirSync(downloads).filter(name=>name.endsWith('.xlsx'));
  const chrome=spawn(process.env.CHROME_BIN,['--headless=new','--no-sandbox','--disable-dev-shm-usage',`--remote-debugging-port=${port}`,`--user-data-dir=${profile}`,'about:blank'],{stdio:'ignore'});
  let socket;let checks=0;const pending=new Map();let next=0;
  const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
@@ -21,7 +22,9 @@ export async function testTransferBrowser(origin,cookies){
   let target;await wait(async()=>{try{target=await fetch(`http://127.0.0.1:${port}/json/new?about:blank`,{method:'PUT'}).then(response=>response.json());return !!target.webSocketDebuggerUrl;}catch{return false;}},'Chrome start');
   socket=new WebSocket(target.webSocketDebuggerUrl);await new Promise(resolve=>socket.addEventListener('open',resolve,{once:true}));
   socket.addEventListener('message',event=>{const message=JSON.parse(event.data);if(!message.id)return;const request=pending.get(message.id);if(!request)return;clearTimeout(request.timer);pending.delete(message.id);if(message.error)request.reject(new Error(JSON.stringify(message.error)));else request.resolve(message.result);});
-  await send('Page.enable');await send('Network.enable');await send('Emulation.setDeviceMetricsOverride',{width:820,height:1180,deviceScaleFactor:1,mobile:false});
+  await send('Page.enable');await send('Network.enable');
+  await send('Browser.setDownloadBehavior',{behavior:'allow',downloadPath:downloads});
+  await send('Page.addScriptToEvaluateOnNewDocument',{source:"Object.defineProperty(navigator,'share',{value:undefined});Object.defineProperty(navigator,'canShare',{value:undefined});"});await send('Emulation.setDeviceMetricsOverride',{width:820,height:1180,deviceScaleFactor:1,mobile:false});
   const login=async(id)=>{await send('Network.setCookie',{name:'mobiup_session',value:cookies[id].split('=')[1],url:origin,httpOnly:true,sameSite:'Strict'});await send('Page.navigate',{url:origin});await wait(()=>evaluate("!!document.querySelector('.app-shell')"),'Authenticated app');};
   await login('ta');
   const tabs=await evaluate("[...document.querySelectorAll('.main-nav [role=tab]')].map(node=>node.textContent.trim())");check(tabs.indexOf('Transfer')===tabs.indexOf('Avize')+1&&tabs.indexOf('Parteneri')===tabs.indexOf('Transfer')+1,'Agent Transfer between Avize and Parteneri');
@@ -39,8 +42,17 @@ export async function testTransferBrowser(origin,cookies){
   await wait(()=>evaluate("document.querySelector('.transfer-editor output')?.textContent==='Ciornă salvată'"),'Autosaved transfer');
   check(await evaluate("document.documentElement.scrollWidth<=window.innerWidth"),'Tablet editor fits viewport');await screenshot('agent-editor-tablet');
   await button('Finalizează solicitarea');await wait(()=>evaluate("!!document.querySelector('.transfer-result')"),'Finalized transfer result');
+  await wait(()=>downloaded().length===1,'Automatic Excel download without Web Share');
+  check(readFileSync(join(downloads,downloaded()[0])).subarray(0,2).toString()==='PK','Automatic download is an XLSX archive');
+  const downloadName=downloaded()[0];check(downloadName.startsWith('transfer-')&&downloadName.endsWith('.xlsx'),'Automatic download uses transfer filename');
   check(await evaluate("document.querySelector('.email-preview')?.textContent.includes('manager-b@example.invalid')"),'Result shows manager from destination region');
   check(await evaluate("[...document.querySelectorAll('.transfer-result a')].some(node=>node.textContent.includes('.eml'))"),'Result offers eml with attachment');await screenshot('agent-result-tablet');
+  await button('Înapoi la transferuri');await wait(()=>evaluate("document.querySelectorAll('.transfer-history-row').length>0"),'Transfer history');
+  await click('.transfer-history-row');await wait(()=>evaluate("!!document.querySelector('.transfer-result')"),'Reopened transfer');
+  await pause(800);check(downloaded().length===1,'History does not download Excel again');
+  await click('.transfer-result a[href$="/excel"]');await wait(()=>downloaded().length===2,'Manual Excel download from history');
+  await send('Page.reload');await wait(()=>evaluate("!!document.querySelector('.app-shell')"),'Reloaded app');await pause(800);check(downloaded().length===2,'Reload does not repeat finalization download');
+
   await login('tm-a');await evaluate("[...document.querySelectorAll('[role=tab]')].find(node=>node.textContent==='Operațiuni').click();true");
   await wait(()=>evaluate("!!document.querySelector('.manager-operation-nav')"),'Manager operations');await button('Transferuri');
   await wait(()=>evaluate("!!document.querySelector('[aria-label=\"Agent expeditor\"] option[value=tc]')"),'Manager source selector');await fill('[aria-label="Agent expeditor"]','tc');await button('Transfer nou');
@@ -49,5 +61,5 @@ export async function testTransferBrowser(origin,cookies){
   await send('Emulation.setDeviceMetricsOverride',{width:1440,height:1080,deviceScaleFactor:1,mobile:false});await screenshot('manager-editor-desktop');
   check(await evaluate("document.documentElement.scrollWidth<=window.innerWidth"),'Manager editor fits desktop');
   console.log(`PASS: ${checks} transfer tablet/browser/scanner/manager checks.`);
- }finally{for(const request of pending.values())clearTimeout(request.timer);socket?.close();chrome.kill();await new Promise(resolve=>{if(chrome.exitCode!==null)return resolve();chrome.once('exit',resolve);});try{rmSync(profile,{recursive:true,force:true,maxRetries:15,retryDelay:100});}catch{console.warn('Chrome profile cleanup deferred.');}}
+ }finally{for(const request of pending.values())clearTimeout(request.timer);socket?.close();chrome.kill();await new Promise(resolve=>{if(chrome.exitCode!==null)return resolve();chrome.once('exit',resolve);});rmSync(downloads,{recursive:true,force:true});try{rmSync(profile,{recursive:true,force:true,maxRetries:15,retryDelay:100});}catch{console.warn('Chrome profile cleanup deferred.');}}
 }
