@@ -49,5 +49,5 @@ export async function testTransferBrowser(origin,cookies){
   await send('Emulation.setDeviceMetricsOverride',{width:1440,height:1080,deviceScaleFactor:1,mobile:false});await screenshot('manager-editor-desktop');
   check(await evaluate("document.documentElement.scrollWidth<=window.innerWidth"),'Manager editor fits desktop');
   console.log(`PASS: ${checks} transfer tablet/browser/scanner/manager checks.`);
- }finally{for(const request of pending.values())clearTimeout(request.timer);socket?.close();chrome.kill();await new Promise(resolve=>{if(chrome.exitCode!==null)return resolve();chrome.once('exit',resolve);});rmSync(profile,{recursive:true,force:true});}
+ }finally{for(const request of pending.values())clearTimeout(request.timer);socket?.close();chrome.kill();await new Promise(resolve=>{if(chrome.exitCode!==null)return resolve();chrome.once('exit',resolve);});try{rmSync(profile,{recursive:true,force:true,maxRetries:15,retryDelay:100});}catch{console.warn('Chrome profile cleanup deferred.');}}
 }
