@@ -1,3 +1,4 @@
+import {managerFilter} from './manager-scope';
 import {db,fail,jsonBody,textField,response,userView,requireAgentAccess,settings,requireGlobalManager} from './server';
 import {readCatalog} from './catalog';
 import {stockForWarehouse} from './stock-server';
@@ -96,9 +97,10 @@ export async function transfers(req:Request,user:User,path:string[]){
   if(!id&&req.method==='GET'){
     const params=new URL(req.url).searchParams,offset=Number(params.get('offset')||0);
     if(!Number.isSafeInteger(offset)||offset<0)fail(400,'Pagină invalidă.');
-    const requested=textField(params.get('agentId'),100);
-    const owner=user.role==='agent'?user.id:requested;
-    const rows=await db().prepare("SELECT value FROM settings WHERE key LIKE 'transfer-v1:%' AND (?='' OR json_extract(value,'$.source.agentId')=?) ORDER BY json_extract(value,'$.createdAt') DESC,key DESC LIMIT 41 OFFSET ?").bind(owner,owner,offset).all<{value:string}>();
+    const filter=user.role==='manager'?await managerFilter({...user,managerScope:'global'},params):null;
+    const ids=user.role==='agent'?[user.id]:filter?.agentIds;
+    const clause=ids?(ids.length?` AND json_extract(value,'$.source.agentId') IN (${ids.map(()=>'?').join(',')})`:' AND 0'):'';
+    const rows=await db().prepare(`SELECT value FROM settings WHERE key LIKE 'transfer-v1:%'${clause} ORDER BY json_extract(value,'$.createdAt') DESC,key DESC LIMIT 41 OFFSET ?`).bind(...(ids||[]),offset).all<{value:string}>();
     const available=await targets();
     return response({transfers:await Promise.all(rows.results.slice(0,40).map(row=>view(JSON.parse(row.value),user))),hasMore:rows.results.length>40,nextOffset:offset+40,targets:available,sources:available.filter(target=>user.role==='manager'||target.agentId===user.id)});
   }

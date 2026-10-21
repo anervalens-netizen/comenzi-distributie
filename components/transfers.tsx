@@ -12,13 +12,13 @@ type Form={destinationAgentId:string;lines:TransferLine[];notes:string};
 const formFor=(record:TransferView):Form=>({destinationAgentId:record.destination?.agentId||'',lines:record.lines,notes:record.notes});
 const empty:List={transfers:[],sources:[],targets:[],hasMore:false,nextOffset:0};
 
-export function Transfers({user,agentFilter='',onDirty}:{user:User;agentFilter?:string;onDirty:(dirty:boolean)=>void}){
+export function Transfers({user,scopeQuery='',onDirty}:{user:User;scopeQuery?:string;onDirty:(dirty:boolean)=>void}){
   const [list,setList]=useState<List>(empty),[offset,setOffset]=useState(0),[record,setRecord]=useState<TransferView|null>(null),[error,setError]=useState(''),[busy,setBusy]=useState(false),[loaded,setLoaded]=useState(false);
   const [sourceId,setSourceId]=useState(''),[query,setQuery]=useState(''),[status,setStatus]=useState('all'),[configTo,setConfigTo]=useState(''),[configOpen,setConfigOpen]=useState(false);
   const creation=useRef<string|null>(null);
-  const load=useCallback(async()=>{try{setError('');const result=await networkApi<List>(`transfers?offset=${offset}${agentFilter?`&agentId=${encodeURIComponent(agentFilter)}`:''}`);setList(result);setLoaded(true);setSourceId(current=>result.sources.some(target=>target.agentId===current)?current:result.sources[0]?.agentId||'');}catch(err){setError(errorMessage(err));}},[offset,agentFilter]);
+  const load=useCallback(async()=>{try{setError('');const result=await networkApi<List>(`transfers?offset=${offset}${scopeQuery?`&${scopeQuery}`:''}`);setList(result);setLoaded(true);setSourceId(current=>result.sources.some(target=>target.agentId===current)?current:result.sources[0]?.agentId||'');}catch(err){setError(errorMessage(err));}},[offset,scopeQuery]);
   useEffect(()=>{queueMicrotask(()=>void load());},[load]);
-  useEffect(()=>{queueMicrotask(()=>setOffset(0));},[agentFilter]);
+  useEffect(()=>{queueMicrotask(()=>setOffset(0));},[scopeQuery]);
   async function start(){setBusy(true);setError('');try{creation.current??=crypto.randomUUID();const result=await networkApi<{transfer:TransferView}>('transfers','POST',{id:creation.current,sourceAgentId:sourceId});creation.current=null;setRecord(result.transfer);}catch(err){setError(errorMessage(err));}finally{setBusy(false);}}
   async function open(id:string){setBusy(true);setError('');try{const result=await networkApi<{transfer:TransferView}>(`transfers/${id}`);setRecord(result.transfer);}catch(err){setError(errorMessage(err));}finally{setBusy(false);}}
   const visible=list.transfers.filter(row=>(status==='all'||row.status===status)&&normalize([row.number,row.source.agentName,row.source.warehouseName,row.destination?.agentName,row.destination?.warehouseName].join(' ')).includes(normalize(query)));
