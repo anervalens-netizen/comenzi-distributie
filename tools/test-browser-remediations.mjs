@@ -554,7 +554,7 @@ try {
   await waitFor(()=>cdp.evaluate("!!document.querySelector('.sales-scope')"),'scoped manager sales');
   check(await cdp.evaluate("JSON.parse(localStorage.getItem('manager-selection-v1:stock-manager')).agentId==='stock-agent'"),'Agent selection persists across manager sections');
   await clickTab(cdp,'Operațiuni');
-  check(await cdp.evaluate("document.querySelectorAll('.manager-operation-nav button').length===4"),'Operations keeps orders, notices, stock and catalog destinations');
+  check(await cdp.evaluate("(()=>{const buttons=[...document.querySelectorAll('.manager-operation-nav button')];return buttons.length===5&&['Comenzi','Avize','Transferuri','Stocuri','Catalog produse'].every((label,index)=>buttons[index].textContent===label);})()"),'Operations keeps existing destinations and adds transfers after notices');
   await clickTab(cdp,'Parteneri');
   await waitFor(()=>cdp.evaluate("!!document.querySelector('.manager-partner-hub .partner-map')"),'manager map remount after navigation');
   check(await cdp.evaluate("document.querySelector('.manager-partner-hub .partner-filters input').value==='browser-ph'&&window.managerMapNode!==document.querySelector('.manager-partner-hub .partner-map')"),'Partner search survives navigation and the visible map remounts');
