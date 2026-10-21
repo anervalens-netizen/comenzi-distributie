@@ -1,4 +1,4 @@
-import {db,fail,jsonBody,textField,response,userView,requireAgentAccess,settings,settingsForOrder,requireGlobalManager} from './server';
+import {db,fail,jsonBody,textField,response,userView,requireAgentAccess,settings,requireGlobalManager} from './server';
 import {readCatalog} from './catalog';
 import {stockForWarehouse} from './stock-server';
 import {emlFor} from './exports';
@@ -24,16 +24,25 @@ async function get(id:string,user:User,write=false){
   if(!row)fail(404,'Transferul nu a fost găsit.');
   const record=JSON.parse(row.value) as Transfer;await access(record,user,write);return {record,raw:row.value};
 }
-async function config(){const row=await db().prepare("SELECT value FROM settings WHERE key='transfer-mail-v1'").first<{value:string}>();return row?textField(JSON.parse(row.value).to,254):(await settings()).standsEmail;}
+type Routing={to:string;managerEmails:Record<string,string>};
+async function config():Promise<Routing>{
+  const row=await db().prepare("SELECT value FROM settings WHERE key='transfer-mail-v1'").first<{value:string}>();
+  const value=row?JSON.parse(row.value):{};
+  return {to:typeof value.to==='string'?value.to:(await settings()).standsEmail,managerEmails:value.managerEmails||{}};
+}
 const email=(value:string)=>/^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/.test(value);
+async function managerRoutes(){
+  const rows=await db().prepare("SELECT m.id,m.name,s.value FROM users m LEFT JOIN settings s ON s.key='manager-mail:'||m.id WHERE m.role='manager' AND m.active=1 AND EXISTS(SELECT 1 FROM manager_agents ma WHERE ma.manager_id=m.id) ORDER BY m.name").all<{id:string;name:string;value:string|null}>();
+  return rows.results.map(row=>{const value=row.value?JSON.parse(row.value):{};return {id:row.id,name:row.name,address:value.transfer||value.stands||value.accessories||value.sim||value.partner||''};});
+}
 async function recipients(record:Transfer){
-  const to=await config();if(!email(to))fail(409,'Managerul trebuie să configureze adresa distribuției pentru transferuri.');
-  // Reuse the authoritative regional overrides and personal manager routes for
-  // both agents, regardless of the product groups in this particular transfer.
-  const configs=await Promise.all([settingsForOrder({userId:record.source.agentId}),settingsForOrder({userId:record.destination!.agentId})]);
-  const managers=await db().prepare("SELECT DISTINCT s.value FROM manager_agents ma JOIN users m ON m.id=ma.manager_id AND m.role='manager' AND m.active=1 LEFT JOIN settings s ON s.key='manager-mail:'||m.id WHERE ma.agent_id IN (?,?)").bind(record.source.agentId,record.destination!.agentId).all<{value:string|null}>();
-  const personal=managers.results.flatMap(row=>{if(!row.value)return [];const value=JSON.parse(row.value);return [value.stands||value.accessories||value.sim||value.partner||''];});
-  const cc=[...new Map([...configs.flatMap(cfg=>cfg.standsCc),...personal].filter(address=>typeof address==='string'&&email(address)&&address.toLowerCase()!==to.toLowerCase()).map(address=>[address.toLowerCase(),address])).values()];
+  const routing=await config(),to=routing.to;if(!email(to))fail(409,'Managerul trebuie să configureze adresa distribuției pentru transferuri.');
+  const rows=await db().prepare('SELECT DISTINCT manager_id id FROM manager_agents WHERE agent_id IN (?,?)').bind(record.source.agentId,record.destination!.agentId).all<{id:string}>();
+  const ids=new Set(rows.results.map(row=>row.id));
+  const managers=(await managerRoutes()).filter(manager=>ids.has(manager.id));
+  const missing=managers.filter(manager=>!email(routing.managerEmails[manager.id]||manager.address));
+  if(missing.length)fail(409,`Lipsește adresa de transfer pentru: ${missing.map(manager=>manager.name).join(', ')}. Managerul general o poate configura în Transferuri → Destinatar distribuție.`);
+  const cc=[...new Map(managers.map(manager=>routing.managerEmails[manager.id]||manager.address).filter(address=>address.toLowerCase()!==to.toLowerCase()).map(address=>[address.toLowerCase(),address])).values()];
   return {to,cc};
 }
 async function payload(body:Record<string,unknown>,record:Transfer,finalizing:boolean){
@@ -71,8 +80,17 @@ export async function transfers(req:Request,user:User,path:string[]){
   const [,id,action]=path;
   if(id==='config'){
     requireGlobalManager(user);
-    if(req.method==='GET')return response({to:await config()});
-    if(req.method==='PUT'){const body=await jsonBody(req),to=textField(body.to,254);if(!email(to))fail(400,'Adresă de e-mail invalidă.');await db().prepare("INSERT INTO settings(key,value) VALUES('transfer-mail-v1',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(JSON.stringify({to})).run();return response({to});}
+    if(req.method==='GET')return response({...await config(),managers:await managerRoutes()});
+    if(req.method==='PUT'){
+      const body=await jsonBody(req),to=textField(body.to,254);if(!email(to))fail(400,'Adresă de e-mail invalidă.');
+      const current=await config(),managerEmails={...current.managerEmails};
+      if(body.managerEmails!==undefined){
+        if(!body.managerEmails||typeof body.managerEmails!=='object'||Array.isArray(body.managerEmails))fail(400,'Adresele managerilor sunt invalide.');
+        const managers=await managerRoutes();
+        for(const [id,raw] of Object.entries(body.managerEmails)){const address=textField(raw,254);if(!managers.some(manager=>manager.id===id)||address&&!email(address))fail(400,'Adresă de manager invalidă.');managerEmails[id]=address;}
+      }
+      await db().prepare("INSERT INTO settings(key,value) VALUES('transfer-mail-v1',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(JSON.stringify({to,managerEmails})).run();return response({to,managerEmails});
+    }
     fail(405,'Metodă nepermisă.');
   }
   if(!id&&req.method==='GET'){

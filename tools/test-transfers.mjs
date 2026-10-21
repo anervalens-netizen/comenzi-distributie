@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
-import {mkdtempSync,rmSync,readFileSync} from 'node:fs';
+import {mkdtempSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
-import {join,resolve} from 'node:path';
+import {join} from 'node:path';
 import {spawn} from 'node:child_process';
 import {randomUUID,createHash} from 'node:crypto';
 import {DatabaseSync} from 'node:sqlite';
@@ -14,7 +14,7 @@ const check=(value,label)=>{assert.ok(value,label);checks++;};
 const hash=value=>createHash('sha256').update(value).digest('hex');
 const cookies={};
 async function call(path,user='ta',method='GET',body,expected=200,extraHeaders={}){
- const response=await fetch(base+path,{method,headers:{...(cookies[user]?{Cookie:cookies[user]}:{}),...(body?{'Content-Type':'application/json'}:{}),...extraHeaders},body:body?JSON.stringify(body):undefined});
+ const options={method,headers:{...(cookies[user]?{Cookie:cookies[user]}:{}),...(body?{'Content-Type':'application/json'}:{}),...extraHeaders}};if(body&&method!=='GET')options.body=JSON.stringify(body);const response=await fetch(base+path,options);
  const data=await response.json();assert.equal(response.status,expected,`${method} ${path}: ${JSON.stringify(data).slice(0,400)}`);checks++;return data;
 }
 const bodyFor=(record,extra={})=>({revision:record.revision,destinationAgentId:'tb',lines:record.lines,notes:record.notes,...extra});
@@ -54,7 +54,7 @@ try{
  record=(await call(`transfers/${record.id}`,'ta','PUT',bodyFor(record,{lines,notes:'Synthetic <&> transfer'}))).transfer;
  await call(`transfers/${record.id}`,'ta','PUT',bodyFor(record,{revision:1}),409);
  await call(`transfers/${record.id}/finalize`,'ta','POST',bodyFor(record,{lines:lines.map(line=>line.id===phone.id?{...line,quantity:2}:line)}),400);
- const raced=await Promise.all([fetch(base+`transfers/${record.id}`,{method:'PUT',headers:{Cookie:cookies.ta,'Content-Type':'application/json'},body:JSON.stringify(bodyFor(record,{notes:'First'}))}),fetch(base+`transfers/${record.id}`,{method:'PUT',headers:{Cookie:cookies.ta,'Content-Type':'application/json'},body:JSON.stringify(bodyFor(record,{notes:'Second'}))})]);check(raced.map(response=>response.status).sort().join(',')==='200,409','Concurrent edits have a single CAS winner');
+ const raced=await Promise.all([fetch(base+`transfers/${record.id}`,{method:'PUT',headers:{Cookie:cookies.ta,'Content-Type':'application/json'},body:JSON.stringify(bodyFor(record,{notes:'First'}))}),fetch(base+`transfers/${record.id}`,{method:'PUT',headers:{Cookie:cookies.ta,'Content-Type':'application/json'},body:JSON.stringify(bodyFor(record,{notes:'Second'}))})]);check(raced.map(response=>response.status).sort((a,b)=>a-b).join(',')==='200,409','Concurrent edits have a single CAS winner');
  record=(await call(`transfers/${record.id}`)).transfer;
  record=(await call(`transfers/${record.id}/finalize`,'ta','POST',bodyFor(record))).transfer;
  check(record.status==='finalized','Finalization persists request');
@@ -78,5 +78,6 @@ try{
  regional=(await call(`transfers/${regional.id}/finalize`,'tm-b','POST',bodyFor(regional,{destinationAgentId:'ta',lines:[lines[0]]}))).transfer;check(regional.status==='finalized','Regional manager finalizes transfer outside own region');
  const draft=(await call('transfers','tm-b','POST',{id:randomUUID(),sourceAgentId:'ta'})).transfer;await call(`transfers/${draft.id}`,'tm-a','DELETE',{revision:draft.revision});await call(`transfers/${draft.id}`,'tm-a','GET',undefined,404);
  check(JSON.stringify(snapshot())===JSON.stringify(before),'Transfer creation, finalization and deletion do not change stock, orders or inventories');
+ if(process.env.CHROME_BIN){const {testTransferBrowser}=await import('./test-transfers-browser.mjs');await testTransferBrowser(origin,cookies);}
  console.log(`PASS: ${checks} transfer API/export/authorization/concurrency checks.`);
 }finally{db?.close();server.kill();await new Promise(resolve=>{if(server.exitCode!==null)return resolve();server.once('exit',resolve);});rmSync(directory,{recursive:true,force:true});}
