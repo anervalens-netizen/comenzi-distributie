@@ -76,7 +76,7 @@ node tools/test-sales-view-worker.mjs
 node tools/test-sales-view-consistency.mjs
 node tools/test-stock-worker.mjs
 node tools/test-exports.mjs
-node tools/test-transfers.mjs
+CHROME_BIN="${CHROME_BIN:-$(command -v google-chrome || command -v chromium || true)}" node tools/test-transfers.mjs
 node tools/test-order-read-consistency.mjs
 node tools/test-interaction-backend.mjs
 node tools/test-interaction-pwa.mjs
