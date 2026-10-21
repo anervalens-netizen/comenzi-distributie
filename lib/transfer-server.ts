@@ -102,7 +102,7 @@ export async function transfers(req:Request,user:User,path:string[]){
     const clause=ids?(ids.length?` AND json_extract(value,'$.source.agentId') IN (${ids.map(()=>'?').join(',')})`:' AND 0'):'';
     const rows=await db().prepare(`SELECT value FROM settings WHERE key LIKE 'transfer-v1:%'${clause} ORDER BY json_extract(value,'$.createdAt') DESC,key DESC LIMIT 41 OFFSET ?`).bind(...(ids||[]),offset).all<{value:string}>();
     const available=await targets();
-    return response({transfers:await Promise.all(rows.results.slice(0,40).map(row=>view(JSON.parse(row.value),user))),hasMore:rows.results.length>40,nextOffset:offset+40,targets:available,sources:available.filter(target=>user.role==='manager'||target.agentId===user.id)});
+    return response({transfers:await Promise.all(rows.results.slice(0,40).map(async row=>{const record=JSON.parse(row.value) as Transfer;return {...await view(record,user),pieces:record.lines.reduce((sum,line)=>sum+line.quantity,0),lines:[]};})),hasMore:rows.results.length>40,nextOffset:offset+40,targets:available,sources:available.filter(target=>user.role==='manager'||target.agentId===user.id)});
   }
   if(!id&&req.method==='POST'){
     const body=await jsonBody(req);if(!uuid(body.id))fail(400,'Identificator de transfer invalid.');
