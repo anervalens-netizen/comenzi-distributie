@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from 'next';
 import { Geist, Geist_Mono } from 'next/font/google';
 import './globals.css';
 import './combined-cart-fix.css';
+import './transfers.css';
 import { PwaInstall } from '@/components/pwa';
 
 const geistSans = Geist({

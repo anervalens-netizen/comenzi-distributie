@@ -21,6 +21,7 @@ import { readCatalog, changeProduct } from '@/lib/catalog';
 import { stockImportStatus, stockView, stockUpload } from '@/lib/stock-server';
 import { salesImportStatus, salesView, salesUpload } from '@/lib/sales-server';
 import { inventories } from '@/lib/inventory-server';
+import { transfers } from '@/lib/transfer-server';
 import { partnerMail } from '@/lib/partner-mail';
 import { getPartnerRequest, listPartnerRequests, partnerLocations, teamActivity, managerActivity } from '@/lib/partner-requests';
 import { readPartnerNotifications, managerRequestInbox, pushPublicConfig, removePushSubscription, upsertPushSubscription } from '@/lib/push-notifications';
@@ -348,6 +349,7 @@ async function dispatch(req: Request) {
   if(path.join('/')==='sales/import'&&req.method==='POST')return salesUpload(req,user,true);
   if(path.join('/')==='stock'&&req.method==='GET')return stockView(req,readUser);
   if(path.join('/')==='catalog'&&req.method==='GET')return response({products:(await readCatalog()).products});
+  if(path[0]==='transfers'&&path.length<=3)return transfers(req,user,path);
   if(path[0]==='inventory'&&path.length<=2)return inventories(req,user,path[1]);
   if(path.join('/')==='admin/stock/preview'&&req.method==='POST')return stockUpload(req,user,false);
   if(path.join('/')==='admin/stock/import'&&req.method==='POST')return stockUpload(req,user,true);
