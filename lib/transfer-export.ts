@@ -1,5 +1,5 @@
 import {zipSync,strToU8} from 'fflate';
-import {xmlSafeText} from './exports';
+import {xmlSafeText} from './xml-text';
 import {transferLabels,serializedCategory} from './transfer-types';
 import type {Transfer} from './transfer-types';
 import type {Mail} from './types';
