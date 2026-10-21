@@ -43,7 +43,7 @@ export async function testTransferBrowser(origin,cookies){
   check(await evaluate("[...document.querySelectorAll('.transfer-result a')].some(node=>node.textContent.includes('.eml'))"),'Result offers eml with attachment');await screenshot('agent-result-tablet');
   await login('tm-a');await evaluate("[...document.querySelectorAll('[role=tab]')].find(node=>node.textContent==='Operațiuni').click();true");
   await wait(()=>evaluate("!!document.querySelector('.manager-operation-nav')"),'Manager operations');await button('Transferuri');
-  await wait(()=>evaluate("!!document.querySelector('[aria-label=\"Agent expeditor\"]')"),'Manager source selector');await fill('[aria-label="Agent expeditor"]','tc');await button('Transfer nou');
+  await wait(()=>evaluate("!!document.querySelector('[aria-label=\"Agent expeditor\"] option[value=tc]')"),'Manager source selector');await fill('[aria-label="Agent expeditor"]','tc');await button('Transfer nou');
   await wait(()=>evaluate("document.querySelector('.transfer-editor .page-heading p')?.textContent.includes('Synthetic tc')"),'Manager unassigned source editor');
   await fill('[aria-label="Gestiunea destinație"]','ta');await wait(()=>evaluate("document.querySelector('.transfer-editor output')?.textContent==='Ciornă salvată'"),'Manager autosave');
   await send('Emulation.setDeviceMetricsOverride',{width:1440,height:1080,deviceScaleFactor:1,mobile:false});await screenshot('manager-editor-desktop');
