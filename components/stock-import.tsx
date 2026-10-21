@@ -20,7 +20,7 @@ export function StockImport({lastImportText}:{lastImportText:string}) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
-  const [decision,setDecision]=useState<StockCoverageDecision>({warehouses:'partial',depot:'partial'});
+  const decision:StockCoverageDecision={warehouses:'full',depot:'full'};
   const token = useRef(0);
 
   const groups = useMemo(
@@ -127,7 +127,7 @@ export function StockImport({lastImportText}:{lastImportText:string}) {
   return <section className="panel stock-import stock-panel">
     <div className="panel-heading"><div>
       <h2><FileSpreadsheet size={19}/> Import stoc Excel</h2>
-      <p className="muted">Actualizează gestiunile selectate și depozitul conform acoperirii confirmate.</p>
+      <p className="muted">Fișierul zilnic înlocuiește integral stocul curent al agenților și al depozitului.</p>
     </div></div>
     <p className="import-last-status">{lastImportText}</p>
     <label className="stock-upload"><Upload size={20}/><span>{file ? file.name : 'Alege fișier .xls / .xlsx'}</span>
@@ -141,7 +141,7 @@ export function StockImport({lastImportText}:{lastImportText:string}) {
         <strong>{preview.rowCount} rânduri</strong>
         <span>{preview.matchedRows} rânduri potrivite cu catalogul · {preview.unknownProducts} coduri în afara catalogului</span>
       </div>
-      <p className="muted">Produsele din afara catalogului rămân în stoc. Gestiunile de prezentare sunt separate. Depozitul folosește valorile distincte din întregul fișier. Importul parțial păstrează codurile absente; snapshotul complet le elimină.</p>
+      <p className="muted">Se păstrează numai produsele din acest fișier, inclusiv cele din afara catalogului. Produsele absente dispar, iar gestiunile fără rânduri asociate vor avea stoc zero. Depozitul folosește valorile distincte din întregul fișier.</p>
       <input aria-label="Caută gestiune în import" className="stock-filter" placeholder="Caută gestiune…" value={query} onChange={e => setQuery(e.target.value)} />
       <div className="stock-groups">{groups.map(group => <div className="stock-group" key={group.key}>
         <div><strong>{group.name}</strong><small>SiteId {group.siteId} · {group.rowCount} rânduri · {group.quantity.toLocaleString('ro-RO')} buc.</small></div>
@@ -150,18 +150,11 @@ export function StockImport({lastImportText}:{lastImportText:string}) {
           {preview.targets.map(target => <option key={target.id} value={target.id}>{target.name}</option>)}
         </select>
       </div>)}</div>
-      <p className="muted">{selected.length} gestiuni vor fi actualizate · {preview.groups.length-selected.length} nu se importă. Gestiunile omise își păstrează stocul anterior.</p>
+      <p className="muted">{selected.length} gestiuni asociate · {preview.groups.length-selected.length} grupuri din fișier neasociate. Gestiunile aplicației fără rânduri asociate vor fi golite.</p>
       {duplicates&&<p className="error-banner" role="alert">Aceeași gestiune este selectată de mai multe ori. Corectează asocierile.</p>}
-      {(['warehouses','depot'] as const).map(key=><label key={key}>
-        {key==='depot'?'Acoperire depozit global':'Acoperire gestiuni selectate'}
-        <select disabled={busy} value={decision[key]} onChange={e=>setDecision(d=>({...d,[key]:e.target.value as 'full'|'partial'}))}>
-          <option value="partial">Parțial — păstrează produsele absente și vechimea lor</option>
-          <option value="full">Snapshot complet — elimină produsele absente</option>
-        </select>
-      </label>)}
       {previewMatchesSelection
         ? <output><p>Impact calculat pentru aceste asocieri și această acoperire:</p>{preview.impact.warehouses.map(w=>impact(preview.targets.find(t=>t.id===w.warehouseId)?.name||w.warehouseId,w))}{impact('Depozit global',preview.impact.depot)}</output>
-        : <p className="muted">Ai modificat asocierea sau acoperirea. Impactul se recalculează automat la confirmare.</p>}
+        : <p className="muted">Ai modificat asocierea. Impactul se recalculează automat la confirmare.</p>}
       <button className="primary" disabled={busy || !selected.length || duplicates} onClick={() => void importFile()}><Upload size={17}/> Confirmă importul</button>
     </>}
   </section>;

@@ -135,11 +135,11 @@ Routes are comma-separated memberships. Filtering by `1` includes `1`, `1, 11` a
 
 ## Stock coverage and confirmation
 
-Stock preview defaults to partial coverage. Managers declare coverage separately for selected warehouses and the global depot. A partial import replaces present product values and preserves absent products with their prior observation dates. A full snapshot replaces the selected coverage, including removing absent products. Omitted warehouses always remain unchanged. Depot values are global, drawn from the whole file, and repeated product values are not summed.
+The daily ERP stock file is a complete replacement of current stock, for both agent warehouses and the global depot. Present quantities replace previous values, zero stays zero, absent products are removed, and warehouses without mapped rows become empty. This includes stored warehouses whose agents are no longer active. There is no partial-import option in the daily upload. Source groups outside the application's agent roster may be left unassigned; their depot values still participate in the global depot and repeated values are never summed.
 
-Preview lists code additions, removals and quantity changes separately for each mapped warehouse and the depot. Any mapping or coverage change requires another preview. Apply requires the exact file hash, stock/agent version, mappings, coverage semantics and manager-bound impact confirmation; older clients without coverage confirmation must refresh before importing. Partial imports never advance the full-depot snapshot timestamp. Legacy imports without an explicit coverage decision are not certified as full coverage.
+Preview lists additions, removals and quantity changes for every affected warehouse, including those emptied because they are absent from the file, and separately for the depot. Apply requires the exact file hash, stock/agent version, mappings and manager-bound full-replacement confirmation. Older clients submitting partial imports or an old confirmation must refresh. Invalid files, invalid mappings, conflicting depot values and stale/concurrent imports never write a partial replacement.
 
-The stock CAS saves one bounded recovery copy of the prior state, including provenance and observation dates, atomically with the import. This is evidence for controlled recovery, not an automatic rollback over subsequent imports. Reusing a consumed preview fails the version check.
+The stock CAS saves one bounded recovery copy of the prior state, including provenance and observation dates, atomically with the replacement. This is evidence for controlled recovery, not an automatic rollback over subsequent imports. Reusing a consumed preview fails the version check. Legacy partial stock is not retroactively certified as current.
 
 ## Revenue reconciliation
 

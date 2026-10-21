@@ -1,4 +1,4 @@
-import {mergeStockRows,stockImpact} from './stock-impact';
+import {stockSnapshot,stockImpact} from './stock-impact';
 import { db, fail, readLimited, requireManager, requireWarehouseAccess, response, userView } from './server';
 import { readCatalog } from './catalog';
 import { STOCK_FILE_LIMIT, stockHash, stockWarehouseName } from './stock-file';
@@ -55,31 +55,38 @@ export async function stockUpload(req:Request,user:User,apply:boolean) {
   const fileHash=stockHash(bytes);
   const latest=state.history[0];
   if(latest?.fileHash===fileHash&&latest.userId!==user.id)fail(409,await duplicateStockImportMessage(latest.userId));
+  const ambiguous=new Set<string>();
   const suggested=groups.map(group=>{
     const remembered=state.mappings[group.key],exact=available.filter(t=>t.names.includes(stockWarehouseName(group.name)));
     const bySite=groups.filter(g=>g.siteId===group.siteId).length===1?available.filter(t=>t.siteIds.includes(group.siteId)):[];
     const candidate=remembered&&available.some(t=>t.id===remembered)?remembered:exact.length===1?exact[0].id:exact.length===0&&bySite.length===1?bySite[0].id:null;
+    if(!candidate&&(exact.length>1||bySite.length>1))ambiguous.add(group.key);
     return {key:group.key,name:group.name,siteId:group.siteId,rowCount:group.rows.length,quantity:group.rows.reduce((sum,r)=>sum+r.quantity,0),warehouseId:candidate};
   });
   const candidates=suggested.map(g=>g.warehouseId);
-  for(const g of suggested)if(g.warehouseId&&candidates.filter(id=>id===g.warehouseId).length>1)g.warehouseId=null;
+  for(const g of suggested)if(g.warehouseId&&candidates.filter(id=>id===g.warehouseId).length>1){ambiguous.add(g.key);g.warehouseId=null;}
   let mappings:Record<string,string|null>,decision:StockCoverageDecision;
   try{
     mappings=JSON.parse(req.headers.get('X-Stock-Mappings')||JSON.stringify(Object.fromEntries(suggested.map(g=>[g.key,g.warehouseId]))));
-    decision=JSON.parse(req.headers.get('X-Stock-Coverage')||'{"warehouses":"partial","depot":"partial"}');
+    decision=JSON.parse(req.headers.get('X-Stock-Coverage')||'{"warehouses":"full","depot":"full"}');
   }catch{fail(400,'Asocierile sau acoperirea sunt invalide.');}
   if(!mappings||typeof mappings!=='object'||Array.isArray(mappings)||Object.keys(mappings).length!==groups.length||groups.some(g=>!Object.hasOwn(mappings,g.key)))fail(400,'Verifică asocierea fiecărei gestiuni din fișier.');
   if(!decision||Object.keys(decision).sort().join(',')!=='depot,warehouses'||!['full','partial'].includes(decision.warehouses)||!['full','partial'].includes(decision.depot))fail(400,'Declară separat acoperirea gestiunilor și a depozitului.');
+  if(decision.warehouses!=='full'||decision.depot!=='full')fail(409,'Importul zilnic înlocuiește integral stocul anterior. Reîncarcă aplicația și previzualizarea.');
   const selected=new Set<string>();
   for(const group of groups){
     const target=mappings[group.key];
-    if(target===null||target===''){mappings[group.key]=null;continue;}
+    if(target===null||target===''){
+      if(apply&&ambiguous.has(group.key))fail(400,'Asociere ambiguă pentru '+group.name+'. Corectează asocierile înainte de import.');
+      mappings[group.key]=null;continue;
+    }
     if(typeof target!=='string'||!available.some(t=>t.id===target))fail(400,'Una dintre gestiunile selectate nu are un agent activ.');
     if(selected.has(target))fail(400,'Asociază o singură gestiune din fișier fiecărei gestiuni din aplicație.');
     selected.add(target);
   }
-  const impact=stockImpact(state,groups,mappings,decision);
-  const confirmation=stockHash(JSON.stringify(['stock-coverage-v1',user.id,version,fileHash,groups.map(g=>[g.key,mappings[g.key]]),decision.warehouses,decision.depot,impact]));
+  const warehouseIds=[...new Set([...Object.keys(state.warehouses),...available.map(t=>t.id)])];
+  const impact=stockImpact(state,groups,mappings,warehouseIds);
+  const confirmation=stockHash(JSON.stringify(['stock-daily-snapshot-v2',user.id,version,fileHash,groups.map(g=>[g.key,mappings[g.key]]),decision.warehouses,decision.depot,impact]));
   if(!apply){
     const productCodes=new Set(currentCatalog.products.map(p=>stockCode(p.code))),allRows=groups.flatMap(g=>g.rows);
     const preview:StockPreview={version,fileHash,filename,decision,confirmation,impact,rowCount:allRows.length,matchedRows:allRows.filter(r=>productCodes.has(r.code)).length,unknownProducts:new Set(allRows.filter(r=>!productCodes.has(r.code)).map(r=>r.code)).size,targets:available.map(({id,name})=>({id,name})),groups:suggested.map(g=>({...g,warehouseId:mappings[g.key]}))};
@@ -93,21 +100,16 @@ export async function stockUpload(req:Request,user:User,apply:boolean) {
   // Bounded recovery copy is committed in the same CAS as stock, with no recursive copies.
   const {recovery:_priorRecovery,...previous}=structuredClone(state);
   state.recovery={savedAt:importedAt,userId:user.id,previous};
-  for(const group of groups){
-    const target=mappings[group.key];state.mappings[group.key]=target;
-    if(!target)continue;
-    rowCount+=group.rows.length;
-    const old=state.warehouses[target],fullSnapshotAt=decision.warehouses==='full'?importedAt:old?.coverage?.fullSnapshotAt??null;
-    const before=(old?.rows||[]).map(r=>({...r,observedAt:r.observedAt??old?.importedAt??undefined}));
-    state.warehouses[target]={warehouseId:target,importedAt,filename,coverage:{mode:decision.warehouses,updatedAt:importedAt,fullSnapshotAt},rows:mergeStockRows(before,group.rows.map(({code,name,quantity})=>({code,name,quantity,observedAt:importedAt})),decision.warehouses)};
-  }
-  // A partial export patches only present products. Its timestamp never declares full coverage.
-  const depotRows=Object.fromEntries(groups.flatMap(group=>group.rows.map(row=>[row.code,row.depotQuantity])));
-  const depotDates=Object.fromEntries(Object.keys(state.depot||{}).map(code=>[code,state.depotObservedAt?.[code]??state.depotImportedAt??null]));
-  state.depot=decision.depot==='full'?depotRows:{...state.depot,...depotRows};
-  state.depotObservedAt={...(decision.depot==='partial'?depotDates:{}),...Object.fromEntries(Object.keys(depotRows).map(code=>[code,importedAt]))};
-  if(decision.depot==='full')state.depotImportedAt=importedAt;
-  state.depotCoverage={mode:decision.depot,updatedAt:importedAt,fullSnapshotAt:decision.depot==='full'?importedAt:state.depotCoverage?.fullSnapshotAt??null};
+  const snapshot=stockSnapshot(groups,mappings,warehouseIds);
+  for(const group of groups){state.mappings[group.key]=mappings[group.key];if(mappings[group.key])rowCount+=group.rows.length;}
+  state.warehouses=Object.fromEntries(Object.entries(snapshot.warehouses).map(([warehouseId,rows])=>[warehouseId,{
+    warehouseId,importedAt,filename,coverage:{mode:'full' as const,updatedAt:importedAt,fullSnapshotAt:importedAt},
+    rows:rows.map(row=>({...row,observedAt:importedAt})),
+  }]));
+  state.depot=snapshot.depot;
+  state.depotObservedAt=Object.fromEntries(Object.keys(snapshot.depot).map(code=>[code,importedAt]));
+  state.depotImportedAt=importedAt;
+  state.depotCoverage={mode:'full',updatedAt:importedAt,fullSnapshotAt:importedAt};
   state.history=[{importedAt,filename,userId:user.id,fileHash,warehouses:selected.size,rows:rowCount,decision,confirmation},...state.history].slice(0,30);
   const next=JSON.stringify(state);
   // A single compare-and-swap writes every selected warehouse together.

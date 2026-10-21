@@ -49,17 +49,13 @@ try{
  assert(await e("document.body.textContent.includes('Impact calculat pentru aceste asocieri')"));
  assert(await e("document.documentElement.scrollWidth<=innerWidth"),'mobile layout does not overflow');
 
- // Changing coverage keeps confirm available; clicking it refreshes the server token automatically.
- await e("const s=document.querySelectorAll('select')[2];s.value='full';s.dispatchEvent(new Event('change',{bubbles:true}));");
- await wait("document.body.textContent.includes('recalculează automat')");
- assert.equal(await e(confirm+'.disabled'),false);
+ assert.equal(await e("document.body.textContent.includes('înlocuiește integral')"),true,'UI explains daily replacement');
+ assert.equal(await e("[...document.querySelectorAll('option')].some(o=>o.value==='partial')"),false,'No partial-import option is available');
+ assert.equal(await e("document.body.textContent.includes('vor fi golite')"),true,'UI explains entirely omitted warehouses');
  await e(confirm+'.click()');
  await wait("document.body.textContent.includes('Import finalizat')");
- assert.equal(previews,2,'one initial preview plus one transparent refresh');
- assert.equal(JSON.parse(applied['x-stock-coverage']).depot,'full');
- assert.equal(JSON.parse(applied['x-stock-coverage']).warehouses,'partial');
- assert.equal(JSON.parse(applied['x-stock-mappings']).g,'w');
- assert.equal(applied['x-stock-hash'],'hash');
+ assert.equal(previews,1,'daily import applies the initial full-replacement token');
+ assert.deepEqual(JSON.parse(applied['x-stock-coverage']),{warehouses:'full',depot:'full'});
  // Mapping changes are independently fenced, including deselection.
  await e("const input=document.querySelector('input[type=file]'),dt=new DataTransfer();dt.items.add(new File(['synthetic'],'stock.xlsx'));input.files=dt.files;input.dispatchEvent(new Event('change',{bubbles:true}));");
  await wait("document.body.textContent.includes('Confirmă importul')");
@@ -68,14 +64,14 @@ try{
  await e("const s=document.querySelector('select');s.value='w2';s.dispatchEvent(new Event('change',{bubbles:true}));");
  await wait('!('+confirm+'.disabled)');
  await e(confirm+'.click()');await wait("document.body.textContent.includes('Import finalizat')");
- assert.equal(JSON.parse(applied['x-stock-mappings']).g,'w2');assert.equal(previews,4);
+ assert.equal(JSON.parse(applied['x-stock-mappings']).g,'w2');assert.equal(previews,3);
 
  // An unchanged initial preview needs no extra request at confirmation.
  await e("const input=document.querySelector('input[type=file]'),dt=new DataTransfer();dt.items.add(new File(['synthetic'],'stock.xlsx'));input.files=dt.files;input.dispatchEvent(new Event('change',{bubbles:true}));");
  await wait("document.body.textContent.includes('Confirmă importul')");
  await e(confirm+'.click()');await wait("document.body.textContent.includes('Import finalizat')");
- assert.equal(previews,5,'unchanged selection imports using the initial exact token');
- console.log('PASS: stock import confirms directly; changed mapping/coverage refreshes impact/token transparently and mobile stays within viewport.');
+ assert.equal(previews,4,'unchanged selection imports using the initial exact token');
+ console.log('PASS: stock import confirms directly; complete daily replacement; changed mapping refreshes impact/token transparently and mobile stays within viewport.');
 }finally{
  await browser?.close();
  server.closeAllConnections();
