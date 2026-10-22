@@ -27,14 +27,14 @@ export function readActivations(month:string,sites:string[]|null,provider:Activa
   let source:DatabaseSync|undefined;
   try{
     const meta=Object.fromEntries(report.prepare('SELECT key,value FROM report_meta').all().map(r=>[String(r.key),String(r.value)]));
-    if(!['1','2','3'].includes(meta.version))throw new Error('Unsupported activation report');
+    if(!['1','2','3','4'].includes(meta.version))throw new Error('Unsupported activation report');
     source=new DatabaseSync(resolve(directory,'activations.sqlite'),{readOnly:true});
     if(!['2','3'].includes(String(source.prepare("SELECT value FROM activation_meta WHERE key='schema_version'").get()?.value)))throw new Error('Unsupported activation ledger');
     const imports=source.prepare("SELECT sha256,operator,row_count,parser_version FROM activation_imports WHERE status='complete' ORDER BY sha256").all().map(r=>[r.sha256,r.operator,r.row_count,r.parser_version]);
     if(JSON.stringify(imports)!==meta.sourceImports)throw new Error('Stale activation report');
     if(meta.sourceGeneration!==undefined&&meta.sourceGeneration!==String(source.prepare("SELECT value FROM activation_meta WHERE key='generation'").get()?.value||''))throw new Error('Stale activation generation');
-    if(meta.version==='3'&&meta.rules&&!query)throw new Error('Distribution rules required');
-    if(query){if(meta.version!=='3')throw new Error('Distribution projection requires rebuild');return distributionReport(report,result,meta,sites,query);}
+    if(['3','4'].includes(meta.version)&&meta.rules&&!query)throw new Error('Distribution rules required');
+    if(query){if(meta.version!=='4')throw new Error('Distribution projection requires rebuild');return distributionReport(report,result,meta,sites,query);}
     const allowed=sites===null?null:new Set(sites);
     const rows=(meta.version!=='1'
       ?report.prepare("SELECT month,item_type,site,count,last_date FROM monthly WHERE month<>'' AND provider=? ORDER BY month DESC,site").all(provider)

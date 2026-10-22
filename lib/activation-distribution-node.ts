@@ -18,7 +18,7 @@ function add(t:ActivationCounts,r:Dimension,rules:DistributionRules,provider:Act
 export function distributionReport(report:DatabaseSync,base:ActivationReport,meta:Record<string,string>,sites:string[]|null,query:ActivationQuery):ActivationReport{
  if(!meta.rules||canonicalRules(JSON.parse(meta.rules))!==canonicalRules(query.rules))throw new Error('Stale distribution rules');
  const {provider}=base,{rules}=query;
- const revision=createHash('sha256').update(meta.sourceImports+'|'+meta.sourceGeneration+'|'+meta.rules+'|'+query.policy+'|'+JSON.stringify(sites)+'|'+JSON.stringify([query.projects,query.months,query.q,query.point,query.company,query.portfolioRevision])).digest('hex');
+ const revision=createHash('sha256').update(meta.version+'|'+meta.builtAt+'|'+meta.sourceImports+'|'+meta.sourceGeneration+'|'+meta.rules+'|'+query.policy+'|'+JSON.stringify(sites)+'|'+JSON.stringify([query.projects,query.months,query.q,query.point,query.company,query.portfolioRevision])).digest('hex');
  if(query.revision&&query.revision!==revision)throw new Error('Stale activation selection');
  const clauses=['provider=?','is_tr=1'],args:(string|number)[]=[provider];
  const selectedSites=rules.assignments.filter(a=>query.projects.includes(a.projectId)).map(a=>a.siteCode.toUpperCase());

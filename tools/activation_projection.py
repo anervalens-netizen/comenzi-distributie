@@ -72,7 +72,9 @@ def build_details(source,target):
         r=outstanding[0]
         if not r['is_tr'] or not r['site'] or not r['movement_date']:continue
         # An attribution conflict may never create a confident cohort.
-        fact=source.execute('SELECT status FROM activation_facts WHERE company=? AND provider=? AND serial=?',(r['company'],r['provider'],r['serial'])).fetchone() if r['serial'] else None
-        if fact and fact['status']!='candidate':continue
+        fact=source.execute('SELECT status,activation_date,reasons FROM activation_facts WHERE company=? AND provider=? AND serial=?',(r['company'],r['provider'],r['serial'])).fetchone() if r['serial'] else None
+        # A known activation before a later distribution is an attribution exception,
+        # not a second activation or a reason to erase a uniquely reconciled cohort member.
+        if fact and fact['status']!='candidate' and json.loads(fact['reasons'])!=['post_activation_movement_rule_pending']:continue
         ident=hashlib.sha256(json.dumps([r['company'],r['provider'],r['imei']],separators=(',',':')).encode()).hexdigest()
-        target.execute('INSERT INTO cohorts VALUES(?,?,?,?,?,?,?,?)',(ident,r['company'],r['provider'],r['site'],r['item_code'],r['movement_date'][:7],r['movement_date'],int(bool(fact))))
+        target.execute('INSERT INTO cohorts VALUES(?,?,?,?,?,?,?,?)',(ident,r['company'],r['provider'],r['site'],r['item_code'],r['movement_date'][:7],r['movement_date'],int(bool(fact and fact['activation_date']))))

@@ -174,7 +174,8 @@ export async function salesView(req: Request, user: User) {
     if(projects.some(p=>!(projectIds as readonly string[]).includes(p)))fail(400,'Proiect invalid.');
     const rules=await readDistributionRules();if(!rules)fail(503,'Configurația proiectelor trebuie pregătită.');
     const projectActors=rules.assignments.filter(a=>projects.includes(a.projectId)).map(a=>a.userId);
-    actorIds=actorIds?actorIds.filter(id=>projectActors.includes(id)):projectActors;
+    // The union of every project preserves authorized historical sellers without a current mapping.
+    if(projects.length<projectIds.length)actorIds=actorIds?actorIds.filter(id=>projectActors.includes(id)):projectActors;
   }
   if (actorIds) siteScope = actorScope(actorIds, snapshot, user.role === 'agent' ? undefined : requestedSite);
   return response(decoratedView(await getSalesViewRuntime(month, siteScope, fromMonth, toMonth, await salesCatalog()), snapshot));

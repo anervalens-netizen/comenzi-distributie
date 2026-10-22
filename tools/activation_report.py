@@ -47,7 +47,7 @@ def _build_report(directory, rules=None):
         target.executemany('INSERT INTO monthly VALUES(?,?,?,?,?,?,?)', rows)
         if schema == '3': build_details(source,target)
         target.executemany('INSERT INTO sites VALUES(?,?)', source.execute("SELECT site,CASE WHEN COUNT(DISTINCT agent)=1 THEN MIN(agent) ELSE site END FROM activation_movements WHERE is_tr=1 AND site<>'' GROUP BY site"))
-        meta = {'version': '3' if schema == '3' else '2', 'rules': json.dumps(rules,sort_keys=True,separators=(',',':')) if rules else '', 'sourceImports': json.dumps(imports, separators=(',', ':')),
+        meta = {'version': '4' if schema == '3' else '2', 'rules': json.dumps(rules,sort_keys=True,separators=(',',':')) if rules else '', 'sourceImports': json.dumps(imports, separators=(',', ':')),
                 'latestDate': source.execute('SELECT MAX(activation_date) FROM activation_facts').fetchone()[0] or '',
                 'sourcePeriods': json.dumps([{'from':r[0],'to':r[1]} for r in source.execute("SELECT period_start,period_end FROM activation_imports WHERE status='complete'")]) if schema == '3' else '[]',
                 'sourceGeneration': dict(source.execute('SELECT key,value FROM activation_meta')).get('generation',''),

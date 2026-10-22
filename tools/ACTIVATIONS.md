@@ -166,7 +166,7 @@ independent pointers and physical databases. Backups pin the published directory
 verify report/ledger generation coherence and restore it as ordinary files; retained
 prior generations support a controlled rollback without destructive down-migrations.
 
-Projection version 3 contains private indexed detail/cohort tables and precomputed
+Projection version 4 contains private indexed detail/cohort tables and precomputed
 monthly dimensions. Configure the private `distribution-rules-v1` settings record
 with a new revision for every changed mapping. Invalid or stale rules fail closed.
 `tools/distribution_configure.py` validates account/site identities, verifies a
@@ -186,3 +186,8 @@ and never merge by name. Company drill-up reuses authorized distinct activation
 identities. Recent windows are inclusive calendar dates ending at each source's
 reported date. SIM0 cohort counts use reconciled distribution identities, not the
 activation-month total, and do not claim physical inventory.
+
+Projection v4 keeps a uniquely reconciled distribution cohort member when its
+activation predates a later movement. The activation remains an attribution
+exception where required; it is not erased from the cohort or counted twice.
+The projection build revision participates in pagination identity.
