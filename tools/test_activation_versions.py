@@ -46,7 +46,7 @@ class VersionTests(f.ActivationsTests):
 
     def test_operator_missing_values_preserve_internal_and_absence_preserves_facts(self):
         self.revision([f.row(DataActivare='20261015',JudetActivare='TIMIS',HandSetType='SIM with initial credit >= 3 EUR')])
-        self.operator([self.official(COUNTY_OF_ACTIVATION='NEALOCAT')])
+        self.operator([self.official(COUNTY_OF_ACTIVATION='<UNASSIGNED>')])
         self.assertEqual(json.loads(self.fact()['evidence_json'])['observation']['county'],'TIMIS')
         self.operator([self.official(SerieText='000000000000000002')],at='2026-10-22')
         self.assertEqual(a.summary(self.c)['facts'],2)

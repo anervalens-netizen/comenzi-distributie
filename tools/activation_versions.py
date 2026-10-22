@@ -7,7 +7,7 @@ import re
 
 ACTIVATION_FIELDS = ('Activat', 'DataActivare', 'HandSetType', 'JudetActivare', 'ItemCodeA', 'ItemNameA')
 COMMERCIAL_FIELDS = ('Firma', 'DataVDF', 'TR', 'SiteCode', 'ItemCode', 'ItemName', 'Cantitate', 'Pret', 'Valoare', 'PretFD', 'CIF', 'CodPunctDeLucru', 'PunctDeLucru', 'Denumire Client', 'Oras', 'Judet', 'Nr', 'TRVechi', 'ItemType', 'IMEI', 'Qtty', 'DocumentDetailId', 'DocumentId', 'SiteId')
-UNKNOWN = {'', '-', 'NEALOCAT', 'UNALLOCATED', 'N/A', 'UNKNOWN'}
+UNKNOWN = {'', '-', 'NEALOCAT', 'UNALLOCATED', 'N/A', 'UNKNOWN', 'UNASSIGNED', '<UNASSIGNED>'}
 
 
 def migrate(c, version):
