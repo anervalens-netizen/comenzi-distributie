@@ -94,6 +94,30 @@ class RecoveryTests(unittest.TestCase):
         with contextlib.closing(sqlite3.connect(self.root/'usage-restored/usage.sqlite')) as db:
             self.assertEqual(db.execute('SELECT user_id FROM usage_days').fetchall(), [('synthetic-user',)])
 
+    def test_restore_byte_budget_rejects_then_allows_same_archive(self):
+        archive = self.make_backup()
+        with tarfile.open(archive) as saved:
+            total = sum(member.size for member in saved)
+        destination = self.root / 'budget-restored'
+        with patch.dict(recovery.os.environ, {'MOBIUP_RESTORE_MAX_BYTES': str(total - 1)}):
+            with self.assertRaisesRegex(RuntimeError, 'bounded restore budget'):
+                recovery.restore(archive, destination)
+        self.assertFalse(destination.exists())
+        self.assertEqual(list(self.root.glob('.restore-*')), [])
+        with patch.dict(recovery.os.environ, {'MOBIUP_RESTORE_MAX_BYTES': str(total)}):
+            self.assertEqual(recovery.restore(archive, destination)['status'], 'restored_not_started')
+
+    def test_invalid_restore_budget_preserves_existing_nas_fallback(self):
+        archive = self.make_backup()
+        nas = self.root / 'nas'
+        old = nas / 'mobiup-comenzi-20000101T000000Z.tar.gz'
+        old.write_bytes(b'keep')
+        for value in ('', '0', '-1', 'unbounded', '1.5'):
+            with self.subTest(value=value), patch.dict(recovery.os.environ, {'MOBIUP_RESTORE_MAX_BYTES': value}):
+                with self.assertRaisesRegex(ValueError, 'positive integer'):
+                    backup.prune_nas_latest(nas, nas / archive.name)
+                self.assertTrue(old.exists())
+
     def test_roundtrip_includes_runtime_and_private_inputs(self):
         archive=self.make_backup(); result=recovery.restore(archive,self.root/'restored')
         self.assertEqual(result['databases'],{'mobiup.sqlite':'ok'})
