@@ -14,6 +14,7 @@ const rules=JSON.parse(readFileSync(join(root,'rules.json'))),projects=['vodafon
 const read=(sites,policy='manager',extra={})=>readActivations('2026-10',sites,'vodafone',{rules,months:['2026-10'],projects,policy,...extra});
 try{
  const manager=read(null);assert.equal(manager.totals.total,8);assert.equal(manager.totals.eligible,5);assert.equal(manager.totals.ineligible,3);assert.equal(manager.totals.total,manager.totals.eligible+manager.totals.ineligible);assert.equal(manager.totals.eligible,manager.totals.ownRegion+manager.totals.otherRegion+manager.totals.unknownRegion);
+ assert.equal(manager.reconciliation,1,'non-distribution observations stay in the separately aggregated reconciliation count');
  const north=read(['N'],'north');assert.equal(north.totals.total,3);assert.equal(north.totals.eligible,2);assert.equal(north.totals.ineligible,1);assert.equal(north.sites.length,1);
  const south=read(['S'],'south');assert.equal(south.totals.total,1);assert.equal(south.totals.eligible,1);assert.equal(south.totals.ineligible||0,0);
  assert.equal(read(['X'],'nonexclusive').totals.total,0);assert.equal(read([],'north').totals.total,0);

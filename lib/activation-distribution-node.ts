@@ -56,7 +56,7 @@ export function distributionReport(report:DatabaseSync,base:ActivationReport,met
    result.simZero={distributed:Number(row.distributed),activated:Number(row.activated),withoutReportedActivation:Number(row.distributed)-Number(row.activated)};
  }
  // No operator-only serial enters distribution KPI; managers see a separate reconciliation count.
- if(query.policy==='manager'&&sites===null&&query.projects.length===3)result.reconciliation=Number(report.prepare(`SELECT COUNT(*) n FROM details WHERE provider=? AND is_tr=0 AND ${monthWhere}`).get(provider,...query.months)?.n||0);
+ if(query.policy==='manager'&&sites===null&&query.projects.length===3)result.reconciliation=Number(report.prepare(`SELECT SUM(count) n FROM dimension_monthly WHERE provider=? AND is_tr=0 AND ${monthWhere}`).get(provider,...query.months)?.n||0);
  activationPartnerView(report,result,where,args,query);
  return result;
 }

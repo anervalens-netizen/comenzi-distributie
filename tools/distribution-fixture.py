@@ -20,5 +20,6 @@ for i,(site,county,handset,code,active,month,point) in enumerate([
  ('X','AG','SIM with initial credit >= 3 EUR','CREDIT',True,'202610','A'),
  ('N','','','ZERO',False,'202610','A')]):
  serial=f'{i+1:018d}';rows.append(row(DocumentDetailId=str(i),IMEI=serial+'0',Activat=serial if active else '',DataVDF='20260801',DataActivare=month+'15' if active else '',SiteCode=site,JudetActivare=county,HandSetType=handset,ItemCode=code,CIF='EXAMPLE',CodPunctDeLucru=point))
+rows.append(row(DocumentDetailId='synthetic-retail',IMEI='0000000000000000990',Activat='000000000000000099',DataVDF='20260801',DataActivare='20261015',TR='Synthetic retail',SiteCode='STORE',JudetActivare='AG',HandSetType='Other Paid SIMs',ItemCode='CREDIT',CIF='EXAMPLE',CodPunctDeLucru='A'))
 a.import_files(c,root,[fixture(root/'input.xlsx',rows)],operator='vodafone')
 c.close();build_report(root,rules);(root/'rules.json').write_text(json.dumps(rules))
