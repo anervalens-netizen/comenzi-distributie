@@ -45,6 +45,7 @@ try{
  await waitFor(()=>browser.evaluate('document.querySelector(".distribution-table tbody button")!==null'),'partner table');
  await browser.evaluate('document.querySelector(".distribution-table tbody button").click()');
  await waitFor(()=>browser.evaluate('document.body.textContent.includes("Reper sursă")'),'point detail');
+ assert.equal(await browser.evaluate('document.activeElement?.tagName'),'H3','opening a point moves keyboard focus into its detail');
  for(const [width,height] of [[1280,900],[820,1180],[390,844]]){await browser.send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:width<700});assert(await browser.evaluate('document.documentElement.scrollWidth<=innerWidth'),'no overflow '+width);mkdirSync('work/evidence',{recursive:true});const screenshot=await browser.send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});writeFileSync('work/evidence/distribution-'+width+'.png',Buffer.from(screenshot.data,'base64'));}
  await browser.evaluate('[...document.querySelectorAll(".main-nav [role=tab]")].find(b=>b.textContent==="Vânzări").click()');
  await waitFor(()=>browser.evaluate('document.body.textContent.includes("Media / SIM")'),'sales cards');
