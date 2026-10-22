@@ -113,8 +113,8 @@ class RecoveryTests(unittest.TestCase):
         result=recovery.restore(self.make_backup(),self.root/'history-restored')
         self.assertEqual(result['databases']['client-history/client-sales-history.sqlite'],'ok')
         self.assertEqual((self.root/'history-restored/client-history/client-sales-originals/example.xlsx').read_bytes(),original.read_bytes())
-    def activation_fixture(self):
-        root=self.data/'activations';(root/'activation-originals').mkdir(parents=True)
+    def activation_fixture(self, relative='activations'):
+        root=self.data/relative;(root/'activation-originals').mkdir(parents=True)
         payload=b'synthetic activation original';sha=hashlib.sha256(payload).hexdigest()
         original=root/'activation-originals'/(sha+'.xlsx');original.write_bytes(payload)
         with contextlib.closing(sqlite3.connect(root/'activations.sqlite')) as db, db:
@@ -130,6 +130,25 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(result['databases']['activations/activations.sqlite'],'ok')
         self.assertEqual(result['databases']['activations/activation-report.sqlite'],'ok')
         self.assertEqual((self.root/'activation-restored/activations/activation-originals'/original.name).read_bytes(),original.read_bytes())
+    def test_separate_digi_and_vodafone_roundtrip(self):
+        vodafone = self.activation_fixture()
+        digi = self.activation_fixture('activations/digi')
+        result = recovery.restore(self.make_backup(), self.root / 'operators-restored')
+        for relative, original in [('activations', vodafone), ('activations/digi', digi)]:
+            self.assertEqual(result['databases'][relative + '/activations.sqlite'], 'ok')
+            self.assertEqual(result['databases'][relative + '/activation-report.sqlite'], 'ok')
+            self.assertEqual((self.root / 'operators-restored' / relative / 'activation-originals' / original.name).read_bytes(), original.read_bytes())
+
+    def test_missing_digi_original_rejects_backup(self):
+        self.activation_fixture('activations/digi').unlink()
+        with self.assertRaisesRegex(RuntimeError, 'Activation original'):
+            self.make_backup()
+
+    def test_digi_original_tampering_rejects_restore(self):
+        original = self.activation_fixture('activations/digi')
+        archive = self.rewrite_archive(lambda files: files.update({'activations/digi/activation-originals/' + original.name: b'corrupt'}))
+        self.assert_restore_rejected(archive, 'activation original')
+
     def test_missing_activation_original_rejects_backup(self):
         self.activation_fixture().unlink()
         with self.assertRaisesRegex(RuntimeError,'Activation original'):self.make_backup()

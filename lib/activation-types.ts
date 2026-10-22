@@ -1,6 +1,7 @@
 export type ActivationCounts = {total:number;sim:number;telsim:number;other:number;unassigned:number};
+export type ActivationProvider = 'vodafone'|'digi';
 export type ActivationReport = {
-  month:string;available:boolean;scoped:boolean;importedAt:string;latestDate:string|null;
+  month:string;provider:ActivationProvider;available:boolean;scoped:boolean;importedAt:string;latestDate:string|null;
   months:{month:string;total:number}[];totals:ActivationCounts;
   sites:({site:string;label:string}&ActivationCounts)[];
   history:({month:string}&ActivationCounts)[];

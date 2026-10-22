@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {build} from 'esbuild';
 import {DatabaseSync} from 'node:sqlite';
-import {mkdtempSync,rmSync} from 'node:fs';
+import {mkdtempSync,mkdirSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 async function load(path){const r=await build({entryPoints:[path],bundle:true,platform:'node',format:'esm',write:false});return import('data:text/javascript;base64,'+Buffer.from(r.outputFiles[0].text).toString('base64'));}
@@ -18,6 +18,23 @@ try{
  const all=readActivations('2026-10',null);assert.equal(all.totals.total,35);assert.equal(all.totals.unassigned,3);assert.equal(all.sites.reduce((n,r)=>n+r.total,0),35);
  const own=readActivations('2026-10',['A']);assert.equal(own.totals.total,12);assert.equal(own.totals.unassigned,0);assert.equal(own.sites.length,1);assert.equal(own.history.length,2);assert(!JSON.stringify(own).includes('Example B'));
  assert.equal(readActivations('2026-10',[]).totals.total,0);assert.equal(readActivations('2024-01',['A']).totals.total,7);
+ assert.equal(readActivations('2026-10',null,'digi').available,false,'Digi has a separate database');
+ const digiFolder=join(folder,'digi');mkdirSync(digiFolder);
+ const digiSource=new DatabaseSync(join(digiFolder,'activations.sqlite'));
+ digiSource.exec("CREATE TABLE activation_meta(key,value);INSERT INTO activation_meta VALUES('schema_version','2');CREATE TABLE activation_imports(sha256,operator,row_count,parser_version,status);INSERT INTO activation_imports VALUES('digi-hash','digi',5,2,'complete');");
+ const digiReport=new DatabaseSync(join(digiFolder,'activation-report.sqlite'));
+ digiReport.exec("CREATE TABLE report_meta(key,value);CREATE TABLE monthly(month,item_type,site,count,last_date,provider);CREATE TABLE sites(site,label);INSERT INTO report_meta VALUES('version','2'),('importedAt','2026-10-22');INSERT INTO sites VALUES('A','Example A'),('B','Example B');INSERT INTO monthly VALUES('2026-09','SIM','A',4,'2026-09-30','digi'),('2026-09','SIM','B',8,'2026-09-29','digi'),('2026-09','SIM','',1,'2026-09-28','digi'),('2026-09','SIM','A',900,'2026-09-30','vodafone');");
+ digiReport.prepare('INSERT INTO report_meta VALUES(?,?)').run('sourceImports',JSON.stringify([['digi-hash','digi',5,2]]));
+ assert.equal(readActivations('2026-09',null,'digi').totals.total,13);
+ assert.equal(readActivations('2026-09',['A'],'digi').totals.total,4);
+ assert.equal(readActivations('2026-09',[],'digi').totals.total,0);
+ assert.equal(readActivations('2026-10',null,'digi').totals.total,0);
+ assert.equal(readActivations('2026-10',null,'digi').latestDate,'2026-09-30');
+ assert.equal(readActivations('2026-10',null).totals.total,35,'Digi never changes Vodafone totals');
+ digiSource.exec("INSERT INTO activation_imports VALUES('new-digi','digi',1,2,'complete')");
+ assert.throws(()=>readActivations('2026-09',null,'digi'),/Stale/);
+ assert.equal(readActivations('2026-10',null).totals.total,35,'Digi staleness is isolated');
+ digiSource.close();digiReport.close();
  source.exec("INSERT INTO activation_imports VALUES('new','example',1,2,'complete')");assert.throws(()=>readActivations('2026-10',null),/Stale/);
  source.close();report.close();console.log('PASS: two-account pilot, scoped totals/history, no cross-agent data, missing/stale reports.');
 }finally{rmSync(folder,{recursive:true,force:true});}

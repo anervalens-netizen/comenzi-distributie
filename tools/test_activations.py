@@ -22,18 +22,18 @@ def row(**changes):
     return r
 
 
-def fixture(path, rows, headers=None, numeric=None, shared_empty=False):
+def fixture(path, rows, headers=None, numeric=None, shared_empty=False, header_row=5):
     headers = headers or a.HEADERS
     def col(i):
         return (chr(64 + i // 26) if i >= 26 else '') + chr(65 + i % 26)
     lines = []
-    for rn, r in [(5, headers)] + [(i + 6, [v[h] for h in headers]) for i, v in enumerate(rows)]:
+    for rn, r in [(header_row, headers)] + [(i + header_row + 1, [v[h] for h in headers]) for i, v in enumerate(rows)]:
         cells = []
         for i, value in enumerate(r):
             ref = col(i) + str(rn)
-            if rn > 5 and headers[i] == numeric:
+            if rn > header_row and headers[i] == numeric:
                 cells.append(f'<c r="{ref}"><v>{escape(value)}</v></c>')
-            elif rn > 5 and headers[i] == 'Activat' and shared_empty:
+            elif rn > header_row and headers[i] == 'Activat' and shared_empty:
                 cells.append(f'<c r="{ref}" t="s"><v>0</v></c>')
             else:
                 cells.append(f'<c r="{ref}" t="inlineStr"><is><t>{escape(value)}</t></is></c>')
@@ -254,6 +254,80 @@ class ActivationsTests(unittest.TestCase):
         self.c.commit()
         with self.assertRaisesRegex(a.ImportError, 'schema version'):
             a.connect(self.root / 'data')
+
+def digi_row(**changes):
+    raw = dict(Canal='ExampleCo', Magazin='TR Example', Data='2026-01-01', Cod='EXAMPLE-SIM',
+               Cantitate='400', IMEI='0000000000000000010', Pret='10',
+               Activat='0000000000000000010', DataDigi='2026-03-15')
+    raw['Denumire Client'] = 'Example customer'
+    raw.update(changes)
+    return raw
+
+
+class DigiTests(unittest.TestCase):
+    setUp = ActivationsTests.setUp
+    tearDown = ActivationsTests.tearDown
+    fact = ActivationsTests.fact
+
+    def load(self, rows, **options):
+        self.n += 1
+        path = fixture(self.root / f'digi-{self.n}.xlsx', rows, headers=options.pop('headers', a.DIGI_HEADERS), header_row=1, **options)
+        return a.import_files(self.c, self.root / 'data', [path], operator='digi', site_aliases={('ExampleCo', 'TR Example'): 'SITE-A'}), path
+
+    def test_digi_exact_19_digit_serial_and_per_sim_quantity(self):
+        self.load([digi_row()])
+        fact = self.fact()
+        self.assertEqual((fact['provider'], fact['serial'], fact['month'], fact['candidate_site'], fact['net_quantity']),
+                         ('digi', '0000000000000000010', '2026-03', 'SITE-A', 1))
+        self.assertEqual(json.loads(self.c.execute('SELECT raw_json FROM activation_movements').fetchone()[0])['Cantitate'], '400')
+
+    def test_digi_retail_and_inventory_retained_outside_tr_report(self):
+        from activation_report import build_report
+        self.load([digi_row(), digi_row(Magazin='Example retail', IMEI='0000000000000000020', Activat='0000000000000000020'),
+                   digi_row(Canal='ExampleCoInv', IMEI='0000000000000000030', Activat='0000000000000000030'),
+                   digi_row(IMEI='0000000000000000040', Activat='', DataDigi='')])
+        self.assertEqual(self.c.execute('SELECT COUNT(*) FROM activation_facts').fetchone()[0], 3)
+        self.assertEqual(build_report(self.root / 'data')['counts'], {'dated': 1})
+
+    def test_digi_duplicate_observations_reimport_and_no_operator_mixing(self):
+        _, path = self.load([digi_row(), digi_row()])
+        before = a.summary(self.c)
+        self.assertEqual(before['facts'], 1)
+        self.assertEqual(before['sourceRows'], 2)
+        self.assertIn('indistinguishable_source_rows', self.fact()['reasons'])
+        self.assertIsNone(self.fact()['candidate_site'])
+        a.import_files(self.c, self.root / 'data', [path], operator='digi', site_aliases={('ExampleCo', 'TR Example'): 'SITE-A'})
+        self.assertEqual(a.summary(self.c), before)
+        with self.assertRaisesRegex(a.ImportError, 'another operator'):
+            a.import_files(self.c, self.root / 'data', [path], operator='vodafone')
+
+    def test_digi_date_conflicts_and_unmatched_returns_stay_unassigned(self):
+        self.load([digi_row(), digi_row(Cantitate='-400', Data='2026-02-01', DataDigi='2026-04-15')])
+        self.assertIsNone(self.fact()['month'])
+        self.assertIn('activation_date_conflict', self.fact()['reasons'])
+        self.assertIn('ambiguous_or_unmatched_return', self.fact()['reasons'])
+
+    def test_digi_reordered_headers_numeric_serial_and_formula_rejected(self):
+        self.load([digi_row()], headers=list(reversed(a.DIGI_HEADERS)))
+        before = a.summary(self.c)
+        with self.assertRaisesRegex(a.ImportError, 'Numeric serial'):
+            self.load([digi_row()], numeric='IMEI')
+        self.assertEqual(a.summary(self.c), before)
+
+    def test_digi_source_schema_cannot_be_mislabelled(self):
+        path = fixture(self.root / 'wrong.xlsx', [digi_row()], headers=a.DIGI_HEADERS, header_row=1)
+        with self.assertRaisesRegex(a.ImportError, 'digi operator'):
+            a.import_files(self.c, self.root / 'data', [path], operator='vodafone')
+        self.assertEqual(a.summary(self.c)['imports'], 0)
+
+    def test_digi_no_cross_company_alias_and_invalid_date(self):
+        self.load([digi_row(Canal='OtherCo'), digi_row(DataDigi='2026-02-30')])
+        facts = {f['company']: dict(f) for f in self.c.execute('SELECT * FROM activation_facts')}
+        self.assertIn('unmapped_source_site', facts['OtherCo']['reasons'])
+        self.assertIsNone(facts['OtherCo']['candidate_site'])
+        self.assertIsNone(facts['ExampleCo']['month'])
+        self.assertIn('invalid_DataDigi', facts['ExampleCo']['reasons'])
+
 
 if __name__ == '__main__':
     unittest.main()
