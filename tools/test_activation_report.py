@@ -28,4 +28,13 @@ class ReportTests(unittest.TestCase):
         finally:c.close()
         self.assertEqual(build_report(self.root/'data')['counts'],result['counts'])
 
+    def test_activation_before_distribution_keeps_the_same_serial_in_the_cohort(self):
+        self.load([row(DataVDF='20261010',DataActivare='20261001',ItemCode='ZERO')])
+        f=self.c.execute('SELECT status,reasons FROM activation_facts').fetchone()
+        self.assertEqual(f['status'],'unresolved');self.assertEqual(json.loads(f['reasons']),['post_activation_movement_rule_pending'])
+        build_report(self.root/'data')
+        c=sqlite3.connect(self.root/'data'/'activation-report.sqlite')
+        try:self.assertEqual(c.execute('SELECT COUNT(*),SUM(activated) FROM cohorts').fetchone(),(1,1))
+        finally:c.close()
+
 if __name__=='__main__':unittest.main()

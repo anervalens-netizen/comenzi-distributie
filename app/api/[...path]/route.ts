@@ -279,7 +279,8 @@ async function dispatch(req: Request) {
     if(!user||user.mustChangePassword) return response({user},200,sessionHeaders);
     const cfg=await settings();
     const regional=user.role==='manager'&&!isGlobalManager(user)?await regionalOperationalSettings(user.id):undefined;
-    const common={user,warehouses:await visibleWarehouses(user),users:user.role==='manager'?await getUsers(user):[],settings:cfg,managerMailSettings:user.role==='manager'?await managerMailSettings(user.id):undefined,regionalSettings:regional?.settings,regionalSettingsMixed:regional?.mixed,weekKey:weekKey(),importWarnings:isGlobalManager(user)?seed.importWarnings:[]};
+    const distributionConfigured=!!await db().prepare("SELECT 1 FROM settings WHERE key='distribution-rules-v1'").first();
+    const common={user:{...user,distributionConfigured},warehouses:await visibleWarehouses(user),users:user.role==='manager'?await getUsers(user):[],settings:cfg,managerMailSettings:user.role==='manager'?await managerMailSettings(user.id):undefined,regionalSettings:regional?.settings,regionalSettingsMixed:regional?.mixed,weekKey:weekKey(),importWarnings:isGlobalManager(user)?seed.importWarnings:[]};
     if(new URL(req.url).searchParams.get('compact')==='1')return response({...common,...await listOrdersPage(user,new URLSearchParams('kind=orders&range=7d&limit=40'))},200,sessionHeaders);
     return response({...common,products:(await readCatalog()).products,orders:await listOrders(user)},200,sessionHeaders);
   }

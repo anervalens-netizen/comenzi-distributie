@@ -16,6 +16,13 @@ python3 tools/test_crm_location_repair.py
 python3 tools/test_crm_master_reconcile.py
 node tools/test-bind-ready.mjs
 node tools/test-operational-status.mjs
+node tools/test-distribution-rules.mjs
+python3 -W error::ResourceWarning tools/test_distribution_configure.py
+python3 -W error::ResourceWarning tools/test_activation_versions.py
+python3 -W error::ResourceWarning tools/test_activation_job.py
+node tools/test-distribution-sales.mjs
+node tools/test-distribution-store.mjs
+node tools/test-activation-access.mjs
 python3 -W error::ResourceWarning tools/test_activations.py
 python3 -W error::ResourceWarning tools/test_activation_report.py
 node tools/test-activation-store.mjs
@@ -84,6 +91,7 @@ node tools/test-interaction-offline.mjs
 node tools/test-usage.mjs
 node tools/test-usage-http.mjs
 node tools/test-activation-http.mjs
+node tools/test-distribution-http.mjs
 node tools/test-client-api.mjs
 node tools/test-partner-map-health.mjs
 node tools/test-local-work.mjs

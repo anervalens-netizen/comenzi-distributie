@@ -8,6 +8,7 @@ import type { SalesView } from '@/lib/sales-types';
 import { PartnerActivityDetail } from './partner-activity-detail';
 import type { ManagerScope } from './manager-scope';
 import './manager-workspace.css';
+import {DistributionOverview} from './distribution-overview';
 
 export type ManagerDestination = 'partner' | 'sales' | 'clients' | 'stock' | 'inventory' | 'orders';
 type Activity = {activity: TeamActivityView; confirmed: number; confirmedByAgent: Record<string, number>; finalizedOrders: number; finalizedNotices: number};
@@ -35,7 +36,7 @@ function useActivity(query: string, month: string, reload: number) {
 function MonthControl({month,onMonth,onRefresh}: {month:string;onMonth:(value:string)=>void;onRefresh:()=>void}) {
   return <div className="activity-toolbar"><label>Luna<input aria-label="Luna sintezei" type="month" value={month} onChange={event => {if (/^\d{4}-(0[1-9]|1[0-2])$/.test(event.target.value)) onMonth(event.target.value);}}/></label><button className="icon-button" aria-label="Actualizează sinteza" onClick={onRefresh}><RefreshCw size={18}/></button></div>;
 }
-export function ManagerOverview({scope,users,month,onMonth,onRequests,onAgent}: {scope:ManagerScope;users:User[];month:string;onMonth:(value:string)=>void;onRequests:()=>void;onAgent:(id:string,destination:ManagerDestination)=>void}) {
+export function ManagerOverview({scope,users,month,onMonth,onRequests,onAgent,canViewActivations=false,distributionConfigured=false}: {scope:ManagerScope;users:User[];month:string;canViewActivations?:boolean;distributionConfigured?:boolean;onMonth:(value:string)=>void;onRequests:()=>void;onAgent:(id:string,destination:ManagerDestination)=>void}) {
   const [reload,setReload] = useState(0);
   const {data,error} = useActivity(scope.query,month,reload);
   const [sales,setSales] = useState<{key:string;value:SalesView}|null>(null);
@@ -58,6 +59,8 @@ export function ManagerOverview({scope,users,month,onMonth,onRequests,onAgent}: 
     <div className="page-heading"><div><span className="eyebrow">SPAȚIUL MANAGERULUI</span><h1>Sinteză</h1><p>{scope.label}</p></div><MonthControl month={month} onMonth={onMonth} onRefresh={()=>setReload(value=>value+1)}/></div>
     {error&&<p className="error-banner" role="alert">{error}</p>}
     {currentSalesError&&<p className="error-banner" role="alert">Vânzările nu au putut fi încărcate: {currentSalesError}</p>}
+    {distributionConfigured&&<DistributionOverview userId={scope.userId} query={scope.reportQuery} canViewActivations={canViewActivations}/>}
+    <h2>Activitate operațională · {month}</h2>
     <div className="manager-summary-grid">
       <button className="manager-metric" onClick={()=>onAgent(scope.agentId,'sales')}><TrendingUp size={19}/><span>VÂNZĂRI</span><strong className="manager-sales-value">{salesAvailable?<><span className="manager-sales-amount">{new Intl.NumberFormat('ro-RO',{minimumFractionDigits:2,maximumFractionDigits:2}).format(currentSales!.summary.value)}</span><span className="manager-sales-currency">RON</span></>:'—'}</strong><small>{salesAvailable?'Valoare în luna selectată':currentSalesError?'Încărcare nereușită':currentSales?'Fără import în această lună':'Se încarcă…'}</small></button>
       <button className="manager-metric" onClick={onRequests}><Store size={19}/><span>CLIENȚI NOI</span><strong>{data?data.confirmed:'—'}</strong><small>Puncte noi în portofoliu în luna selectată</small></button>

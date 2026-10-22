@@ -129,3 +129,65 @@ This opens the reference read-only; it never copies Vodafone activations. The
 mapping snapshot is recorded in the Digi ledger; a changed mapping requires
 explicit reconciliation. No fuzzy person matching, company merging or current
 account activity filtering is performed. Missing aliases remain unassigned.
+
+## Reporting revisions and atomic jobs
+
+Schema/parser version 3 migrates version 2 in staging and retains all raw rows,
+occurrences and archived bytes. Commercial movement versions are selected by an
+explicit verified `source_at` date. Activation-only changes do not create extra
+quantities. Equal-revision commercial contradictions remain quarantined. Source
+file names and import order never establish precedence. Unknown activation fields
+cannot erase known values; independent operator observations take precedence over
+internal observations for valid supplied fields. The exact Excel leading apostrophe
+text marker is accepted for an 18-digit operator serial and retained in raw evidence.
+Other prefixes and numeric serial cells are refused.
+
+`source_kind=operator` requires an explicit Vodafone company namespace. Supported
+inputs are the named Detailed SIM XLSX sheet and a private JSON.gz extraction with
+the same named fields; an optional extracted `serial` must exactly agree with
+SerieText after the explicit text-marker decoding. Operator rows without verified
+TR distribution stay in the manager reconciliation queue. An explicit operator
+serial/date can update retained pre-existing SIM movements through the validated
+19/18-digit relationship; IMEI alone never creates an activation.
+
+Use `tools/activation_job.py --data-dir /private/network --manifest
+/private/batches.json --rules /private/rules.json` for a complete import/rebuild.
+The manifest is an array of import options with explicit `files`, `operator`,
+`source_kind`, `source_at`, `period_start`, `period_end` and, for operator inputs,
+`company`. Omitted source dates stay unknown. Periods describe coverage and never
+cause implicit deletion of absent movements or older months.
+
+The job locks one network, snapshots the ledger with SQLite backup, preserves
+checksummed originals, migrates/imports/rebuilds in a new generation and validates
+integrity before atomically publishing `current`. Import/report failure leaves the
+previous generation active. Failed staging is retained privately for diagnosis.
+The low-level importer refuses a published generation root. Vodafone and Digi have
+independent pointers and physical databases. Backups pin the published directory,
+verify report/ledger generation coherence and restore it as ordinary files; retained
+prior generations support a controlled rollback without destructive down-migrations.
+
+Projection version 4 contains private indexed detail/cohort tables and precomputed
+monthly dimensions. Configure the private `distribution-rules-v1` settings record
+with a new revision for every changed mapping. Invalid or stale rules fail closed.
+`tools/distribution_configure.py` validates account/site identities, verifies a
+new recovery copy and applies only explicit additive county memberships, retaining
+all other memberships and transactions. Real configuration belongs outside Git.
+
+The reporting API supports deduplicated `months` and `projects` selections. Empty
+explicit selections mean no rows; omission uses the current Bucharest month and all
+projects. The same server scope protects totals, month discovery, point/company
+history and paginated export. Existing pilot admission remains mandatory; additional
+agent admission is explicit through `MOBIUP_ACTIVATIONS_PILOT_ADDITIONAL_AGENT_IDS`.
+National manager read policy does not grant operational write permission.
+
+Partner keys use the existing CIF/franchise identity conventions. Current portfolio
+links require exact verified codes; missing/ambiguous associations remain visible
+and never merge by name. Company drill-up reuses authorized distinct activation
+identities. Recent windows are inclusive calendar dates ending at each source's
+reported date. SIM0 cohort counts use reconciled distribution identities, not the
+activation-month total, and do not claim physical inventory.
+
+Projection v4 keeps a uniquely reconciled distribution cohort member when its
+activation predates a later movement. The activation remains an attribution
+exception where required; it is not erased from the cohort or counted twice.
+The projection build revision participates in pagination identity.

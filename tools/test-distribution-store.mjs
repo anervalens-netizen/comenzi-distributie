@@ -1,0 +1,33 @@
+import assert from 'node:assert/strict';
+import {spawnSync} from 'node:child_process';
+import {mkdtempSync,readFileSync,rmSync,mkdirSync,renameSync,symlinkSync,unlinkSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {build} from 'esbuild';
+const root=mkdtempSync(join(tmpdir(),'distribution-'));
+const result=spawnSync('python3',['tools/distribution-fixture.py',root],{encoding:'utf8'});assert.equal(result.status,0,result.stderr);
+process.env.MOBIUP_ACTIVATIONS_DIR=root;
+const bundle=await build({entryPoints:['lib/activation-store-node.ts'],bundle:true,platform:'node',format:'esm',write:false});
+const {readActivations}=await import('data:text/javascript;base64,'+Buffer.from(bundle.outputFiles[0].text).toString('base64'));
+const rules=JSON.parse(readFileSync(join(root,'rules.json'))),projects=['vodafone_nord','vodafone_sud','non_exclusiv'];
+const read=(sites,policy='manager',extra={})=>readActivations('2026-10',sites,'vodafone',{rules,months:['2026-10'],projects,policy,...extra});
+try{
+ const manager=read(null);assert.equal(manager.totals.total,8);assert.equal(manager.totals.eligible,5);assert.equal(manager.totals.ineligible,3);assert.equal(manager.totals.total,manager.totals.eligible+manager.totals.ineligible);assert.equal(manager.totals.eligible,manager.totals.ownRegion+manager.totals.otherRegion+manager.totals.unknownRegion);
+ const north=read(['N'],'north');assert.equal(north.totals.total,3);assert.equal(north.totals.eligible,2);assert.equal(north.totals.ineligible,1);assert.equal(north.sites.length,1);
+ const south=read(['S'],'south');assert.equal(south.totals.total,1);assert.equal(south.totals.eligible,1);assert.equal(south.totals.ineligible||0,0);
+ assert.equal(read(['X'],'nonexclusive').totals.total,0);assert.equal(read([],'north').totals.total,0);
+ assert.equal(read(null,'manager',{months:['2026-09','2026-10']}).totals.total,9);
+ assert.equal(read(null,'manager',{projects:['vodafone_sud','vodafone_nord']}).totals.total,7);
+ assert.equal(read(null,'manager',{projects:[]}).totals.total,0);assert.equal(read(null,'manager',{projects:[]}).totals.eligible,0,'empty selections retain explicit eligibility zero');assert.equal(read(null,'manager',{months:[]}).totals.total,0);
+ assert.throws(()=>read(null,'manager',{rules:{...rules,revision:'changed'}}),/Stale distribution/);
+ const partners=read(['N'],'north',{view:'partners',portfolio:[{id:'zero-point',client:'EXAMPLE',codes:['C'],name:'Synthetic zero point'}]});assert.equal(partners.partners.rows.reduce((n,r)=>n+r.total,0),3);assert.equal(partners.partners.rows.at(-1).total,0);
+ const point=partners.partners.rows[0];assert.equal(read(['N'],'north',{view:'detail',point:point.key}).detail.total,point.total);
+ assert.equal(read(['S'],'south',{view:'detail',point:point.key}).detail.total,1,'same workpoint still intersects the authenticated seller');
+ assert.equal(read(['N'],'north',{view:'detail',point:'foreign'}).detail.total,0);
+ assert.equal(read(['N'],'north',{view:'export',company:JSON.stringify(['ExampleCo','EXAMPLE'])}).detail.total,3);
+ assert.throws(()=>readActivations('2026-10',null,'vodafone'),/rules required/,'a configured projection cannot downgrade to legacy policy');
+ const generation=join(root,'generations','synthetic');mkdirSync(generation,{recursive:true});for(const name of ['activations.sqlite','activation-report.sqlite'])renameSync(join(root,name),join(generation,name));
+ symlinkSync('generations/synthetic',join(root,'current'),'dir');assert.equal(read(null).totals.total,8,'published generation is pinned');
+ unlinkSync(join(root,'current'));symlinkSync('generations/missing',join(root,'current'),'dir');assert.throws(()=>read(null),/ENOENT/,'dangling pointer fails closed');
+ console.log('PASS: indexed projections, weighted disjoint counts, exact geography, projects/months union, fail-closed scopes, point/company/detail/export.');
+}finally{rmSync(root,{recursive:true,force:true});}

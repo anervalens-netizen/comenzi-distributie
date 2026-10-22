@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {cpSync, existsSync, mkdtempSync, readFileSync, rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
-import {spawn} from 'node:child_process';
+import {spawn,spawnSync} from 'node:child_process';
 import net from 'node:net';
 
 // Relocation prevents missing modules being resolved from the build checkout.
@@ -11,6 +11,8 @@ let child;
 try {
   const artifact = join(root, 'release');
   cpSync(resolve('dist/standalone'), artifact, {recursive: true});
+  const offline=spawnSync('python3',['-I','-c',`import sys,pathlib;sys.path.insert(0,${JSON.stringify(artifact)});import activation_job,distribution_configure;result=activation_job.run_job(pathlib.Path(${JSON.stringify(root)})/'offline-ledger',[]);assert result['report']['counts']=={}`],{cwd:root,encoding:'utf8'});
+  assert.equal(offline.status,0,'Relocated activation job dependency closure: '+offline.stderr);
   const manifest = JSON.parse(readFileSync(join(artifact, 'runtime-dependencies.json'), 'utf8'));
   for (const name of ['braces', 'micromatch', 'fast-glob', 'shadcn', 'vite-plugin-commonjs', 'vite-plugin-dynamic-import', 'proxy-addr', 'undici', '@modelcontextprotocol/sdk']) {
     assert(!manifest.packages.some(pkg => pkg.name === name), name + ' leaked into runtime');

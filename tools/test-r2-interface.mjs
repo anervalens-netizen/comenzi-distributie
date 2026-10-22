@@ -210,7 +210,7 @@ try {
   // Render actual components with controlled hook state. Infrastructure-only UI
   // imports are inert; authorization props and production markup stay unchanged.
   const controlledReact=`export * from 'react';
-    export function useState(initial){const queue=globalThis.__r2States;return [queue?.length?queue.shift():initial?.userId!==undefined&&globalThis.__r2Selection?globalThis.__r2Selection:typeof initial==='function'?initial():initial,()=>{}];}
+    export function useState(initial){const queue=globalThis.__r2States;return [queue?.length?queue.shift():initial?.userId!==undefined&&initial?.managerId!==undefined&&globalThis.__r2Selection?globalThis.__r2Selection:typeof initial==='function'?initial():initial,()=>{}];}
     export const useEffect=()=>{};`;
   const uiPlugin={name:'controlled-components',setup(b){
     b.onResolve({filter:/^react$/},args=>args.importer.includes('/components/')||args.importer.includes('/app/')?{path:'controlled-react',namespace:'ui'}:{path:require.resolve('react'),external:true});

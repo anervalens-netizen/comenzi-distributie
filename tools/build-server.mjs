@@ -15,7 +15,7 @@ await build({entryPoints:['lib/sales-view-worker.ts'],outfile:'dist/standalone/s
 await build({entryPoints:['lib/stock-parser-worker.ts'],outfile:'dist/standalone/stock-parser-worker.mjs',bundle:true,platform:'node',format:'esm',packages:'external',sourcemap:'external'});
 
 await build({entryPoints:['lib/client-history-import-worker.ts'],outfile:'dist/standalone/client-history-import-worker.mjs',bundle:true,platform:'node',format:'esm',packages:'external',sourcemap:'external'});
-for(const name of ['client_sales_history.py','client_history_upload.py','activations.py','activation_report.py'])copyFileSync('tools/'+name,'dist/standalone/'+name);
+for(const name of ['client_sales_history.py','client_history_upload.py','client_catalog_plan.py','activation_versions.py','activation_projection.py','activations.py','activation_report.py','activation_job.py','distribution_configure.py'])copyFileSync('tools/'+name,'dist/standalone/'+name);
 
 // Workers must be emitted before tracing so their dependencies are included.
 const {packageRuntime} = await import('./package-runtime.mjs');

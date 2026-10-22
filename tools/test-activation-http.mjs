@@ -41,17 +41,9 @@ try{
  await account('pilot-manager');
  const tabs=await browser.evaluate('[...document.querySelectorAll(".main-nav [role=tab]")].map(x=>x.textContent)');assert.equal(tabs[tabs.indexOf('Vânzări')+1],'Activări');
  await browser.evaluate('[...document.querySelectorAll(".main-nav [role=tab]")].find(x=>x.textContent==="Activări").click()');
- await waitFor(()=>browser.evaluate('document.body.textContent.includes("Serii distincte activate")'),'activation cards');
- assert.equal(await browser.evaluate('document.querySelector(".activation-primary strong").textContent'),'35');
- await browser.evaluate(`{const s=document.querySelector('[aria-label="Operator"]');s.value='digi';s.dispatchEvent(new Event('change',{bubbles:true}));}`);
- await waitFor(()=>browser.evaluate('document.querySelector(".activation-workspace").textContent.includes("Nu sunt încă date de activare")'),'Digi separate empty source');
- assert(!(await browser.evaluate('!!document.querySelector(".activation-primary")')));
- await browser.evaluate(`{const s=document.querySelector('[aria-label="Operator"]');s.value='vodafone';s.dispatchEvent(new Event('change',{bubbles:true}));}`);
- await waitFor(()=>browser.evaluate('document.querySelector(".activation-primary strong")?.textContent==="35"'),'Vodafone restored after operator switch');
- await browser.evaluate('[...document.querySelectorAll("[role=tab]")].find(x=>x.textContent==="Istoric").click()');
- await waitFor(()=>browser.evaluate('document.body.textContent.includes("Istoric lunar")'),'monthly history');
- await browser.evaluate('[...document.querySelectorAll(".activation-month")].find(x=>x.textContent.includes("2024")).click()');
- await waitFor(()=>browser.evaluate('document.querySelector(".activation-primary strong")?.textContent==="7"'),'history selection');
+ await waitFor(()=>browser.evaluate('document.querySelectorAll(".activation-operator").length===2'),'simultaneous operator cards');
+ await waitFor(()=>browser.evaluate('document.querySelector(".activation-primary strong")?.textContent==="35"'),'legacy pilot stays functional before project configuration');
+ assert(!(await browser.evaluate('!!document.querySelector(".distribution-filters")')),'unconfigured project filters are not offered');
  await browser.send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
  assert(await browser.evaluate('document.documentElement.scrollWidth<=innerWidth'),'no page overflow on mobile');
  mkdirSync('work/evidence',{recursive:true});const shot=await browser.send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});writeFileSync('work/evidence/activation-mobile.png',Buffer.from(shot.data,'base64'));
@@ -66,5 +58,5 @@ try{
  await browser.evaluate(`document.querySelector('[aria-label="Actualizează activările"]').click()`);
  await waitFor(()=>browser.evaluate('document.querySelector(".activation-workspace [role=alert]")!==null'),'stale error');
  assert(!(await browser.evaluate('!!document.querySelector(".activation-primary")')));
- console.log('PASS: real API authentication/pilot/scope, tab placement and exclusion, current/history, mobile, stale-report error.');
+ console.log('PASS: real API authentication/pilot/scope, tab placement and exclusion, legacy API, explicit project migration, simultaneous cards, mobile, stale-report error.');
 }finally{await browser?.close();child.kill();await new Promise(r=>child.once('exit',r));rmSync(folder,{recursive:true,force:true});}

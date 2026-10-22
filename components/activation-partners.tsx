@@ -1,0 +1,40 @@
+'use client';
+import {useEffect,useState,useRef} from 'react';
+import {activationCsv} from '@/lib/activation-csv';
+import {api,errorMessage} from '@/lib/client-api';
+import type {ActivationPartner,ActivationReport} from '@/lib/activation-types';
+type Partners={provider:'both';revision:string;operators:Record<string,{available:boolean;latestDate?:string;error?:string}>;partners:{rows:(ActivationPartner&{vodafone:number;digi:number})[];total:number;hasMore:boolean}};
+export function ActivationPartners({userId,query,reload}:{userId:string;query:string;reload:number}){
+ const detailHeading=useRef<HTMLHeadingElement>(null),pointButton=useRef<HTMLButtonElement|null>(null);
+ const [page,setPage]=useState(0),[search,setSearch]=useState(''),[selected,setSelected]=useState<ActivationPartner|null>(null),[company,setCompany]=useState(false),[detailPage,setDetailPage]=useState(0);
+ useEffect(()=>{if(selected)detailHeading.current?.focus();},[selected,company]);
+ const params=new URLSearchParams(query);params.set('provider','both');params.set('view','partners');params.set('page',String(page));params.set('q',search);const listQuery=params.toString(),listKey=userId+'|'+listQuery+'|'+reload;
+ const [data,setData]=useState<{key:string;value:Partners}|null>(null),[error,setError]=useState<{key:string;text:string}|null>(null);
+ useEffect(()=>{const c=new AbortController();api<Partners>('activations?'+listQuery,'GET',undefined,c.signal).then(value=>{if(!c.signal.aborted)setData({key:listKey,value});}).catch(e=>{if(!c.signal.aborted)setError({key:listKey,text:errorMessage(e)});});return()=>c.abort();},[listKey,listQuery]);
+ const visible=data?.key===listKey?data.value:null,message=error?.key===listKey?error.text:'';
+ const [detail,setDetail]=useState<{key:string;reports:ActivationReport[];errors:string[]}|null>(null);
+ const detailParams=new URLSearchParams(query);detailParams.set('view','detail');detailParams.set('page',String(detailPage));if(company&&selected)detailParams.set('company',JSON.stringify([selected.company,selected.clientCode]));else if(selected)detailParams.set('point',selected.key);
+ const detailQuery=detailParams.toString(),detailKey=userId+'|'+detailQuery+'|'+reload;
+ useEffect(()=>{if(!selected)return;const c=new AbortController();void Promise.allSettled((['vodafone','digi'] as const).map(provider=>api<ActivationReport>('activations?'+detailQuery+'&provider='+provider,'GET',undefined,c.signal))).then(results=>{if(!c.signal.aborted)setDetail({key:detailKey,reports:results.flatMap(r=>r.status==='fulfilled'?[r.value]:[]),errors:results.flatMap(r=>r.status==='rejected'?[errorMessage(r.reason)]:[])});});return()=>c.abort();},[detailKey,detailQuery,selected]);
+ const current=detail?.key===detailKey?detail:null;
+ const exportController=useRef<AbortController|null>(null),[exporting,setExporting]=useState(false),[exportError,setExportError]=useState('');
+ useEffect(()=>{queueMicrotask(()=>{setExporting(false);setExportError('');});return()=>exportController.current?.abort();},[detailKey]);
+ async function exportSelection(){
+  exportController.current?.abort();const c=new AbortController();exportController.current=c;setExporting(true);setExportError('');
+  try{
+   const pages:ActivationReport[]=[];
+   for(const provider of ['vodafone','digi'] as const){
+    let revision='';
+    for(let p=0;p<2000;p++){
+     const params=new URLSearchParams(detailQuery);params.set('provider',provider);params.set('view','export');params.set('page',String(p));if(revision)params.set('revision',revision);
+     const report=await api<ActivationReport>('activations?'+params,'GET',undefined,c.signal);revision=report.revision||'';pages.push(report);
+     if(!report.detail?.hasMore)break;if(p===1999)throw new Error('Selecția este prea mare. Alege mai puține luni.');
+    }
+   }
+   if(c.signal.aborted)return;
+   const url=URL.createObjectURL(new Blob([activationCsv(pages)],{type:'text/csv;charset=utf-8'}));const a=document.createElement('a');a.href=url;a.download='activari.csv';a.click();URL.revokeObjectURL(url);
+  }catch(e){if(!c.signal.aborted)setExportError(errorMessage(e));}finally{if(!c.signal.aborted)setExporting(false);}
+ }
+
+ return <section className="panel distribution-card"><h2>Activări pe punct de lucru</h2><div className="distribution-partner-toolbar"><input aria-label="Caută punct de lucru" value={search} placeholder="Partener, CIF sau cod punct" onChange={e=>{setSearch(e.target.value);setPage(0);setSelected(null);}}/></div>{message?<p role="alert">{message}</p>:!visible?<output>Se încarcă partenerii…</output>:<>{Object.entries(visible.operators).map(([name,o])=><p key={name}>{name==='vodafone'?'Vodafone':'Digi'}: {o.error||(!o.available?'Sursă indisponibilă':('până la '+(o.latestDate||'—')))}</p>)}<p>{visible.partners.total.toLocaleString('ro-RO')} puncte în selecție · ordonate descrescător după activări.</p><div className="distribution-table-scroll"><table className="distribution-table"><thead><tr><th>Punct de lucru</th><th>Vodafone</th><th>Digi</th><th>Total ↓</th><th>Ultima activare</th></tr></thead><tbody>{visible.partners.rows.map(p=><tr key={p.key}><th><button type="button" onClick={e=>{pointButton.current=e.currentTarget;setSelected(p);setCompany(false);setDetailPage(0);}}>{p.label}</button><small>{p.clientCode||'Identitate de verificat'}{p.pointCode?' · '+p.pointCode:''}{p.kind==='unresolved'?' · Asociere de verificat':''}</small></th><td>{p.vodafone}</td><td>{p.digi}</td><td>{p.total}</td><td>{p.lastDate||'—'}</td></tr>)}</tbody></table></div><div className="distribution-partner-toolbar"><button type="button" className="secondary" disabled={!page} onClick={()=>setPage(p=>p-1)}>Înapoi</button><span>Pagina {page+1}</span><button type="button" className="secondary" disabled={!visible.partners.hasMore} onClick={()=>setPage(p=>p+1)}>Înainte</button></div></>}{selected&&<section><div className="distribution-partner-toolbar"><h3 ref={detailHeading} tabIndex={-1}>{selected.label}{company?' · Total firmă':''}</h3><button type="button" className="secondary" onClick={()=>{setSelected(null);pointButton.current?.focus();}}>Închide detaliul</button><button type="button" className="secondary" disabled={exporting} onClick={()=>{void exportSelection();}}>{exporting?'Se pregătește exportul…':'Exportă selecția CSV'}</button>{selected.company&&selected.clientCode&&<button type="button" className="secondary" onClick={()=>{setCompany(c=>!c);setDetailPage(0);}}>{company?'Înapoi la punct':'Vezi totalul firmei'}</button>}</div>{exportError&&<p role="alert">{exportError}</p>}{!current?<output>Se încarcă detaliul…</output>:<>{current.errors.map((error,i)=><p key={i} role="alert">{error}</p>)}{current.reports.map(r=><section key={r.provider}><h4>{r.provider==='vodafone'?'Vodafone':'Digi'} · {r.detail?.total||0} activări în selecție</h4><p>Ultima activare: {r.detail?.lastDate||'—'}. Reper sursă: {r.detail?.asOf||'—'}.</p><p>{[7,14,30].map(days=>`${days} zile: ${r.detail?.recent[String(days)]||0}`).join(' · ')}</p><div className="distribution-table-scroll"><table className="distribution-table"><thead><tr><th>Data</th><th>Tip</th><th>Județ</th><th>Eligibilitate</th></tr></thead><tbody>{r.detail?.rows.map(d=><tr key={d.id}><td>{d.date}</td><td>{d.handset||d.itemType}</td><td>{d.county||'Lipsă'}</td><td>{d.eligible===null?'Fără regulă geografică':d.eligible?'Comisionabilă':'Necomisionabilă'}{d.reasons.length>0&&<small>{d.reasons.join(', ')}</small>}</td></tr>)}</tbody></table></div></section>)}<div className="distribution-partner-toolbar"><button type="button" className="secondary" disabled={!detailPage} onClick={()=>setDetailPage(p=>p-1)}>Detalii anterioare</button><button type="button" className="secondary" disabled={!current.reports.some(r=>r.detail?.hasMore)} onClick={()=>setDetailPage(p=>p+1)}>Detalii următoare</button></div></>}</section>}<p>Ferestrele recente au ca reper data sursei. Ritmul activărilor nu dovedește stocul fizic al partenerului.</p></section>;
+}

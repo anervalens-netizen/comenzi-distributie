@@ -1,6 +1,9 @@
 'use client';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, Search } from 'lucide-react';
+import {projectIds,type DistributionProject} from '@/lib/distribution-rules';
+import {bucharestMonthKey} from '@/lib/bucharest-month';
+import './distribution.css';
 import type { User } from '@/lib/types';
 
 export type RegionOption = {value: string; label: string; agentIds: string[]};
@@ -23,6 +26,8 @@ export function managerRegions(users: User[]): RegionOption[] {
 type Selection = {userId: string; managerId: string; agentId: string};
 export function useManagerScope(user: User | null, users: User[]) {
   const [stored, setStored] = useState<Selection>({userId: '', managerId: '', agentId: ''});
+  const [reportStored,setReportStored]=useState<{userId:string;months:string[];projects:DistributionProject[]}>({userId:'',months:[],projects:[]});
+  const report=reportStored.userId===user?.id?reportStored:{months:[bucharestMonthKey(new Date())],projects:[...projectIds]};
   const global = user?.role === 'manager';
   const regions = useMemo(() => managerRegions(users), [users]);
   const agents = useMemo(() => users.filter(item => item.role === 'agent').sort((a,b) => a.name.localeCompare(b.name,'ro')), [users]);
@@ -37,8 +42,10 @@ export function useManagerScope(user: User | null, users: User[]) {
     if (!userId || role !== 'manager') return;
     let next: Selection = {userId, managerId: '', agentId: ''};
     try {const focusedRequest=new URLSearchParams(window.location.search).get('request');const parsed = focusedRequest?null:JSON.parse(localStorage.getItem(`manager-selection-v1:${userId}`) || 'null'); if (parsed && typeof parsed.managerId === 'string' && typeof parsed.agentId === 'string') next = {...next, managerId: parsed.managerId, agentId: parsed.agentId};} catch {}
+    let nextReport={userId,months:[bucharestMonthKey(new Date())],projects:[...projectIds] as DistributionProject[]};
+    try{const saved=JSON.parse(localStorage.getItem('distribution-selection-v1:'+userId)||'null');if(saved&&Array.isArray(saved.months)&&saved.months.length<=36&&saved.months.every((m:unknown)=>typeof m==='string'&&/^20\d{2}-(0[1-9]|1[0-2])$/.test(m))&&Array.isArray(saved.projects)&&saved.projects.every((p:DistributionProject)=>projectIds.includes(p)))nextReport={userId,months:[...new Set(saved.months)] as string[],projects:[...new Set(saved.projects)] as DistributionProject[]};}catch{}
     let alive = true;
-    queueMicrotask(() => {if (alive) setStored(next);});
+    queueMicrotask(() => {if (alive) {setStored(next);setReportStored(nextReport);}});
     return () => {alive = false;};
   }, [userId, role]);
   function write(nextManager: string, nextAgent: string) {
@@ -47,8 +54,9 @@ export function useManagerScope(user: User | null, users: User[]) {
     setStored(next);
     try {localStorage.setItem(`manager-selection-v1:${user.id}`, JSON.stringify(next));} catch {}
   }
+  function writeReport(months:string[],projects:DistributionProject[]){if(!user)return;const next={userId:user.id,months:[...new Set(months)].sort(),projects:[...new Set(projects)].sort()};setReportStored(next);try{localStorage.setItem('distribution-selection-v1:'+user.id,JSON.stringify(next));}catch{}}
   const query = new URLSearchParams({...managerId ? {managerId} : {}, ...agentId ? {agentId} : {}}).toString();
-  return {global, regions, agents: regionAgents, selectedAgents, managerId, agentId, query,
+  return {global, userId:user?.id||'', reportMonths:report.months, projects:report.projects, reportQuery:new URLSearchParams([...new URLSearchParams(query),['months',report.months.join(',')],['projects',report.projects.join(',')]]).toString(), selectMonths:(months:string[])=>writeReport(months,report.projects),selectProjects:(projects:DistributionProject[])=>writeReport(report.months,projects),resetReporting:()=>{write('','');writeReport([bucharestMonthKey(new Date())],[...projectIds]);},regions, agents: regionAgents, selectedAgents, managerId, agentId, query,
     label: agentId ? regionAgents.find(agent => agent.id === agentId)!.name : region?.label || (global ? 'Toată distribuția' : 'Echipa mea'),
     selectRegion: (value: string) => write(value, ''),
     selectAgent: (value: string) => write(managerId, value === 'all' ? '' : value),
@@ -75,10 +83,16 @@ export function SearchScopeChoice({label, value, options, onChange}: {label: str
     </div>
   </details>;
 }
-export function ManagerScopeBar({scope}: {scope: ManagerScope}) {
+export function ManagerScopeBar({scope,reporting=false}: {scope: ManagerScope;reporting?:boolean}) {
   return <div className="manager-scope-bar" aria-label="Selecția managerului">
     {scope.global && <SearchScopeChoice label="Regiune" value={scope.managerId} onChange={scope.selectRegion} options={[{value:'',label:'Toate regiunile'},...scope.regions]}/>}
     <SearchScopeChoice label="Agent / TR" value={scope.agentId} onChange={scope.selectAgent} options={[{value:'',label:'Toată echipa'},...scope.agents.map(agent => ({value:agent.id,label:`${agent.name}${agent.siteCode?` · ${agent.siteCode}`:''}${agent.active===0?' · inactiv':''}`}))]}/>
+    {reporting&&<DistributionFilterControls scope={scope}/>}
     <span className="manager-scope-note">Selecția se păstrează între secțiuni.</span>
   </div>;
+}
+
+export function DistributionFilterControls({scope}:{scope:ManagerScope}){
+ const [month,setMonth]=useState(bucharestMonthKey(new Date()));
+ return <div className="distribution-filters"><details><summary>Proiecte · {scope.projects.length===3?'Toate':scope.projects.length||'Niciunul'}</summary><fieldset><legend>Proiecte</legend>{projectIds.map(p=><label key={p}><input type="checkbox" checked={scope.projects.includes(p)} onChange={e=>scope.selectProjects(e.target.checked?[...scope.projects,p]:scope.projects.filter(v=>v!==p))}/>{{vodafone_sud:'Vodafone Sud',vodafone_nord:'Vodafone Nord',non_exclusiv:'Non-exclusiv'}[p]}</label>)}</fieldset></details><details><summary>Perioadă · {scope.reportMonths.join(' + ')||'Nicio lună'}</summary><fieldset><legend>Luni selectate</legend><div className="distribution-months">{scope.reportMonths.map(m=><button type="button" key={m} aria-label={'Elimină luna '+m} onClick={()=>scope.selectMonths(scope.reportMonths.filter(v=>v!==m))}>{m} ×</button>)}{!scope.reportMonths.length&&<span>Nicio lună selectată</span>}</div><label>Adaugă luna<input aria-label="Lună de adăugat" type="month" value={month} onChange={e=>setMonth(e.target.value)}/></label><button type="button" className="secondary" disabled={!/^20\d{2}-(0[1-9]|1[0-2])$/.test(month)||scope.reportMonths.length>=36} onClick={()=>scope.selectMonths([...scope.reportMonths,month])}>Adaugă</button></fieldset></details><button type="button" className="secondary" onClick={scope.resetReporting}>Resetează filtrele</button></div>;
 }

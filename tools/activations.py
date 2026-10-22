@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Private, explicit-path activation ledger. No application/production defaults."""
 import argparse
+import activation_versions as versions
+import fcntl
 import collections
 import datetime as dt
 from decimal import Decimal, InvalidOperation
@@ -19,7 +21,7 @@ import xml.etree.ElementTree as ET
 HEADERS = 'Firma DataVDF Regional TR SiteCode ItemCode ItemName Cantitate Pret Valoare PretFD'.split() + ['Denumire Client', 'CIF', 'PunctDeLucru', 'CodPunctDeLucru', 'Oras', 'Judet', 'Nr', 'TRVechi', 'ItemType', 'IMEI', 'Qtty', 'Activat', 'DataActivare', 'HandSetType', 'JudetActivare', 'ItemCodeA', 'ItemNameA', 'Furnizor', 'DocumentDetailId', 'DocumentId', 'SiteId', 'DataVDFFormat']
 NS = {'s': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
 TR = re.compile(r'(^|[^A-Z0-9])TR([^A-Z0-9]|$)')
-VERSION = 2
+VERSION = 3
 MAX_ROWS = 1_000_000
 DIGI_HEADERS = ['Canal', 'Magazin', 'Data', 'Cod', 'Cantitate', 'IMEI', 'Pret', 'Denumire Client', 'Activat', 'DataDigi']
 
@@ -81,7 +83,7 @@ def xml_rows(archive, target, strings):
             parents.pop()
 
 
-def workbook(path):
+def workbook(path, *, sheet_name="SIM", required_headers=None, header_row=None):
     with zipfile.ZipFile(path) as archive:
         entries = archive.infolist()
         if len(entries) > 4096 or sum(e.file_size for e in entries) > 2_000_000_000:
@@ -101,8 +103,10 @@ def workbook(path):
                         root.clear()
         book = ET.fromstring(archive.read('xl/workbook.xml'))
         sheets = book.findall('s:sheets/s:sheet', NS)
-        if len(sheets) != 1 or sheets[0].get('name') != 'SIM':
-            raise ImportError('Expected exactly one SIM sheet')
+        matches = [s for s in sheets if s.get('name') == sheet_name]
+        if len(matches) != 1 or (sheet_name == 'SIM' and len(sheets) != 1):
+            raise ImportError('Expected exactly one ' + sheet_name + ' sheet')
+        sheets = matches
         rels = {r.get('Id'): r for r in ET.fromstring(archive.read('xl/_rels/workbook.xml.rels'))}
         rel = rels[sheets[0].get('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id')]
         target = rel.get('Target', '')
@@ -116,6 +120,21 @@ def workbook(path):
             if rn <= last or rn > MAX_ROWS + 5:
                 raise ImportError('Invalid row order or row limit exceeded')
             last = rn
+            if required_headers is not None:
+                if rn < header_row: continue
+                if rn == header_row:
+                    header = [cells.get(i, ('', ''))[0] for i in range(1, len(cells)+1)]
+                    if len(set(header)) != len(header) or not set(required_headers).issubset(header):
+                        raise ImportError('Unexpected operator headers')
+                    continue
+                if header is None: raise ImportError('Missing operator header')
+                raw = {key: cells.get(i, ('', ''))[0] for i,key in enumerate(header,1)}
+                if not any(raw.values()): continue
+                for i,key in enumerate(header,1):
+                    if key == 'SerieText' and raw[key] and cells[i][1] not in ('s','inlineStr','str'):
+                        raise ImportError('Numeric operator serial')
+                yield rn,raw
+                continue
             if rn == 1:
                 first = [cells.get(i, ('', ''))[0] for i in range(1, len(cells) + 1)]
                 if len(first) == len(DIGI_HEADERS) and set(first) == set(DIGI_HEADERS):
@@ -147,6 +166,8 @@ CREATE TABLE IF NOT EXISTS activation_meta(key TEXT PRIMARY KEY,value TEXT NOT N
 CREATE TABLE IF NOT EXISTS activation_imports(
  id INTEGER PRIMARY KEY, sha256 TEXT NOT NULL UNIQUE, filename TEXT NOT NULL,
  operator TEXT NOT NULL, nominal_period TEXT NOT NULL, parser_version INTEGER NOT NULL, imported_at TEXT NOT NULL,
+ source_kind TEXT NOT NULL DEFAULT 'internal', source_at TEXT NOT NULL DEFAULT '',
+ period_start TEXT NOT NULL DEFAULT '', period_end TEXT NOT NULL DEFAULT '', company TEXT NOT NULL DEFAULT '',
  row_count INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL CHECK(status IN ('loading','complete')));
 CREATE TABLE IF NOT EXISTS activation_movements(
  id INTEGER PRIMARY KEY, movement_key TEXT NOT NULL, payload_hash TEXT NOT NULL,
@@ -165,12 +186,26 @@ CREATE TABLE IF NOT EXISTS activation_facts(
  candidate_site TEXT, status TEXT NOT NULL, reasons TEXT NOT NULL, net_quantity INTEGER,
  evidence_json TEXT NOT NULL, PRIMARY KEY(company,provider,serial));
 CREATE INDEX IF NOT EXISTS activation_facts_month ON activation_facts(month,status);
+CREATE TABLE IF NOT EXISTS activation_observations(
+ import_id INTEGER NOT NULL REFERENCES activation_imports(id), source_row INTEGER NOT NULL,
+ company TEXT NOT NULL, provider TEXT NOT NULL, serial TEXT NOT NULL, activation_date TEXT NOT NULL,
+ county TEXT NOT NULL, handset TEXT NOT NULL, raw_json TEXT NOT NULL, PRIMARY KEY(import_id,source_row));
+CREATE INDEX IF NOT EXISTS observation_identity ON activation_observations(company,provider,serial);
+CREATE TABLE IF NOT EXISTS activation_effective_movements(
+ movement_id INTEGER PRIMARY KEY REFERENCES activation_movements(id), company TEXT NOT NULL, provider TEXT NOT NULL,
+ imei TEXT NOT NULL, serial TEXT NOT NULL, movement_date TEXT, site TEXT NOT NULL, is_tr INTEGER NOT NULL,
+ item_code TEXT NOT NULL, customer_key TEXT NOT NULL, quantity INTEGER, raw_json TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS effective_serial ON activation_effective_movements(company,provider,serial);
+CREATE INDEX IF NOT EXISTS effective_period ON activation_effective_movements(provider,movement_date,site);
+
 '''
 
 
 def connect(directory):
     root = Path(directory).resolve()
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if (root / 'current').exists() or (root / 'current').is_symlink():
+        raise ImportError('Use activation_job for a published generation root')
     path = root / 'activations.sqlite'
     # Refuse unrelated databases before any schema writes.
     c = sqlite3.connect(path, timeout=30)
@@ -181,6 +216,9 @@ def connect(directory):
         raise ImportError('Not an activations database')
     if tables:
         version = c.execute("SELECT value FROM activation_meta WHERE key='schema_version'").fetchone()
+        if version and version[0] == '2':
+            versions.migrate(c, '2')
+            version = (str(VERSION),)
         if not version or version[0] != str(VERSION):
             c.close()
             raise ImportError('Unsupported activations schema version')
@@ -351,25 +389,57 @@ def rebuild(c, operator=None):
         c.execute('DELETE FROM activation_facts')
     else:
         c.execute('DELETE FROM activation_facts WHERE provider=?', (operator,))
-    conflicts = {r[0] for r in c.execute('SELECT movement_key FROM activation_movements GROUP BY movement_key HAVING COUNT(*)>1')}
+    c.execute('DELETE FROM activation_effective_movements' + (' WHERE provider=?' if operator else ''), (operator,) if operator else ())
+    c.execute("DELETE FROM activation_meta WHERE key LIKE 'conflict:%'")
+    official = collections.defaultdict(list)
+    for o in c.execute("SELECT o.*,i.source_at FROM activation_observations o JOIN activation_imports i ON i.id=o.import_id WHERE i.status='complete'"):
+        official[(o['company'],o['provider'],o['serial'])].append(dict(serial=o['serial'],activation_date=o['activation_date'],county=o['county'],handset=o['handset'],priority=1,source_at=o['source_at'],ref={'importId':o['import_id'],'row':o['source_row']}))
+    used=set()
     repeated_digi = {r[0] for r in c.execute("SELECT o.movement_id FROM activation_occurrences o JOIN activation_movements m ON m.id=o.movement_id WHERE m.provider='digi' GROUP BY o.import_id,o.movement_id HAVING COUNT(*)>1")}
-    cursor = c.execute('SELECT * FROM activation_movements' + (' WHERE provider=?' if operator else '') + ' ORDER BY company,provider,imei,id', (operator,) if operator else ())
-    for _, group in itertools.groupby(cursor, key=lambda r: (r['company'], r['provider'], r['imei'])):
-        rows = [dict(r) for r in group]
-        for row in rows:
-            if row['id'] in repeated_digi:
-                row['issues'] = dump(sorted(set(json.loads(row['issues']) + ['indistinguishable_source_rows'])))
-        for fact in reconcile_group(rows, conflicts):
-            old = c.execute('SELECT evidence_json,reasons FROM activation_facts WHERE company=? AND provider=? AND serial=?', fact[:3]).fetchone()
+    query="SELECT m.*,COALESCE(MAX(i.source_at),'') source_at FROM activation_movements m JOIN activation_occurrences o ON o.movement_id=m.id JOIN activation_imports i ON i.id=o.import_id"
+    query+=(' WHERE m.provider=?' if operator else '')+' GROUP BY m.id ORDER BY m.company,m.provider,m.imei,m.id'
+    cursor=c.execute(query,(operator,) if operator else ())
+    for identity,group in itertools.groupby(cursor,key=lambda r:(r['company'],r['provider'],r['imei'])):
+        rows,conflicts=versions.effective([dict(r) for r in group])
+        for key in conflicts:c.execute('INSERT OR REPLACE INTO activation_meta VALUES(?,?)',('conflict:'+key,'1'))
+        company,provider,imei=identity
+        # Explicit operator observation supplies the activation, never an IMEI truncation alone.
+        serial_keys={o['serial'] for r in rows for o in r['observations'] if o['serial']}
+        if provider=='vodafone' and re.fullmatch(r'[0-9]{19}',imei) and all(r['item_type']=='SIM' for r in rows):
+            serial_keys.add(imei[:-1])
+        external=[]
+        for serial in serial_keys:
+            key=(company,provider,serial)
+            if key in official:external+=official[key];used.add(key)
+        selected,refs,observation_conflicts=versions.apply_observations(rows,external)
+        for r in rows:
+            if any(i in repeated_digi for i in r['version_ids']):
+                r['issues']=dump(sorted(set(json.loads(r['issues'])+['indistinguishable_source_rows'])))
+            c.execute('INSERT INTO activation_effective_movements VALUES(?,?,?,?,?,?,?,?,?,?,?,?)', (r['id'],r['company'],r['provider'],r['imei'],r['serial'],r['movement_date'],r['site'],r['is_tr'],r['item_code'],r['customer_key'],r['quantity'],r['raw_json']))
+        for fact in reconcile_group(rows,conflicts):
+            fact=list(fact)
+            evidence=json.loads(fact[-1]);evidence.update(observation=selected,observationSources=refs,versionIds=[i for r in rows for i in r['version_ids']])
+            reasons=set(json.loads(fact[9]))|set(observation_conflicts)
+            if observation_conflicts:
+                fact[7]=None;fact[8]='unresolved'
+                if 'activation_date_conflict' in observation_conflicts:fact[3]=fact[4]=None
+            fact[9]=dump(sorted(reasons));fact[-1]=dump(evidence)
+            old=c.execute('SELECT evidence_json,reasons FROM activation_facts WHERE company=? AND provider=? AND serial=?',fact[:3]).fetchone()
             if old:
-                evidence = json.loads(old[0]); new = json.loads(fact[-1])
-                for key in ('movementIds', 'returnLinks', 'remainingSaleIds'):
-                    evidence[key] += new[key]
-                reasons = sorted(set(json.loads(old[1]) + json.loads(fact[9]) + ['conflicting_imei_for_serial']))
-                c.execute("UPDATE activation_facts SET status='unresolved',candidate_site=NULL,activation_date=NULL,month=NULL,item_code=NULL,item_type=NULL,net_quantity=NULL,reasons=?,evidence_json=? WHERE company=? AND provider=? AND serial=?",
-                          (dump(reasons), dump(evidence), *fact[:3]))
-            else:
-                c.execute('INSERT INTO activation_facts VALUES(' + ','.join('?' * 12) + ')', fact)
+                previous=json.loads(old[0])
+                for key in ('movementIds','returnLinks','remainingSaleIds','versionIds'):previous[key]+=evidence[key]
+                reasons=sorted(set(json.loads(old[1])+json.loads(fact[9])+['conflicting_imei_for_serial']))
+                c.execute("UPDATE activation_facts SET status='unresolved',candidate_site=NULL,activation_date=NULL,month=NULL,item_code=NULL,item_type=NULL,net_quantity=NULL,reasons=?,evidence_json=? WHERE company=? AND provider=? AND serial=?",(dump(reasons),dump(previous),*fact[:3]))
+            else:c.execute('INSERT INTO activation_facts VALUES('+','.join('?'*12)+')',fact)
+    for key,observations in official.items():
+        if key in used or (operator and key[1]!=operator):continue
+        selected={};refs={};reasons=['operator_without_distribution']
+        for field in ('serial','activation_date','county','handset'):
+            selected[field],refs[field],conflict=versions.select_field(observations,field)
+            if conflict:reasons.append(field+'_conflict')
+        ad=selected['activation_date'] or None
+        c.execute('INSERT INTO activation_facts VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',(*key,ad,ad[:7] if ad else None,None,None,None,'unresolved',dump(reasons),None,dump({'observation':selected,'observationSources':refs,'movementIds':[],'returnLinks':[],'remainingSaleIds':[],'versionIds':[]})))
+    c.execute("INSERT INTO activation_meta VALUES('generation','1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1")
 
 
 def summary(c):
@@ -388,9 +458,22 @@ def summary(c):
     }
 
 
-def import_files(c, directory, paths, *, operator, nominal_period='', site_aliases=None):
+def import_files(c, directory, paths, **options):
+    if Path(c.execute('PRAGMA database_list').fetchone()[2]).resolve() != Path(directory).resolve() / 'activations.sqlite':
+        raise ImportError('Data directory does not match the database')
+    with (Path(directory) / '.activation-job.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return _import_files(c, directory, paths, **options)
+
+
+def _import_files(c, directory, paths, *, operator, nominal_period='', site_aliases=None, source_kind='internal', source_at='', period_start='', period_end='', company=''):
     if not re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,63}', operator):
         raise ImportError('Explicit stable operator namespace required')
+    if source_kind not in ('internal','operator') or (source_kind=='operator' and (operator!='vodafone' or not company)):
+        raise ImportError('Operator source requires explicit Vodafone company')
+    for value in (source_at,period_start,period_end):
+        if value: dt.date.fromisoformat(value)
+    if period_start and period_end and period_start>period_end:raise ImportError('Invalid declared period')
     root = Path(directory).resolve()
     database = Path(c.execute('PRAGMA database_list').fetchone()[2]).resolve()
     if database != root / 'activations.sqlite':
@@ -416,15 +499,17 @@ def import_files(c, directory, paths, *, operator, nominal_period='', site_alias
         for source in paths:
             source = Path(source)
             # Parse an immutable staged copy; source changes cannot invalidate the hash binding.
-            with tempfile.NamedTemporaryFile(dir=originals, suffix='.xlsx') as staged:
+            with tempfile.NamedTemporaryFile(dir=originals, suffix=''.join(source.suffixes)) as staged:
                 with source.open('rb') as stream:
                     shutil.copyfileobj(stream, staged)
                 staged.flush(); os.fsync(staged.fileno())
                 sha = digest(staged.name)
-                existing = c.execute('SELECT id,operator FROM activation_imports WHERE sha256=?', (sha,)).fetchone()
+                existing = c.execute('SELECT * FROM activation_imports WHERE sha256=?', (sha,)).fetchone()
                 if existing:
                     if existing['operator'] != operator:
                         raise ImportError('Source already bound to another operator')
+                    if tuple(existing[k] for k in ('source_kind','source_at','period_start','period_end','company')) != (source_kind,source_at,period_start,period_end,company):
+                        raise ImportError('Source already bound to different provenance')
                     archived = originals / (sha + '.xlsx')
                     if not archived.is_file() or digest(archived) != sha:
                         raise ImportError('Archived source missing or checksum mismatch')
@@ -443,8 +528,15 @@ def import_files(c, directory, paths, *, operator, nominal_period='', site_alias
                         os.close(fd)
                 batch = c.execute("INSERT INTO activation_imports(sha256,filename,operator,nominal_period,parser_version,imported_at,status) VALUES(?,?,?,?,?,?,'loading')",
                                   (sha, source.name, operator, nominal_period, VERSION, dt.datetime.now(dt.timezone.utc).isoformat())).lastrowid
+                c.execute('UPDATE activation_imports SET source_kind=?,source_at=?,period_start=?,period_end=?,company=? WHERE id=?',(source_kind,source_at,period_start,period_end,company,batch))
                 count = 0
-                for rn, raw in workbook(staged.name):
+                records = versions.operator_records(Path(staged.name),workbook) if source_kind=='operator' else workbook(staged.name)
+                for rn, raw in records:
+                    if source_kind=='operator':
+                        serial,ad,county,handset=versions.operator_values(raw)
+                        c.execute('INSERT INTO activation_observations VALUES(?,?,?,?,?,?,?,?,?)',(batch,rn,company,operator,serial,ad,county,handset,dump(raw)))
+                        count+=1
+                        continue
                     values = normalized(raw, sha, rn, operator, aliases)
                     c.execute('INSERT OR IGNORE INTO activation_movements(movement_key,payload_hash,company,provider,imei,serial,movement_date,activation_date,site,agent,is_tr,item_code,item_type,customer_key,quantity,issues,raw_json) VALUES(' + ','.join('?' * 17) + ')', values)
                     movement = c.execute('SELECT id FROM activation_movements WHERE movement_key=? AND payload_hash=?', values[:2]).fetchone()[0]
@@ -466,6 +558,11 @@ def main():
     parser.add_argument('--data-dir', required=True, type=Path)
     parser.add_argument('--operator', required=True, help='Stable network/operator namespace, not the source supplier')
     parser.add_argument('--nominal-period', default='')
+    parser.add_argument('--source-kind',choices=['internal','operator'],default='internal')
+    parser.add_argument('--source-at',default='',help='Verified source revision date (ISO), never inferred from filename')
+    parser.add_argument('--period-start',default='')
+    parser.add_argument('--period-end',default='')
+    parser.add_argument('--company',default='',help='Required namespace for operator observations')
     parser.add_argument('--preview', action='store_true', help='Use a disposable copy; no changes to target data')
     parser.add_argument('--site-reference-data-dir', type=Path, help='Read-only historical ledger for exact company and TR label aliases (Digi only)')
     parser.add_argument('files', nargs='+', type=Path)
@@ -477,7 +574,7 @@ def main():
             raise ImportError('Site reference must be a separate read-only ledger for Digi')
         reference = sqlite3.connect((args.site_reference_data_dir.resolve() / 'activations.sqlite').as_uri() + '?mode=ro', uri=True)
         try:
-            if reference.execute("SELECT value FROM activation_meta WHERE key='schema_version'").fetchone() != (str(VERSION),):
+            if reference.execute("SELECT value FROM activation_meta WHERE key='schema_version'").fetchone() not in (('2',),(str(VERSION),)):
                 raise ImportError('Unsupported site reference ledger')
             aliases = {(r[0], r[1]): r[2] for r in reference.execute("SELECT company,agent,MIN(site) FROM activation_movements WHERE provider='vodafone' AND is_tr=1 AND site<>'' GROUP BY company,agent HAVING COUNT(DISTINCT site)=1")}
         finally:
@@ -494,13 +591,13 @@ def main():
                     source.close(); target.close()
             c = connect(temp)
             try:
-                print(dump({'preview': True, **import_files(c, temp, args.files, operator=args.operator, nominal_period=args.nominal_period, site_aliases=aliases)}))
+                print(dump({'preview': True, **import_files(c, temp, args.files, operator=args.operator, nominal_period=args.nominal_period, site_aliases=aliases,source_kind=args.source_kind,source_at=args.source_at,period_start=args.period_start,period_end=args.period_end,company=args.company)}))
             finally:
                 c.close()
     else:
         c = connect(args.data_dir)
         try:
-            print(dump(import_files(c, args.data_dir, args.files, operator=args.operator, nominal_period=args.nominal_period, site_aliases=aliases)))
+            print(dump(import_files(c, args.data_dir, args.files, operator=args.operator, nominal_period=args.nominal_period, site_aliases=aliases,source_kind=args.source_kind,source_at=args.source_at,period_start=args.period_start,period_end=args.period_end,company=args.company)))
         finally:
             c.close()
 
