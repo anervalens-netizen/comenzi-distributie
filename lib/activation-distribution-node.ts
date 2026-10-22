@@ -28,14 +28,15 @@ export function distributionReport(report:DatabaseSync,base:ActivationReport,met
  clauses.push('activation_visible(county,handset,contradictory)=1');
  const where=clauses.join(' AND '),monthWhere=query.months.length?`month IN (${query.months.map(()=>'?').join(',')})`:'0';
  const dimensions=report.prepare(`SELECT COALESCE(month,'') month,site,item_type,county,handset,contradictory,count,last_date FROM dimension_monthly WHERE ${where} ORDER BY month DESC,site`).all(...args) as Dimension[];
+ const newCounts=():ActivationCounts=>({...emptyActivationCounts(),...(provider==='vodafone'?{eligible:0,ownRegion:0,otherRegion:0,unknownRegion:0,...(query.policy==='south'?{}:{ineligible:0,reasons:{}})}:{})});
  const labels=new Map(report.prepare('SELECT site,label FROM sites').all().map(r=>[String(r.site),String(r.label)])),history=new Map<string,ActivationCounts>(),agents=new Map<string,ActivationCounts>();
- const result={...base,available:JSON.parse(meta.sourceImports).some((i:unknown[])=>i[1]===provider),importedAt:meta.importedAt,latestDate:meta.latestDate||null,revision,rulesRevision:rules.revision,selectedMonths:query.months,builtAt:meta.builtAt,totals:emptyActivationCounts(),history:[],months:[],sites:[]} as ActivationReport;
+ const result={...base,available:JSON.parse(meta.sourceImports).some((i:unknown[])=>i[1]===provider),importedAt:meta.importedAt,latestDate:meta.latestDate||null,revision,rulesRevision:rules.revision,selectedMonths:query.months,builtAt:meta.builtAt,totals:newCounts(),history:[],months:[],sites:[]} as ActivationReport;
  for(const row of dimensions){
    if(!row.month)continue;
-   const h=history.get(row.month)||emptyActivationCounts();add(h,row,rules,provider);history.set(row.month,h);
+   const h=history.get(row.month)||newCounts();add(h,row,rules,provider);history.set(row.month,h);
    if(row.last_date&&(!result.latestDate||row.last_date>result.latestDate))result.latestDate=row.last_date;
    if(!query.months.includes(row.month))continue;
-   add(result.totals,row,rules,provider);const a=agents.get(row.site)||emptyActivationCounts();add(a,row,rules,provider);agents.set(row.site,a);
+   add(result.totals,row,rules,provider);const a=agents.get(row.site)||newCounts();add(a,row,rules,provider);agents.set(row.site,a);
  }
  result.history=[...history].map(([month,counts])=>({month,...counts}));result.months=result.history.map(({month,total})=>({month,total}));
  result.sites=[...agents].map(([site,counts])=>({site,label:site?(labels.get(site)||site):'Agent de verificat',...counts})).sort((a,b)=>b.total-a.total||a.site.localeCompare(b.site));

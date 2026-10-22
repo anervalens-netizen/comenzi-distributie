@@ -18,7 +18,7 @@ try{
  assert.equal(read(['X'],'nonexclusive').totals.total,0);assert.equal(read([],'north').totals.total,0);
  assert.equal(read(null,'manager',{months:['2026-09','2026-10']}).totals.total,9);
  assert.equal(read(null,'manager',{projects:['vodafone_sud','vodafone_nord']}).totals.total,7);
- assert.equal(read(null,'manager',{projects:[]}).totals.total,0);assert.equal(read(null,'manager',{months:[]}).totals.total,0);
+ assert.equal(read(null,'manager',{projects:[]}).totals.total,0);assert.equal(read(null,'manager',{projects:[]}).totals.eligible,0,'empty selections retain explicit eligibility zero');assert.equal(read(null,'manager',{months:[]}).totals.total,0);
  assert.throws(()=>read(null,'manager',{rules:{...rules,revision:'changed'}}),/Stale distribution/);
  const partners=read(['N'],'north',{view:'partners',portfolio:[{id:'zero-point',client:'EXAMPLE',codes:['C'],name:'Synthetic zero point'}]});assert.equal(partners.partners.rows.reduce((n,r)=>n+r.total,0),3);assert.equal(partners.partners.rows.at(-1).total,0);
  const point=partners.partners.rows[0];assert.equal(read(['N'],'north',{view:'detail',point:point.key}).detail.total,point.total);
