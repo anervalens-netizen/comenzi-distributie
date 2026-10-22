@@ -40,6 +40,10 @@ def run_job(directory,batches,rules=None,before_publish=None):
                 for batch in batches:
                     options=dict(batch);paths=[Path(p) for p in options.pop('files')]
                     receipts.append(activations.import_files(c,stage,paths,**options))
+                # A schema-2 migration without a new source still needs the
+                # effective movements before building a schema-3 projection.
+                if not c.execute("SELECT 1 FROM activation_meta WHERE key='generation'").fetchone():
+                    activations.rebuild(c);c.commit()
                 if c.execute('PRAGMA integrity_check').fetchone()[0]!='ok' or c.execute('PRAGMA foreign_key_check').fetchall():raise ValueError('Invalid ledger')
                 c.execute('PRAGMA wal_checkpoint(TRUNCATE)')
             finally:c.close()
