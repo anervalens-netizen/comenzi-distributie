@@ -130,6 +130,21 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(result['databases']['activations/activations.sqlite'],'ok')
         self.assertEqual(result['databases']['activations/activation-report.sqlite'],'ok')
         self.assertEqual((self.root/'activation-restored/activations/activation-originals'/original.name).read_bytes(),original.read_bytes())
+    def test_published_activation_generation_roundtrip(self):
+        original=self.activation_fixture()
+        old=self.data/'activations';generation=old/'generations'/'synthetic';generation.mkdir(parents=True)
+        for name in ('activations.sqlite','activation-report.sqlite','activation-originals'):(old/name).rename(generation/name)
+        (old/'current').symlink_to('generations/synthetic',target_is_directory=True)
+        restored=self.root/'published-restored'
+        recovery.restore(self.make_backup(),restored)
+        self.assertEqual((restored/'activations/activation-originals'/original.name).read_bytes(),b'synthetic activation original')
+        self.assertFalse((restored/'activations/current').exists(),'restore flattens one coherent generation')
+
+    def test_activation_pointer_cannot_escape_data_root(self):
+        self.activation_fixture();outside=self.root/'outside';outside.mkdir()
+        (self.data/'activations/current').symlink_to(outside,target_is_directory=True)
+        with self.assertRaisesRegex(RuntimeError,'generation location'):self.make_backup()
+
     def test_separate_digi_and_vodafone_roundtrip(self):
         vodafone = self.activation_fixture()
         digi = self.activation_fixture('activations/digi')

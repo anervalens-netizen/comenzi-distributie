@@ -225,6 +225,16 @@ def run_backup(
         activation_sources = []
         for activation_relative in ('activations', 'activations/digi'):
             activation_root = data / activation_relative
+            # Pin the supported immutable generation once; flatten it in recovery archives.
+            pointer = activation_root / 'current'
+            if pointer.exists() or pointer.is_symlink():
+                generations = activation_root / 'generations'
+                if not pointer.is_symlink() or generations.is_symlink() or not generations.is_dir():
+                    raise RuntimeError('Invalid activation generation location')
+                pinned = pointer.resolve(strict=True)
+                if pinned.parent != generations.resolve() or not pinned.is_dir() or pinned.is_symlink():
+                    raise RuntimeError('Invalid activation generation location')
+                activation_root = pinned
             activation_db = activation_root / 'activations.sqlite'
             if not activation_db.exists():
                 continue
@@ -247,6 +257,18 @@ def run_backup(
                                 raise RuntimeError('Activation original missing or checksum mismatch')
                             activation_sources.append((path, expected, activation_relative))
                 activation_snapshots.append((snapshot_path, activation_relative + '/' + activation_name))
+            pinned_snapshots = {name.rsplit('/',1)[-1]:path for path,name in activation_snapshots if name.rsplit('/',1)[0]==activation_relative}
+            if len(pinned_snapshots)==2:
+                with closing(sqlite3.connect(pinned_snapshots['activations.sqlite'])) as ledger, closing(sqlite3.connect(pinned_snapshots['activation-report.sqlite'])) as report:
+                    has_meta = ledger.execute("SELECT 1 FROM sqlite_master WHERE name='activation_meta'").fetchone()
+                    if has_meta and dict(ledger.execute('SELECT key,value FROM activation_meta')).get('schema_version')=='3':
+                        source_meta = dict(ledger.execute('SELECT key,value FROM activation_meta'))
+                        report_meta = dict(report.execute('SELECT key,value FROM report_meta'))
+                        if source_meta.get('generation','')!=report_meta.get('sourceGeneration'):
+                            raise RuntimeError('Incoherent activation generation')
+                        imports = ledger.execute("SELECT sha256,operator,row_count,parser_version FROM activation_imports WHERE status='complete' ORDER BY sha256").fetchall()
+                        if json.dumps(imports,separators=(',',':'))!=report_meta.get('sourceImports'):
+                            raise RuntimeError('Stale activation projection in backup')
         captured_release = release.read_bytes()
         try:
             with tarfile.open(local_partial, 'w:gz', compresslevel=2) as output:
