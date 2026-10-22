@@ -11,6 +11,8 @@ import { bucharestMonthKey, bucharestReportingMonthKey } from '@/lib/bucharest-m
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import './sales.css';
 
+import {DistributionSalesCards} from './distribution-cards';
+
 const ClientSales = lazy(() => import('./client-sales'));
 const SalesChart = lazy(() => import('./sales-chart'));
 
@@ -40,7 +42,7 @@ function monthLabel(month: string) {
   return Number.isNaN(date.valueOf()) ? month : date.toLocaleDateString('ro-RO', { timeZone: 'Europe/Bucharest', month: 'long', year: 'numeric' });
 }
 
-export function SalesPanel({ user, users, scopeQuery, scopeLabel, initialMonth, onMonthChange, initialView, onViewChange }: { user: User; users: User[]; scopeQuery?: string; scopeLabel?: string; initialMonth?: string; onMonthChange?: (month:string)=>void; initialView?: 'current'|'history'|'clients'; onViewChange?: (view:'current'|'history'|'clients')=>void }) {
+export function SalesPanel({ user, users, scopeQuery, distributionQuery, scopeLabel, initialMonth, onMonthChange, initialView, onViewChange }: { user: User; users: User[]; scopeQuery?: string; distributionQuery?:string; scopeLabel?: string; initialMonth?: string; onMonthChange?: (month:string)=>void; initialView?: 'current'|'history'|'clients'; onViewChange?: (view:'current'|'history'|'clients')=>void }) {
   const manager = user.role === 'manager';
   const [view, setView] = useState<'current' | 'history' | 'clients'>(()=>initialView||((initialMonth||reportingMonth())!==currentMonth()?'history':'current'));
   const [clientMonth,setClientMonth]=useState(initialMonth||reportingMonth);
@@ -59,9 +61,9 @@ export function SalesPanel({ user, users, scopeQuery, scopeLabel, initialMonth, 
   const requestId = useRef(0);
   const [knownSites, setKnownSites] = useState<Array<{ siteCode: string; location: string }>>([]);
 
-  const params = new URLSearchParams(scopeQuery || '');
+  const params = new URLSearchParams(distributionQuery||scopeQuery||'');
   params.set('month',month);
-  if(view==='history'){params.set('fromMonth',fromMonth);params.set('toMonth',toMonth);}
+  if(view==='history'&&!distributionQuery){params.set('fromMonth',fromMonth);params.set('toMonth',toMonth);}
   if(manager&&scopeQuery===undefined&&siteCode!=='all')params.set(siteCode.startsWith('agent:')?'agentId':'siteCode',siteCode.startsWith('agent:')?siteCode.slice(6):siteCode);
   const query=params.toString(),requestScope=user.id+'|'+query;
   const activeError=errorScope===requestScope?error:'';
@@ -110,6 +112,7 @@ export function SalesPanel({ user, users, scopeQuery, scopeLabel, initialMonth, 
   }, [siteCode, siteOptions, siteQuery]);
 
   const salesBody=<>
+      {visibleSnapshot?.distribution&&<DistributionSalesCards data={visibleSnapshot.distribution}/>}
       {(view === 'history' || manager) && <div className="sales-toolbar">{view === 'history' && <label>Luna {snapshot?.months.length ? <select aria-label="Luna vânzărilor" value={month} onChange={event => selectMonth(event.target.value)}>{snapshot.months.map(item => <option key={item.month} value={item.month}>{monthLabel(item.month)} · {item.rowCount.toLocaleString('ro-RO')} rânduri</option>)}</select> : <input aria-label="Luna vânzărilor" type="month" value={month} max={currentMonth()} onChange={event => selectMonth(event.target.value || currentMonth())}/>}</label>}{manager && scopeQuery === undefined && <><label className="sales-filter-search"><span><Search size={14}/> Caută</span><input aria-label="Caută gestiune sau agent" placeholder="Agent sau SiteCode" value={siteQuery} onChange={event => setSiteQuery(event.target.value)}/></label><label className="sales-target"><span><Filter size={14}/> Gestiune / agent</span><select aria-label="Filtrează vânzările după gestiune sau agent" value={siteCode} onChange={event => setSiteCode(event.target.value)}><option value="all">Toată echipa</option>{filteredSiteOptions.map(agent => <option key={agent.id} value={agent.selection}>{agent.name} · {agent.siteCode}</option>)}</select></label></>}</div>}
       {activeError && <p className="error-banner" role="alert">{activeError}</p>}
       {manager && !waiting && !activeError && <div className="sales-freshness">{snapshot?.filename ? <><FileSpreadsheet size={15}/><span>Fișier: <strong>{snapshot.filename}</strong> · importat {formatDateTime(snapshot.importedAt)}</span></> : <><AlertTriangle size={15}/><span>Nu există un import pentru {monthLabel(month)}.</span></>}<span className="sales-scope">{scopeLabel || (siteCode === 'all' ? 'Toată echipa' : siteOptions.find(option => option.selection === siteCode)?.name || `SiteCode ${siteCode}`)}</span></div>}{manager && view === 'history' && <p className="muted">Codurile istorice fără agent activ rămân în totalul național. Filtrele pe echipa actuală le pot exclude; valorile sursă nu sunt realocate automat.</p>}
