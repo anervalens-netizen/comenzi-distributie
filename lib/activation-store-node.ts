@@ -19,7 +19,8 @@ export function readActivations(month:string,sites:string[]|null,provider:Activa
   const network=provider==='digi'?resolve(base,'digi'):base;
   let directory=network;
   const pointer=resolve(network,'current');
-  if(existsSync(pointer)){if(!lstatSync(pointer).isSymbolicLink())throw new Error('Invalid generation pointer');directory=realpathSync(pointer);if(dirname(directory)!==resolve(network,'generations'))throw new Error('Invalid generation location');}
+  const pointerInfo=lstatSync(pointer,{throwIfNoEntry:false});
+  if(pointerInfo){if(!pointerInfo.isSymbolicLink())throw new Error('Invalid generation pointer');directory=realpathSync(pointer);if(dirname(directory)!==resolve(network,'generations'))throw new Error('Invalid generation location');}
   const path=resolve(directory,'activation-report.sqlite');
   if(!existsSync(path))return result;
   const report=new DatabaseSync(path,{readOnly:true});
@@ -32,6 +33,7 @@ export function readActivations(month:string,sites:string[]|null,provider:Activa
     const imports=source.prepare("SELECT sha256,operator,row_count,parser_version FROM activation_imports WHERE status='complete' ORDER BY sha256").all().map(r=>[r.sha256,r.operator,r.row_count,r.parser_version]);
     if(JSON.stringify(imports)!==meta.sourceImports)throw new Error('Stale activation report');
     if(meta.sourceGeneration!==undefined&&meta.sourceGeneration!==String(source.prepare("SELECT value FROM activation_meta WHERE key='generation'").get()?.value||''))throw new Error('Stale activation generation');
+    if(meta.version==='3'&&meta.rules&&!query)throw new Error('Distribution rules required');
     if(query){if(meta.version!=='3')throw new Error('Distribution projection requires rebuild');return distributionReport(report,result,meta,sites,query);}
     const allowed=sites===null?null:new Set(sites);
     const rows=(meta.version!=='1'

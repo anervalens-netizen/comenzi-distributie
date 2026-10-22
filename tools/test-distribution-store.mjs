@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
-import {mkdtempSync,readFileSync,rmSync} from 'node:fs';
+import {mkdtempSync,readFileSync,rmSync,mkdirSync,renameSync,symlinkSync,unlinkSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {build} from 'esbuild';
@@ -25,5 +25,9 @@ try{
  assert.equal(read(['S'],'south',{view:'detail',point:point.key}).detail.total,1,'same workpoint still intersects the authenticated seller');
  assert.equal(read(['N'],'north',{view:'detail',point:'foreign'}).detail.total,0);
  assert.equal(read(['N'],'north',{view:'export',company:JSON.stringify(['ExampleCo','EXAMPLE'])}).detail.total,3);
+ assert.throws(()=>readActivations('2026-10',null,'vodafone'),/rules required/,'a configured projection cannot downgrade to legacy policy');
+ const generation=join(root,'generations','synthetic');mkdirSync(generation,{recursive:true});for(const name of ['activations.sqlite','activation-report.sqlite'])renameSync(join(root,name),join(generation,name));
+ symlinkSync('generations/synthetic',join(root,'current'),'dir');assert.equal(read(null).totals.total,8,'published generation is pinned');
+ unlinkSync(join(root,'current'));symlinkSync('generations/missing',join(root,'current'),'dir');assert.throws(()=>read(null),/ENOENT/,'dangling pointer fails closed');
  console.log('PASS: indexed projections, weighted disjoint counts, exact geography, projects/months union, fail-closed scopes, point/company/detail/export.');
 }finally{rmSync(root,{recursive:true,force:true});}

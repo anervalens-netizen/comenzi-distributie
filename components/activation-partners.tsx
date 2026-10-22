@@ -16,7 +16,7 @@ export function ActivationPartners({userId,query,reload}:{userId:string;query:st
  useEffect(()=>{if(!selected)return;const c=new AbortController();void Promise.allSettled((['vodafone','digi'] as const).map(provider=>api<ActivationReport>('activations?'+detailQuery+'&provider='+provider,'GET',undefined,c.signal))).then(results=>{if(!c.signal.aborted)setDetail({key:detailKey,reports:results.flatMap(r=>r.status==='fulfilled'?[r.value]:[]),errors:results.flatMap(r=>r.status==='rejected'?[errorMessage(r.reason)]:[])});});return()=>c.abort();},[detailKey,detailQuery,selected]);
  const current=detail?.key===detailKey?detail:null;
  const exportController=useRef<AbortController|null>(null),[exporting,setExporting]=useState(false),[exportError,setExportError]=useState('');
- useEffect(()=>()=>exportController.current?.abort(),[detailKey]);
+ useEffect(()=>{queueMicrotask(()=>{setExporting(false);setExportError('');});return()=>exportController.current?.abort();},[detailKey]);
  async function exportSelection(){
   exportController.current?.abort();const c=new AbortController();exportController.current=c;setExporting(true);setExportError('');
   try{
