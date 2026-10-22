@@ -20,6 +20,14 @@ def digest(path: Path) -> str:
 
 
 def restore(archive: Path, destination: Path, checksum: Path | None = None) -> dict:
+    # Count uncompressed bytes, including every archive member. Keep the default
+    # conservative, while allowing explicitly sized full-history recoveries.
+    try:
+        max_bytes = int(os.environ.get('MOBIUP_RESTORE_MAX_BYTES', str(8 * 1024**3)))
+    except ValueError as error:
+        raise ValueError('MOBIUP_RESTORE_MAX_BYTES must be a positive integer') from error
+    if max_bytes <= 0:
+        raise ValueError('MOBIUP_RESTORE_MAX_BYTES must be a positive integer')
     archive = archive.resolve(strict=True)
     checksum = checksum or archive.with_suffix(archive.suffix + '.sha256')
     expected = checksum.read_text().split()[0]
@@ -42,7 +50,7 @@ def restore(archive: Path, destination: Path, checksum: Path | None = None) -> d
                     raise RuntimeError('Only regular files and directories may be restored')
                 seen.add(member.name)
                 total += member.size
-                if len(seen) > 100000 or total > 8 * 1024**3:
+                if len(seen) > 100000 or total > max_bytes:
                     raise RuntimeError('Recovery archive exceeds the bounded restore budget')
                 target = temporary.joinpath(*path.parts)
                 if member.isdir():

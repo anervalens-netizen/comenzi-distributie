@@ -100,6 +100,11 @@ local temporary directory. Restore failure preserves previous NAS generations.
 The default fourteen-day retention remains available. Local backup space must
 also accommodate the temporary restored generation. Install `backup.py` and
 `restore.py` together so the retention gate uses the current restore contract.
+Restore defaults to 8 GiB of uncompressed archive members and 100,000 entries.
+For larger history sets, explicitly set `MOBIUP_RESTORE_MAX_BYTES` to a positive
+integer byte limit in both the backup service and manual restore environment.
+Size it against the full archive inventory and available temporary disk space;
+checksum, path, resource, database and entry-count checks still apply.
 
 ## Manager access
 
