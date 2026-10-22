@@ -40,6 +40,7 @@ try{
  await browser.evaluate(`localStorage.setItem('distribution-selection-v1:manager',JSON.stringify({months:['2026-09','2026-10'],projects:['vodafone_sud','vodafone_nord','non_exclusiv']}));location.reload();`);
  await waitFor(()=>browser.evaluate('document.querySelectorAll(".distribution-operators").length>0'),'overview comparison');
  await browser.evaluate('[...document.querySelectorAll(".main-nav [role=tab]")].find(b=>b.textContent==="Activări").click()');
+ await waitFor(()=>browser.evaluate('document.querySelector(".activation-workspace h1")?.textContent==="Activări"&&[...document.querySelectorAll("button")].some(b=>b.textContent==="Pe partener")'),'activation workspace navigation');
  await waitFor(()=>browser.evaluate('document.querySelectorAll(".activation-primary strong")[0]?.textContent==="9"'),'activation union');
  assert.equal(await browser.evaluate('document.querySelectorAll(".activation-operator").length'),2);
  await browser.evaluate('[...document.querySelectorAll("button")].find(b=>b.textContent==="Pe partener").click()');
