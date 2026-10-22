@@ -1,3 +1,6 @@
+import {readDistributionRules} from './distribution-config';
+import {projectIds} from './distribution-rules';
+import {distributionSales,combineSalesViews} from './distribution-sales';
 import { catalog, db, fail, isGlobalManager, readLimited, requireManager, response } from './server';
 import type { User } from './types';
 import { readCatalog } from './catalog';
@@ -124,6 +127,19 @@ async function duplicateImportMessage(kind:'Vânzările'|'Stocurile',userId:stri
 export async function salesView(req: Request, user: User) {
   const query = new URL(req.url).searchParams;
   const month = validateMonth(query.get('month'));
+  if(query.has('months')){
+    const months=[...new Set(query.getAll('months').flatMap(v=>v.split(',')).filter(Boolean))].sort();
+    if(months.length>36)fail(400,'Selectează maximum 36 de luni.');
+    months.forEach(validateMonth);
+    const rules=await readDistributionRules();if(!rules)fail(503,'Configurația proiectelor trebuie pregătită.');
+    const generation=salesRevision(),identity=(await mappingSnapshot()).hash,views:SalesView[]=[];
+    // Reuse the existing authorized worker for each distinct month; a generation change rejects the union.
+    for(const selected of months){const url=new URL(req.url);url.searchParams.delete('months');url.searchParams.set('month',selected);for(const key of ['from','to','fromMonth','toMonth'])url.searchParams.delete(key);views.push(await (await salesView(new Request(url),user)).json() as SalesView);}
+    let fallback=views[0];
+    if(!fallback){const url=new URL(req.url);url.searchParams.delete('months');url.searchParams.set('projects','');fallback=await (await salesView(new Request(url),user)).json() as SalesView;}
+    if(generation!==salesRevision()||identity!==(await mappingSnapshot()).hash||JSON.stringify(rules)!==JSON.stringify(await readDistributionRules()))fail(409,'Datele s-au modificat. Reîncarcă selecția.');
+    return response({...combineSalesViews(views,fallback),distribution:distributionSales(views,rules,months)});
+  }
   // The current-month view must not aggregate the complete imported history.
   // History callers opt into a range explicitly.
   const fromMonth = validateMonth(query.get('fromMonth') || query.get('from') || month);
@@ -152,6 +168,13 @@ export async function salesView(req: Request, user: User) {
     }
     const allowedIds = actorIds;
     actorIds = allowedIds ? selectedIds.filter(id => allowedIds.includes(id)) : selectedIds;
+  }
+  if(query.has('projects')){
+    const projects=[...new Set(query.getAll('projects').flatMap(v=>v.split(',')).filter(Boolean))];
+    if(projects.some(p=>!(projectIds as readonly string[]).includes(p)))fail(400,'Proiect invalid.');
+    const rules=await readDistributionRules();if(!rules)fail(503,'Configurația proiectelor trebuie pregătită.');
+    const projectActors=rules.assignments.filter(a=>projects.includes(a.projectId)).map(a=>a.userId);
+    actorIds=actorIds?actorIds.filter(id=>projectActors.includes(id)):projectActors;
   }
   if (actorIds) siteScope = actorScope(actorIds, snapshot, user.role === 'agent' ? undefined : requestedSite);
   return response(decoratedView(await getSalesViewRuntime(month, siteScope, fromMonth, toMonth, await salesCatalog()), snapshot));

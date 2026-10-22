@@ -1,6 +1,8 @@
+import {distributionReport} from './activation-distribution-node';
+import type {ActivationQuery} from './activation-distribution';
 import {DatabaseSync} from 'node:sqlite';
-import {resolve} from 'node:path';
-import {existsSync} from 'node:fs';
+import {resolve,dirname} from 'node:path';
+import {existsSync,lstatSync,realpathSync} from 'node:fs';
 import {emptyActivationCounts,type ActivationCounts,type ActivationReport,type ActivationProvider} from './activation-types';
 
 type Row={month:string;item_type:string;site:string;count:number;last_date:string|null};
@@ -11,23 +13,28 @@ function add(totals:ActivationCounts,row:Row){
   else totals.other+=row.count;
   if(!row.site)totals.unassigned+=row.count;
 }
-export function readActivations(month:string,sites:string[]|null,provider:ActivationProvider='vodafone'):ActivationReport{
+export function readActivations(month:string,sites:string[]|null,provider:ActivationProvider='vodafone',query?:ActivationQuery):ActivationReport{
   const result:ActivationReport={month,provider,available:false,scoped:sites!==null,importedAt:'',latestDate:null,months:[],totals:emptyActivationCounts(),sites:[],history:[]};
   const base=resolve(process.env.MOBIUP_ACTIVATIONS_DIR||process.env.MOBIUP_DATA_DIR||'./work/server-data');
-  const directory=provider==='digi'?resolve(base,'digi'):base;
+  const network=provider==='digi'?resolve(base,'digi'):base;
+  let directory=network;
+  const pointer=resolve(network,'current');
+  if(existsSync(pointer)){if(!lstatSync(pointer).isSymbolicLink())throw new Error('Invalid generation pointer');directory=realpathSync(pointer);if(dirname(directory)!==resolve(network,'generations'))throw new Error('Invalid generation location');}
   const path=resolve(directory,'activation-report.sqlite');
   if(!existsSync(path))return result;
   const report=new DatabaseSync(path,{readOnly:true});
   let source:DatabaseSync|undefined;
   try{
     const meta=Object.fromEntries(report.prepare('SELECT key,value FROM report_meta').all().map(r=>[String(r.key),String(r.value)]));
-    if(meta.version!=='1'&&meta.version!=='2')throw new Error('Unsupported activation report');
+    if(!['1','2','3'].includes(meta.version))throw new Error('Unsupported activation report');
     source=new DatabaseSync(resolve(directory,'activations.sqlite'),{readOnly:true});
-    if(source.prepare("SELECT value FROM activation_meta WHERE key='schema_version'").get()?.value!=='2')throw new Error('Unsupported activation ledger');
+    if(!['2','3'].includes(String(source.prepare("SELECT value FROM activation_meta WHERE key='schema_version'").get()?.value)))throw new Error('Unsupported activation ledger');
     const imports=source.prepare("SELECT sha256,operator,row_count,parser_version FROM activation_imports WHERE status='complete' ORDER BY sha256").all().map(r=>[r.sha256,r.operator,r.row_count,r.parser_version]);
     if(JSON.stringify(imports)!==meta.sourceImports)throw new Error('Stale activation report');
+    if(meta.sourceGeneration!==undefined&&meta.sourceGeneration!==String(source.prepare("SELECT value FROM activation_meta WHERE key='generation'").get()?.value||''))throw new Error('Stale activation generation');
+    if(query){if(meta.version!=='3')throw new Error('Distribution projection requires rebuild');return distributionReport(report,result,meta,sites,query);}
     const allowed=sites===null?null:new Set(sites);
-    const rows=(meta.version==='2'
+    const rows=(meta.version!=='1'
       ?report.prepare("SELECT month,item_type,site,count,last_date FROM monthly WHERE month<>'' AND provider=? ORDER BY month DESC,site").all(provider)
       :provider==='vodafone'?report.prepare("SELECT month,item_type,site,count,last_date FROM monthly WHERE month<>'' ORDER BY month DESC,site").all():[]) as Row[];
     const scopedRows=rows.filter(r=>allowed===null||allowed.has(r.site));

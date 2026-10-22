@@ -31,7 +31,7 @@ export function parseDistributionRules(value:unknown):DistributionRules {
   return r;
 }
 export function assignmentFor(rules:DistributionRules,userId:string,siteCode:string){return rules.assignments.find(a=>a.userId===userId&&a.siteCode.toUpperCase()===siteCode.trim().toUpperCase());}
-export function productGroup(rules:DistributionRules,code:string):ProductGroup{return rules.products[code]||'unmapped';}
+export function productGroup(rules:DistributionRules,code:string):ProductGroup{return Object.hasOwn(rules.products,code)?rules.products[code]:'unmapped';}
 export function vodafoneEligibility(county:string,handset:string,territory:Territory|null,contradictory=false){
   const id=canonicalCounty(county).id?.slice(3),reasons:string[]=[];
   if(!id)reasons.push('missing_county');

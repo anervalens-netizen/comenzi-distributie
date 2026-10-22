@@ -74,6 +74,7 @@ export type SalesMonthly = SalesAggregate & {
 };
 
 export type SalesView = {
+  distribution?:import('./distribution-sales').DistributionSales;
   month: string;
   importedAt: string | null;
   filename: string | null;
