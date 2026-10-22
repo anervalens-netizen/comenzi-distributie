@@ -86,7 +86,7 @@ def restore(archive: Path, destination: Path, checksum: Path | None = None) -> d
         if not any(name.startswith('recovery/products/') for name in manifest['files']):
             raise RuntimeError('Required recovery products are missing')
         databases = {}
-        for name in ('mobiup.sqlite', 'sales.sqlite', 'usage.sqlite', 'client-history/client-sales-history.sqlite', 'activations/activations.sqlite', 'activations/activation-report.sqlite'):
+        for name in ('mobiup.sqlite', 'sales.sqlite', 'usage.sqlite', 'client-history/client-sales-history.sqlite', 'activations/activations.sqlite', 'activations/activation-report.sqlite', 'activations/digi/activations.sqlite', 'activations/digi/activation-report.sqlite'):
             path = temporary / name
             if not path.exists():
                 if name == 'mobiup.sqlite':
@@ -101,11 +101,11 @@ def restore(archive: Path, destination: Path, checksum: Path | None = None) -> d
                         original = temporary / 'client-history' / relative
                         if not original.resolve().is_relative_to((temporary / 'client-history').resolve()) or not original.is_file() or digest(original) != source_hash:
                             raise RuntimeError('Restored customer history original is inconsistent')
-                if name == 'activations/activations.sqlite':
+                if name in ('activations/activations.sqlite', 'activations/digi/activations.sqlite'):
                     for (source_hash,) in db.execute("SELECT sha256 FROM activation_imports WHERE status='complete'"):
                         if len(source_hash) != 64 or any(c not in '0123456789abcdef' for c in source_hash):
                             raise RuntimeError('Invalid activation source checksum')
-                        original = temporary / 'activations/activation-originals' / (source_hash + '.xlsx')
+                        original = path.parent / 'activation-originals' / (source_hash + '.xlsx')
                         if not original.is_file() or digest(original) != source_hash:
                             raise RuntimeError('Restored activation original is inconsistent')
                 databases[name] = 'ok'

@@ -27,16 +27,16 @@ def build_report(directory):
         target = sqlite3.connect(temporary)
         target.executescript('''
           CREATE TABLE report_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
-          CREATE TABLE monthly(month TEXT NOT NULL,item_type TEXT NOT NULL,site TEXT NOT NULL,count INTEGER NOT NULL,first_date TEXT,last_date TEXT);
-          CREATE INDEX monthly_scope ON monthly(month,site);
+          CREATE TABLE monthly(month TEXT NOT NULL,item_type TEXT NOT NULL,site TEXT NOT NULL,count INTEGER NOT NULL,first_date TEXT,last_date TEXT,provider TEXT NOT NULL);
+          CREATE INDEX monthly_scope ON monthly(provider,month,site);
           CREATE TABLE sites(site TEXT PRIMARY KEY,label TEXT NOT NULL);
         ''')
-        rows = source.execute('''SELECT COALESCE(f.month,''),COALESCE(f.item_type,'OTHER'),COALESCE(f.candidate_site,''),COUNT(*),MIN(f.activation_date),MAX(f.activation_date)
+        rows = source.execute('''SELECT COALESCE(f.month,''),COALESCE(f.item_type,'OTHER'),COALESCE(f.candidate_site,''),COUNT(*),MIN(f.activation_date),MAX(f.activation_date),f.provider
           FROM activation_facts f JOIN tr_keys k USING(company,provider,serial)
-          GROUP BY f.month,f.item_type,f.candidate_site''')
-        target.executemany('INSERT INTO monthly VALUES(?,?,?,?,?,?)', rows)
+          GROUP BY f.provider,f.month,f.item_type,f.candidate_site''')
+        target.executemany('INSERT INTO monthly VALUES(?,?,?,?,?,?,?)', rows)
         target.executemany('INSERT INTO sites VALUES(?,?)', source.execute("SELECT site,CASE WHEN COUNT(DISTINCT agent)=1 THEN MIN(agent) ELSE site END FROM activation_movements WHERE is_tr=1 AND site<>'' GROUP BY site"))
-        meta = {'version': '1', 'sourceImports': json.dumps(imports, separators=(',', ':')),
+        meta = {'version': '2', 'sourceImports': json.dumps(imports, separators=(',', ':')),
                 'builtAt': dt.datetime.now(dt.timezone.utc).isoformat(),
                 'importedAt': source.execute("SELECT COALESCE(MAX(imported_at),'') FROM activation_imports WHERE status='complete'").fetchone()[0]}
         target.executemany('INSERT INTO report_meta VALUES(?,?)', meta.items())

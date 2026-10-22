@@ -28,6 +28,9 @@ try{
  const agent=await request('activations?month='+current,tokens['pilot-agent']);assert.equal(agent.status,200);assert.equal(agent.body.totals.total,12);assert.equal(agent.body.sites.length,1);assert(!JSON.stringify(agent.body).includes('Example B'));
  assert.equal((await request('activations?agentId=other-agent',tokens['pilot-agent'])).status,403);
  assert.equal((await request('activations?month=invalid',tokens['pilot-manager'])).status,400);
+ assert.equal((await request('activations?provider=other',tokens['pilot-manager'])).status,400);
+ const digi=await request('activations?provider=digi',tokens['pilot-manager']);assert.equal(digi.status,200);assert.equal(digi.body.available,false);assert.equal(digi.body.totals.total,0);
+ assert.equal((await request('activations?provider=digi&agentId=other-agent',tokens['pilot-agent'])).status,403);
  assert.equal((await request('activations?month='+current+'&agentId=other-agent',tokens['pilot-manager'])).body.totals.total,20);
  assert.equal((await request('activations?month=2024-01',tokens['pilot-manager'])).body.totals.total,7);
  db.prepare("INSERT INTO users(id,username,name,role,password_hash,active,site_code) VALUES('old-a','old-a','Old account','agent','invalid-preview-only',0,'a')").run();
@@ -40,6 +43,11 @@ try{
  await browser.evaluate('[...document.querySelectorAll(".main-nav [role=tab]")].find(x=>x.textContent==="Activări").click()');
  await waitFor(()=>browser.evaluate('document.body.textContent.includes("Serii distincte activate")'),'activation cards');
  assert.equal(await browser.evaluate('document.querySelector(".activation-primary strong").textContent'),'35');
+ await browser.evaluate(`{const s=document.querySelector('[aria-label="Operator"]');s.value='digi';s.dispatchEvent(new Event('change',{bubbles:true}));}`);
+ await waitFor(()=>browser.evaluate('document.querySelector(".activation-workspace").textContent.includes("Nu sunt încă date de activare")'),'Digi separate empty source');
+ assert(!(await browser.evaluate('!!document.querySelector(".activation-primary")')));
+ await browser.evaluate(`{const s=document.querySelector('[aria-label="Operator"]');s.value='vodafone';s.dispatchEvent(new Event('change',{bubbles:true}));}`);
+ await waitFor(()=>browser.evaluate('document.querySelector(".activation-primary strong")?.textContent==="35"'),'Vodafone restored after operator switch');
  await browser.evaluate('[...document.querySelectorAll("[role=tab]")].find(x=>x.textContent==="Istoric").click()');
  await waitFor(()=>browser.evaluate('document.body.textContent.includes("Istoric lunar")'),'monthly history');
  await browser.evaluate('[...document.querySelectorAll(".activation-month")].find(x=>x.textContent.includes("2024")).click()');

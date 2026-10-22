@@ -6,6 +6,8 @@ import {bucharestMonthKey} from './bucharest-month';
 import type {User} from './types';
 export async function activationReport(user:User,params:URLSearchParams){
   if(!canViewActivations(user))fail(403,'Secțiunea Activări nu este disponibilă pentru acest cont.');
+  const provider=params.get('provider')||'vodafone';
+  if(provider!=='vodafone'&&provider!=='digi')fail(400,'Alege un operator valid.');
   const month=params.get('month')||bucharestMonthKey(new Date());
   if(!/^20\d{2}-(0[1-9]|1[0-2])$/.test(month))fail(400,'Alege o lună validă.');
   let sites:string[]|null;
@@ -17,5 +19,5 @@ export async function activationReport(user:User,params:URLSearchParams){
     const owners=code?(await db().prepare("SELECT id FROM users WHERE role='agent' AND UPPER(TRIM(site_code))=UPPER(?)").bind(code).all<{id:string}>()).results:[];
     sites=code&&owners.length===1&&owners[0].id===user.id?[code]:[];
   }
-  try{return readActivations(month,sites);}catch{fail(503,'Activările nu sunt disponibile momentan. Încearcă din nou mai târziu.');}
+  try{return readActivations(month,sites,provider);}catch{fail(503,'Activările nu sunt disponibile momentan. Încearcă din nou mai târziu.');}
 }

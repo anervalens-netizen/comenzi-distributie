@@ -101,3 +101,31 @@ snapshots and verifies original workbook checksums. Validate isolated recovery,
 runtime identity and permissions during promotion. Never overwrite existing
 production data with a development database. Use online SQLite backup to provision
 a verified new ledger or preserve live recovery.
+
+## Separate network ledgers
+
+The existing activation directory remains the Vodafone ledger. Digi uses its own
+`digi/` subdirectory with independent `activations.sqlite`, `activation-report.sqlite`
+and `activation-originals/`. The API defaults to Vodafone and accepts only
+`provider=vodafone` or `provider=digi`; permissions and TR scope apply to both.
+The selector never combines network totals. Missing or stale Digi data does not
+invalidate the Vodafone report. Report version 2 carries an explicit provider;
+the reader preserves compatibility with the original Vodafone version 1 report.
+Backup and restore verify both ledgers and each network's source checksums.
+
+Digi imports require `--operator digi` and a dedicated database. The source has one
+SIM sheet, ten named columns and a row-1 header. `Activat` must be the exact
+19-digit text IMEI; `DataDigi` supplies the activation month. `Cantitate` is a
+repeated signed document quantity: each serial row contributes only its sign.
+Blank activations, numeric serials, invalid dates, contradictory observations,
+ambiguous returns and indistinguishable repeated rows are never auto-assigned.
+Original rows, including retail and inventory observations, remain private source
+evidence. Only distinct TR sale facts enter the application report. Inventory
+channels ending in `Inv` remain distinct and never enter the TR population.
+
+Optionally provide `--site-reference-data-dir /private/vodafone-ledger` to use
+unique exact company and TR-label mappings from the historical Vodafone ledger.
+This opens the reference read-only; it never copies Vodafone activations. The
+mapping snapshot is recorded in the Digi ledger; a changed mapping requires
+explicit reconciliation. No fuzzy person matching, company merging or current
+account activity filtering is performed. Missing aliases remain unassigned.

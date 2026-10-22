@@ -21,6 +21,7 @@ NS = {'s': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
 TR = re.compile(r'(^|[^A-Z0-9])TR([^A-Z0-9]|$)')
 VERSION = 2
 MAX_ROWS = 1_000_000
+DIGI_HEADERS = ['Canal', 'Magazin', 'Data', 'Cod', 'Cantitate', 'IMEI', 'Pret', 'Denumire Client', 'Activat', 'DataDigi']
 
 class ImportError(ValueError):
     pass
@@ -109,20 +110,26 @@ def workbook(path):
             raise ImportError('Invalid sheet relationship')
         target = target.lstrip('/') if target.startswith('/') else 'xl/' + target
         header = None
+        digi = False
         last = 0
         for rn, cells in xml_rows(archive, target, strings):
             if rn <= last or rn > MAX_ROWS + 5:
                 raise ImportError('Invalid row order or row limit exceeded')
             last = rn
-            if rn < 5:
+            if rn == 1:
+                first = [cells.get(i, ('', ''))[0] for i in range(1, len(cells) + 1)]
+                if len(first) == len(DIGI_HEADERS) and set(first) == set(DIGI_HEADERS):
+                    header, digi = first, True
+                    continue
+            if not digi and rn < 5:
                 continue
-            if rn == 5:
+            if not digi and rn == 5:
                 header = [cells.get(i, ('', ''))[0] for i in range(1, 34)]
                 if len(set(header)) != 33 or set(header) != set(HEADERS):
                     raise ImportError('Unexpected or duplicate headers')
                 continue
             if header is None:
-                raise ImportError('Missing header at row 5')
+                raise ImportError('Missing SIM header')
             raw = {key: cells.get(i, ('', ''))[0] for i, key in enumerate(header, 1)}
             if not any(raw.values()):
                 continue
@@ -186,7 +193,60 @@ def connect(directory):
     return c
 
 
-def normalized(raw, file_hash, rn, operator):
+def normalized_digi(raw, operator, aliases):
+    if operator != 'digi':
+        raise ImportError('Digi source requires the digi operator namespace')
+    issues = []
+    dates = []
+    for name in ('Data', 'DataDigi'):
+        value = raw[name]
+        try:
+            if value and not re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}', value):
+                raise ValueError()
+            dates.append(dt.date.fromisoformat(value).isoformat() if value else None)
+        except ValueError:
+            dates.append(None)
+            issues.append('invalid_' + name)
+    if not dates[0]:
+        issues.append('missing_movement_date')
+    if raw['Activat'] and not dates[1]:
+        issues.append('missing_activation_date')
+    if not raw['Canal'] or not raw['IMEI']:
+        issues.append('missing_identity')
+    for key in ('IMEI', 'Activat'):
+        if raw[key] and not re.fullmatch(r'[0-9]{19}', raw[key]):
+            issues.append('invalid_serial_text')
+    if raw['Activat'] and raw['Activat'] != raw['IMEI']:
+        issues.append('unverified_serial_relationship')
+    try:
+        document_quantity = Decimal(raw['Cantitate'])
+        quantity = (1 if document_quantity > 0 else -1) if document_quantity.is_finite() and document_quantity and document_quantity == document_quantity.to_integral_value() else None
+    except (InvalidOperation, ValueError):
+        quantity = None
+    if quantity is None:
+        issues.append('unsupported_quantity')
+    # Inventory channels are retained as source evidence, never treated as TR sales.
+    inventory = raw['Canal'].endswith('Inv')
+    is_tr = bool(TR.search(raw['Magazin'].upper())) and not inventory
+    site = aliases.get((raw['Canal'], raw['Magazin']), '') if is_tr else ''
+    if inventory:
+        issues.append('inventory_channel')
+    if is_tr and not site:
+        issues.append('unmapped_source_site')
+    # No document ID exists in this export. Preserve indistinguishable observations
+    # and quarantine repeated observations instead of inventing document identities.
+    identity = [raw[k] for k in ('Canal', 'Magazin', 'Data', 'Cod', 'IMEI', 'Pret', 'Denumire Client')] + [quantity, operator]
+    payload = dump(raw)
+    return (hashlib.sha256(dump(identity).encode()).hexdigest(), hashlib.sha256(payload.encode()).hexdigest(),
+            raw['Canal'], operator, raw['IMEI'], raw['Activat'] if raw['Activat'].strip() else '',
+            *dates, site, raw['Magazin'], int(is_tr), raw['Cod'], 'SIM', '', quantity, dump(sorted(set(issues))), payload)
+
+
+def normalized(raw, file_hash, rn, operator, aliases=None):
+    if 'Canal' in raw:
+        return normalized_digi(raw, operator, aliases or {})
+    if operator == 'digi':
+        raise ImportError('Digi operator requires the Digi source schema')
     issues = []
     dates = []
     for name in ('DataVDF', 'DataActivare'):
@@ -286,12 +346,19 @@ def reconcile_group(rows, conflicts):
              'candidate' if candidate else 'unresolved', dump(sorted(reasons)), net, evidence) for serial in sorted(serials)]
 
 
-def rebuild(c):
-    c.execute('DELETE FROM activation_facts')
+def rebuild(c, operator=None):
+    if operator is None:
+        c.execute('DELETE FROM activation_facts')
+    else:
+        c.execute('DELETE FROM activation_facts WHERE provider=?', (operator,))
     conflicts = {r[0] for r in c.execute('SELECT movement_key FROM activation_movements GROUP BY movement_key HAVING COUNT(*)>1')}
-    cursor = c.execute('SELECT * FROM activation_movements ORDER BY company,provider,imei,id')
+    repeated_digi = {r[0] for r in c.execute("SELECT o.movement_id FROM activation_occurrences o JOIN activation_movements m ON m.id=o.movement_id WHERE m.provider='digi' GROUP BY o.import_id,o.movement_id HAVING COUNT(*)>1")}
+    cursor = c.execute('SELECT * FROM activation_movements' + (' WHERE provider=?' if operator else '') + ' ORDER BY company,provider,imei,id', (operator,) if operator else ())
     for _, group in itertools.groupby(cursor, key=lambda r: (r['company'], r['provider'], r['imei'])):
-        rows = list(group)
+        rows = [dict(r) for r in group]
+        for row in rows:
+            if row['id'] in repeated_digi:
+                row['issues'] = dump(sorted(set(json.loads(row['issues']) + ['indistinguishable_source_rows'])))
         for fact in reconcile_group(rows, conflicts):
             old = c.execute('SELECT evidence_json,reasons FROM activation_facts WHERE company=? AND provider=? AND serial=?', fact[:3]).fetchone()
             if old:
@@ -321,7 +388,7 @@ def summary(c):
     }
 
 
-def import_files(c, directory, paths, *, operator, nominal_period=''):
+def import_files(c, directory, paths, *, operator, nominal_period='', site_aliases=None):
     if not re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,63}', operator):
         raise ImportError('Explicit stable operator namespace required')
     root = Path(directory).resolve()
@@ -333,6 +400,19 @@ def import_files(c, directory, paths, *, operator, nominal_period=''):
     results = []
     c.execute('BEGIN IMMEDIATE')
     try:
+        # Exact historical company + label matches only; never fuzzy-match people,
+        # merge companies, or infer ownership from current account activity.
+        aliases = site_aliases or {}
+        if operator == 'digi':
+            if c.execute("SELECT 1 FROM activation_imports WHERE operator<>'digi' LIMIT 1").fetchone():
+                raise ImportError('Digi requires its own dedicated database')
+            basis = dump([[*key, value] for key, value in sorted(aliases.items())])
+            old = c.execute("SELECT value FROM activation_meta WHERE key='digi_site_aliases'").fetchone()
+            if old and old[0] != basis:
+                raise ImportError('Digi site mapping changed; explicit reconciliation required')
+            c.execute("INSERT OR IGNORE INTO activation_meta VALUES('digi_site_aliases',?)", (basis,))
+        elif c.execute("SELECT 1 FROM activation_imports WHERE operator='digi' LIMIT 1").fetchone():
+            raise ImportError('Digi database cannot contain another operator')
         for source in paths:
             source = Path(source)
             # Parse an immutable staged copy; source changes cannot invalidate the hash binding.
@@ -365,7 +445,7 @@ def import_files(c, directory, paths, *, operator, nominal_period=''):
                                   (sha, source.name, operator, nominal_period, VERSION, dt.datetime.now(dt.timezone.utc).isoformat())).lastrowid
                 count = 0
                 for rn, raw in workbook(staged.name):
-                    values = normalized(raw, sha, rn, operator)
+                    values = normalized(raw, sha, rn, operator, aliases)
                     c.execute('INSERT OR IGNORE INTO activation_movements(movement_key,payload_hash,company,provider,imei,serial,movement_date,activation_date,site,agent,is_tr,item_code,item_type,customer_key,quantity,issues,raw_json) VALUES(' + ','.join('?' * 17) + ')', values)
                     movement = c.execute('SELECT id FROM activation_movements WHERE movement_key=? AND payload_hash=?', values[:2]).fetchone()[0]
                     c.execute('INSERT INTO activation_occurrences VALUES(?,?,?)', (batch, rn, movement))
@@ -373,7 +453,7 @@ def import_files(c, directory, paths, *, operator, nominal_period=''):
                 c.execute("UPDATE activation_imports SET status='complete',row_count=? WHERE id=?", (count, batch))
                 results.append({'status': 'imported', 'sha256': sha, 'rows': count})
         if any(r['status'] == 'imported' for r in results):
-            rebuild(c)
+            rebuild(c, operator)
         c.commit()
     except BaseException:
         c.rollback()
@@ -387,9 +467,21 @@ def main():
     parser.add_argument('--operator', required=True, help='Stable network/operator namespace, not the source supplier')
     parser.add_argument('--nominal-period', default='')
     parser.add_argument('--preview', action='store_true', help='Use a disposable copy; no changes to target data')
+    parser.add_argument('--site-reference-data-dir', type=Path, help='Read-only historical ledger for exact company and TR label aliases (Digi only)')
     parser.add_argument('files', nargs='+', type=Path)
     args = parser.parse_args()
     os.umask(0o077)
+    aliases = {}
+    if args.site_reference_data_dir:
+        if args.operator != 'digi' or args.site_reference_data_dir.resolve() == args.data_dir.resolve():
+            raise ImportError('Site reference must be a separate read-only ledger for Digi')
+        reference = sqlite3.connect((args.site_reference_data_dir.resolve() / 'activations.sqlite').as_uri() + '?mode=ro', uri=True)
+        try:
+            if reference.execute("SELECT value FROM activation_meta WHERE key='schema_version'").fetchone() != (str(VERSION),):
+                raise ImportError('Unsupported site reference ledger')
+            aliases = {(r[0], r[1]): r[2] for r in reference.execute("SELECT company,agent,MIN(site) FROM activation_movements WHERE provider='vodafone' AND is_tr=1 AND site<>'' GROUP BY company,agent HAVING COUNT(DISTINCT site)=1")}
+        finally:
+            reference.close()
     if args.preview:
         with tempfile.TemporaryDirectory(prefix='activations-preview-') as temp:
             path = args.data_dir / 'activations.sqlite'
@@ -402,13 +494,13 @@ def main():
                     source.close(); target.close()
             c = connect(temp)
             try:
-                print(dump({'preview': True, **import_files(c, temp, args.files, operator=args.operator, nominal_period=args.nominal_period)}))
+                print(dump({'preview': True, **import_files(c, temp, args.files, operator=args.operator, nominal_period=args.nominal_period, site_aliases=aliases)}))
             finally:
                 c.close()
     else:
         c = connect(args.data_dir)
         try:
-            print(dump(import_files(c, args.data_dir, args.files, operator=args.operator, nominal_period=args.nominal_period)))
+            print(dump(import_files(c, args.data_dir, args.files, operator=args.operator, nominal_period=args.nominal_period, site_aliases=aliases)))
         finally:
             c.close()
 
