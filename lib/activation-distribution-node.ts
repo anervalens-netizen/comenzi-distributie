@@ -25,7 +25,9 @@ export function distributionReport(report:DatabaseSync,base:ActivationReport,met
  if(query.projects.length<3){clauses.push(`UPPER(site) IN (${selectedSites.map(()=>'?').join(',')||'NULL'})`);args.push(...selectedSites);}
  if(sites!==null){clauses.push(`UPPER(site) IN (${sites.map(()=>'?').join(',')||'NULL'})`);args.push(...sites.map(s=>s.toUpperCase()));}
  report.function('activation_visible',{deterministic:true},(county,handset,conflict)=>visibleActivation(provider,String(county),String(handset),!!conflict,query.policy)?1:0);
- clauses.push('activation_visible(county,handset,contradictory)=1');
+ // Managers already have unrestricted eligibility visibility; keep their indexed
+ // aggregates covering, while retaining every seller/project restriction above.
+ if(query.policy!=='manager')clauses.push('activation_visible(county,handset,contradictory)=1');
  const where=clauses.join(' AND '),monthWhere=query.months.length?`month IN (${query.months.map(()=>'?').join(',')})`:'0';
  const dimensions=report.prepare(`SELECT COALESCE(month,'') month,site,item_type,county,handset,contradictory,count,last_date FROM dimension_monthly WHERE ${where} ORDER BY month DESC,site`).all(...args) as Dimension[];
  const newCounts=():ActivationCounts=>({...emptyActivationCounts(),...(provider==='vodafone'?{eligible:0,ownRegion:0,otherRegion:0,unknownRegion:0,...(query.policy==='south'?{}:{ineligible:0,reasons:{}})}:{})});
@@ -54,7 +56,7 @@ export function distributionReport(report:DatabaseSync,base:ActivationReport,met
    result.simZero={distributed:Number(row.distributed),activated:Number(row.activated),withoutReportedActivation:Number(row.distributed)-Number(row.activated)};
  }
  // No operator-only serial enters distribution KPI; managers see a separate reconciliation count.
- if(query.policy==='manager'&&sites===null&&query.projects.length===3)result.reconciliation=Number(report.prepare(`SELECT COUNT(*) n FROM details WHERE provider=? AND is_tr=0 AND ${monthWhere}`).get(provider,...query.months)?.n||0);
+ if(query.policy==='manager'&&sites===null&&query.projects.length===3)result.reconciliation=Number(report.prepare(`SELECT SUM(count) n FROM dimension_monthly WHERE provider=? AND is_tr=0 AND ${monthWhere}`).get(provider,...query.months)?.n||0);
  activationPartnerView(report,result,where,args,query);
  return result;
 }

@@ -28,7 +28,7 @@ def build_details(source,target):
         status TEXT NOT NULL,reasons TEXT NOT NULL,is_tr INTEGER NOT NULL);
       CREATE INDEX detail_scope ON details(provider,site,month,activation_date);
       CREATE INDEX detail_month ON details(provider,month,site);
-      CREATE INDEX detail_point ON details(point_key,provider,site,month);
+      CREATE INDEX detail_point ON details(point_key,provider,is_tr,month,site,activation_date);
       CREATE INDEX detail_recent ON details(provider,activation_date,site,point_key);
       CREATE TABLE cohorts(id TEXT PRIMARY KEY,company TEXT NOT NULL,provider TEXT NOT NULL,site TEXT NOT NULL,
         item_code TEXT NOT NULL,distribution_month TEXT NOT NULL,distribution_date TEXT NOT NULL,activated INTEGER NOT NULL);
@@ -48,7 +48,8 @@ def build_details(source,target):
             f=dict(f);f['is_tr']=0
         contradictory=any(r in json.loads(f['reasons']) for r in ('county_conflict','handset_conflict','activation_date_conflict','serial_conflict','serial_identity_conflict','conflicting_imei_for_serial'))
         target.execute('INSERT INTO details VALUES('+','.join('?'*20)+')',(ident,f['company'],f['provider'],f['serial'],f['activation_date'],f['month'],f['candidate_site'] or '',f['item_type'] or 'OTHER',f['item_code'] or '',observation.get('county',''),observation.get('handset',''),int(contradictory),point_key,client,point,raw.get('Denumire Client','') or ('Partener generic / persoane fizice' if client=='CLIENTGEN' else 'Punct de verificat'),m['movement_date'] if m else None,f['status'],f['reasons'],f['is_tr']))
-    target.executescript('''CREATE TABLE dimension_monthly AS SELECT provider,month,site,item_type,county,handset,contradictory,is_tr,COUNT(*) count,MAX(activation_date) last_date FROM details GROUP BY provider,month,site,item_type,county,handset,contradictory,is_tr;
+    target.executescript('''CREATE INDEX detail_company_scope ON details(provider,company,client_code,is_tr,month,site,activation_date);
+      CREATE TABLE dimension_monthly AS SELECT provider,month,site,item_type,county,handset,contradictory,is_tr,COUNT(*) count,MAX(activation_date) last_date FROM details GROUP BY provider,month,site,item_type,county,handset,contradictory,is_tr;
       CREATE INDEX dimension_scope ON dimension_monthly(provider,site,month);
       CREATE INDEX dimension_month ON dimension_monthly(provider,month);''')
     # Cohorts include unactivated SIMs; retain only a sole net-positive TR survivor after exact returns.

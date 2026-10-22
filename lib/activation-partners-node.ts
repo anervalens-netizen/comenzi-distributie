@@ -37,15 +37,27 @@ export function activationPartnerView(db:DatabaseSync,result:ActivationReport,wh
    const page=query.page||0;result.partners={rows:query.allPartners?all:all.slice(page*50,(page+1)*50),total:all.length,page,hasMore:(page+1)*50<all.length,asOf};
    return;
  }
- const selection=query.point?`(${keySql})=?`:query.company?'company=? AND client_code=?':'0';
+ // Keep exact point and unresolved identities searchable by their existing indexes.
+ let selection='0';
+ let selectionIndex='';
  let selectedArgs:string[]=[];
- if(query.point)selectedArgs=[query.point];
- else if(query.company){try{const v=JSON.parse(query.company);if(!Array.isArray(v)||v.length!==2||v.some(v=>typeof v!=='string'))throw new Error();selectedArgs=v;}catch{throw new Error('Invalid company selection');}}
+ if(query.point){
+   if(query.point.startsWith('unresolved:')){selection="id=? AND point_key=''";selectedArgs=[query.point.slice('unresolved:'.length)];}
+   else if(!query.point.startsWith('portfolio:')){selection='point_key=?';selectionIndex='detail_point';selectedArgs=[query.point];}
+ }else if(query.company){
+   try{const v=JSON.parse(query.company);if(!Array.isArray(v)||v.length!==2||v.some(v=>typeof v!=='string'))throw new Error();selectedArgs=v;}catch{throw new Error('Invalid company selection');}
+   if(!db.prepare("SELECT 1 FROM sqlite_master WHERE type='index' AND name='detail_company_scope'").get())throw new Error('Company projection index requires rebuild');
+   selection='company=? AND client_code=?';
+   selectionIndex='detail_company_scope';
+ }
+ // LIMIT/order must not make SQLite choose an operator-wide date index and
+ // scan unrelated partners before finding this identity.
+ const selectedTable='details'+(selectionIndex?' INDEXED BY '+selectionIndex:'');
  const selectedWhere=periodWhere+' AND '+selection,selected=[...periodArgs,...selectedArgs];
- const stats=db.prepare(`SELECT COUNT(*) total,MAX(activation_date) lastDate,${recentSql} FROM details WHERE ${selectedWhere}`).get(...recentArgs,...selected)!;
- const recent=db.prepare(`SELECT MAX(activation_date) lastDate,${recentSql} FROM details WHERE ${where} AND ${selection}`).get(...recentArgs,...args,...selectedArgs)!;
+ const stats=db.prepare(`SELECT COUNT(*) total,MAX(activation_date) lastDate,${recentSql} FROM ${selectedTable} WHERE ${selectedWhere}`).get(...recentArgs,...selected)!;
+ const recent=db.prepare(`SELECT MAX(activation_date) lastDate,${recentSql} FROM ${selectedTable} WHERE ${where} AND ${selection}`).get(...recentArgs,...args,...selectedArgs)!;
  const page=query.page||0;
- const rows=db.prepare(`SELECT id,activation_date date,item_type itemType,county,handset,contradictory,site,reasons FROM details WHERE ${selectedWhere} ORDER BY activation_date DESC,id LIMIT 50 OFFSET ?`).all(...selected,page*50);
+ const rows=db.prepare(`SELECT id,activation_date date,item_type itemType,county,handset,contradictory,site,reasons FROM ${selectedTable} WHERE ${selectedWhere} ORDER BY activation_date DESC,id LIMIT 50 OFFSET ?`).all(...selected,page*50);
  result.detail={rows:rows.map(r=>{
    const a=query.rules.assignments.find(a=>a.siteCode.toUpperCase()===String(r.site).toUpperCase());
    const e=vodafoneEligibility(String(r.county),String(r.handset),a?.territoryId||null,!!r.contradictory);
