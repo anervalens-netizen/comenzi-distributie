@@ -2,6 +2,21 @@
 import hashlib
 import json
 from client_sales_history import cui_key,code_key
+from client_catalog_plan import county_key
+
+
+def validate_rules(rules):
+    if rules is None:return
+    groups={'vodafone_0','vodafone_3','vodafone_5','vodafone_credit','digi','accessories','varta','scent','unmapped'}
+    if not isinstance(rules,dict) or rules.get('version')!=1 or not isinstance(rules.get('revision'),str) or not rules['revision'].strip() or rules.get('history')!='all' or not isinstance(rules.get('assignments'),list) or not isinstance(rules.get('products'),dict):raise ValueError('Invalid distribution rules')
+    users=set();sites=set()
+    for a in rules['assignments']:
+        if not isinstance(a,dict) or any(not isinstance(a.get(k),str) or not a[k].strip() or a[k]!=a[k].strip() for k in ['userId','siteCode']):raise ValueError('Invalid distribution identity')
+        if a['userId'] in users or a['siteCode'].upper() in sites:raise ValueError('Ambiguous distribution identity')
+        users.add(a['userId']);sites.add(a['siteCode'].upper())
+        allowed={'vodafone_sud':{'sud'},'vodafone_nord':{'nord_a','nord_b'},'non_exclusiv':{None}}
+        if a.get('territoryId') not in allowed.get(a.get('projectId'),set()) or not isinstance(a.get('counties'),list) or any(not isinstance(v,str) or not county_key(v.removeprefix('RO-')) for v in a['counties']):raise ValueError('Invalid project territory')
+    if any(not isinstance(k,str) or not k.strip() or k!=k.strip() or v not in groups for k,v in rules['products'].items()):raise ValueError('Invalid product mapping')
 
 
 def build_details(source,target):

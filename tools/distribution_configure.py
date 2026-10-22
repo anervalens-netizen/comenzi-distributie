@@ -7,9 +7,11 @@ from pathlib import Path
 import sqlite3
 import os
 from client_catalog_plan import county_key
+from activation_projection import validate_rules
 
 
 def configure(application,rules,recovery,*,add_counties=None):
+    validate_rules(rules)
     path=Path(application).resolve();recovery=Path(recovery).resolve()
     if path==recovery or recovery.exists():raise ValueError('A new recovery path is required')
     if rules.get('version')!=1 or rules.get('history')!='all' or not rules.get('revision'):raise ValueError('Invalid rules')

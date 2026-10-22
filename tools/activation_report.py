@@ -2,7 +2,7 @@
 """Build an atomic, serial-free read model from the private activation ledger."""
 import argparse
 import fcntl
-from activation_projection import build_details
+from activation_projection import build_details,validate_rules
 import datetime as dt
 import json
 import os
@@ -12,6 +12,7 @@ import tempfile
 
 
 def build_report(directory, rules=None):
+    validate_rules(rules)
     with (Path(directory) / ".activation-job.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         return _build_report(directory, rules)

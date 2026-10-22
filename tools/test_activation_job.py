@@ -20,6 +20,13 @@ class JobTests(unittest.TestCase):
    c=sqlite3.connect(old/'activations.sqlite');self.assertEqual(c.execute('SELECT COUNT(*) FROM activation_imports').fetchone()[0],1);c.close()
    retry=run_job(data,[batch]);self.assertEqual(retry['imports'][0]['files'][0]['status'],'already_imported');self.assertNotEqual(first['generation'],retry['generation'])
 
+ def test_invalid_rules_never_replace_the_valid_generation(self):
+  with tempfile.TemporaryDirectory() as folder:
+   root=Path(folder);file=fixture(root/'one.xlsx',[row()]);batch={'files':[str(file)],'operator':'vodafone'}
+   run_job(root/'data',[batch]);before=(root/'data/current').resolve()
+   with self.assertRaisesRegex(ValueError,'Invalid distribution rules'):run_job(root/'data',[batch],rules={'version':1})
+   self.assertEqual((root/'data/current').resolve(),before)
+
  def test_simultaneous_same_source_has_one_import(self):
   with tempfile.TemporaryDirectory() as folder:
    root=Path(folder);file=fixture(root/'one.xlsx',[row()]);manifest=root/'manifest.json';manifest.write_text(json.dumps([{'files':[str(file)],'operator':'vodafone'}]))
