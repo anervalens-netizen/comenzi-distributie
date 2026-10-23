@@ -115,6 +115,18 @@ reports share direct multi-month selection and visible project toggles. The
 customer portfolio report retains its explicitly monthly scope. Changing the
 presentation does not change authorization or activation eligibility.
 
+Agents reuse the same Accesorii and Prepay reports for their own portfolio.
+Prepay sales remain available independently of activation access; only the
+Activări subtab requires that permission. Their report controls select months,
+while seller and project scope come from the authenticated account. Customer
+reports retain a single month and do not expose manager reconciliation controls.
+
+Product mappings are evaluated when reading sales and SIM 0 cohorts. Updating
+only product mappings or their revision does not require rebuilding activation
+facts. Report compatibility still requires identical structural rules, and
+detail/export selection tokens include the complete current rules. Unmapped
+products remain inspectable by source category and subcategory.
+
 Activation partner summaries distinguish identified work points, personal sales
 and activations whose point identity remains unresolved. Browse groups and
 activation counts are not work-point counts. Personal sales remain in totals;
