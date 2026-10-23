@@ -11,6 +11,7 @@ stop_last(){ local i=$((${#pids[@]}-1)); kill "${pids[$i]}" 2>/dev/null || true;
 
 node tools/test-partner-matching.mjs
 node tools/test-partner-registration.mjs
+node tools/test-push-notifications.mjs
 node tools/test-partner-form.mjs
 python3 tools/test_crm_location_repair.py
 python3 tools/test_crm_master_reconcile.py
@@ -115,6 +116,7 @@ python3 -W error::ResourceWarning tools/test-backup.py
 python3 -W error::ResourceWarning tools/test-recovery.py
 node tools/test-password-race.mjs
 node tools/test-agent-account-authorization.mjs
+node tools/test-operational-write-authorization.mjs
 node tools/test-session-persistence.mjs
 # API acceptance on isolated SQLite.
 rm -rf work/qa work/qa-credentials
@@ -154,6 +156,7 @@ if [ -n "$CHROME_BIN" ]; then
   CHROME_BIN="$CHROME_BIN" node tools/test-offline-contract-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-finalize-cleanup-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-recovery-contract-browser.mjs
+  CHROME_BIN="$CHROME_BIN" node tools/test-transfer-offline-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-delete-recovery-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-recovery-navigation-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-portfolio-page-error-browser.mjs

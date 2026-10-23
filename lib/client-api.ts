@@ -41,6 +41,8 @@ function validGetContract(path:string,data:unknown){
  if(path==='auth/session')return record(data)&&(data.user===null||(record(data.user)&&typeof data.user.id==='string'));
  if(/^orders(?:\?|$)/.test(path))return record(data)&&record(data.user)&&array(data.orders)&&typeof data.weekKey==='string'&&(!('orderPage'in data)||record(data.orderPage));
  if(/^orders\/[^/?]+$/.test(path))return record(data)&&record(data.order)&&typeof data.order.id==='string';
+ if(/^transfers\/[^/?]+$/.test(path))return record(data)&&record(data.transfer)&&typeof data.transfer.id==='string'&&array(data.transfer.lines)&&typeof data.transfer.revision==='number';
+ if(/^transfers(?:\?|$)/.test(path))return record(data)&&array(data.transfers)&&array(data.targets)&&array(data.sources);
  if(path==='catalog')return record(data)&&array(data.products);
  if(path==='partner/summary')return record(data)&&array(data.partners);
  if(/^partner\/browse(?:\?|$)/.test(path))return record(data)&&array(data.partners)&&typeof data.total==='number'&&record(data.facets)&&array(data.facets.counties)&&array(data.facets.cities)&&array(data.facets.routes);
@@ -179,7 +181,7 @@ export async function networkApi<T=Record<string,unknown>>(path: string,method='
   }
   return data as T;
 }
-const cacheable=(path:string)=>bootstrapPath(path)||path==='auth/session'||/^orders(?:\?|$)/.test(path)||/^orders\/[^/]+$/.test(path)||path==='catalog'||/^partner\/(browse|map|summary|portfolio|planning)([/?]|$)/.test(path)||/^clients[?]/.test(path)||/^stock[/?]/.test(path);
+const cacheable=(path:string)=>bootstrapPath(path)||path==='auth/session'||/^orders(?:\?|$)/.test(path)||/^orders\/[^/]+$/.test(path)||path==='catalog'||/^transfers(?:[?]|$)/.test(path)||/^transfers\/[^/?]+(?:\/stock)?$/.test(path)||/^partner\/(browse|map|summary|portfolio|planning)([/?]|$)/.test(path)||/^clients[?]/.test(path)||/^stock[/?]/.test(path);
 export async function api<T=Record<string,unknown>>(path:string,method='GET',body?:unknown,signal?:AbortSignal,options:ApiReadOptions={}):Promise<T>{
  method=method.toUpperCase();synchronizeReadCache();
  if(signal?.aborted)throw signal.reason??new DOMException('Cerere anulată.','AbortError');

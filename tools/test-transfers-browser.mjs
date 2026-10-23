@@ -55,7 +55,7 @@ export async function testTransferBrowser(origin,cookies){
   await button('SIM-uri');await click('.transfer-product');const simSelector='input[aria-label^="Scanează seria SIM"]';await fill(simSelector,'00123456789012345678');
   await evaluate(`document.querySelector(${JSON.stringify(simSelector)}).dispatchEvent(new KeyboardEvent('keydown',{key:'Tab',bubbles:true}));true`);
   await wait(()=>evaluate("document.querySelectorAll('.transfer-serials li').length===2"),'SIM Tab suffix scan');
-  await wait(()=>evaluate("document.querySelector('.transfer-editor output')?.textContent==='Ciornă salvată'"),'Autosaved transfer');
+  await wait(()=>evaluate("document.querySelector('.transfer-editor output')?.textContent==='Ciornă salvată pe server'"),'Autosaved transfer');
   check(await evaluate("document.documentElement.scrollWidth<=window.innerWidth"),'Tablet editor fits viewport');await screenshot('agent-editor-tablet');
   await button('Finalizează solicitarea');await wait(()=>evaluate("!!document.querySelector('.transfer-result')"),'Finalized transfer result');
   await wait(()=>completedDownloads().length===1,'Automatic Excel download without Web Share');
@@ -94,7 +94,7 @@ export async function testTransferBrowser(origin,cookies){
   await wait(()=>evaluate("!!document.querySelector('.manager-operation-nav')"),'Manager operations');await button('Transferuri');
   await wait(()=>evaluate("!!document.querySelector('[aria-label=\"Agent expeditor\"] option[value=tc]')"),'Manager source selector');await fill('[aria-label="Agent expeditor"]','tc');await button('Transfer nou');
   await wait(()=>evaluate("document.querySelector('.transfer-editor .page-heading p')?.textContent.includes('Synthetic tc')"),'Manager unassigned source editor');
-  await fill('[aria-label="Gestiunea destinație"]','ta');await wait(()=>evaluate("document.querySelector('.transfer-editor output')?.textContent==='Ciornă salvată'"),'Manager autosave');
+  await fill('[aria-label="Gestiunea destinație"]','ta');await wait(()=>evaluate("document.querySelector('.transfer-editor output')?.textContent==='Ciornă salvată pe server'"),'Manager autosave');
   await send('Emulation.setDeviceMetricsOverride',{width:1440,height:1080,deviceScaleFactor:1,mobile:false});await screenshot('manager-editor-desktop');
   check(await evaluate("document.documentElement.scrollWidth<=window.innerWidth"),'Manager editor fits desktop');
   console.log(`PASS: ${checks} transfer tablet/browser/scanner/manager checks.`);

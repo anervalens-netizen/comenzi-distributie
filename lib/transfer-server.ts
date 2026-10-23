@@ -1,3 +1,4 @@
+import {operationalWriteGuard} from './operational-write-guard';
 import {managerFilter} from './manager-scope';
 import {db,fail,jsonBody,textField,response,userView,requireAgentAccess,settings,requireGlobalManager} from './server';
 import {readCatalog} from './catalog';
@@ -90,7 +91,10 @@ export async function transfers(req:Request,user:User,path:string[]){
         const managers=await managerRoutes();
         for(const [id,raw] of Object.entries(body.managerEmails)){const address=textField(raw,254);if(!managers.some(manager=>manager.id===id)||address&&!email(address))fail(400,'Adresă de manager invalidă.');managerEmails[id]=address;}
       }
-      await db().prepare("INSERT INTO settings(key,value) VALUES('transfer-mail-v1',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(JSON.stringify({to,managerEmails})).run();return response({to,managerEmails});
+      const guard=operationalWriteGuard(req,user,{globalOnly:true});
+      const result=await db().prepare(`INSERT INTO settings(key,value) SELECT 'transfer-mail-v1',? WHERE ${guard.sql} ON CONFLICT(key) DO UPDATE SET value=excluded.value`).bind(JSON.stringify({to,managerEmails}),...guard.args).run();
+      if(!result.meta.changes)fail(409,'Drepturile sau sesiunea s-au modificat. Autentifică-te din nou.');
+      return response({to,managerEmails});
     }
     fail(405,'Metodă nepermisă.');
   }
@@ -112,7 +116,8 @@ export async function transfers(req:Request,user:User,path:string[]){
     if(existing){const record=JSON.parse(existing.value) as Transfer;await access(record,user,true);if(record.source.agentId!==agentId||record.createdBy!==user.id)fail(409,'Identificator folosit pentru alt transfer.');return response({transfer:await view(record,user)});}
     const now=new Date().toISOString();
     const record:Transfer={id:body.id,number:`TRF-${now.slice(0,10).replace(/-/g,'')}-${body.id.slice(0,8).toUpperCase()}`,source,destination:null,createdBy:user.id,createdAt:now,updatedAt:now,finalizedAt:null,status:'draft',revision:1,lines:[],notes:''};
-    const result=await db().prepare('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)').bind(prefix+record.id,JSON.stringify(record)).run();if(!result.meta.changes)fail(409,'Transferul a fost creat între timp. Reîncarcă lista.');
+    const guard=operationalWriteGuard(req,user,{agentId:source.agentId,nationalManager:true});
+    const result=await db().prepare(`INSERT OR IGNORE INTO settings(key,value) SELECT ?,? WHERE ${guard.sql} AND EXISTS (SELECT 1 FROM users WHERE id=? AND active=1 AND role='agent' AND warehouse_id=?)`).bind(prefix+record.id,JSON.stringify(record),...guard.args,source.agentId,source.warehouseId).run();if(!result.meta.changes)fail(409,'Transferul a fost creat între timp. Reîncarcă lista.');
     return response({transfer:await view(record,user)});
   }
   if(!id)fail(405,'Metodă nepermisă.');
@@ -130,14 +135,16 @@ export async function transfers(req:Request,user:User,path:string[]){
   }
   if(req.method==='DELETE'&&!action){
     const body=await jsonBody(req);if(record.status!=='draft')fail(409,'Solicitările finalizate rămân în istoric.');if(body.revision!==record.revision)fail(409,'Ciorna s-a modificat. Reîncarcă transferul.');
-    const result=await db().prepare('DELETE FROM settings WHERE key=? AND value=?').bind(prefix+id,raw).run();if(!result.meta.changes)fail(409,'Ciorna s-a modificat. Reîncarcă transferul.');return response({ok:true});
+    const guard=operationalWriteGuard(req,user,{agentId:record.source.agentId,nationalManager:true});
+    const result=await db().prepare(`DELETE FROM settings WHERE key=? AND value=? AND ${guard.sql}`).bind(prefix+id,raw,...guard.args).run();if(!result.meta.changes)fail(409,'Ciorna s-a modificat. Reîncarcă transferul.');return response({ok:true});
   }
   if((req.method==='PUT'&&!action)||(req.method==='POST'&&action==='finalize')){
     if(record.status==='finalized'){if(action==='finalize')return response({transfer:await view(record,user)});fail(409,'Transferul este finalizat.');}
     const body=await jsonBody(req);if(body.revision!==record.revision)fail(409,'Ciorna a fost modificată în altă sesiune. Redeschide transferul.');
     const next=await payload(body,record,action==='finalize');
     if(action==='finalize'){next.status='finalized';next.finalizedAt=next.updatedAt;const {to,cc}=await recipients(next);next.mail=transferMail(next,to,cc);}
-    const result=await db().prepare('UPDATE settings SET value=? WHERE key=? AND value=?').bind(JSON.stringify(next),prefix+id,raw).run();if(!result.meta.changes)fail(409,'Ciorna s-a modificat. Reîncarcă transferul.');
+    const guard=operationalWriteGuard(req,user,{agentId:record.source.agentId,nationalManager:true});
+    const result=await db().prepare(`UPDATE settings SET value=? WHERE key=? AND value=? AND ${guard.sql} AND EXISTS (SELECT 1 FROM users WHERE id=? AND active=1 AND role='agent' AND warehouse_id=?) AND (? IS NULL OR EXISTS (SELECT 1 FROM users WHERE id=? AND active=1 AND role='agent' AND warehouse_id=?))`).bind(JSON.stringify(next),prefix+id,raw,...guard.args,next.source.agentId,next.source.warehouseId,next.destination?.agentId??null,next.destination?.agentId??null,next.destination?.warehouseId??null).run();if(!result.meta.changes)fail(409,'Ciorna s-a modificat. Reîncarcă transferul.');
     return response({transfer:await view(next,user)});
   }
   fail(405,'Metodă nepermisă.');

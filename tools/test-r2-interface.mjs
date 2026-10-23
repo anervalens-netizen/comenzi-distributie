@@ -248,7 +248,12 @@ try {
   for(const canEdit of [undefined,false,true]){
     const detail={...details.shared,partner:{...details.shared.partner,canEdit,latitude:45,longitude:25,positionSource:'manual',positionQuality:null,positionAccuracy:null,updatedAt:'2026-10-03T09:00:00Z'}},html=render(PartnerSheet,{id:'shared',onClose:noOp,onSaved:noOp},[detail,detail.partner]);
     equal(/<fieldset disabled=""/.test(html),canEdit!==true,'contact, GPS and pin save fieldset permission');
-    equal(button(html,'Înregistrează vizita').disabled,canEdit!==true,'visit save capability');
+    check(button(html,'Înregistrează vizita').disabled,'visit waits for local recovery before becoming editable');
+    for(const recovery of [{id:'shared',attempt:0,status:'ready'},{id:'shared',attempt:0,status:'error'},{id:'other',attempt:0,status:'ready'},{id:'shared',attempt:1,status:'ready'}]){
+      const recoveredHtml=render(PartnerSheet,{id:'shared',onClose:noOp,onSaved:noOp},[detail,detail.partner,'','',false,'','','',null,recovery]);
+      const ready=recovery.id==='shared'&&recovery.attempt===0&&recovery.status==='ready';
+      equal(button(recoveredHtml,'Înregistrează vizita').disabled,canEdit!==true||!ready,'visit requires capability and completed recovery for the current partner');
+    }
     check(html.includes('Google Maps'),'navigation remains available');
     check(html.includes('Firma și agentul sunt completate automat'),'visit form is explicit and frictionless');
     check(html.includes('un apel, o factură sau poziția GPS nu creează o vizită'),'calls, invoices, GPS and visits remain distinct');

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {unzipSync,strFromU8} from 'fflate';
 import { readFileSync,writeFileSync,mkdirSync } from 'node:fs';
-import {randomBytes,scryptSync,randomUUID} from 'node:crypto';
+import {randomBytes,scryptSync,randomUUID,createECDH} from 'node:crypto';
 import {DatabaseSync} from 'node:sqlite';
 
 const root='http://localhost:3000/api/';
@@ -92,7 +92,8 @@ try {
   await call('notifications/push','GET',null,agent,403);
   await call('notifications/inbox','GET',null,agent,403);
   await call('notifications/push','POST',{endpoint:'http://example.invalid/push',keys:{p256dh:'AAAA',auth:'BBBB'}},regional,400);
-  const fakePush={endpoint:'https://example.invalid/push/qa',keys:{p256dh:'AAAA',auth:'BBBB'}};
+  const pushKey=createECDH('prime256v1');pushKey.generateKeys();
+  const fakePush={endpoint:'https://fcm.googleapis.com/fcm/send/synthetic-test-token',keys:{p256dh:pushKey.getPublicKey().toString('base64url'),auth:randomBytes(16).toString('base64url')}};
   await call('notifications/push','POST',fakePush,regional);
   let pushDb=new DatabaseSync('work/qa/mobiup.sqlite');ok(pushDb.prepare('SELECT COUNT(*) count FROM push_subscriptions WHERE user_id=?').get('qa-regional').count===1,'Manager push subscription is persisted');pushDb.close();
   await call('notifications/push','DELETE',{endpoint:fakePush.endpoint},regional);

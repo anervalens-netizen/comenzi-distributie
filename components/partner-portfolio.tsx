@@ -485,6 +485,13 @@ export function PartnerSheet({
     [pending, setPending] = useState<{ id: string; notes: string; nextStep?:string; followUpDate?:string|null } | null>(
       null,
     );
+  const [visitRecovery,setVisitRecovery]=useState<{id:string;attempt:number;status:'loading'|'ready'|'error'}>({id,attempt:0,status:'loading'});
+  const [visitRecoveryError,setVisitRecoveryError]=useState('');
+  const [visitRecoveryAttempt,setVisitRecoveryAttempt]=useState(0);
+  const currentVisitRecovery=visitRecovery.id===id&&visitRecovery.attempt===visitRecoveryAttempt;
+  const visitReady=currentVisitRecovery&&visitRecovery.status==='ready';
+  const visitRecovering=!currentVisitRecovery||visitRecovery.status==='loading';
+  const visitRecoveryAvailable=form?.id===id;
   const dialog = useRef<HTMLDialogElement>(null);
   const contactEditor = useRef<HTMLDetailsElement>(null);
   const positionEditor = useRef<HTMLDetailsElement>(null);
@@ -498,27 +505,14 @@ export function PartnerSheet({
     }
     gpsButton.current?.focus({ preventScroll: true });
   }
-  const unlockInvalidVisit=useCallback(async(value:NonNullable<typeof pending>)=>{
-    // Preserve editable recovery and archive only the exact invalid legacy
-    // request. Valid or different queued requests remain unresolved.
-    await unlockVisitWork(userIdForWork(),id,value);
-    setNotes(value.notes);setNextStep(value.nextStep||'');setFollowUpDate(value.followUpDate||'');
-    setPending(null);setError(visitDateError(value.followUpDate||''));
-  },[id]);
   useEffect(() => {
     dialog.current?.showModal();
     let alive = true;const controller=new AbortController();
     api<PartnerDetail>(`partner/portfolio/${encodeURIComponent(id)}`,'GET',undefined,controller.signal)
       .then(async (data) => {
-        if (alive) {
-          setDetail(data);
-          setForm(await readWork<PortfolioPartner>(userIdForWork(),'partner',id)||data.partner);
-          const saved=await readWork<NonNullable<typeof pending>>(userIdForWork(),'visit',id);
-          const editable=saved||await readWork<NonNullable<typeof pending>>(userIdForWork(),'visit-edit',id);
-          if(!alive)return;
-          if(editable){setNotes(editable.notes);setNextStep(editable.nextStep||'');setFollowUpDate(editable.followUpDate||'');}
-          if(editable&&visitDateError(editable.followUpDate||''))await unlockInvalidVisit(editable);else setPending(saved||null);
-        }
+        const saved=await readWork<PortfolioPartner>(userIdForWork(),'partner',id);
+        if(!alive)return;
+        setDetail(data);setForm(saved||data.partner);
       })
       .catch((e) => {
         if (alive) setError(e.message);
@@ -526,7 +520,30 @@ export function PartnerSheet({
     return () => {
       alive = false;controller.abort();
     };
-  }, [id,unlockInvalidVisit]);
+  }, [id]);
+  useEffect(()=>{
+    if(!visitRecoveryAvailable)return;
+    let alive=true;const owner=userIdForWork();
+    const current=()=>alive&&owner===userIdForWork();
+    void (async()=>{
+      const saved=await readWork<NonNullable<typeof pending>>(owner,'visit',id);
+      const editable=saved||await readWork<NonNullable<typeof pending>>(owner,'visit-edit',id);
+      if(!current())return;
+      setNotes(editable?.notes||'');setNextStep(editable?.nextStep||'');setFollowUpDate(editable?.followUpDate||'');
+      const invalid=editable?visitDateError(editable.followUpDate||''):'';
+      // Keep the displayed recovery read-only until its exact legacy request is
+      // archived. Storage failure preserves the work and requires an explicit retry.
+      if(editable&&invalid)await unlockVisitWork(owner,id,editable);
+      if(!current())return;
+      setPending(invalid?null:saved||null);
+      if(invalid)setError(invalid);
+      setVisitRecoveryError('');setVisitRecovery({id,attempt:visitRecoveryAttempt,status:'ready'});
+    })().catch(e=>{
+      if(!current())return;
+      setVisitRecoveryError((e as Error).message);setVisitRecovery({id,attempt:visitRecoveryAttempt,status:'error'});
+    });
+    return()=>{alive=false;};
+  },[id,visitRecoveryAttempt,visitRecoveryAvailable]);
   useEffect(()=>{if(form)void saveWork(userIdForWork(),'partner',id,form).catch(e=>setError(e.message));},[form,id]);
   useEffect(()=>{
     const synced=(event:Event)=>{const value=(event as CustomEvent).detail;if(value.userId!==userIdForWork())return;
@@ -593,9 +610,9 @@ export function PartnerSheet({
     setNotice('Pinul afișat este pregătit pentru confirmare manuală. Salvează datele pentru a-l proteja la actualizările de adresă.');
   }
   async function visit() {
-    if(manager||form?.canEdit!==true)return;
+    if(!visitReady||busy||manager||form?.canEdit!==true)return;
     const dateError=visitDateError(pending?pending.followUpDate||'':followUpDate);
-    if(dateError){if(pending){try{await unlockInvalidVisit(pending);}catch(e){setError((e as Error).message);}}else setError(dateError);return;}
+    if(dateError){if(pending)setVisitRecoveryAttempt(n=>n+1);setError(dateError);return;}
     setBusy(true);
     setError('');
     setNotice('');
@@ -808,22 +825,24 @@ export function PartnerSheet({
             </fieldset>
           </form>
           </details>
-          <details className="partner-visits">
+          <details className="partner-visits" aria-busy={visitRecovering}>
             <summary>Înregistrează activitatea · Vizite {detail ? `(${detail.visitCount})` : ''}</summary>
+            {!manager&&visitRecovering&&<output>Se recuperează vizita salvată pe dispozitiv…</output>}
+            {!manager&&currentVisitRecovery&&visitRecoveryError&&<p role="alert">{visitRecoveryError} <button type="button" className="secondary" onClick={()=>setVisitRecoveryAttempt(n=>n+1)}>Reîncearcă recuperarea vizitei</button></p>}
             {!manager&&<><label>
               Rezultat / notă vizită <span className="optional">opțional</span>
               <textarea
                 maxLength={2000}
-                disabled={busy || !!pending || form.canEdit!==true}
+                disabled={!visitReady || busy || !!pending || form.canEdit!==true}
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
                 placeholder="Ce ai discutat sau constatat?"
               />
             </label>
-            <div className="partner-follow-up-fields"><label>Pas următor <span className="optional">opțional</span><input maxLength={500} disabled={busy||!!pending||form.canEdit!==true} value={nextStep} onChange={e=>setNextStep(e.target.value)} placeholder="Ex.: revin cu oferta"/></label><label>Data revenirii <span className="optional">opțional</span><input type="date" disabled={busy||!!pending||form.canEdit!==true} value={followUpDate} onChange={e=>setFollowUpDate(e.target.value)}/></label></div>
+            <div className="partner-follow-up-fields"><label>Pas următor <span className="optional">opțional</span><input maxLength={500} disabled={!visitReady||busy||!!pending||form.canEdit!==true} value={nextStep} onChange={e=>setNextStep(e.target.value)} placeholder="Ex.: revin cu oferta"/></label><label>Data revenirii <span className="optional">opțional</span><input type="date" disabled={!visitReady||busy||!!pending||form.canEdit!==true} value={followUpDate} onChange={e=>setFollowUpDate(e.target.value)}/></label></div>
             <button
               className="primary"
-              disabled={busy||form.canEdit!==true}
+              disabled={!visitReady||busy||form.canEdit!==true}
               onClick={() => void visit()}
             >
               {pending

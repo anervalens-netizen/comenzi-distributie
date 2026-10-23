@@ -1,9 +1,11 @@
 import {mergeConcurrentOrders,orderSaveBody,sameEditableOrder} from './order-draft.ts';
 import type {Order} from './types';
+import {transferBody,transferForm,sameTransferForm,type TransferWork} from './transfer-draft.ts';
+import type {TransferView} from './transfer-types';
 import {visitDateError} from './visit-date.ts';
-import {readLocalWork,removeLocalWork,writeLocalWork} from './local-work.ts';
+import {currentLocalWorkUserId,readLocalWork,removeLocalWork,writeLocalWork} from './local-work.ts';
 /** Account-bound durable work. Transactions never evict pending mutations. */
-export type PendingOperation = { id:string; userId:string; entity:string; path:string; method:string; body:unknown; created:number; attempts:number; next:number; state:'pending'|'blocked'; error?:string; status?:number; orderWork?:{base:Order;local:Order} };
+export type PendingOperation = { id:string; userId:string; entity:string; path:string; method:string; body:unknown; created:number; attempts:number; next:number; state:'pending'|'blocked'; error?:string; status?:number; orderWork?:{base:Order;local:Order}; transferWork?:TransferWork };
 type Snapshot = {key:string;userId:string;path:string;value:unknown;at:number;bytes:number};
 type SnapshotMetadata = {key:string;userId:string;path:string;at:number;bytes:number;pinned:boolean};
 type SnapshotStats = {key:'snapshot-stats';bytes:number;count:number;pinnedBytes:number};
@@ -32,8 +34,24 @@ const MAX_PINNED_TOTAL_BYTES=12*1024*1024;
 const openings:Partial<Record<'cache'|'work',Promise<IDBDatabase>>>={};
 const workChannel=typeof window!=='undefined'&&window.BroadcastChannel?new BroadcastChannel('mobiup-outbox-changes'):null;
 const localNotify=()=>{if(typeof window!=='undefined')window.dispatchEvent(new Event(OFFLINE_EVENT));};
-if(workChannel)workChannel.onmessage=localNotify;
+const transferEditors=new Set<string>();
+const remoteTransferEditors=new Set<string>();
+if(workChannel)workChannel.onmessage=event=>{
+ const message=event.data;
+ if(message?.type==='transfer-editor-query'){for(const id of transferEditors)workChannel.postMessage({type:'transfer-editor',id,dirty:true});return;}
+ if(message?.type==='transfer-editor'){const changed=remoteTransferEditors.has(message.id)!==message.dirty;if(message.dirty)remoteTransferEditors.add(message.id);else remoteTransferEditors.delete(message.id);if(!changed)return;}
+ localNotify();
+};
+/** Unsaved content also blocks activation when durable storage has failed. Only
+ * random editor identities cross tabs; no account or transfer content does. */
+export function setTransferEditorDirty(id:string,dirty:boolean){
+ if(transferEditors.has(id)===dirty)return;
+ if(dirty)transferEditors.add(id);else transferEditors.delete(id);
+ workChannel?.postMessage({type:'transfer-editor',id,dirty});localNotify();
+}
+
 const notify=()=>{localNotify();workChannel?.postMessage('changed');};
+if(typeof window!=='undefined'){window.addEventListener('pagehide',()=>{for(const id of transferEditors)workChannel?.postMessage({type:'transfer-editor',id,dirty:false});});window.addEventListener('pageshow',()=>{for(const id of transferEditors)workChannel?.postMessage({type:'transfer-editor',id,dirty:true});});}
 const request=<T>(req:IDBRequest<T>)=>new Promise<T>((resolve,reject)=>{req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});
 const isPinnedPath=(path:string)=>path==='bootstrap'||path==='bootstrap?compact=1'||path==='auth/session';
 const isFragmentMarker=(value:unknown):value is FragmentMarker=>!!value&&typeof value==='object'&&Array.isArray((value as FragmentMarker).__mobiupFragments)&&typeof (value as FragmentMarker).property==='string';
@@ -262,7 +280,55 @@ export function withOutboxGate<T>(run:()=>Promise<T>,activation=false):Promise<T
  if(activation)return Promise.reject(new Error('Actualizarea sigură între file nu este disponibilă. Sincronizează lucrul și redeschide aplicația într-un browser actualizat.'));
  return run(); // Saving remains available; this browser cannot offer activation.
 }
-export async function pendingOperationCount(){return transaction(['outbox'],'readonly',tx=>request(tx.objectStore('outbox').count()));}
+export async function pendingOperationCount(){
+ // Advisory UI signals, not acknowledgements from frozen/background tabs. Safe
+ // activation must keep the current documents and their old shell caches; this
+ // timeout must never authorize a reload or cache eviction. Durable work below
+ // is counted transactionally across all accounts.
+ if(workChannel){workChannel.postMessage({type:'transfer-editor-query'});await new Promise(resolve=>setTimeout(resolve,30));}
+ return transaction(['outbox','work'],'readonly',async tx=>{
+ const count=await request(tx.objectStore('outbox').count());
+ const work=await request(tx.objectStore('work').getAll()) as {key:string;value:TransferWork}[];
+ return count+transferEditors.size+remoteTransferEditors.size+work.filter(row=>row.key.includes('|transfer|')&&(row.value.branches?.length||!sameTransferForm(row.value.local,transferForm(row.value.base)))).length;
+});}
+/** Transfer edits and their queue entry commit together. A stale tab retains a
+ * recovery branch instead of overwriting another tab's durable draft. */
+export async function saveTransferWork(userId:string,id:string,value:TransferWork,expectedVersion:string|null){
+ const result=await withOutboxGate(()=>transaction(['work','outbox','meta'],'readwrite',async tx=>{
+  const fence=(await request(tx.objectStore('meta').get('session-fence')))?.value as SessionFence|undefined;
+  if(!userId||currentLocalWorkUserId()!==userId||fence?.rejected||fence?.userId&&fence.userId!==userId)throw new Error('Contul s-a schimbat. Redeschide transferul.');
+  const store=tx.objectStore('work'),key=userId+'|transfer|'+id;
+  const previous=(await request(store.get(key)))?.value as TransferWork|undefined;
+  if((previous?.version??null)!==expectedVersion){
+   const latest=previous??value;
+   const branches=[...(latest.branches||[])];
+   if(!sameTransferForm(latest.local,value.local)&&!branches.some(branch=>sameTransferForm(branch,value.local)))branches.push(value.local);
+   const conflict={...latest,version:crypto.randomUUID(),branches};
+   await request(store.put({key,value:conflict}));
+   const outbox=tx.objectStore('outbox'),rows=await request(outbox.index('user').getAll(userId)) as PendingOperation[];
+   for(const op of rows)if(op.path==='transfers/'+id)await request(outbox.put({...op,state:'blocked',error:'Modificări concurente păstrate. Compară versiunile.'}));
+   return {work:conflict,conflict:true};
+  }
+  const work={...value,version:crypto.randomUUID()};
+  const outbox=tx.objectStore('outbox'),rows=await request(outbox.index('user').getAll(userId)) as PendingOperation[];
+  const path='transfers/'+id;
+  const previousOp=rows.filter(op=>op.path===path&&op.method==='PUT'&&!op.attempts&&op.state==='pending').at(-1);
+  const op:PendingOperation={id:previousOp?.id??crypto.randomUUID(),userId,path,entity:path,method:'PUT',body:transferBody(work.local,work.base.revision),transferWork:work,created:previousOp?.created??Math.max(Date.now(),...rows.map(row=>row.created+1)),attempts:0,next:0,state:'pending'};
+  await request(store.put({key,value:work}));await request(outbox.put(op));return {work,conflict:false};
+ }));notify();return result;
+}
+export async function acceptTransferWork(userId:string,record:TransferView){
+ const pending=await transaction(['work','outbox'],'readwrite',async tx=>{
+  const store=tx.objectStore('work'),key=userId+'|transfer|'+record.id;
+  const work=(await request(store.get(key)))?.value as TransferWork|undefined;
+  const rows=await request(tx.objectStore('outbox').index('user').getAll(userId)) as PendingOperation[];
+  if(rows.some(op=>op.path==='transfers/'+record.id)||work?.branches?.length||work&&!sameTransferForm(work.local,transferForm(record)))return true;
+  await request(store.delete(key));return false;
+ });notify();return pending;
+}
+export async function transferRecoveries(userId:string){return transaction(['work'],'readonly',async tx=>(await request(tx.objectStore('work').getAll()) as {key:string;value:TransferWork}[]).filter(row=>row.key.startsWith(userId+'|recovered-transfer|')).map(row=>({id:row.key.slice((userId+'|recovered-transfer|').length),work:row.value})));}
+export async function transferWorks(userId:string){return transaction(['work'],'readonly',async tx=>(await request(tx.objectStore('work').getAll()) as {key:string;value:TransferWork}[]).filter(row=>row.key.startsWith(userId+'|transfer|')).map(row=>row.value));}
+
 export async function rememberAccount(userId:string,expected?:SessionFence){
  await sessionMetadata(async store=>{
   if(expected&&(await request(store.get('session-fence')))?.value?.epoch!==expected.epoch)return;
@@ -447,6 +513,19 @@ async function acknowledgeOperation(op:PendingOperation,result:unknown,token:str
    await request(store.put({key:projectionKey,value:projection}));
    await reconcileOrderListInTransaction(tx,op.userId,[saved],false);
   }
+  if(op.path.startsWith('transfers/')&&object(result)&&object(result.transfer)){
+   const saved=result.transfer as unknown as TransferView,key=op.userId+'|transfer|'+saved.id;
+   const current=(await request(store.get(key)))?.value as TransferWork|undefined;
+   if(current){
+    const next={...current,base:saved};
+    await request(store.put({key,value:next}));
+    const rows=await request(outbox.index('user').getAll(op.userId)) as PendingOperation[];
+    for(const later of rows){if(later.id===op.id||later.path!==op.path||later.attempts||later.state!=='pending')continue;
+     later.body=transferBody(later.transferWork?.local??current.local,saved.revision);
+     later.transferWork={...(later.transferWork??next),base:saved};await request(outbox.put(later));
+    }
+   }
+  }
   await request(outbox.delete(op.id));return submitted;
  });
 }
@@ -544,6 +623,9 @@ type ReplayTransport=(path:string,method:string,body:unknown,operationId?:string
 export async function resolveQueuedWork(options:{expectedWork?:unknown;expectedOrder?:Order;userId:string;path:string;method:string;remote:unknown;body:unknown;local:{scope:string;id:string;value:unknown};transport:ReplayTransport;active:()=>string}){
  const {userId,path,method,remote,body,local,transport,active}=options;
  const entity=entityFor(path,body??remote);
+ // Final/deleted documents fence every transfer PUT. Explicit local archival
+ // needs only fresh terminal readback; it must never replay a forbidden write.
+ const terminalTransfer=local.scope==='transfer'&&/^transfers\/[^/]+$/.test(path)&&body===null&&(remote===null||object(remote)&&remote.status==='finalized');
  const run=async()=>{
   const token=await claimLease(userId);if(!token)throw new Error('Sincronizarea este în curs. Reîncearcă.');
   try{
@@ -552,22 +634,25 @@ export async function resolveQueuedWork(options:{expectedWork?:unknown;expectedO
    const stored=await readWork<{local?:Order}>(userId,local.scope,local.id);
    if(options.expectedWork!==undefined&&JSON.stringify(options.expectedWork)!==JSON.stringify(stored))throw new Error('Lucrul local s-a schimbat în altă filă. Redeschide documentul.');
    if(options.expectedOrder&&stored?.local&&!sameEditableOrder(options.expectedOrder,stored.local))throw new Error('Modificările locale s-au schimbat în altă filă. Redeschide documentul.');
+   if(terminalTransfer&&rows.some(op=>op.method!=='PUT'))throw new Error('Operațiunea locală necesită verificare înainte de arhivare.');
    const readRemote=async()=>{
     if(path==='partner/planning'){
      const date=(remote as {date:string}).date,day=new Date(date+'T12:00:00Z');day.setUTCDate(day.getUTCDate()-((day.getUTCDay()+6)%7));
      const result=await transport('partner/planning?week='+day.toISOString().slice(0,10),'GET',undefined) as {plans:{date:string;stops:string[];revision:number}[]};
      return result.plans.find(plan=>plan.date===date)??{date,stops:[],revision:0};
     }
-    const result=await transport(path,'GET',undefined) as {order?:Order;partner?:{canEdit?:boolean}};
+    let result:{order?:Order;partner?:{canEdit?:boolean};transfer?:TransferView};
+    try{result=await transport(path,'GET',undefined) as typeof result;}catch(error){if(terminalTransfer&&remote===null&&(error as {status?:number}).status===404)return null;throw error;}
+    if(result.transfer&&!result.transfer.canEdit&&!(terminalTransfer&&result.transfer.status==='finalized'))throw Object.assign(new Error('Transferul nu mai poate fi editat. Copia locală rămâne păstrată.'),{status:403});
     if(result.partner&&result.partner.canEdit!==true)throw Object.assign(new Error('Acces retras. Copia locală rămâne păstrată; nu poate fi retrimisă.'),{status:403});
-    return result.order??result.partner;
+    return result.order??result.partner??result.transfer;
    };
    const checkRemote=async()=>{const current=await readRemote();assertOwner();if(JSON.stringify(current)!==JSON.stringify(remote))throw new Error('Documentul s-a schimbat din nou. Reîncarcă și compară înainte de rezolvare.');};
    await checkRemote();
    for(const op of rows){
-    if(!op.attempts)continue;
+    if(terminalTransfer||!op.attempts)continue;
     // A matching authoritative document already proves the desired write.
-    const comparable=path.startsWith('orders/')?orderSaveBody(remote as Order,(remote as Order).revision):remote as Record<string,unknown>;
+    const comparable=path.startsWith('orders/')?orderSaveBody(remote as Order,(remote as Order).revision):path.startsWith('transfers/')?transferBody(transferForm(remote as TransferView),(remote as TransferView).revision):remote as Record<string,unknown>;
     if(equalDesired(comparable,op.body as Record<string,unknown>))continue;
     try{const result=await transport(op.path,op.method,op.body,op.id);requireReplayContract(op,result);throw new Error('Operațiunea anterioară a fost confirmată. Reîncarcă documentul înainte de alegere.');}
     catch(error){if(![400,409,422].includes((error as {status?:number}).status??0))throw error;}
@@ -579,9 +664,10 @@ export async function resolveQueuedWork(options:{expectedWork?:unknown;expectedO
     const current=(await request(outbox.index('user').getAll(userId)) as PendingOperation[]).filter(op=>entityFor(op.path,op.body)===entity);
     if(current.length!==rows.length||current.some(row=>JSON.stringify(row)!==JSON.stringify(rows.find(expected=>expected.id===row.id)))||JSON.stringify((await request(work.get(key)))?.value)!==JSON.stringify(stored))throw new Error('Lucrul local s-a schimbat în altă filă. Redeschide documentul.');
     for(const op of rows){await request(work.put({key:userId+'|resolved-operation|'+op.id,value:op}));await request(outbox.delete(op.id));}
-    if(local.scope==='order'&&body===null)await request(work.delete(key));
+    if(local.scope==='transfer'&&stored)await request(work.put({key:userId+'|recovered-transfer|'+local.id+'|'+crypto.randomUUID(),value:stored}));
+    if((local.scope==='order'||local.scope==='transfer')&&body===null)await request(work.delete(key));
     else await request(work.put({key,value:local.value}));
-    if(body!==null){const op:PendingOperation={id:crypto.randomUUID(),userId,path,method,body,entity,created:Date.now(),attempts:0,next:0,state:'pending',...(local.scope==='order'?{orderWork:local.value as {base:Order;local:Order}}:{})};await request(outbox.put(op));}
+    if(body!==null){const op:PendingOperation={id:crypto.randomUUID(),userId,path,method,body,entity,created:Date.now(),attempts:0,next:0,state:'pending',...(local.scope==='order'?{orderWork:local.value as {base:Order;local:Order}}:local.scope==='transfer'?{transferWork:local.value as TransferWork}:{})};await request(outbox.put(op));}
    }));notify();
   }finally{await releaseLease(userId,token);}
  };
@@ -643,7 +729,8 @@ function confirmedVisit(op:PendingOperation,result:unknown){
 function requireReplayContract(op:PendingOperation,result:unknown){
  const value=object(result)?result:null;
  let valid=true;
- if(/^orders(?:\/[^/]+)?$/.test(op.path))valid=!!value&&object(value.order)&&value.order.id===(op.path==='orders'?(op.body as {id?:string})?.id:op.path.slice(7));
+ if(/^transfers\/[^/]+$/.test(op.path))valid=!!value&&object(value.transfer)&&value.transfer.id===op.path.slice(10)&&Number.isSafeInteger(value.transfer.revision)&&Array.isArray(value.transfer.lines)&&sameTransferForm(transferForm(value.transfer as unknown as TransferView),op.transferWork?.local??op.body as import('./transfer-draft').TransferForm);
+ else if(/^orders(?:\/[^/]+)?$/.test(op.path))valid=!!value&&object(value.order)&&value.order.id===(op.path==='orders'?(op.body as {id?:string})?.id:op.path.slice(7));
  else if(/^partner\/portfolio\/[^/]+$/.test(op.path))valid=!!value&&object(value.partner)&&typeof value.partner.id==='string';
  else if(/^partner\/portfolio\/[^/]+\/visits$/.test(op.path))valid=!!value&&object(value.partner)&&value.partner.id===decodeURIComponent(op.path.split('/')[2])&&Array.isArray(value.visits)&&value.visits.every(v=>visitRecord(v)&&v.customerId===decodeURIComponent(op.path.split('/')[2]))&&Number.isInteger(value.visitCount)&&(value.visitCount as number)>0&&(value.visitCount as number)>=value.visits.length&&(value.nextCursor===null||typeof value.nextCursor==='string')&&!!confirmedVisit(op,value);
  else if(op.path==='partner/planning')valid=!!value&&typeof value.date==='string'&&Array.isArray(value.stops);
@@ -652,6 +739,7 @@ function requireReplayContract(op:PendingOperation,result:unknown){
 async function reconcileReplaySnapshot(userId:string,op:PendingOperation,result:unknown){
  requireReplayContract(op,result);
  const prefixes=new Set<string>();
+ if(op.path.startsWith('transfers/')&&object(result)&&object(result.transfer)){await saveSnapshot(userId,op.path,{transfer:result.transfer});prefixes.add('transfers');}
  if(/^orders(?:\/[^/]+)?$/.test(op.path)){
   const order=object(result)&&object(result.order)?result.order:null;
   if(order&&typeof order.id==='string'){
@@ -710,6 +798,14 @@ export async function replay(userId:string,transport:(path:string,method:string,
        if(sameEditableOrder(merged.order,current.order))result=current;
        else op.body=orderSaveBody(merged.order,current.order.revision);
       }
+    }
+    if(op.method==='PUT'&&op.path.startsWith('transfers/')){
+     const work=await readWork<TransferWork>(userId,'transfer',op.path.slice(10));
+     if(work?.branches?.length)throw Object.assign(new Error('Modificări din alte file sunt păstrate. Compară versiunile.'),{status:409});
+     const current=await transport(op.path,'GET',undefined) as {transfer:TransferView};
+     if(current.transfer.status!=='draft'||!current.transfer.canEdit)throw Object.assign(new Error('Transferul nu mai poate fi editat. Lucrul local este păstrat.'),{status:409});
+     if(equalDesired(transferBody(transferForm(current.transfer),current.transfer.revision),op.body as Record<string,unknown>))result=current;
+     else if(!op.attempts&&current.transfer.revision!==(op.body as {revision:number}).revision)throw Object.assign(new Error('Transferul s-a schimbat pe server. Compară versiunile înainte de sincronizare.'),{status:409});
     }
     if(op.method==='PATCH'&&op.path.startsWith('partner/portfolio/')){const current=await transport(op.path,'GET',undefined) as {partner:Record<string,unknown>};const desired=op.body as Record<string,unknown>;if(current.partner.canEdit!==true)throw Object.assign(new Error('Dreptul de editare s-a modificat.'),{status:403});if(['contact','phone','email','latitude','longitude','positionSource','positionAccuracy','addressFingerprint'].every(k=>JSON.stringify(current.partner[k])===JSON.stringify(desired[k])))result={partner:current.partner};}
     if(op.path==='partner/planning'){const desired=op.body as {date:string;stops:string[]};const day=new Date(desired.date+'T12:00:00Z');day.setUTCDate(day.getUTCDate()-((day.getUTCDay()+6)%7));const current=await transport('partner/planning?week='+day.toISOString().slice(0,10),'GET',undefined) as {plans:{date:string;stops:string[]}[]};const plan=current.plans.find(p=>p.date===desired.date);if(plan&&JSON.stringify(plan.stops)===JSON.stringify(desired.stops))result=plan;}
