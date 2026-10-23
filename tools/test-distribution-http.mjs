@@ -45,21 +45,30 @@ try{
  assert(!(await browser.evaluate('document.querySelector(".manager-agent-table")?.textContent.includes("Vânzări")')),'operational table contains no commercial sales column');
  await browser.evaluate('[...document.querySelectorAll(".main-nav [role=tab]")].find(button=>button.textContent==="Prepay").click()');
  await waitFor(()=>browser.evaluate('!!document.querySelector(".prepay-sales")'),'prepay sales');
- assert(await browser.evaluate('document.querySelector(".prepay-sales").textContent.includes("20,00")'),'weighted credit-only mean rendered');
- assert(!(await browser.evaluate('document.querySelector(".prepay-sales").textContent.includes("Accesorii")')),'prepay excludes accessory cards');
+ assert(await browser.evaluate('document.querySelector(".prepay-sales")?.textContent.includes("20,00")'),'weighted credit-only mean rendered');
+ assert(!(await browser.evaluate('document.querySelector(".prepay-sales")?.textContent.includes("Accesorii")')),'prepay excludes accessory cards');
  assert.equal(await browser.evaluate('document.querySelectorAll(".distribution-projects button[aria-pressed]").length'),3,'all projects remain directly visible');
  assert.equal(await browser.evaluate('document.querySelectorAll(".report-month-grid button[aria-pressed=true]").length'),2,'restored months are selected directly');
  await browser.evaluate(`document.querySelector('[aria-label="septembrie 2026"]').click()`);
- await waitFor(()=>browser.evaluate('document.querySelector(".prepay-sales").textContent.includes("40,00")'),'deselect month recomputes weighted mean');
+ await waitFor(()=>browser.evaluate('document.querySelector(".prepay-sales")?.textContent.includes("40,00")'),'deselect month recomputes weighted mean');
  await browser.evaluate(`document.querySelector('[aria-label="septembrie 2026"]').click()`);
- await waitFor(()=>browser.evaluate('document.querySelector(".prepay-sales").textContent.includes("20,00")'),'direct month selection unions reports');
+ await waitFor(()=>browser.evaluate('document.querySelector(".prepay-sales")?.textContent.includes("20,00")'),'direct month selection unions reports');
  await browser.evaluate('[...document.querySelectorAll(".distribution-projects button")].find(button=>button.textContent==="Vodafone Nord").click()');
  await waitFor(()=>browser.evaluate('document.querySelector(".prepay-sales .distribution-metric strong")?.textContent==="0 buc."'),'project toggle filters report');
  await browser.evaluate('[...document.querySelectorAll(".distribution-projects button")].find(button=>button.textContent==="Vodafone Nord").click()');
- await waitFor(()=>browser.evaluate('document.querySelector(".prepay-sales").textContent.includes("20,00")'),'multiple projects restore union');
+ await waitFor(()=>browser.evaluate('document.querySelector(".prepay-sales")?.textContent.includes("20,00")'),'multiple projects restore union');
  await browser.evaluate('[...document.querySelectorAll(".commerce-tabs button")].find(button=>button.textContent==="Activări").click()');
  await waitFor(()=>browser.evaluate('document.querySelectorAll(".activation-primary strong")[0]?.textContent==="9"'),'activation union');
  assert.equal(await browser.evaluate('document.querySelectorAll(".activation-operator").length'),2);
+ for(const [width,height] of [[360,800],[390,844]]){
+  await browser.send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:true});await browser.evaluate('scrollTo(0,0)');
+  const geometry=await browser.evaluate(`(()=>{const total=document.querySelector('.activation-primary strong').getBoundingClientRect(),year=document.querySelector('.report-year').getBoundingClientRect(),months=document.querySelector('.report-month-grid').getBoundingClientRect(),projects=[...document.querySelectorAll('.distribution-projects button[aria-pressed]')].map(button=>{const r=button.getBoundingClientRect();return {left:r.left,right:r.right,hit:button.contains(document.elementFromPoint(r.left+r.width/2,r.top+r.height/2))}});return {totalBottom:total.bottom,yearRight:year.right,monthsLeft:months.left,projects,overflow:document.documentElement.scrollWidth>innerWidth}})()`);
+  assert(geometry.totalBottom<=height-76,'first activation total is visible above mobile navigation: '+JSON.stringify({width,height,...geometry}));
+  assert(geometry.yearRight<=geometry.monthsLeft,'year and direct month grid share one compact row');
+  assert(geometry.projects.every(project=>project.left>=0&&project.right<=width&&project.hit),'all three project toggles remain visible and clickable');assert(!geometry.overflow,'no mobile report overflow');
+  mkdirSync('work/evidence',{recursive:true});const screenshot=await browser.send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});writeFileSync('work/evidence/activations-first-screen-'+width+'.png',Buffer.from(screenshot.data,'base64'));
+ }
+
  await browser.evaluate('[...document.querySelectorAll("button")].find(button=>button.textContent==="Pe partener").click()');
  await waitFor(()=>browser.evaluate('document.querySelector(".distribution-table tbody button")!==null'),'partner table');
  await browser.evaluate('document.querySelector(".distribution-table tbody button").click()');
