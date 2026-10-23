@@ -13,7 +13,7 @@ try{
  browser=await browserFixture('http://127.0.0.1:'+server.address().port);
  for(const count of [6,5]){
   if(count===5)await browser.evaluate('document.querySelectorAll("[data-slot=tabs-trigger]")[3].remove()');
-  for(const [width,height] of [[360,800],[390,844],[430,932],[820,1180]]){
+  for(const [width,height] of [[320,800],[360,800],[390,844],[430,932],[820,1180]]){
    await browser.send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:true});
    const geometry=await browser.evaluate(`(()=>{const bar=document.querySelector('.nav-wrap').getBoundingClientRect();return [...document.querySelectorAll('[data-slot=tabs-trigger]')].map(b=>{const r=b.getBoundingClientRect();return {label:b.textContent,width:r.width,height:r.height,visible:r.top>=bar.top&&r.bottom<=bar.bottom+1&&r.left>=0&&r.right<=innerWidth,hit:b.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))}})})()`);
    assert.equal(geometry.length,count);

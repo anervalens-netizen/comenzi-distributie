@@ -534,7 +534,7 @@ try {
     await sleep(120);
     const geometry=await cdp.evaluate("(()=>{const nav=document.querySelector('.manager-shell .main-nav'),rect=nav.getBoundingClientRect();return {width:innerWidth,scroll:document.documentElement.scrollWidth,count:nav.querySelectorAll('[role=tab]').length,left:rect.left,right:rect.right,bottom:rect.bottom};})()");
     check(geometry.scroll<=geometry.width+1,`Manager summary has no document overflow at ${width}px`);
-    check(geometry.count===6&&geometry.left>=0&&geometry.right<=width+1,`All six manager destinations fit at ${width}px`);
+    check(geometry.count===6&&geometry.left>=0&&geometry.right<=width+1,`All six manager destinations fit at ${width}px: ${JSON.stringify(geometry)}`);
     if(width<1024)check(geometry.bottom<=900&&geometry.bottom>=830,`Manager navigation stays at viewport bottom at ${width}px`);
     const metrics=await cdp.evaluate("(()=>{const grid=document.querySelector('.manager-summary-grid');return {columns:getComputedStyle(grid).gridTemplateColumns.split(' ').length,count:grid.children.length,valuesFit:[...grid.querySelectorAll('strong')].every(value=>value.scrollWidth<=value.clientWidth+1)};})()");
     check(metrics.count===4&&metrics.columns===(width>900?4:2),`Four operational cards use responsive columns at ${width}px`);
