@@ -235,10 +235,10 @@ existing history screens do not combine activity across retired aliases.
 The separate activation database and offline XLSX importer are documented in
 [Activation ledger foundation](tools/ACTIVATIONS.md). They preserve all source
 movements, reconcile returns before proposing a TR site, and derive months only
-from activation dates. The Activări tab follows Vânzări and offers current-month and monthly-history
-views for agents; managers use Prepay. Reports show eligibility, without commission amounts. Configure
+from activation dates. Both agents and managers use Prepay, with Vânzări and
+permission-gated Activări subtabs and monthly report selection. Reports show eligibility, without commission amounts. Configure
 MOBIUP_ACTIVATIONS_PILOT_MANAGER_ID and MOBIUP_ACTIVATIONS_PILOT_AGENT_ID privately.
-Both navigation and API access default to denied. Agents receive only their
+Activation navigation and API access default to denied; Prepay sales remain available. Agents receive only their
 unambiguously owned current site; managers can use the existing read filters.
 No user names or account IDs belong in the public source.
 
