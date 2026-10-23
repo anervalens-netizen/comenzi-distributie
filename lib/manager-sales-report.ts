@@ -1,7 +1,7 @@
 import type {SalesProduct} from './sales-types';
 
 export type ManagerProductCategory='accessories'|'varta'|'scent'|'phones'|'vouchers'|'other';
-export const managerCategoryLabels:Record<ManagerProductCategory,string>={accessories:'Accesorii Cellara / Mobix',varta:'Varta',scent:'Odorizante Q Car',phones:'Telefoane',vouchers:'Cartele valorice / vouchere',other:'Produse de verificat'};
+export const managerCategoryLabels:Record<ManagerProductCategory,string>={accessories:'Accesorii',varta:'Varta',scent:'Odorizante Q Car',phones:'Telefoane',vouchers:'Cartele valorice / vouchere',other:'Produse de verificat'};
 /** Exact configured groups win over the older, broader sales segments. */
 export function managerProductCategory(product:SalesProduct):ManagerProductCategory|null{
   const group=product.distributionGroup;
