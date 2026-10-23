@@ -51,15 +51,24 @@ export async function testTransferBrowser(origin,cookies){
   check(automaticBytes.subarray(0,2).toString()==='PK','Automatic download is an XLSX archive');
   check(downloadName.startsWith('transfer-')&&downloadName.endsWith('.xlsx'),'Automatic download uses transfer filename');
   const automaticWorkbook=XLSX.read(automaticBytes,{type:'buffer'});check(automaticWorkbook.SheetNames.includes('Transfer'),'Automatic download has the transfer worksheet');
+  const finalizedNumber=await evaluate("document.querySelector('.transfer-result .eyebrow').textContent"),finalizedUrl=await evaluate('document.querySelector(\'.transfer-result a[href$="/excel"]\').href');
+  check(automaticWorkbook.Sheets.Transfer.B2?.v===finalizedNumber,'Automatic workbook identifies the finalized transfer');
   check(await evaluate("document.querySelector('.email-preview')?.textContent.includes('manager-b@example.invalid')"),'Result shows manager from destination region');
   check(await evaluate("[...document.querySelectorAll('.transfer-result a')].some(node=>node.textContent.includes('.eml'))"),'Result offers eml with attachment');await screenshot('agent-result-tablet');
-  await button('Înapoi la transferuri');await wait(()=>evaluate("document.querySelectorAll('.transfer-history-row').length>0"),'Transfer history');
-  await click('.transfer-history-row');await wait(()=>evaluate("!!document.querySelector('.transfer-result')"),'Reopened transfer');
+  await button('Înapoi la transferuri');
+  // Closing starts an async history refresh; existing rows may remain visible.
+  // Wait for this document, rather than opening the first stale history row.
+  const historyRow=`[...document.querySelectorAll('.transfer-history-row')].find(row=>row.querySelector('small')?.textContent.startsWith(${JSON.stringify(finalizedNumber+' ·')}))`;
+  await wait(()=>evaluate(`!!(${historyRow})`),'Finalized transfer appears in refreshed history');
+  check(await evaluate(`(()=>{const row=${historyRow};if(!row||row.disabled)return false;row.click();return true;})()`),'Reopen the finalized transfer by document number');
+  await wait(()=>evaluate("!!document.querySelector('.transfer-result')"),'Reopened transfer');
   await pause(800);check(downloadEvents.size===1,'History does not download Excel again');
   const manualUrl=await evaluate('document.querySelector(\'.transfer-result a[href$="/excel"]\').href');
+  check(manualUrl===finalizedUrl,'History reopens the same finalized transfer identity');
   await click('.transfer-result a[href$="/excel"]');await wait(()=>completedDownloads().length===2,'Manual Excel download from history');
   const manualDownload=completedDownloads().find(download=>download.guid!==automaticDownload.guid);
-  check(manualDownload.url===manualUrl&&manualDownload.suggestedFilename===downloadName,'Manual download completes a distinct request for the selected historical transfer');
+  check(manualDownload.url===manualUrl,'Manual download URL matches the selected historical transfer: '+JSON.stringify({expected:manualUrl,actual:manualDownload.url}));
+  check(manualDownload.suggestedFilename===downloadName,'Manual download filename matches the finalized transfer: '+JSON.stringify({automatic:downloadName,manual:manualDownload.suggestedFilename}));
   // CDP allow may overwrite the same suggested filename instead of adding (1).
   // GUID completion and workbook bytes prove both downloads on either browser.
   const manualBytes=readDownload(manualDownload);check(manualBytes.subarray(0,2).toString()==='PK','Manual download is an XLSX archive');
