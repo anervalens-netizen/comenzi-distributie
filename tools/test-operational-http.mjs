@@ -33,7 +33,9 @@ async function stop() {
 const get=(path,cookie)=>fetch(origin+'/api/'+path,{headers:cookie?{Cookie:cookie}:{}});
 try {
   await start(resolve('dist/standalone'),data);
-  assert.deepEqual(await (await get('health')).json(),{status:'ok',service:'comenzi-distributie'});
+  const health=await get('health');
+  assert.match(health.headers.get('server-timing'),/^app;dur=\d+\.\d$/);
+  assert.deepEqual(await health.json(),{status:'ok',service:'comenzi-distributie'});
   assert.equal(existsSync(join(data,'mobiup.sqlite')),false,'Liveness must not create a database');
   assert.equal((await get('bootstrap')).status,200);
   const cookies={};let db=new DatabaseSync(join(data,'mobiup.sqlite'));
@@ -43,7 +45,10 @@ try {
     db.prepare('INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,?,?)').run(createHash('sha256').update(token).digest('hex'),id,Date.now()+3600000);
   }
   db.close();
-  assert.equal((await get('admin/status')).status,401);
+  const anonymous=await get('admin/status');
+  assert.equal(anonymous.status,401);
+  assert.match(anonymous.headers.get('server-timing'),/^app;dur=\d+\.\d$/);
+  assert.match(anonymous.headers.get('cache-control'),/no-store/);
   assert.equal((await get('admin/status',cookies.agent)).status,403);
   assert.equal((await get('admin/status',cookies.regional)).status,403);
   const historyRoot=join(data,'client-history');mkdirSync(join(historyRoot,'client-sales-originals'),{recursive:true});
@@ -52,6 +57,7 @@ try {
   db.exec('CREATE TABLE history_imports(sha256,original_path,state,imported_at,period_start,period_end)');
   db.prepare('INSERT INTO history_imports VALUES(?,?,?,?,?,?)').run(createHash('sha256').update(original).digest('hex'),'client-sales-originals/example.xlsx','active','2026-01-03T12:00:00Z','2026-01-01','2026-01-02');db.close();
   const response=await get('admin/status',cookies.global);assert.equal(response.status,200);
+  assert.match(response.headers.get('server-timing'),/^app;dur=\d+\.\d$/);
   assert.match(response.headers.get('cache-control'),/no-store/);
   const status=await response.json();assert.equal(status.history.through,'2026-01-02');
   assert.equal(status.portfolio.state,'uninitialized');

@@ -1,4 +1,5 @@
 import {activationReport} from '@/lib/activation-api';
+import {timedResponse} from '@/lib/request-timing';
 import {usageAuth,usagePulse,usageReport} from '@/lib/usage-api';
 import { managerFilter } from '@/lib/manager-scope';
 import {historyImportStatus,historyImportPreview,historyImportCommit} from '@/lib/client-history-import-runtime';
@@ -124,6 +125,25 @@ async function targetAgent(user: User,id: unknown) {
   if(!u) fail(400,'Alege agentul pentru care faci comanda.');
   await requireAgentAccess(user,String(u.id));
   return userView(u);
+}
+function managerAccountWriteGuard(req:Request,user:User,globalOnly=false,agentId?:string) {
+  // Password derivation yields. Admit the account CAS with current actor and
+  // session authority; its required cleanup uses the successful CAS proof.
+  // Read the clock in SQLite so a session cannot expire while a write is queued.
+  const nowMs="(CAST(strftime('%s','now') AS INTEGER)*1000+CAST(substr(strftime('%f','now'),4,3) AS INTEGER))";
+  return {
+    sql:`EXISTS (SELECT 1 FROM users actor WHERE actor.id=? AND actor.active=1 AND actor.role='manager' AND (?=0 OR actor.manager_scope='global') AND (? IS NULL OR actor.manager_scope='global' OR EXISTS (SELECT 1 FROM manager_agents ma WHERE ma.manager_id=actor.id AND ma.agent_id=?)) AND EXISTS (SELECT 1 FROM sessions actor_session WHERE actor_session.token_hash=? AND actor_session.user_id=actor.id AND actor_session.expires_at>${nowMs}))`,
+    args:[user.id,globalOnly?1:0,agentId??null,agentId??null,sha256(sessionToken(req))] as const,
+  };
+}
+function agentAccountWriteGuard(req:Request,user:User,agentId:string,revision:number,globalOnly=false) {
+  const actor=managerAccountWriteGuard(req,user,globalOnly,agentId);
+  return {sql:`${actor.sql} AND EXISTS (SELECT 1 FROM users WHERE id=? AND role='agent' AND profile_revision=?)`,args:[...actor.args,agentId,revision] as const};
+}
+function agentCredentialCleanupGuard(agentId:string,revision:number,passwordHash:string) {
+  // The random salted hash and saved revision identify this successful CAS.
+  // The same transaction holds the writer while its session cleanup completes.
+  return {sql:"EXISTS (SELECT 1 FROM users WHERE id=? AND role='agent' AND profile_revision=? AND password_hash=?)",args:[agentId,revision,passwordHash] as const};
 }
 function parseLines(raw: unknown, kind: 'accessories'|'stands'|'stand_client', activeProducts: Product[]) {
   if(raw===undefined) return [] as Line[];
@@ -366,9 +386,9 @@ async function dispatch(req: Request) {
     const row=await db().prepare('SELECT password_hash,profile_revision,active FROM users WHERE id=?').bind(user.id).first<{password_hash:string;profile_revision:number;active:number}>();
     if(!row||typeof body.currentPassword!=='string'||!(await verifyPassword(body.currentPassword,row.password_hash))) fail(400,'Parola curentă este incorectă.');
     if(password===body.currentPassword) fail(400,'Parola nouă trebuie să fie diferită.');
-    const passwordHash=await hashPassword(password),tokenHash=sha256(sessionToken(req)),expectedRevision=Number(row.profile_revision);
+    const passwordHash=await hashPassword(password),tokenHash=sha256(sessionToken(req)),expectedRevision=Number(row.profile_revision),guard=managerAccountWriteGuard(req,user);
     const results=await db().batch([
-      db().prepare('UPDATE users SET password_hash=?,must_change_password=0,profile_revision=profile_revision+1 WHERE id=? AND active=1 AND password_hash=? AND profile_revision=? AND EXISTS (SELECT 1 FROM sessions WHERE token_hash=? AND user_id=? AND expires_at>?)').bind(passwordHash,user.id,row.password_hash,expectedRevision,tokenHash,user.id,Date.now()),
+      db().prepare(`UPDATE users SET password_hash=?,must_change_password=0,profile_revision=profile_revision+1 WHERE id=? AND active=1 AND password_hash=? AND profile_revision=? AND ${guard.sql}`).bind(passwordHash,user.id,row.password_hash,expectedRevision,...guard.args),
       db().prepare('DELETE FROM sessions WHERE user_id=? AND token_hash!=? AND EXISTS (SELECT 1 FROM users WHERE id=? AND active=1 AND password_hash=? AND profile_revision=?)').bind(user.id,tokenHash,user.id,passwordHash,expectedRevision+1),
     ]);
     if(!results[0]?.meta.changes)fail(409,'Contul sau parola s-au modificat între timp. Reautentifică-te și încearcă din nou.');
@@ -521,8 +541,13 @@ async function dispatch(req: Request) {
       if(await db().prepare('SELECT id FROM users WHERE username=?').bind(username).first())fail(409,'Numele de utilizator este deja folosit.');
       const available=await db().prepare("SELECT id FROM users WHERE role='agent' AND active=1").all<{id:string}>(),allowed=new Set(available.results.map(item=>item.id));
       if(agentIds.some(id=>!allowed.has(id)))fail(400,'Unul dintre agenții selectați nu este activ sau nu există.');
-      const id=crypto.randomUUID(),passwordHash=await hashPassword(password);
-      await db().batch([db().prepare("INSERT INTO users (id,username,name,role,manager_scope,warehouse_id,password_hash,must_change_password,active) VALUES (?,?,?,'manager','assigned',NULL,?,0,1)").bind(id,username,name,passwordHash),...agentIds.map(agentId=>db().prepare('INSERT INTO manager_agents (manager_id,agent_id) VALUES (?,?)').bind(id,agentId))]);
+      const id=crypto.randomUUID(),passwordHash=await hashPassword(password),guard=managerAccountWriteGuard(req,user,true);
+      const agentsLive="NOT EXISTS (SELECT 1 FROM json_each(?) selected LEFT JOIN users agent ON agent.id=selected.value AND agent.role='agent' AND agent.active=1 WHERE agent.id IS NULL)";
+      const results=await db().batch([
+        db().prepare(`INSERT INTO users (id,username,name,role,manager_scope,warehouse_id,password_hash,must_change_password,active) SELECT ?,?,?,'manager','assigned',NULL,?,0,1 WHERE ${guard.sql} AND ${agentsLive}`).bind(id,username,name,passwordHash,...guard.args,JSON.stringify(agentIds)),
+        ...agentIds.map(agentId=>db().prepare("INSERT INTO manager_agents (manager_id,agent_id) SELECT ?,? WHERE EXISTS (SELECT 1 FROM users WHERE id=? AND role='manager' AND password_hash=?)").bind(id,agentId,id,passwordHash)),
+      ]);
+      if(!results[0]?.meta.changes)fail(409,'Contul sau agenții selectați s-au modificat. Actualizează lista.');
       return response({users:await getUsers(user)});
     }
     if(path[1]==='managers' && path[2] && req.method==='PUT') {
@@ -540,20 +565,28 @@ async function dispatch(req: Request) {
       if(agentIds.length>100)fail(400,'Sunt prea mulți agenți selectați.');
       const available=await db().prepare("SELECT id FROM users WHERE role='agent' AND active=1").all<{id:string}>(),allowed=new Set(available.results.map(item=>item.id));
       if(agentIds.some(id=>!allowed.has(id)))fail(400,'Unul dintre agenții selectați nu este activ sau nu există.');
-      const passwordHash=password===undefined?null:await hashPassword(password);
-      const guard='EXISTS (SELECT 1 FROM users WHERE id=? AND profile_revision=?)';
-      const statements=[];
+      const passwordHash=password===undefined?null:await hashPassword(password),guard=managerAccountWriteGuard(req,user,true);
+      // The proof exists only inside this atomic batch. Unlike saved metadata,
+      // its random key cannot match a different writer's otherwise equal result.
+      const proofKey='account-write-proof-v1:'+crypto.randomUUID(),proof='EXISTS (SELECT 1 FROM settings WHERE key=?)';
+      const agentsLive="NOT EXISTS (SELECT 1 FROM json_each(?) selected LEFT JOIN users agent ON agent.id=selected.value AND agent.role='agent' AND agent.active=1 WHERE agent.id IS NULL)";
+      const where=`id=? AND profile_revision=? AND role='manager' AND manager_scope=? AND (manager_scope<>'global' OR id=?) AND ${guard.sql} AND ${agentsLive}`;
+      const args=[current.id,expectedRevision,current.managerScope,user.id,...guard.args,JSON.stringify(agentIds)] as const;
+      const statements=[
+        passwordHash===null?db().prepare(`UPDATE users SET username=?,name=?,profile_revision=profile_revision+1 WHERE ${where}`).bind(username,name,...args):db().prepare(`UPDATE users SET username=?,name=?,password_hash=?,must_change_password=0,profile_revision=profile_revision+1 WHERE ${where}`).bind(username,name,passwordHash,...args),
+        db().prepare("INSERT INTO settings (key,value) SELECT ?,'1' WHERE changes()=1").bind(proofKey),
+      ];
       if(current.managerScope==='assigned') {
-        statements.push(db().prepare(`DELETE FROM manager_agents WHERE manager_id=? AND ${guard}`).bind(current.id,current.id,expectedRevision));
-        for(const agentId of agentIds)statements.push(db().prepare(`INSERT INTO manager_agents (manager_id,agent_id) SELECT ?,? WHERE ${guard}`).bind(current.id,agentId,current.id,expectedRevision));
+        statements.push(db().prepare(`DELETE FROM manager_agents WHERE manager_id=? AND ${proof}`).bind(current.id,proofKey));
+        for(const agentId of agentIds)statements.push(db().prepare(`INSERT INTO manager_agents (manager_id,agent_id) SELECT ?,? WHERE ${proof}`).bind(current.id,agentId,proofKey));
       }
       if(password!==undefined||username!==current.username) {
-        statements.push(db().prepare(`DELETE FROM login_attempts WHERE key IN (?,?) AND ${guard}`).bind('account:'+current.username,'account:'+username,current.id,expectedRevision));
-        statements.push(current.id===user.id?db().prepare(`DELETE FROM sessions WHERE user_id=? AND token_hash!=? AND ${guard}`).bind(current.id,sha256(sessionToken(req)),current.id,expectedRevision):db().prepare(`DELETE FROM sessions WHERE user_id=? AND ${guard}`).bind(current.id,current.id,expectedRevision));
+        statements.push(db().prepare(`DELETE FROM login_attempts WHERE key IN (?,?) AND ${proof}`).bind('account:'+current.username,'account:'+username,proofKey));
+        statements.push(current.id===user.id?db().prepare(`DELETE FROM sessions WHERE user_id=? AND token_hash!=? AND ${proof}`).bind(current.id,sha256(sessionToken(req)),proofKey):db().prepare(`DELETE FROM sessions WHERE user_id=? AND ${proof}`).bind(current.id,proofKey));
       }
-      statements.push(passwordHash===null?db().prepare('UPDATE users SET username=?,name=?,profile_revision=profile_revision+1 WHERE id=? AND profile_revision=?').bind(username,name,current.id,expectedRevision):db().prepare('UPDATE users SET username=?,name=?,password_hash=?,must_change_password=0,profile_revision=profile_revision+1 WHERE id=? AND profile_revision=?').bind(username,name,passwordHash,current.id,expectedRevision));
+      statements.push(db().prepare('DELETE FROM settings WHERE key=?').bind(proofKey));
       const results=await db().batch(statements);
-      if(!results.at(-1)?.meta.changes)fail(409,'Datele managerului s-au modificat. Redeschide editarea.');
+      if(!results[0]?.meta.changes)fail(409,'Datele managerului s-au modificat. Redeschide editarea.');
       return response({users:await getUsers(user)});
     }
     if(path[1]==='users' && path[2] && req.method==='PUT') {
@@ -569,13 +602,13 @@ async function dispatch(req: Request) {
         if(typeof password!=='string'||password.length<10||password.length>128)fail(400,'Parola trebuie să aibă între 10 și 128 de caractere.');
         const duplicate=await db().prepare('SELECT id FROM users WHERE username=? AND id!=?').bind(username,path[2]).first();
         if(duplicate)fail(409,'Numele de utilizator este deja folosit.');
-        const passwordHash=await hashPassword(password),guard='EXISTS (SELECT 1 FROM users WHERE id=? AND profile_revision=?)';
+        const passwordHash=await hashPassword(password),guard=agentAccountWriteGuard(req,user,path[2],expectedRevision),saved=agentCredentialCleanupGuard(path[2],expectedRevision+1,passwordHash);
         const results=await db().batch([
-          db().prepare(`DELETE FROM login_attempts WHERE key=(SELECT 'account:'||username FROM users WHERE id=?) AND ${guard}`).bind(path[2],path[2],expectedRevision),
-          db().prepare(`DELETE FROM sessions WHERE user_id=? AND ${guard}`).bind(path[2],path[2],expectedRevision),
-          db().prepare('UPDATE users SET username=?,password_hash=?,must_change_password=0,profile_revision=profile_revision+1 WHERE id=? AND profile_revision=?').bind(username,passwordHash,path[2],expectedRevision),
+          db().prepare(`UPDATE users SET username=?,password_hash=?,must_change_password=0,profile_revision=profile_revision+1 WHERE id=? AND profile_revision=? AND ${guard.sql}`).bind(username,passwordHash,path[2],expectedRevision,...guard.args),
+          db().prepare(`DELETE FROM login_attempts WHERE key=? AND ${saved.sql}`).bind('account:'+current.username,...saved.args),
+          db().prepare(`DELETE FROM sessions WHERE user_id=? AND ${saved.sql}`).bind(path[2],...saved.args),
         ]);
-        if(!results.at(-1)?.meta.changes)fail(409,'Datele agentului s-au modificat. Redeschide editarea.');
+        if(!results[0]?.meta.changes)fail(409,'Datele agentului s-au modificat. Redeschide editarea.');
         return response({users:await getUsers(user)});
       }
       const name=textField(body.name,100),warehouseName=textField(body.warehouseName,200),requestedSiteCode=textField(body.siteCode,80),currentSiteCode=typeof row.site_code==='string'?row.site_code:'';
@@ -583,8 +616,9 @@ async function dispatch(req: Request) {
       if(!isGlobalManager(user)&&requestedSiteCode!==currentSiteCode)fail(403,'SiteCode-ul poate fi modificat doar de managerul general.');
       const siteCode=isGlobalManager(user)?requestedSiteCode:currentSiteCode;
       if(siteCode&&await db().prepare("SELECT id FROM users WHERE role='agent' AND active=1 AND id!=? AND UPPER(TRIM(site_code))=UPPER(TRIM(?)) LIMIT 1").bind(path[2],siteCode).first())fail(409,'SiteCode-ul este deja alocat altui agent activ.');
+      const guard=agentAccountWriteGuard(req,user,path[2],expectedRevision,siteCode!==currentSiteCode);
       let result;
-      try { result=await db().prepare('UPDATE users SET name=?,warehouse_name=?,site_code=?,profile_revision=profile_revision+1 WHERE id=? AND profile_revision=?').bind(name,warehouseName,siteCode,path[2],expectedRevision).run(); }
+      try { result=await db().prepare(`UPDATE users SET name=?,warehouse_name=?,site_code=?,profile_revision=profile_revision+1 WHERE id=? AND profile_revision=? AND ${guard.sql}`).bind(name,warehouseName,siteCode,path[2],expectedRevision,...guard.args).run(); }
       catch(error) { if(error instanceof Error&&/UNIQUE constraint failed/.test(error.message))fail(409,'SiteCode-ul este deja alocat altui agent activ.'); throw error; }
       if(!result.meta.changes)fail(409,'Datele agentului s-au modificat între timp. Actualizează lista.');
       return response({users:await getUsers(user)});
@@ -601,9 +635,13 @@ async function dispatch(req: Request) {
         if(!found) fail(404,'Utilizatorul nu există.');
         const expectedRevision=Number(body.version);
         if(!Number.isSafeInteger(expectedRevision)||expectedRevision!==Number(userView(found).profileVersion))fail(409,'Datele agentului s-au modificat. Actualizează lista.');
-        const passwordHash=await hashPassword(password),guard='EXISTS (SELECT 1 FROM users WHERE id=? AND profile_revision=?)';
-        const results=await db().batch([db().prepare(`DELETE FROM login_attempts WHERE key=(SELECT 'account:'||username FROM users WHERE id=?) AND ${guard}`).bind(id,id,expectedRevision),db().prepare(`DELETE FROM sessions WHERE user_id=? AND ${guard}`).bind(id,id,expectedRevision),db().prepare('UPDATE users SET password_hash=?,must_change_password=0,profile_revision=profile_revision+1 WHERE id=? AND profile_revision=?').bind(passwordHash,id,expectedRevision)]);
-        if(!results.at(-1)?.meta.changes)fail(409,'Datele agentului s-au modificat. Actualizează lista.');
+        const passwordHash=await hashPassword(password),guard=agentAccountWriteGuard(req,user,id,expectedRevision),saved=agentCredentialCleanupGuard(id,expectedRevision+1,passwordHash);
+        const results=await db().batch([
+          db().prepare(`UPDATE users SET password_hash=?,must_change_password=0,profile_revision=profile_revision+1 WHERE id=? AND profile_revision=? AND ${guard.sql}`).bind(passwordHash,id,expectedRevision,...guard.args),
+          db().prepare(`DELETE FROM login_attempts WHERE key=? AND ${saved.sql}`).bind('account:'+String(found.username),...saved.args),
+          db().prepare(`DELETE FROM sessions WHERE user_id=? AND ${saved.sql}`).bind(id,...saved.args),
+        ]);
+        if(!results[0]?.meta.changes)fail(409,'Datele agentului s-au modificat. Actualizează lista.');
       } else if(body.action==='toggle') {
         const id=textField(body.id);
         await requireAgentAccess(user,id);
@@ -613,9 +651,10 @@ async function dispatch(req: Request) {
         const expectedRevision=Number(body.version);
         if(!Number.isSafeInteger(expectedRevision)||expectedRevision!==Number(userView(found).profileVersion))fail(409,'Datele agentului s-au modificat. Actualizează lista.');
         const activationGuard="(active=1 OR TRIM(site_code)='' OR NOT EXISTS (SELECT 1 FROM users other WHERE other.role='agent' AND other.active=1 AND other.id!=users.id AND UPPER(TRIM(other.site_code))=UPPER(TRIM(users.site_code))))";
+        const guard=agentAccountWriteGuard(req,user,id,expectedRevision);
         const results=await db().batch([
-          db().prepare(`UPDATE users SET active=1-active,profile_revision=profile_revision+1 WHERE id=? AND profile_revision=? AND ${activationGuard}`).bind(id,expectedRevision),
-          db().prepare('DELETE FROM sessions WHERE user_id=? AND EXISTS (SELECT 1 FROM users WHERE id=? AND profile_revision=?)').bind(id,id,expectedRevision+1),
+          db().prepare(`UPDATE users SET active=1-active,profile_revision=profile_revision+1 WHERE id=? AND profile_revision=? AND ${activationGuard} AND ${guard.sql}`).bind(id,expectedRevision,...guard.args),
+          db().prepare('DELETE FROM sessions WHERE user_id=? AND changes()=1').bind(id),
         ]);
         if(!results[0]?.meta.changes) {
           const current=await db().prepare("SELECT active,site_code,profile_revision FROM users WHERE id=? AND role='agent'").bind(id).first<{active:number;site_code:string;profile_revision:number}>();
@@ -627,8 +666,9 @@ async function dispatch(req: Request) {
         const username=textField(body.username,80).toLowerCase(),name=textField(body.name,100),password=textField(body.password,128),warehouseId=textField(body.warehouseId);
         if(!/^[a-z0-9._-]{3,80}$/.test(username)||!name||password.length<10||!warehouses.some(g=>g.id===warehouseId)) fail(400,'Completează numele, un utilizator valid, gestiunea și o parolă de minimum 10 caractere.');
         if(await db().prepare('SELECT id FROM users WHERE username=?').bind(username).first()) fail(409,'Numele de utilizator este deja folosit.');
-        const passwordHash=await hashPassword(password);
-        await db().prepare("INSERT INTO users (id,username,name,role,warehouse_id,password_hash,must_change_password) VALUES (?,?,?,'agent',?,?,0)").bind(crypto.randomUUID(),username,name,warehouseId,passwordHash).run();
+        const passwordHash=await hashPassword(password),guard=managerAccountWriteGuard(req,user,true);
+        const result=await db().prepare(`INSERT INTO users (id,username,name,role,warehouse_id,password_hash,must_change_password) SELECT ?,?,?,'agent',?,?,0 WHERE ${guard.sql}`).bind(crypto.randomUUID(),username,name,warehouseId,passwordHash,...guard.args).run();
+        if(!result.meta.changes)fail(409,'Contul managerului s-a modificat. Reautentifică-te și încearcă din nou.');
       }
       return response({users:await getUsers(user)});
     }
@@ -691,7 +731,7 @@ async function dispatch(req: Request) {
   }
   fail(404,'Pagina solicitată nu există.');
 }
-async function run(req: Request) { try { return await dispatch(req); } catch(err) { return handleError(err); } }
+async function run(req: Request) { return timedResponse(async()=>{try { return await dispatch(req); } catch(err) { return handleError(err); }}); }
 export const GET=run;
 export const POST=run;
 export const PUT=run;

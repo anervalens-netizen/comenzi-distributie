@@ -24,6 +24,7 @@ node tools/test-distribution-sales.mjs
 node tools/test-manager-commerce.mjs
 node tools/test-distribution-store.mjs
 node tools/test-activation-partners.mjs
+node tools/test-activation-portfolio.mjs
 node tools/test-activation-access.mjs
 node tools/test-activation-presentation.mjs
 python3 -W error::ResourceWarning tools/test_activations.py
@@ -113,6 +114,7 @@ node tools/test-r2-interface.mjs
 python3 -W error::ResourceWarning tools/test-backup.py
 python3 -W error::ResourceWarning tools/test-recovery.py
 node tools/test-password-race.mjs
+node tools/test-agent-account-authorization.mjs
 node tools/test-session-persistence.mjs
 # API acceptance on isolated SQLite.
 rm -rf work/qa work/qa-credentials
@@ -163,6 +165,7 @@ if [ -n "$CHROME_BIN" ]; then
   CHROME_BIN="$CHROME_BIN" node tools/test-order-pagination-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-stock-coverage-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-client-sales-browser.mjs
+  CHROME_BIN="$CHROME_BIN" node tools/test-report-error-recovery-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-client-history-import-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-client-import-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-portfolio-navigation-performance.mjs

@@ -14,6 +14,18 @@ const baselinePlugin={name:'baseline',setup(b){b.onLoad({filter:/(lib\/offline-w
 const previousDirectory=process.env.MOBIUP_DATA_DIR;process.env.MOBIUP_DATA_DIR=join(directory,'data');
 let browser,server,checks=0;const requests=[];
 const check=(value,label)=>{assert.ok(value,label);checks++;};
+const waitForWithDiagnostics=async(fn,label)=>{
+ try{await waitFor(fn,label);}catch(error){
+  let browserState;
+  try{
+   const serialized=await browser.evaluate(`JSON.stringify({bodyText:(document.body?.innerText??'').slice(0,4000),pendingCount:await m.pendingOperationCount(),pending:(await m.pendingOperations('agent')).map(op=>({id:op.id,path:op.path,method:op.method,state:op.state,attempts:op.attempts}))})`);
+   browserState=JSON.parse(serialized||'{}');
+  }catch(diagnosticError){browserState={diagnosticError:String(diagnosticError?.message||diagnosticError).slice(0,500)};}
+  const recentRequests=requests.slice(-5).map(({id,body,status})=>({id,body:JSON.stringify(body).slice(0,1000),status}));
+  console.error('RECOVERY CONTRACT FAILURE DIAGNOSTICS '+JSON.stringify({label,recentRequests,browserState}));
+  throw error;
+ }
+};
 try{
  const modulePath=join(directory,'route.mjs');
  await build({stdin:{contents:"export * from './app/api/[...path]/route';export {env} from './lib/runtime';",loader:'ts',resolveDir:resolve('.')},outfile:modulePath,bundle:true,platform:'node',format:'esm',packages:'external',logLevel:'silent',plugins:[{name:'node-runtime',setup(b){b.onResolve({filter:/^#mobiup-/},args=>({path:resolve('lib/'+args.path.slice('#mobiup-'.length)+'-node.ts')}));b.onResolve({filter:/\.sql\?raw$/},args=>({path:resolve(args.path.replace(/^@\//,'').replace(/\?raw$/,'')),namespace:'raw'}));b.onLoad({filter:/.*/,namespace:'raw'},args=>({contents:readFileSync(args.path,'utf8'),loader:'text'}));}}]});
@@ -169,7 +181,7 @@ try{
   await evaluate('root.unmount();mountPartner()');
   await waitFor(()=>evaluate("document.querySelector('.partner-visits textarea')?.value==='Legacy note'"),'editable legacy content survives another reopen');
   await fillVisit('.partner-follow-up-fields input[type=date]','2026-10-12');await clickVisit();
-  await waitFor(()=>evaluate("document.body.innerText.includes('Vizita a fost sincronizată.')"),'corrected legacy Monday saves');
+  await waitForWithDiagnostics(()=>evaluate("document.body.innerText.includes('Vizita a fost sincronizată.')"),'corrected legacy Monday saves');
   check(await evaluate("!(await m.readWork('agent','visit','point'))&&!(await m.readWork('agent','visit-edit','point'))&&(await m.pendingOperationCount())===0"),'corrected legacy confirmation clears pending, recovery and PWA barrier');
   assert.deepEqual(requests.at(-1).body.notes,'Legacy note');assert.equal(requests.at(-1).body.nextStep,'Legacy next step');assert.equal(requests.at(-1).body.followUpDate,'2026-10-12');
  }

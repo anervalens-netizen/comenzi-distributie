@@ -1,11 +1,18 @@
 import assert from 'node:assert/strict';
 import {distribution,payloadBytes} from './performance/lab.mjs';
+import {assertEquivalentSearchReports} from './performance/report-comparison.mjs';
 import {clientSalesTestRuntime} from './client-sales-test-runtime.mjs';
 assert.equal(distribution([1,2,3,4]).p95,undefined);
 assert.equal(distribution([1,2,3,4]).min,undefined,'Short probes are observations, not a distribution');
 assert.equal(distribution(Array.from({length:30},(_,i)=>i+1)).p95,29);
 assert.equal(distribution(Array.from({length:30},(_,i)=>i+1)).p50,15);
 assert.throws(()=>distribution([]));
+const searchReport=(revision)=>({state:'ready',revision,total:2,totals:{valueCents:4500},rows:[{id:'synthetic-1'},{id:'synthetic-2'}]});
+const searchA=searchReport('0.'+'a'.repeat(64)),searchB=searchReport('0.'+'b'.repeat(64));
+assert.doesNotThrow(()=>assertEquivalentSearchReports(searchA,searchB),'equivalent filters may produce equal report data with distinct query-bound revisions');
+assert.throws(()=>assertEquivalentSearchReports(searchA,{...searchB,total:3}),assert.AssertionError,'commercial result differences must fail equivalence');
+assert.throws(()=>assertEquivalentSearchReports(searchA,{...searchB,revision:searchA.revision}),/distinct/,'different filters must not share pagination revisions');
+assert.throws(()=>assertEquivalentSearchReports(searchA,{...searchB,revision:'invalid'}),/opaque revision/,'both pagination revisions must be valid tokens');
 const bytes=payloadBytes('ș'.repeat(1000));assert.equal(bytes.raw,2000);assert(bytes.gzip<bytes.raw);assert(bytes.brotli<bytes.raw);
 const t=await clientSalesTestRuntime(),m=t.module;
 try{

@@ -12,7 +12,7 @@ export function ActivationPartners({userId,query,reload}:{userId:string;query:st
  useEffect(()=>{if(selected)detailHeading.current?.focus();},[selected,company]);
  const params=new URLSearchParams(query);params.set('provider','both');params.set('view','partners');params.set('page',String(page));params.set('q',search);const listQuery=params.toString(),listKey=userId+'|'+listQuery+'|'+reload;
  const [data,setData]=useState<{key:string;value:Partners}|null>(null),[error,setError]=useState<{key:string;text:string}|null>(null);
- useEffect(()=>{const c=new AbortController();api<Partners>('activations?'+listQuery,'GET',undefined,c.signal).then(value=>{if(!c.signal.aborted)setData({key:listKey,value});}).catch(e=>{if(!c.signal.aborted)setError({key:listKey,text:errorMessage(e)});});return()=>c.abort();},[listKey,listQuery]);
+ useEffect(()=>{const c=new AbortController();api<Partners>('activations?'+listQuery,'GET',undefined,c.signal).then(value=>{if(!c.signal.aborted){setData({key:listKey,value});setError(null);}}).catch(e=>{if(!c.signal.aborted)setError({key:listKey,text:errorMessage(e)});});return()=>c.abort();},[listKey,listQuery]);
  const visible=data?.key===listKey?data.value:null,message=error?.key===listKey?error.text:'';
  const [detail,setDetail]=useState<{key:string;reports:ActivationReport[];errors:string[]}|null>(null);
  const detailParams=new URLSearchParams(query);detailParams.set('view','detail');detailParams.set('page',String(detailPage));if(company&&selected)detailParams.set('company',JSON.stringify([selected.company,selected.clientCode]));else if(selected)detailParams.set('point',selected.key);
