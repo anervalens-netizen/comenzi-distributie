@@ -48,9 +48,9 @@ try{
  assert(await browser.evaluate('document.documentElement.scrollWidth<=innerWidth'),'no page overflow on mobile');
  mkdirSync('work/evidence',{recursive:true});const shot=await browser.send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});writeFileSync('work/evidence/activation-mobile.png',Buffer.from(shot.data,'base64'));
  await account('other-manager');assert(await browser.evaluate('[...document.querySelectorAll(".main-nav [role=tab]")].some(x=>x.textContent==="Prepay")'));await browser.evaluate('[...document.querySelectorAll(".main-nav [role=tab]")].find(x=>x.textContent==="Prepay").click()');await waitFor(()=>browser.evaluate('!!document.querySelector(".prepay-workspace")'),'sales-only Prepay');assert(!(await browser.evaluate('[...document.querySelectorAll(".commerce-tabs button")].some(x=>x.textContent==="Activări")')),'activation tab stays permission gated');
- await account('other-agent');assert(!(await browser.evaluate('[...document.querySelectorAll(".main-nav [role=tab]")].some(x=>x.textContent==="Activări")')));
- await account('pilot-agent');assert(await browser.evaluate('[...document.querySelectorAll(".main-nav [role=tab]")].some(x=>x.textContent==="Activări")'));
- await browser.evaluate('[...document.querySelectorAll(".main-nav [role=tab]")].find(x=>x.textContent==="Activări").click()');
+ await account('other-agent');assert(await browser.evaluate('[...document.querySelectorAll(".main-nav [role=tab]")].some(x=>x.textContent==="Prepay")'));await browser.evaluate('[...document.querySelectorAll(".main-nav [role=tab]")].find(x=>x.textContent==="Prepay").click()');await waitFor(()=>browser.evaluate('!!document.querySelector(".prepay-workspace")'),'agent Prepay sales without activation permission');assert(!(await browser.evaluate('[...document.querySelectorAll(".prepay-workspace .commerce-tabs button")].some(button=>button.textContent==="Activări")')),'agent activation tab remains permission gated');
+ await account('pilot-agent');assert(await browser.evaluate('[...document.querySelectorAll(".main-nav [role=tab]")].some(x=>x.textContent==="Prepay")'));
+ await browser.evaluate('[...document.querySelectorAll(".main-nav [role=tab]")].find(x=>x.textContent==="Prepay").click()');
  await waitFor(()=>browser.evaluate('document.querySelector(".activation-primary strong")?.textContent==="12"'),'agent totals');
  assert.equal(await browser.evaluate('getComputedStyle(document.querySelector(".activation-source-date")).fontSize'),'12px','cold agent activation owns source-date styles before commerce is loaded');
  assert.equal(await browser.evaluate('getComputedStyle(document.querySelector(".activation-operator .commerce-details summary")).fontSize'),'13px','cold agent activation loads shared disclosure styles');
@@ -59,7 +59,7 @@ try{
  assert(!(await browser.evaluate('document.querySelector(".activation-workspace").textContent.includes("TR Example B")')));
  // A stale source must replace data with an error, never leave old totals visible.
  const changed=new DatabaseSync(folder+'/activations.sqlite');changed.exec("INSERT INTO activation_imports VALUES('new','example',1,2,'complete')");changed.close();
- await browser.evaluate(`document.querySelector('[aria-label="Actualizează activările"]').click()`);
+ await browser.evaluate(`document.querySelector('[aria-label="Actualizează Prepay"]').click()`);
  await waitFor(()=>browser.evaluate('document.querySelector(".activation-workspace [role=alert]")!==null'),'stale error');
  assert(!(await browser.evaluate('!!document.querySelector(".activation-primary")')));
  console.log('PASS: real API authentication/pilot/scope, tab placement and exclusion, legacy API, explicit project migration, simultaneous cards, mobile, stale-report error.');
