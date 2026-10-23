@@ -108,6 +108,19 @@ checksum, path, resource, database and entry-count checks still apply.
 
 ## Manager access
 
+The manager workspace separates operational activity (Sinteză), product sales
+(Accesorii, including an additional-products view), and prepaid SIM sales and
+activations (Prepay). Operational activity has one monthly selector; commercial
+reports share direct multi-month selection and visible project toggles. The
+customer portfolio report retains its explicitly monthly scope. Changing the
+presentation does not change authorization or activation eligibility.
+
+Activation partner summaries distinguish identified work points, personal sales
+and activations whose point identity remains unresolved. Browse groups and
+activation counts are not work-point counts. Personal sales remain in totals;
+detail and export retain the same authenticated scope. A reported handset
+category of `-` is explicit noncommissionable evidence, not a missing value.
+
 All managers can view national activity, partners, orders, stock, inventory and sales, with region and agent filters. Regional assignments still govern account changes and operational writes. Managers change their own password from their profile; regional managers reset assigned agents' passwords under Team → Passwords and accounts (the default subtab). Regional managers cannot change other regions' accounts or manager assignments.
 
 ## Lucru mobil și offline

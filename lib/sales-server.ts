@@ -1,5 +1,5 @@
 import {readDistributionRules} from './distribution-config';
-import {projectIds} from './distribution-rules';
+import {projectIds,productGroup} from './distribution-rules';
 import {distributionSales,combineSalesViews} from './distribution-sales';
 import { catalog, db, fail, isGlobalManager, readLimited, requireManager, response } from './server';
 import type { User } from './types';
@@ -138,7 +138,9 @@ export async function salesView(req: Request, user: User) {
     let fallback=views[0];
     if(!fallback){const url=new URL(req.url);url.searchParams.delete('months');url.searchParams.set('projects','');fallback=await (await salesView(new Request(url),user)).json() as SalesView;}
     if(generation!==salesRevision()||identity!==(await mappingSnapshot()).hash||JSON.stringify(rules)!==JSON.stringify(await readDistributionRules()))fail(409,'Datele s-au modificat. Reîncarcă selecția.');
-    return response({...combineSalesViews(views,fallback),distribution:distributionSales(views,rules,months)});
+    const combined=combineSalesViews(views,fallback);
+    combined.products=combined.products.map(p=>({...p,distributionGroup:productGroup(rules,p.itemCode)}));
+    return response({...combined,distribution:distributionSales(views,rules,months)});
   }
   // The current-month view must not aggregate the complete imported history.
   // History callers opt into a range explicitly.

@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronDown, Search } from 'lucide-react';
+import { ChevronDown, Search, ArrowDown, ArrowUp, Network, RotateCcw } from 'lucide-react';
+import {ReportPeriod} from './report-period';
 import {projectIds,type DistributionProject} from '@/lib/distribution-rules';
 import {bucharestMonthKey} from '@/lib/bucharest-month';
 import './distribution.css';
@@ -93,6 +94,6 @@ export function ManagerScopeBar({scope,reporting=false}: {scope: ManagerScope;re
 }
 
 export function DistributionFilterControls({scope}:{scope:ManagerScope}){
- const [month,setMonth]=useState(bucharestMonthKey(new Date()));
- return <div className="distribution-filters"><details><summary>Proiecte · {scope.projects.length===3?'Toate':scope.projects.length||'Niciunul'}</summary><fieldset><legend>Proiecte</legend>{projectIds.map(p=><label key={p}><input type="checkbox" checked={scope.projects.includes(p)} onChange={e=>scope.selectProjects(e.target.checked?[...scope.projects,p]:scope.projects.filter(v=>v!==p))}/>{{vodafone_sud:'Vodafone Sud',vodafone_nord:'Vodafone Nord',non_exclusiv:'Non-exclusiv'}[p]}</label>)}</fieldset></details><details><summary>Perioadă · {scope.reportMonths.join(' + ')||'Nicio lună'}</summary><fieldset><legend>Luni selectate</legend><div className="distribution-months">{scope.reportMonths.map(m=><button type="button" key={m} aria-label={'Elimină luna '+m} onClick={()=>scope.selectMonths(scope.reportMonths.filter(v=>v!==m))}>{m} ×</button>)}{!scope.reportMonths.length&&<span>Nicio lună selectată</span>}</div><label>Adaugă luna<input aria-label="Lună de adăugat" type="month" value={month} onChange={e=>setMonth(e.target.value)}/></label><button type="button" className="secondary" disabled={!/^20\d{2}-(0[1-9]|1[0-2])$/.test(month)||scope.reportMonths.length>=36} onClick={()=>scope.selectMonths([...scope.reportMonths,month])}>Adaugă</button></fieldset></details><button type="button" className="secondary" onClick={scope.resetReporting}>Resetează filtrele</button></div>;
+ const icons={vodafone_sud:ArrowDown,vodafone_nord:ArrowUp,non_exclusiv:Network};
+ return <div className="distribution-filters"><fieldset className="distribution-projects" aria-label="Proiecte">{projectIds.map(project=>{const Icon=icons[project],active=scope.projects.includes(project);return <button type="button" key={project} aria-pressed={active} onClick={()=>scope.selectProjects(active?scope.projects.filter(value=>value!==project):[...scope.projects,project])}><Icon size={17}/>{{vodafone_sud:'Vodafone Sud',vodafone_nord:'Vodafone Nord',non_exclusiv:'Non-exclusiv'}[project]}</button>;})}<button type="button" className="report-reset" aria-label="Resetează filtrele" title="Resetează filtrele" onClick={scope.resetReporting}><RotateCcw size={16}/></button></fieldset><ReportPeriod selected={scope.reportMonths} onChange={scope.selectMonths}/></div>;
 }

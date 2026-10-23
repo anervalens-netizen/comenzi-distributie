@@ -8,6 +8,9 @@ import re
 ACTIVATION_FIELDS = ('Activat', 'DataActivare', 'HandSetType', 'JudetActivare', 'ItemCodeA', 'ItemNameA')
 COMMERCIAL_FIELDS = ('Firma', 'DataVDF', 'TR', 'SiteCode', 'ItemCode', 'ItemName', 'Cantitate', 'Pret', 'Valoare', 'PretFD', 'CIF', 'CodPunctDeLucru', 'PunctDeLucru', 'Denumire Client', 'Oras', 'Judet', 'Nr', 'TRVechi', 'ItemType', 'IMEI', 'Qtty', 'DocumentDetailId', 'DocumentId', 'SiteId')
 UNKNOWN = {'', '-', 'NEALOCAT', 'UNALLOCATED', 'N/A', 'UNKNOWN', 'UNASSIGNED', '<UNASSIGNED>'}
+# A dash is an explicit noncommissionable handset category, but remains a
+# missing-value marker for identifiers, dates and counties.
+FIELD_UNKNOWN = {'handset': UNKNOWN - {'-'}, 'HandSetType': UNKNOWN - {'-'}}
 
 
 def migrate(c, version):
@@ -24,8 +27,9 @@ def migrate(c, version):
 
 
 def select_field(observations, field):
-    """Absent/unallocated fields never erase known values. Equal authority conflicts stay explicit."""
-    values=[o for o in observations if str(o.get(field) or '').strip().upper() not in UNKNOWN]
+    """Only field-specific missing values are skipped; explicit categories supersede history."""
+    missing=FIELD_UNKNOWN.get(field, UNKNOWN)
+    values=[o for o in observations if str(o.get(field) or '').strip().upper() not in missing]
     if not values:
         return '', [], False
     rank=max((o['priority'],o['source_at']) for o in values)

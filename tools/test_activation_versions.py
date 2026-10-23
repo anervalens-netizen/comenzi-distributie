@@ -60,6 +60,28 @@ class VersionTests(f.ActivationsTests):
         self.operator([self.official(DATE_OF_ACTIVATION='2026-09-01')],at='2026-10-20')
         fact=self.fact();self.assertEqual(fact['activation_date'],'2026-10-16');self.assertEqual(json.loads(fact['evidence_json'])['observation']['county'],'COVASNA');self.assertEqual(fact['net_quantity'],1)
 
+    def test_explicit_handset_dash_supersedes_eligible_history_but_missing_does_not(self):
+        eligible='SIM with initial credit >= 3 EUR'
+        self.revision([f.row(DataActivare='20261015',JudetActivare='ARGES',HandSetType=eligible)],'2026-10-20')
+        self.operator([self.official(**{'Paid SIM Category':eligible})],at='2026-10-21')
+        self.operator([self.official(COUNTY_OF_ACTIVATION='-',**{'Paid SIM Category':'-'})],at='2026-10-22')
+        evidence=json.loads(self.fact()['evidence_json'])
+        self.assertEqual(evidence['observation']['handset'],'-')
+        self.assertEqual(evidence['observation']['county'],'ARGES')
+        source=evidence['observationSources']['handset']
+        self.assertEqual(len(source),1)
+        selected=self.c.execute('SELECT handset,source_at FROM activation_observations o JOIN activation_imports i ON i.id=o.import_id WHERE o.import_id=? AND o.source_row=?',(source[0]['importId'],source[0]['row'])).fetchone()
+        self.assertEqual(tuple(selected),('-','2026-10-22'))
+        self.operator([self.official(**{'Paid SIM Category':''})],at='2026-10-23')
+        self.assertEqual(json.loads(self.fact()['evidence_json'])['observation']['handset'],'-')
+
+    def test_equal_authority_handset_dash_conflict_remains_explicit(self):
+        self.revision([f.row(DataActivare='20261015')],'2026-10-20')
+        self.operator([self.official(**{'Paid SIM Category':'SIM with initial credit >= 3 EUR'})])
+        self.operator([self.official(**{'Paid SIM Category':'-'})])
+        self.assertIn('handset_conflict',json.loads(self.fact()['reasons']))
+        self.assertEqual(json.loads(self.fact()['evidence_json'])['observation']['handset'],'')
+
     def test_partial_month_keeps_old_month_and_company_namespace(self):
         self.revision([f.row()],period_start='2026-01-01',period_end='2026-03-31')
         self.revision([f.row(IMEI='0000000000000000020',Activat='000000000000000002',DocumentDetailId='NEW',DataActivare='20261001')],period_start='2026-10-01',period_end='2026-10-20')

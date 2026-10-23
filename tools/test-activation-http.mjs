@@ -39,15 +39,15 @@ try{
  browser=await browserFixture(origin);
  async function account(id){await browser.close();browser=await browserFixture(origin);await browser.send('Network.setCookie',{name:'mobiup_session',value:tokens[id],url:origin});await browser.send('Page.navigate',{url:origin});await waitFor(()=>browser.evaluate('document.querySelector(".profile strong")?.textContent==='+JSON.stringify(id)),'account navigation');}
  await account('pilot-manager');
- const tabs=await browser.evaluate('[...document.querySelectorAll(".main-nav [role=tab]")].map(x=>x.textContent)');assert.equal(tabs[tabs.indexOf('Vânzări')+1],'Activări');
- await browser.evaluate('[...document.querySelectorAll(".main-nav [role=tab]")].find(x=>x.textContent==="Activări").click()');
+ const tabs=await browser.evaluate('[...document.querySelectorAll(".main-nav [role=tab]")].map(x=>x.textContent)');assert.equal(tabs[tabs.indexOf('Accesorii')+1],'Prepay');
+ await browser.evaluate('[...document.querySelectorAll(".main-nav [role=tab]")].find(x=>x.textContent==="Prepay").click()');
  await waitFor(()=>browser.evaluate('document.querySelectorAll(".activation-operator").length===2'),'simultaneous operator cards');
  await waitFor(()=>browser.evaluate('document.querySelector(".activation-primary strong")?.textContent==="35"'),'legacy pilot stays functional before project configuration');
  assert(!(await browser.evaluate('!!document.querySelector(".distribution-filters")')),'unconfigured project filters are not offered');
  await browser.send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
  assert(await browser.evaluate('document.documentElement.scrollWidth<=innerWidth'),'no page overflow on mobile');
  mkdirSync('work/evidence',{recursive:true});const shot=await browser.send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});writeFileSync('work/evidence/activation-mobile.png',Buffer.from(shot.data,'base64'));
- await account('other-manager');assert(!(await browser.evaluate('[...document.querySelectorAll(".main-nav [role=tab]")].some(x=>x.textContent==="Activări")')));
+ await account('other-manager');assert(await browser.evaluate('[...document.querySelectorAll(".main-nav [role=tab]")].some(x=>x.textContent==="Prepay")'));await browser.evaluate('[...document.querySelectorAll(".main-nav [role=tab]")].find(x=>x.textContent==="Prepay").click()');await waitFor(()=>browser.evaluate('!!document.querySelector(".prepay-workspace")'),'sales-only Prepay');assert(!(await browser.evaluate('[...document.querySelectorAll(".commerce-tabs button")].some(x=>x.textContent==="Activări")')),'activation tab stays permission gated');
  await account('other-agent');assert(!(await browser.evaluate('[...document.querySelectorAll(".main-nav [role=tab]")].some(x=>x.textContent==="Activări")')));
  await account('pilot-agent');assert(await browser.evaluate('[...document.querySelectorAll(".main-nav [role=tab]")].some(x=>x.textContent==="Activări")'));
  await browser.evaluate('[...document.querySelectorAll(".main-nav [role=tab]")].find(x=>x.textContent==="Activări").click()');

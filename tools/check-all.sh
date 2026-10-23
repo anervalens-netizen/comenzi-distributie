@@ -21,7 +21,9 @@ python3 -W error::ResourceWarning tools/test_distribution_configure.py
 python3 -W error::ResourceWarning tools/test_activation_versions.py
 python3 -W error::ResourceWarning tools/test_activation_job.py
 node tools/test-distribution-sales.mjs
+node tools/test-manager-commerce.mjs
 node tools/test-distribution-store.mjs
+node tools/test-activation-partners.mjs
 node tools/test-activation-access.mjs
 python3 -W error::ResourceWarning tools/test_activations.py
 python3 -W error::ResourceWarning tools/test_activation_report.py

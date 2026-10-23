@@ -5,7 +5,7 @@ import {createServer} from 'node:http';
 import {browserFixture} from './offline-browser-fixture.mjs';
 
 const css=readFileSync('app/globals.css','utf8')+readFileSync('components/manager-workspace.css','utf8');
-const labels=['Sinteză','Parteneri','Vânzări','Activări','Echipă','Operațiuni'];
+const labels=['Sinteză','Parteneri','Accesorii','Prepay','Echipă','Operațiuni'];
 const server=createServer((req,res)=>{res.setHeader('Content-Type','text/html');res.end(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>${css}</style><div class="app-shell manager-shell"><div class="nav-wrap"><div class="main-nav" data-slot="tabs-list">${labels.map(label=>`<button data-slot="tabs-trigger" onclick="document.body.dataset.selected=this.textContent">${label}</button>`).join('')}</div></div><main class="main-content">Synthetic content</main></div>`);});
 await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
 let browser,checks=0;
