@@ -79,6 +79,10 @@ try{
  await waitFor(()=>browser.evaluate('document.querySelector(".distribution-table tbody button")!==null'),'partner table');
  await browser.evaluate('document.querySelector(".distribution-table tbody button").click()');
  await waitFor(()=>browser.evaluate('document.body.textContent.includes("Reper sursă")'),'point detail');
+ assert(await browser.evaluate('document.querySelector(".activation-detail-reasons")?.textContent.includes("Județ în afara ariei")'),'partner detail explains eligibility in Romanian');
+ assert(!(await browser.evaluate('/outside_territory|missing_county|ineligible_type|missing_type|contradictory_source/.test(document.querySelector(".activation-workspace").textContent)')),'partner detail never exposes technical reason keys');
+ const reasonLayout=await browser.evaluate('(()=>{const explanation=document.querySelector(".activation-detail-reasons"),style=getComputedStyle(explanation);return {display:style.display,gap:parseFloat(style.marginTop),date:document.querySelector(".activation-date").textContent,dateWrap:getComputedStyle(document.querySelector(".activation-date")).whiteSpace}})()');
+ assert.equal(reasonLayout.display,'block');assert(reasonLayout.gap>=4,'reason explanation has a visible gap after eligibility');assert.equal(reasonLayout.date,'15.10.2026');assert.equal(reasonLayout.dateWrap,'nowrap');
  assert.equal(await browser.evaluate('document.activeElement?.tagName'),'H3','opening a point moves keyboard focus into its detail');
  await browser.evaluate(`document.querySelector('[aria-label="Actualizează Prepay"]').click()`);
  await waitFor(()=>browser.evaluate('document.body.textContent.includes("Reper sursă")'),'refresh keeps selected partner detail');

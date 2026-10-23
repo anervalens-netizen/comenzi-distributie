@@ -4,26 +4,25 @@ import {RefreshCw} from 'lucide-react';
 import {api,errorMessage} from '@/lib/client-api';
 import {bucharestMonthKey} from '@/lib/bucharest-month';
 import type {ActivationReport,ActivationProvider} from '@/lib/activation-types';
+import {activationReasonLabel,activationDateLabel} from '@/lib/activation-labels';
 import {OperatorLogo} from './distribution-cards';
 import {ActivationPartners} from './activation-partners';
 import './activations.css';
 const number=(n:number)=>n.toLocaleString('ro-RO');
-const reasons:Record<string,string>={outside_territory:'Județ în afara ariei',missing_county:'Județ lipsă',ineligible_type:'Tip SIM neeligibil',missing_type:'Tip SIM lipsă',contradictory_source:'Date contradictorii'};
 export function ActivationOperatorCard({userId,query,provider,reload}:{userId:string;query:string;provider:ActivationProvider;reload:number}){
  const params=new URLSearchParams(query);params.set('provider',provider);const search=params.toString(),key=userId+'|'+search+'|'+reload;
  const [result,setResult]=useState<{key:string;data:ActivationReport}|null>(null),[error,setError]=useState<{key:string;text:string}|null>(null);
  useEffect(()=>{const c=new AbortController();api<ActivationReport>('activations?'+search,'GET',undefined,c.signal).then(data=>{if(!c.signal.aborted)setResult({key,data});}).catch(e=>{if(!c.signal.aborted)setError({key,text:errorMessage(e)});});return()=>c.abort();},[key,search]);
  const data=result?.key===key?result.data:null,message=error?.key===key?error.text:'';
- const date=(value:string|null)=>value?value.split('-').reverse().join('.'):'—';
  return <article className="panel distribution-card activation-operator" aria-label={'Activări '+provider}>
   <OperatorLogo provider={provider}/>
   {message?<p role="alert">{message}</p>:!data?<output>Se încarcă activările…</output>:!data.available?<p>Nu sunt încă date de activare pentru acest operator.</p>:<>
    <div className="activation-primary"><span>Activări în perioada selectată</span><strong>{number(data.totals.total)}</strong><small>SIM-uri distincte activate</small></div>
-   <p className="activation-source-date">Sursă până la <strong>{date(data.latestDate)}</strong></p>
+   <p className="activation-source-date">Sursă până la <strong>{activationDateLabel(data.latestDate)}</strong></p>
    {data.selectedMonths?.some(month=>!data.coveredMonths?.includes(month))&&<output className="activation-coverage-warning">Există luni fără activări raportate în selecție. Acoperirea poate fi incompletă.</output>}
    {provider==='vodafone'&&data.totals.eligible!==undefined&&<dl className="activation-eligibility"><div><dt>Comisionabile</dt><dd>{number(data.totals.eligible||0)}</dd></div><div><dt>Din regiunea proprie</dt><dd>{number(data.totals.ownRegion||0)}</dd></div><div><dt>Din altă regiune eligibilă</dt><dd>{number(data.totals.otherRegion||0)}</dd></div>{!!data.totals.unknownRegion&&<div><dt>Regiune de verificat</dt><dd>{number(data.totals.unknownRegion)}</dd></div>}{data.totals.ineligible!==undefined&&<div><dt>Necomisionabile</dt><dd>{number(data.totals.ineligible)}</dd></div>}</dl>}
    {data.simZero&&<section className="activation-sim-zero"><h3>SIM 0 · distribuite în selecție</h3><dl><div><dt>Distribuite</dt><dd>{number(data.simZero.distributed)}</dd></div><div><dt>Activate dintre aceleași SIM-uri</dt><dd>{number(data.simZero.activated)}</dd></div><div><dt>Fără activare raportată</dt><dd>{number(data.simZero.withoutReportedActivation)}</dd></div></dl><small>La data sursei; nu reprezintă stocul fizic.</small></section>}
-   <details className="commerce-details"><summary>Detalii despre sursă și eligibilitate</summary><p>Ultima activare: {date(data.latestDate)}. Import: {data.importedAt?new Date(data.importedAt).toLocaleString('ro-RO',{timeZone:'Europe/Bucharest'}):'—'}.</p>{data.totals.reasons&&Object.keys(data.totals.reasons).length>0&&<><h3>Motivele neeligibilității</h3>{Object.entries(data.totals.reasons).map(([reason,count])=><p key={reason}>{reasons[reason]||reason}: {number(count)}</p>)}<p>Un SIM poate avea mai multe motive; acestea nu se adună pentru total.</p></>}{!!data.totals.unassigned&&<p>Agent de verificat: {number(data.totals.unassigned)}. Incluse o singură dată în total.</p>}{data.reconciliation!==undefined&&data.reconciliation>0&&<p>În afara distribuției TR: {number(data.reconciliation)}. Excluse din totalul distribuției.</p>}</details>
+   <details className="commerce-details"><summary>Detalii despre sursă și eligibilitate</summary><p>Ultima activare: {activationDateLabel(data.latestDate)}. Import: {data.importedAt?new Date(data.importedAt).toLocaleString('ro-RO',{timeZone:'Europe/Bucharest'}):'—'}.</p>{data.totals.reasons&&Object.keys(data.totals.reasons).length>0&&<><h3>Motivele neeligibilității</h3>{Object.entries(data.totals.reasons).map(([reason,count])=><p key={reason}>{activationReasonLabel(reason)}: {number(count)}</p>)}<p>Un SIM poate avea mai multe motive; acestea nu se adună pentru total.</p></>}{!!data.totals.unassigned&&<p>Agent de verificat: {number(data.totals.unassigned)}. Incluse o singură dată în total.</p>}{data.reconciliation!==undefined&&data.reconciliation>0&&<p>În afara distribuției TR: {number(data.reconciliation)}. Excluse din totalul distribuției.</p>}</details>
    <details className="commerce-details"><summary>Pe agent și istoric lunar</summary><div className="distribution-table-scroll"><table className="distribution-table"><thead><tr><th>Agent / TR</th><th>Total</th></tr></thead><tbody>{data.sites.map(site=><tr key={site.site}><th>{site.site?site.label:'Agent de verificat'}</th><td>{number(site.total)}</td></tr>)}</tbody></table><table className="distribution-table"><thead><tr><th>Luna</th><th>Total</th></tr></thead><tbody>{data.history.map(month=><tr key={month.month}><th>{month.month}</th><td>{number(month.total)}</td></tr>)}</tbody></table></div></details>
   </>}
  </article>;

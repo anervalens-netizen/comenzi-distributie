@@ -17,3 +17,5 @@
 .commerce-details{border-top:1px solid var(--manager-line,#e1e6eb);padding:12px 0;margin-top:12px}.commerce-details>summary{display:flex;align-items:center;gap:8px;cursor:pointer;list-style:none;font-size:13px;font-weight:600;min-height:24px}.commerce-details>summary:before{content:'›';font-size:20px;color:#7b8891;line-height:1;transition:transform .15s}.commerce-details[open]>summary:before{transform:rotate(90deg)}.commerce-details>summary>span{font-size:11px;background:#f0f3f6;color:#60707e;padding:2px 6px;border-radius:5px}.distribution-table th small{display:block;font-size:11px;font-weight:400;color:#79838c;margin-top:4px}
 .report-period button:focus-visible,.distribution-projects button:focus-visible{outline:2px solid var(--manager-accent,#bf2430);outline-offset:2px}
 @media(max-width:560px){.manager-scope-bar{margin-bottom:15px;gap:8px}}
+
+.activation-detail-reasons{display:block;margin-top:4px;font-size:11px;line-height:1.45;color:#78818e;white-space:normal}.distribution-table .activation-date{white-space:nowrap}
