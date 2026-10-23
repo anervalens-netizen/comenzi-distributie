@@ -88,7 +88,9 @@ try{
  assert(!(await browser.evaluate('!!document.querySelector(".distribution-filters")')),'customer monthly report has no conflicting global multi-month control');
  assert.equal(await browser.evaluate('document.querySelectorAll(".report-period").length'),1,'one customer report monthly control');
  await browser.evaluate('[...document.querySelectorAll(".main-nav [role=tab]")].find(button=>button.textContent==="Prepay").click()');
- await waitFor(()=>browser.evaluate('!!document.querySelector(".distribution-filters")'),'report months restored after leaving customer mode');
+ // Base UI keeps the outgoing inert panel mounted until its exit completes.
+ // Wait for that transition before checking that the new view has one period.
+ await waitFor(()=>browser.evaluate('!!document.querySelector(".distribution-filters")&&!!document.querySelector(".prepay-workspace")&&!document.querySelector(".client-sales")'),'report months restored after leaving customer mode');
  assert.equal(await browser.evaluate('document.querySelectorAll(".report-month-grid button[aria-pressed=true]").length'),2);
  await browser.evaluate('[...document.querySelectorAll(".main-nav [role=tab]")].find(button=>button.textContent==="Accesorii").click()');
  await waitFor(()=>browser.evaluate('!!document.querySelector(".client-sales")'),'customer subview retained');
