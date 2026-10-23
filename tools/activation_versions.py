@@ -11,6 +11,8 @@ UNKNOWN = {'', '-', 'NEALOCAT', 'UNALLOCATED', 'N/A', 'UNKNOWN', 'UNASSIGNED', '
 # A dash is an explicit noncommissionable handset category, but remains a
 # missing-value marker for identifiers, dates and counties.
 FIELD_UNKNOWN = {'handset': UNKNOWN - {'-'}, 'HandSetType': UNKNOWN - {'-'}}
+# Derived reconciliation semantics are independent of the immutable ledger schema.
+FACTS_VERSION = '2'
 
 
 def migrate(c, version):

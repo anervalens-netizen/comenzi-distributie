@@ -9,5 +9,6 @@ assert.equal(accessories.length,1);assert.equal(accessories[0].quantity,3);asser
 for(const [category,quantity] of [['varta',2],['scent',3],['phones',1],['vouchers',3],['other',1]])assert.equal(rows.find(row=>row.category===category)?.quantity,quantity);
 assert.equal(rows.reduce((sum,row)=>sum+row.quantity,0),13,'prepay is excluded from accessories and other categories');
 assert.equal(managerProductCategory(product('UNCONFIGURED',1,2,{})),'accessories','unconfigured installations retain their existing accessory segment');
+assert.equal(managerProductCategory(product('UNCONFIGURED-SIM',1,2,{segment:'cardsSim',subsegment:'sim'})),null,'legacy SIM sales remain in Prepay without duplicate other-product totals');
 assert.equal(managerProductCategory(product('MAPPED-SIM',1,2,{distributionGroup:'vodafone_credit',segment:'accessories'})),null,'authoritative mapping wins over broader legacy segment');
 console.log('PASS: exact accessory groups, granular category quantities/value, returns, phones/vouchers retention and no Prepay duplication.');

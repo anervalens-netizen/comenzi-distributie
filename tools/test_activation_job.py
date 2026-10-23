@@ -1,4 +1,6 @@
 import json
+import gzip
+import hashlib
 from contextlib import closing
 from pathlib import Path
 import sqlite3
@@ -6,11 +8,49 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from activation_job import run_job
 import activations
 from test_activations import fixture,row
 
 class JobTests(unittest.TestCase):
+ def test_noop_semantic_migration_is_atomic_and_preserves_prior_generation(self):
+  with tempfile.TemporaryDirectory() as folder:
+   root=Path(folder);data=root/'data';eligible='SIM with initial credit >= 3 EUR'
+   file=fixture(root/'one.xlsx',[row(DataActivare='20261015',HandSetType=eligible)])
+   operator=root/'operator.json.gz'
+   with gzip.open(operator,'wt') as out:json.dump([{'SerieText':'000000000000000001','DATE_OF_ACTIVATION':'2026-10-15','COUNTY_OF_ACTIVATION':'ARGES','Paid SIM Category':'-'}],out)
+   batches=[{'files':[str(file)],'operator':'vodafone','source_at':'2026-10-20'},{'files':[str(operator)],'operator':'vodafone','source_kind':'operator','source_at':'2026-10-22','company':'ExampleCo'}]
+   with patch.dict(activations.versions.FIELD_UNKNOWN,{'handset':activations.versions.UNKNOWN}):run_job(data,batches)
+   old=(data/'current').resolve()
+   with closing(sqlite3.connect(old/'activations.sqlite')) as c:
+    self.assertEqual(json.loads(c.execute('SELECT evidence_json FROM activation_facts').fetchone()[0])['observation']['handset'],eligible)
+    c.execute("DELETE FROM activation_meta WHERE key='facts_version'");c.commit()
+    old_generation=int(c.execute("SELECT value FROM activation_meta WHERE key='generation'").fetchone()[0])
+   files=['activations.sqlite','activation-report.sqlite']
+   hashes={name:hashlib.sha256((old/name).read_bytes()).hexdigest() for name in files}
+   originals={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in (old/'activation-originals').glob('*.xlsx')}
+   def crash(stage):
+    with closing(sqlite3.connect(stage/'activations.sqlite')) as c:self.assertEqual(json.loads(c.execute('SELECT evidence_json FROM activation_facts').fetchone()[0])['observation']['handset'],'-')
+    raise RuntimeError('synthetic migration interruption')
+   with self.assertRaisesRegex(RuntimeError,'migration interruption'):run_job(data,[],before_publish=crash)
+   self.assertEqual((data/'current').resolve(),old)
+   self.assertEqual({name:hashlib.sha256((old/name).read_bytes()).hexdigest() for name in files},hashes)
+   migrated=run_job(data,[]);current=(data/'current').resolve()
+   self.assertEqual(migrated['imports'],[]);self.assertNotEqual(current,old)
+   with closing(sqlite3.connect(current/'activations.sqlite')) as c:
+    self.assertEqual(c.execute('SELECT COUNT(*) FROM activation_imports').fetchone()[0],2)
+    self.assertEqual(int(c.execute("SELECT value FROM activation_meta WHERE key='generation'").fetchone()[0]),old_generation+1)
+    self.assertEqual(c.execute("SELECT value FROM activation_meta WHERE key='facts_version'").fetchone()[0],activations.versions.FACTS_VERSION)
+    self.assertEqual(json.loads(c.execute('SELECT evidence_json FROM activation_facts').fetchone()[0])['observation']['handset'],'-')
+   with closing(sqlite3.connect(current/'activation-report.sqlite')) as c:
+    self.assertEqual(c.execute('SELECT handset FROM details').fetchone()[0],'-')
+    self.assertEqual(c.execute("SELECT value FROM report_meta WHERE key='factsVersion'").fetchone()[0],activations.versions.FACTS_VERSION)
+   self.assertEqual({name:hashlib.sha256((old/name).read_bytes()).hexdigest() for name in files},hashes)
+   self.assertEqual({p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in (current/'activation-originals').glob('*.xlsx')},originals)
+   run_job(data,[])
+   with closing(sqlite3.connect((data/'current').resolve()/'activations.sqlite')) as c:self.assertEqual(int(c.execute("SELECT value FROM activation_meta WHERE key='generation'").fetchone()[0]),old_generation+1,'current no-op jobs do not rebuild facts again')
+
  def test_legacy_migration_without_new_import_rebuilds_effective_movements(self):
   with tempfile.TemporaryDirectory() as folder:
    root=Path(folder);data=root/'data';file=fixture(root/'one.xlsx',[row()])

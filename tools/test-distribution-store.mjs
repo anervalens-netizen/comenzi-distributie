@@ -13,6 +13,15 @@ const {readActivations}=await import('data:text/javascript;base64,'+Buffer.from(
 const rules=JSON.parse(readFileSync(join(root,'rules.json'))),projects=['vodafone_nord','vodafone_sud','non_exclusiv'];
 const read=(sites,policy='manager',extra={})=>readActivations('2026-10',sites,'vodafone',{rules,months:['2026-10'],projects,policy,...extra});
 try{
+ const semanticSource=new DatabaseSync(join(root,'activations.sqlite')),semanticReport=new DatabaseSync(join(root,'activation-report.sqlite'));
+ try{
+  semanticSource.prepare("UPDATE activation_meta SET value='1' WHERE key='facts_version'").run();
+  assert.throws(()=>read(null),/semantic rebuild/,'new readers reject stale derived facts even with matching source generation');
+  semanticSource.prepare("UPDATE activation_meta SET value='2' WHERE key='facts_version'").run();
+  semanticReport.prepare("UPDATE report_meta SET value='1' WHERE key='factsVersion'").run();
+  assert.throws(()=>read(null),/semantic rebuild/,'fresh facts cannot certify a projection built with old semantics');
+  semanticReport.prepare("UPDATE report_meta SET value='2' WHERE key='factsVersion'").run();
+ }finally{semanticSource.close();semanticReport.close();}
  const manager=read(null);assert.equal(manager.totals.total,8);assert.equal(manager.totals.eligible,5);assert.equal(manager.totals.ineligible,3);assert.equal(manager.totals.total,manager.totals.eligible+manager.totals.ineligible);assert.equal(manager.totals.eligible,manager.totals.ownRegion+manager.totals.otherRegion+manager.totals.unknownRegion);
  assert.equal(manager.reconciliation,1,'non-distribution observations stay in the separately aggregated reconciliation count');
  const north=read(['N'],'north');assert.equal(north.totals.total,3);assert.equal(north.totals.eligible,2);assert.equal(north.totals.ineligible,1);assert.equal(north.sites.length,1);

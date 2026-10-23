@@ -384,7 +384,15 @@ def reconcile_group(rows, conflicts):
              'candidate' if candidate else 'unresolved', dump(sorted(reasons)), net, evidence) for serial in sorted(serials)]
 
 
+def facts_need_rebuild(c):
+    version=c.execute("SELECT value FROM activation_meta WHERE key='facts_version'").fetchone()
+    return not version or version[0]!=versions.FACTS_VERSION or not c.execute("SELECT 1 FROM activation_meta WHERE key='generation'").fetchone()
+
+
 def rebuild(c, operator=None):
+    # A semantic migration must reconcile the entire ledger before certifying
+    # its derived version, including no-op imports and old complete generations.
+    if facts_need_rebuild(c):operator=None
     if operator is None:
         c.execute('DELETE FROM activation_facts')
     else:
@@ -440,6 +448,7 @@ def rebuild(c, operator=None):
         ad=selected['activation_date'] or None
         c.execute('INSERT INTO activation_facts VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',(*key,ad,ad[:7] if ad else None,None,None,None,'unresolved',dump(reasons),None,dump({'observation':selected,'observationSources':refs,'movementIds':[],'returnLinks':[],'remainingSaleIds':[],'versionIds':[]})))
     c.execute("INSERT INTO activation_meta VALUES('generation','1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1")
+    c.execute("INSERT OR REPLACE INTO activation_meta VALUES('facts_version',?)",(versions.FACTS_VERSION,))
 
 
 def summary(c):
@@ -544,7 +553,7 @@ def _import_files(c, directory, paths, *, operator, nominal_period='', site_alia
                     count += 1
                 c.execute("UPDATE activation_imports SET status='complete',row_count=? WHERE id=?", (count, batch))
                 results.append({'status': 'imported', 'sha256': sha, 'rows': count})
-        if any(r['status'] == 'imported' for r in results):
+        if any(r['status'] == 'imported' for r in results) or facts_need_rebuild(c):
             rebuild(c, operator)
         c.commit()
     except BaseException:

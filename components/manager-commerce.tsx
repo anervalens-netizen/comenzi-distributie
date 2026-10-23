@@ -5,7 +5,7 @@ import {api,errorMessage,invalidateApiReadCache,money} from '@/lib/client-api';
 import {bucharestReportingMonthKey} from '@/lib/bucharest-month';
 import type {SalesProduct,SalesView} from '@/lib/sales-types';
 import {managerCategoryLabels,managerCategoryRows,managerProductCategory,type ManagerProductCategory} from '@/lib/manager-sales-report';
-import {DistributionSalesCards} from './distribution-cards';
+import {DistributionSalesCards,Metric} from './distribution-cards';
 import {ActivationsPanel} from './activations';
 import {ReportPeriod,periodLabel} from './report-period';
 import './manager-commerce.css';
@@ -52,6 +52,11 @@ function CategoryReport({data,other=false}:{data:SalesView;other?:boolean}){
       <ProductDetails key={categories.join(',')} products={data.products.filter(product=>categories.includes(managerProductCategory(product)!))} label="Detalii pe produse"/>
     </section><SalesCoverage data={data}/></>;
 }
+function LegacyPrepaySales({data}:{data:SalesView}){
+  const {cards,sim}=data.segments.cardsSim.subsegments;
+  const products=data.segments.cardsSim.products.filter(product=>product.subsegment!=='vouchers');
+  return <section className="panel distribution-card prepay-legacy-sales" aria-label="Vânzări cartele și SIM"><h2>Cartele cu număr / SIM</h2><Metric label="Vânzări în luna selectată" value={{quantity:cards.quantity+sim.quantity,valueCents:Math.round(cards.value*100)+Math.round(sim.value*100),average:null}}/><ProductDetails products={products} label="Produse Prepay"/></section>;
+}
 export function ManagerAccessories({userId,query,scopeQuery,scopeLabel,initialView,onViewChange,onMonthChange}:{userId:string;query:string;scopeQuery:string;scopeLabel:string;initialView?:'current'|'history'|'clients';onViewChange:(value:'current'|'history'|'clients')=>void;onMonthChange?:(month:string)=>void}){
   const [view,setView]=useState<'current'|'history'|'clients'>(initialView||'current');
   const {reload,refresh}=useSalesRefresh(),{data,error}=useReport(userId,query,reload,view!=='clients');
@@ -61,10 +66,12 @@ export function ManagerAccessories({userId,query,scopeQuery,scopeLabel,initialVi
   </div>;
 }
 export function ManagerPrepay({userId,query,scopeLabel,distributionConfigured,canViewActivations}:{userId:string;query:string;scopeLabel:string;distributionConfigured:boolean;canViewActivations:boolean}){
-  const [view,setView]=useState<'sales'|'activations'>(!distributionConfigured&&canViewActivations?'activations':'sales'),{reload,refresh}=useSalesRefresh(),{data,error}=useReport(userId,query,reload,view==='sales');
+  const [month,setMonth]=useState(()=>new URLSearchParams(query).get('month')||bucharestReportingMonthKey(new Date()));
+  const params=new URLSearchParams(query);if(!distributionConfigured)params.set('month',month);
+  const [view,setView]=useState<'sales'|'activations'>(!distributionConfigured&&canViewActivations?'activations':'sales'),{reload,refresh}=useSalesRefresh(),{data,error}=useReport(userId,params.toString(),reload,view==='sales');
   return <div className="manager-commerce prepay-workspace"><div className="page-heading"><div><span className="eyebrow">VODAFONE + DIGI</span><h1>Prepay</h1><p>{scopeLabel}</p></div><button className="icon-button" aria-label="Actualizează Prepay" onClick={refresh}><RefreshCw size={18}/></button></div>
     <nav className="commerce-tabs" aria-label="Prepay"><button type="button" aria-pressed={view==='sales'} onClick={()=>setView('sales')}>Vânzări</button>{canViewActivations&&<button type="button" aria-pressed={view==='activations'} onClick={()=>setView('activations')}>Activări</button>}</nav>
-    {view==='sales'||!canViewActivations?<><ReportStatus data={data} error={error}/>{data?.distribution&&!error&&<><DistributionSalesCards data={data.distribution}/><SalesCoverage data={data}/><ProductDetails products={data.products.filter(product=>product.distributionGroup&&['vodafone_0','vodafone_3','vodafone_5','vodafone_credit','digi'].includes(product.distributionGroup))} label="Produse Prepay"/></>}{data&&!data.distribution&&!error&&<p>Raportul Prepay necesită configurarea proiectelor și produselor.</p>}</>:<ActivationsPanel refreshVersion={reload} embedded distributionConfigured={distributionConfigured} userId={userId} scopeQuery={query} scopeLabel={scopeLabel}/>}
+    {view==='sales'||!canViewActivations?<>{!distributionConfigured&&<ReportPeriod label="Luna vânzărilor Prepay" selected={[month]} multiple={false} onChange={months=>setMonth(months[0])}/>}<ReportStatus data={data} error={error}/>{data&&!error&&<>{data.distribution?<><DistributionSalesCards data={data.distribution}/><ProductDetails products={data.products.filter(product=>product.distributionGroup&&['vodafone_0','vodafone_3','vodafone_5','vodafone_credit','digi'].includes(product.distributionGroup))} label="Produse Prepay"/></>:<LegacyPrepaySales data={data}/>}<SalesCoverage data={data}/></>}</>:<ActivationsPanel refreshVersion={reload} embedded distributionConfigured={distributionConfigured} userId={userId} scopeQuery={query} scopeLabel={scopeLabel}/>}
     {view==='sales'&&<p className="commerce-link-note"><ArrowRight size={15}/> Telefoanele și voucherele sunt în Accesorii → Alte produse.</p>}
   </div>;
 }

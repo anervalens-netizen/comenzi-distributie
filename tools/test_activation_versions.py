@@ -3,6 +3,7 @@ import gzip
 import json
 import sqlite3
 import unittest
+from unittest.mock import patch
 import activations as a
 import test_activations as f
 
@@ -81,6 +82,32 @@ class VersionTests(f.ActivationsTests):
         self.operator([self.official(**{'Paid SIM Category':'-'})])
         self.assertIn('handset_conflict',json.loads(self.fact()['reasons']))
         self.assertEqual(json.loads(self.fact()['evidence_json'])['observation']['handset'],'')
+
+    def test_identical_reimport_migrates_stored_semantics_once_without_source_changes(self):
+        eligible='SIM with initial credit >= 3 EUR'
+        # Construct the exact pre-fix result, rather than merely corrupting a count.
+        with patch.dict(a.versions.FIELD_UNKNOWN,{'handset':a.versions.UNKNOWN}):
+            self.revision([f.row(DataActivare='20261015',HandSetType=eligible)],'2026-10-20')
+            self.operator([self.official(**{'Paid SIM Category':eligible})],at='2026-10-21')
+            self.operator([self.official(**{'Paid SIM Category':'-'})],at='2026-10-22')
+        source=self.root/f'operator-{self.n}.json.gz'
+        self.assertEqual(json.loads(self.fact()['evidence_json'])['observation']['handset'],eligible)
+        original={table:[tuple(r) for r in self.c.execute('SELECT * FROM '+table)] for table in ['activation_imports','activation_movements','activation_occurrences','activation_observations']}
+        for stale in (None,'1'):
+            with self.subTest(stale_version=stale):
+                self.c.execute("DELETE FROM activation_meta WHERE key='facts_version'")
+                if stale:self.c.execute("INSERT INTO activation_meta VALUES('facts_version',?)",(stale,))
+                self.c.commit()
+                generation=int(self.c.execute("SELECT value FROM activation_meta WHERE key='generation'").fetchone()[0])
+                options=dict(operator='vodafone',source_kind='operator',company='ExampleCo',source_at='2026-10-22',period_start='2026-10-01',period_end='2026-10-20')
+                receipt=a.import_files(self.c,self.root/'data',[source],**options)
+                self.assertEqual(receipt['files'][0]['status'],'already_imported')
+                self.assertEqual(json.loads(self.fact()['evidence_json'])['observation']['handset'],'-')
+                self.assertEqual(self.c.execute("SELECT value FROM activation_meta WHERE key='facts_version'").fetchone()[0],a.versions.FACTS_VERSION)
+                self.assertEqual(int(self.c.execute("SELECT value FROM activation_meta WHERE key='generation'").fetchone()[0]),generation+1)
+                a.import_files(self.c,self.root/'data',[source],**options)
+                self.assertEqual(int(self.c.execute("SELECT value FROM activation_meta WHERE key='generation'").fetchone()[0]),generation+1,'a current identical import is idempotent')
+                self.assertEqual({table:[tuple(r) for r in self.c.execute('SELECT * FROM '+table)] for table in original},original)
 
     def test_partial_month_keeps_old_month_and_company_namespace(self):
         self.revision([f.row()],period_start='2026-01-01',period_end='2026-03-31')

@@ -9,6 +9,7 @@ export function managerProductCategory(product:SalesProduct):ManagerProductCateg
   if(group&&group!=='unmapped')return null;
   if(product.segment==='phones')return 'phones';
   if(product.subsegment==='vouchers')return 'vouchers';
+  if(!group&&product.segment==='cardsSim')return null;
   if(!group&&product.segment==='accessories')return 'accessories';
   // Unmapped SIMs stay inspectable as other products; never mix them into accessories.
   return 'other';
