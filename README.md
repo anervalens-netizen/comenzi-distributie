@@ -88,11 +88,10 @@ production server. The stable framework is pinned to 1.1.0. Its Satori dependenc
 uses the compatible fflate 0.7.5 security backport through a scoped override,
 avoiding the vulnerable ZIP64 parser without downgrading the framework. Source
 audits therefore include Vinext's build dependency chain even though unreachable files are excluded from release artifacts.
-The upstream braces advisory GHSA-vfj7-8cjw-p6xm has no patched version at the
-time of this change. Do not use forced downgrades to hide this finding. Its
-remaining source-tree use is build tooling processing repository-controlled
-patterns, not request input. Keep build jobs isolated from production credentials;
-verify each installed artifact's actual inventory independently of source audit.
+The upstream braces advisory [GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm)
+was withdrawn on October 23, 2026. Keep build jobs isolated from production
+credentials and verify each installed artifact's actual inventory independently
+of the source audit.
 
 Optional `MOBIUP_NAS_LATEST_ONLY=1` retains one NAS generation only after the
 supported restore command successfully restores that generation to an isolated
@@ -133,13 +132,17 @@ activation counts are not work-point counts. Personal sales remain in totals;
 detail and export retain the same authenticated scope. A reported handset
 category of `-` is explicit noncommissionable evidence, not a missing value.
 
-All managers can view national activity, partners, orders, stock, inventory and sales, with region and agent filters. Regional assignments still govern account changes and operational writes. Managers change their own password from their profile; regional managers reset assigned agents' passwords under Team → Passwords and accounts (the default subtab). Regional managers cannot change other regions' accounts or manager assignments.
+All managers can view national activity, partners, orders, stock, inventory and sales, with region and agent filters. Regional assignments still govern account changes and order writes. Transfer managers retain national write access. Operational order and transfer mutations revalidate the current account, exact session and applicable scope in the SQL mutation, after asynchronous preparation. Managers change their own password from their profile; regional managers reset assigned agents' passwords under Team → Passwords and accounts (the default subtab). Regional managers cannot change other regions' accounts or manager assignments.
 
 ## Lucru mobil și offline
 
 Datele consultate și ciornele se păstrează automat pe dispozitiv, fără activare manuală. Aplicația nu descarcă preventiv întregul portofoliu; fără conexiune sunt disponibile doar datele deja păstrate local. Fundalul hărții necesită conexiune.
 
-Ciornele, modificările fișelor, vizitele și planurile sunt păstrate separat pentru fiecare cont în IndexedDB. „Salvat pe telefon” confirmă doar persistența locală. Operațiunile se sincronizează în ordine când aplicația este deschisă și conexiunea revine. Finalizarea și exportul necesită confirmarea serverului. Erorile de sesiune, permisiune sau revizie păstrează lucrul pentru verificare. Recuperarea este disponibilă în comanda, fișa partenerului sau planul afectat: compară versiunile și alege explicit modificările locale sau versiunea serverului. Operațiunile deja trimise își păstrează identitatea și conținutul la reîncercare; rezolvarea arhivează copia veche și creează o operațiune nouă numai după verificare. Comenzile șterse ori finalizate permit recuperarea într-o ciornă nouă, iar accesul retras nu permite retrimiterea.
+Ciornele de comenzi și transferuri, modificările fișelor, vizitele și planurile sunt păstrate separat pentru fiecare cont în IndexedDB. „Salvat pe telefon” confirmă doar persistența locală. Operațiunile se sincronizează în ordine când aplicația este deschisă și conexiunea revine. Finalizarea și exportul necesită confirmarea serverului. Erorile de sesiune, permisiune sau revizie păstrează lucrul pentru verificare. Recuperarea este disponibilă în comanda, fișa partenerului sau planul afectat: compară versiunile și alege explicit modificările locale sau versiunea serverului. Operațiunile deja trimise își păstrează identitatea și conținutul la reîncercare; rezolvarea arhivează copia veche și creează o operațiune nouă numai după verificare. Comenzile șterse ori finalizate permit recuperarea într-o ciornă nouă, iar accesul retras nu permite retrimiterea.
+
+Transferurile afișează separat salvarea pe telefon și confirmarea serverului. Modificările concurente din file diferite rămân disponibile pentru comparare și alegere explicită; finalizarea așteaptă confirmarea serverului. Dacă transferul a fost finalizat sau nu mai este disponibil pe server, arhivarea explicită păstrează o copie locală descărcabilă și oprește sincronizarea ciornei. Crearea unui transfer nou necesită conexiune.
+
+Notificările push acceptă numai endpointuri HTTPS canonice ale FCM, Mozilla, Apple și Windows Push. Redirecționările sunt refuzate, iar abonamentele vechi care nu respectă politica sunt omise fără accesarea destinației. Furnizorii push personalizați nu sunt acceptați. Încrederea DNS/TLS rămâne limitată la furnizorii enumerați.
 
 Actualizările PWA nu reîncarcă automat editorul. Activarea unei versiuni noi este oferită după golirea cozii, iar resursele versiunilor anterioare rămân disponibile taburilor deschise.
 

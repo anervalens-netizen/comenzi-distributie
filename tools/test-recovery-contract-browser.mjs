@@ -158,7 +158,8 @@ try{
  // H: real rendered form rejects Saturday before persistence, allows correction,
  // and releases a definitive server rejection while retaining entered fields.
  await evaluate('mountPartner()');
- await waitFor(()=>evaluate("!!document.querySelector('.partner-visits textarea')"),'visit form');
+ const visitFormReady=()=>evaluate("!!document.querySelector('.partner-visits textarea')&&!document.querySelector('.partner-visits textarea').disabled&&!document.querySelector('.partner-visits button.primary').disabled");
+ await waitFor(visitFormReady,'visit form ready for editing');
  const fillVisit=(selector,value)=>evaluate(`const input=document.querySelector(${JSON.stringify(selector)});Object.getOwnPropertyDescriptor(input.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype,'value').set.call(input,${JSON.stringify(value)});input.dispatchEvent(new Event('input',{bubbles:true}));`);
  const clickVisit=()=>evaluate("document.querySelector('.partner-visits button.primary').click()");
  await fillVisit('.partner-visits textarea','Keep entered note');await fillVisit('.partner-follow-up-fields input:not([type=date])','Keep next step');await fillVisit('.partner-follow-up-fields input[type=date]','2026-10-10');await clickVisit();
@@ -173,13 +174,31 @@ try{
  check(await evaluate("document.querySelector('.partner-visits textarea').value===''&&!(await m.readWork('agent','visit','point'))"),'H Monday succeeds and clears confirmed input');
  // Installed legacy clients persisted invalid pending dates before validation.
  for(const invalidDate of ['2026-10-10','2026-02-30','2026-10-11']){
-  await evaluate(`root.unmount();window.legacyVisit={id:crypto.randomUUID(),notes:'Legacy note',nextStep:'Legacy next step',followUpDate:${JSON.stringify(invalidDate)}};window.legacyOperation=await m.enqueue('agent','partner/portfolio/point/visits','POST',legacyVisit,{scope:'visit',id:'point',value:legacyVisit});await replay();window.legacyOperation=(await m.pendingOperations('agent')).find(op=>op.id===legacyOperation.id);${invalidDate==='2026-10-11'?"await m.saveWork('agent','visit-edit','point',legacyVisit);await m.removeWork('agent','visit','point');":''}mountPartner()`);
+  await evaluate(`root.unmount();window.legacyVisit={id:crypto.randomUUID(),notes:'Legacy note',nextStep:'Legacy next step',followUpDate:${JSON.stringify(invalidDate)}};window.legacyOperation=await m.enqueue('agent','partner/portfolio/point/visits','POST',legacyVisit,{scope:'visit',id:'point',value:legacyVisit});await replay();window.legacyOperation=(await m.pendingOperations('agent')).find(op=>op.id===legacyOperation.id);${invalidDate==='2026-10-11'?"await m.saveWork('agent','visit-edit','point',legacyVisit);await m.removeWork('agent','visit','point');":''}`);
+  if(invalidDate==='2026-10-11'){
+   const beforeFailedRecovery=requests.length;
+   await evaluate("window.originalVisitPut=IDBObjectStore.prototype.put;IDBObjectStore.prototype.put=function(row,...args){if(this.name==='work'&&row.key==='agent|visit-edit|point')throw new Error('Synthetic visit recovery storage failure');return originalVisitPut.call(this,row,...args)};mountPartner()");
+   await waitFor(()=>evaluate("!!document.querySelector('.partner-visits textarea')"),'visit recovery form appears');
+   await evaluate("document.querySelector('.partner-visits').open=true");
+   await waitFor(()=>evaluate("document.body.innerText.includes('Synthetic visit recovery storage failure')"),'visit recovery storage error is visible');
+   check(await evaluate("document.querySelector('.partner-visits textarea').disabled&&document.querySelector('.partner-visits button.primary').disabled&&document.querySelector('.partner-visits textarea').value==='Legacy note'&&(await m.readWork('agent','visit-edit','point')).followUpDate===legacyVisit.followUpDate&&JSON.stringify((await m.pendingOperations('agent')).find(op=>op.id===legacyOperation.id))===JSON.stringify(legacyOperation)&&!(await m.readWork('agent','resolved-operation',legacyOperation.id))"),'failed UI recovery preserves exact queued request and editable work while submission stays disabled');
+   await clickVisit();check(requests.length===beforeFailedRecovery,'failed recovery cannot dispatch a replacement visit');
+   await evaluate("IDBObjectStore.prototype.put=originalVisitPut;[...document.querySelectorAll('.partner-visits button')].find(button=>button.textContent.includes('Reîncearcă recuperarea vizitei')).click()");
+  }else await evaluate('mountPartner()');
   await waitFor(()=>evaluate("!!document.querySelector('.partner-visits textarea')&&!document.querySelector('.partner-visits textarea').disabled&&document.querySelector('.partner-visits textarea').value==='Legacy note'&&!!(await m.readWork('agent','resolved-operation',legacyOperation.id))"),'legacy invalid pending unlocked on reopen');
   check(await evaluate(`!document.querySelector('.partner-follow-up-fields input[type=date]').disabled&&document.querySelector('.partner-follow-up-fields input:not([type=date])').value==='Legacy next step'&&!(await m.readWork('agent','visit','point'))&&(await m.readWork('agent','visit-edit','point')).followUpDate===${JSON.stringify(invalidDate)}`),'invalid pending retains all content as editable recovery');
   check(await evaluate("JSON.stringify(await m.readWork('agent','resolved-operation',legacyOperation.id))===JSON.stringify(legacyOperation)&&(await m.pendingOperations('agent')).length===0&&(await m.pendingOperationCount())===0"),'exact invalid stale request archived and activation pending count cleared');
   if(invalidDate==='2026-10-10')check(await evaluate("document.querySelector('.partner-follow-up-fields input[type=date]').value==='2026-10-10'"),'legacy Saturday remains visible for correction');
-  await evaluate('root.unmount();mountPartner()');
-  await waitFor(()=>evaluate("document.querySelector('.partner-visits textarea')?.value==='Legacy note'"),'editable legacy content survives another reopen');
+  const visitsBeforeRecovery=requests.length;
+  // Delay the real IndexedDB recovery transaction's completion notification.
+  // Its native transaction has committed, but hydration must still await it.
+  await evaluate(`root.unmount();window.originalVisitTransaction=IDBDatabase.prototype.transaction;window.visitRecoveryHeld=false;window.releaseVisitRecovery=null;window.holdVisitRecovery=true;IDBDatabase.prototype.transaction=function(stores,...args){const tx=originalVisitTransaction.call(this,stores,...args);if(holdVisitRecovery&&args[0]==='readwrite'&&Array.isArray(stores)&&['work','outbox','meta'].every(name=>stores.includes(name))){holdVisitRecovery=false;const complete=Object.getOwnPropertyDescriptor(IDBTransaction.prototype,'oncomplete');Object.defineProperty(tx,'oncomplete',{configurable:true,get(){return complete.get.call(tx)},set(callback){complete.set.call(tx,event=>{window.visitRecoveryHeld=true;window.releaseVisitRecovery=()=>callback.call(tx,event)})}})}return tx};mountPartner()`);
+  await waitFor(()=>evaluate("visitRecoveryHeld&&document.querySelector('.partner-visits textarea')?.value==='Legacy note'"),'editable legacy recovery awaits actual storage completion');
+  check(await evaluate("document.querySelector('.partner-visits textarea').disabled&&[...document.querySelectorAll('.partner-follow-up-fields input')].every(input=>input.disabled)&&document.querySelector('.partner-visits button.primary').disabled"),'visit fields and submission remain disabled until recovery completes');
+  await evaluate("document.querySelector('.partner-visits').open=true;document.querySelector('.partner-visits textarea').focus()");await browser.send('Input.insertText',{text:'Premature edit'});await clickVisit();
+  check(requests.length===visitsBeforeRecovery&&await evaluate("document.querySelector('.partner-visits textarea').value==='Legacy note'"),'held recovery cannot accept input or dispatch a visit');
+  await evaluate('IDBDatabase.prototype.transaction=originalVisitTransaction;releaseVisitRecovery()');
+  await waitFor(async()=>await visitFormReady()&&await evaluate("document.querySelector('.partner-visits textarea').value==='Legacy note'"),'editable legacy content ready after storage recovery');
   await fillVisit('.partner-follow-up-fields input[type=date]','2026-10-12');await clickVisit();
   await waitForWithDiagnostics(()=>evaluate("document.body.innerText.includes('Vizita a fost sincronizată.')"),'corrected legacy Monday saves');
   check(await evaluate("!(await m.readWork('agent','visit','point'))&&!(await m.readWork('agent','visit-edit','point'))&&(await m.pendingOperationCount())===0"),'corrected legacy confirmation clears pending, recovery and PWA barrier');

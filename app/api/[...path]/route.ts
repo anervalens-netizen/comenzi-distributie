@@ -1,3 +1,4 @@
+import {operationalWriteGuard} from '@/lib/operational-write-guard';
 import {activationReport} from '@/lib/activation-api';
 import {timedResponse} from '@/lib/request-timing';
 import {usageAuth,usagePulse,usageReport} from '@/lib/usage-api';
@@ -193,7 +194,8 @@ async function saveOrder(req: Request,id: string,user: User) {
   const body=await jsonBody(req);
   if(body.revision!==order.revision) fail(409,'Comanda a fost modificată pe alt dispozitiv. Redeschide comanda înainte să o salvezi.');
   const next=await payloadFor(body,order);
-  const result=await db().prepare("UPDATE orders SET payload=?,revision=revision+1 WHERE id=? AND status='draft' AND revision=?").bind(JSON.stringify(next),id,order.revision).run();
+  const guard=operationalWriteGuard(req,user,{agentId:order.userId});
+  const result=await db().prepare(`UPDATE orders SET payload=?,revision=revision+1 WHERE id=? AND status='draft' AND revision=? AND ${guard.sql}`).bind(JSON.stringify(next),id,order.revision,...guard.args).run();
   if(!result.meta.changes) fail(409,'Comanda a fost modificată. Redeschide-o.');
   return response({order:await getOrder(id,user)});
 }
@@ -241,11 +243,14 @@ async function finalize(id: string,user: User,req: Request) {
   await env.FILES.put(exportKey,bytes,{httpMetadata:{contentType:excelMime}});
   }
   const payload={...finalOrder,exportKey};
+  const guard=operationalWriteGuard(req,user,{agentId:order.userId}),proofKey="order-write-proof-v1:"+crypto.randomUUID();
   try {
-    const statements=[db().prepare("UPDATE orders SET status='finalized',finalized_at=?,week_key=?,payload=?,revision=revision+1 WHERE id=? AND status='draft' AND revision=? AND (? IS (SELECT value FROM settings WHERE key='catalog')) AND (kind NOT IN ('sim','combined','stand_client') OR (kind!='stand_client' AND json_array_length(json_extract(payload,'$.serials'))=0) OR EXISTS (SELECT 1 FROM customers c WHERE c.id=? AND EXISTS (SELECT 1 FROM json_each(COALESCE(json_extract(c.data,'$.warehouseIds'),json_array(c.warehouse_id))) WHERE value=orders.warehouse_id) AND c.active=1 AND c.data=?)) AND (kind NOT IN ('accessories','combined') OR (kind='combined' AND json_array_length(json_extract(payload,'$.items'))=0) OR (SELECT COUNT(*) FROM orders o WHERE o.user_id=orders.user_id AND (o.kind='accessories' OR (o.kind='combined' AND json_array_length(json_extract(o.payload,'$.items'))>0)) AND o.status='finalized' AND o.week_key=?) < ?)").bind(finalOrder.finalizedAt,weekKey(),JSON.stringify(payload),id,order.revision,currentCatalog.raw,order.client?.id||'',clientData,weekKey(),cfg.weeklyLimit)];
-    for(const serial of order.serials) statements.push(db().prepare("INSERT INTO serials (serial,order_id) SELECT ?,? WHERE EXISTS (SELECT 1 FROM orders WHERE id=? AND status='finalized' AND revision=?)").bind(serial,id,id,order.revision+1));
+    const statements=[db().prepare(`UPDATE orders SET status='finalized',finalized_at=?,week_key=?,payload=?,revision=revision+1 WHERE id=? AND status='draft' AND revision=? AND (? IS (SELECT value FROM settings WHERE key='catalog')) AND (kind NOT IN ('sim','combined','stand_client') OR (kind!='stand_client' AND json_array_length(json_extract(payload,'$.serials'))=0) OR EXISTS (SELECT 1 FROM customers c WHERE c.id=? AND EXISTS (SELECT 1 FROM json_each(COALESCE(json_extract(c.data,'$.warehouseIds'),json_array(c.warehouse_id))) WHERE value=orders.warehouse_id) AND c.active=1 AND c.data=?)) AND (kind NOT IN ('accessories','combined') OR (kind='combined' AND json_array_length(json_extract(payload,'$.items'))=0) OR (SELECT COUNT(*) FROM orders o WHERE o.user_id=orders.user_id AND (o.kind='accessories' OR (o.kind='combined' AND json_array_length(json_extract(o.payload,'$.items'))>0)) AND o.status='finalized' AND o.week_key=?) < ?) AND ${guard.sql}`).bind(finalOrder.finalizedAt,weekKey(),JSON.stringify(payload),id,order.revision,currentCatalog.raw,order.client?.id||'',clientData,weekKey(),cfg.weeklyLimit,...guard.args),db().prepare("INSERT INTO settings(key,value) SELECT ?,'1' WHERE changes()=1").bind(proofKey)];
+    for(const serial of order.serials) statements.push(db().prepare("INSERT INTO serials (serial,order_id) SELECT ?,? WHERE EXISTS (SELECT 1 FROM settings WHERE key=?)").bind(serial,id,proofKey));
+    statements.push(db().prepare("DELETE FROM settings WHERE key=?").bind(proofKey));
     const results=await db().batch(statements);
     if(!results[0].meta.changes) {
+      if(!await db().prepare(`SELECT 1 WHERE ${guard.sql}`).bind(...guard.args).first())fail(409,'Drepturile sau sesiunea s-au modificat. Autentifică-te din nou.');
       const latest=await getOrder(id,user);
       if(latest.status==='finalized') { if(exportKey) await env.FILES.delete(exportKey); return response({order:latest,mail:mailFor(latest,await settingsForOrder(latest))}); }
       if(order.kind==='sim') fail(409,'Datele clientului sau ciorna s-au modificat între timp. Redeschide ciorna și selectează din nou clientul.');
@@ -254,6 +259,7 @@ async function finalize(id: string,user: User,req: Request) {
   } catch(err) {
     if(exportKey) await env.FILES.delete(exportKey);
     if(err instanceof Error && /UNIQUE constraint failed: serials/.test(err.message)) {
+      if(!await db().prepare(`SELECT 1 WHERE ${guard.sql}`).bind(...guard.args).first())fail(409,'Drepturile sau sesiunea s-au modificat. Autentifică-te din nou.');
       const latest=await getOrder(id,user);
       if(latest.status==='finalized') return response({order:latest,mail:mailFor(latest,await settingsForOrder(latest))});
       fail(409,'Una dintre seriile SIM a fost deja inclusă într-un aviz finalizat. Comanda rămâne ciornă.');
@@ -312,7 +318,7 @@ async function dispatch(req: Request) {
   if(path.join('/')==='notifications/inbox'&&req.method==='GET')return response(await managerRequestInbox(user));
   if(path.join('/')==='notifications/inbox/read'&&req.method==='POST')return response(await readPartnerNotifications(user,await jsonBody(req)));
   if(path.join('/')==='notifications/push'&&req.method==='GET')return response(await pushPublicConfig(user));
-  if(path.join('/')==='notifications/push'&&req.method==='POST')return response(await upsertPushSubscription(user,await jsonBody(req)));
+  if(path.join('/')==='notifications/push'&&req.method==='POST')return response(await upsertPushSubscription(user,await jsonBody(req),req));
   if(path.join('/')==='notifications/push'&&req.method==='DELETE')return response(await removePushSubscription(user,await jsonBody(req)));
   if(path.join('/')==='partner/planning'&&req.method==='GET')return response(await visitWeek(user,new URL(req.url).searchParams.get('week')||''));
   if(path.join('/')==='partner/planning'&&req.method==='PUT')return response(await saveDayPlan(user,await jsonBody(req)));
@@ -423,7 +429,13 @@ async function dispatch(req: Request) {
         if(source.kind!==kind||source.userId!==agent.id) fail(400,'Comanda se poate copia doar pentru același agent și același tip.');
         order={...order,items:source.items,standItems:kind==='combined'?source.standItems||[]:undefined,serials:kind==='combined'||kind==='sim'?[]:source.serials,client:source.client,notes:source.notes,sourceOrderId:source.id,total:source.total,pieces:kind==='sim'?0:kind==='combined'?source.items.reduce((sum,l)=>sum+l.quantity,0)+(source.standItems||[]).reduce((sum,l)=>sum+l.quantity,0):source.pieces};
       }
-      await db().prepare('INSERT OR IGNORE INTO orders (id,number,user_id,warehouse_id,kind,status,payload,created_at,source_order_id) VALUES (?,?,?,?,?,?,?,?,?)').bind(uuid,number,agent.id,agent.warehouseId,kind,'draft',JSON.stringify(order),order.createdAt,order.sourceOrderId).run();
+      const guard=operationalWriteGuard(req,user,{agentId:agent.id});
+      const result=await db().prepare(`INSERT OR IGNORE INTO orders (id,number,user_id,warehouse_id,kind,status,payload,created_at,source_order_id) SELECT ?,?,?,?,?,?,?,?,? WHERE ${guard.sql} AND EXISTS (SELECT 1 FROM users WHERE id=? AND active=1 AND role='agent' AND warehouse_id IS ?)`).bind(uuid,number,agent.id,agent.warehouseId,kind,'draft',JSON.stringify(order),order.createdAt,order.sourceOrderId,...guard.args,agent.id,agent.warehouseId).run();
+      if(!result.meta.changes){
+        const existing=await db().prepare(`SELECT * FROM orders WHERE id=? AND user_id=? AND kind=? AND ${guard.sql} AND EXISTS (SELECT 1 FROM users WHERE id=? AND active=1 AND role='agent' AND warehouse_id IS ?)`).bind(uuid,agent.id,kind,...guard.args,agent.id,agent.warehouseId).first<Record<string,unknown>>();
+        if(!existing||existing.status==='deleted')fail(409,'Comanda, drepturile sau gestiunea s-au modificat. Reîncarcă lista.');
+        return response({order:orderView(existing)});
+      }
       return response({order:await getOrder(uuid,user)},201);
     }
     if(id && !path[2] && req.method==='GET') return response({order:await getOrder(id,readUser)});
@@ -432,9 +444,12 @@ async function dispatch(req: Request) {
       if(user.role!=='manager' && order.status!=='draft') fail(403,'Poți șterge doar ciornele create de tine.');
       const body=await jsonBody(req);
       if(body.revision!==order.revision) fail(409,'Comanda s-a modificat. Închide confirmarea și actualizează lista înainte de ștergere.');
+      const guard=operationalWriteGuard(req,user,{agentId:order.userId}),proofKey="order-write-proof-v1:"+crypto.randomUUID();
       const result=await db().batch([
-        db().prepare("UPDATE orders SET status='deleted',payload=json_set(payload,'$.deletedAt',?,'$.deletedBy',?,'$.previousStatus',status),revision=revision+1 WHERE id=? AND status!='deleted' AND revision=?").bind(new Date().toISOString(),user.id,id,order.revision),
-        db().prepare("DELETE FROM serials WHERE order_id=? AND EXISTS (SELECT 1 FROM orders WHERE id=? AND status='deleted' AND revision=?)").bind(id,id,order.revision+1),
+        db().prepare(`UPDATE orders SET status='deleted',payload=json_set(payload,'$.deletedAt',?,'$.deletedBy',?,'$.previousStatus',status),revision=revision+1 WHERE id=? AND status!='deleted' AND revision=? AND ${guard.sql}`).bind(new Date().toISOString(),user.id,id,order.revision,...guard.args),
+        db().prepare("INSERT INTO settings(key,value) SELECT ?,'1' WHERE changes()=1").bind(proofKey),
+        db().prepare("DELETE FROM serials WHERE order_id=? AND EXISTS (SELECT 1 FROM settings WHERE key=?)").bind(id,proofKey),
+        db().prepare("DELETE FROM settings WHERE key=?").bind(proofKey),
       ]);
       if(!result[0].meta.changes) fail(409,'Comanda s-a modificat. Actualizează lista înainte de ștergere.');
       return response({ok:true,deletedId:id,revision:order.revision+1});
