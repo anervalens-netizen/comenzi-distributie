@@ -348,7 +348,8 @@ try {
   const reportControls=await cdp.evaluate(`(()=>{const labels=['Accesorii','Telefoane & Prepay','Pe clienți'];return labels.every(label=>{const button=[...document.querySelectorAll('.commerce-tabs button')].find(node=>node.textContent?.trim()===label);return button?.tagName==='BUTTON'&&button.hasAttribute('aria-pressed');});})()`);
   check(reportControls,'Shared product reports expose labeled selectable buttons');
   check(await cdp.evaluate(`(()=>{const button=[...document.querySelectorAll('.commerce-tabs button')].find(node=>node.textContent?.trim()==='Telefoane & Prepay');if(!button)return false;button.focus();return document.activeElement===button;})()`),'Other product report receives keyboard focus');
-  await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',windowsVirtualKeyCode:13,nativeVirtualKeyCode:13});
+  // Enter needs its carriage-return text for Chrome's native keypress/button activation.
+  await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',text:'\r',unmodifiedText:'\r',windowsVirtualKeyCode:13,nativeVirtualKeyCode:13});
   await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13,nativeVirtualKeyCode:13});
   await waitFor(()=>cdp.evaluate("[...document.querySelectorAll('.commerce-tabs button')].some(button=>button.textContent==='Telefoane & Prepay'&&button.getAttribute('aria-pressed')==='true')"),'Enter opens other product report');checks++;
   await clickTab(cdp,'Parteneri');await waitFor(()=>cdp.evaluate("!!document.querySelector('[name=requestId]')||[...document.querySelectorAll('button')].some(b=>b.textContent.includes('Adaugă partener'))"),'partner hub');await cdp.evaluate("[...document.querySelectorAll('button')].find(b=>b.textContent.includes('Adaugă partener'))?.click()");
