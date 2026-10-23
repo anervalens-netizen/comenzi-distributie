@@ -115,6 +115,18 @@ reports share direct multi-month selection and visible project toggles. The
 customer portfolio report retains its explicitly monthly scope. Changing the
 presentation does not change authorization or activation eligibility.
 
+Agents reuse the same Accesorii and Prepay reports for their own portfolio.
+Prepay sales remain available independently of activation access; only the
+Activări subtab requires that permission. Their report controls select months,
+while seller and project scope come from the authenticated account. Customer
+reports retain a single month and do not expose manager reconciliation controls.
+
+Product mappings are evaluated when reading sales and SIM 0 cohorts. Updating
+only product mappings or their revision does not require rebuilding activation
+facts. Report compatibility still requires identical structural rules, and
+detail/export selection tokens include the complete current rules. Unmapped
+products remain inspectable by source category and subcategory.
+
 Activation partner summaries distinguish identified work points, personal sales
 and activations whose point identity remains unresolved. Browse groups and
 activation counts are not work-point counts. Personal sales remain in totals;
@@ -223,10 +235,10 @@ existing history screens do not combine activity across retired aliases.
 The separate activation database and offline XLSX importer are documented in
 [Activation ledger foundation](tools/ACTIVATIONS.md). They preserve all source
 movements, reconcile returns before proposing a TR site, and derive months only
-from activation dates. The Activări tab follows Vânzări and offers current-month and monthly-history
-views for agents; managers use Prepay. Reports show eligibility, without commission amounts. Configure
+from activation dates. Both agents and managers use Prepay, with Vânzări and
+permission-gated Activări subtabs and monthly report selection. Reports show eligibility, without commission amounts. Configure
 MOBIUP_ACTIVATIONS_PILOT_MANAGER_ID and MOBIUP_ACTIVATIONS_PILOT_AGENT_ID privately.
-Both navigation and API access default to denied. Agents receive only their
+Activation navigation and API access default to denied; Prepay sales remain available. Agents receive only their
 unambiguously owned current site; managers can use the existing read filters.
 No user names or account IDs belong in the public source.
 

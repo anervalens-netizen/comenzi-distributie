@@ -12,12 +12,12 @@ const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 let checks=0;function check(value,label){assert.ok(value,label);checks++;}
 const source=`
 import React,{useState} from 'react';import {createRoot} from 'react-dom/client';
-import {SalesPanel} from './components/sales';import {ManagerAccessories,ManagerPrepay} from './components/manager-commerce';import {ManagerTeamLinks} from './components/manager-workspace';
+import {SalesPanel} from './components/sales';import {ManagerAccessories,ManagerPrepay} from './components/manager-commerce';import {AgentCommerce} from './components/agent-commerce';import {ManagerTeamLinks} from './components/manager-workspace';
 import {setLocalWorkUserId} from './lib/local-work';
 setLocalWorkUserId('synthetic-manager');
 const user={id:'synthetic-manager',role:'manager',managerScope:'global',name:'Manager sintetic'};
 const agents=[{id:'a',name:'Agent sintetic A',role:'agent',active:1},{id:'b',name:'Agent sintetic B',role:'agent',active:1}];
-function Fixture(){const [view,setView]=useState('team'),[agent,setAgent]=useState('a'),[initial,setInitial]=useState('clients');window.fixture={setAgent};return <main className="main-content"><button onClick={()=>setView('team')}>Echipă fixture</button><button onClick={()=>{setAgent('a');setView('manager-sales');}}>Accesorii manager fixture</button><button onClick={()=>{setAgent('a');setView('prepay');}}>Prepay fără proiecte fixture</button>{view==='team'?<ManagerTeamLinks scope={{selectedAgents:agents}} onAgent={(id,dest)=>{setAgent(id);setInitial(dest==='clients'?'clients':'current');setView('sales');}}/>:view==='manager-sales'?<ManagerAccessories userId={user.id} query={'agentId='+agent+'&months=2026-09'} scopeQuery={'agentId='+agent} scopeLabel={'Agent sintetic '+agent.toUpperCase()} initialView="clients" onViewChange={()=>{}}/>:view==='prepay'?<ManagerPrepay userId={user.id} query={'agentId='+agent+'&month=2026-09'} scopeLabel={'Agent sintetic '+agent.toUpperCase()} distributionConfigured={false} canViewActivations={false}/>:<SalesPanel user={user} users={agents} scopeQuery={'agentId='+agent} scopeLabel={'Agent sintetic '+agent.toUpperCase()} initialView={initial}/>}</main>;}createRoot(document.getElementById('root')).render(<Fixture/>);
+function Fixture(){const [view,setView]=useState('team'),[agent,setAgent]=useState('a'),[initial,setInitial]=useState('clients'),[configured,setConfigured]=useState(true);window.fixture={setAgent,setConfigured};return <main className="main-content"><button onClick={()=>setView('team')}>Echipă fixture</button><button onClick={()=>{setAgent('a');setView('manager-sales');}}>Accesorii manager fixture</button><button onClick={()=>{setAgent('a');setView('prepay');}}>Prepay fără proiecte fixture</button><button onClick={()=>{setAgent('a');setView('agent-sales');}}>Accesorii agent fixture</button><button onClick={()=>setView('agent-prepay')}>Prepay agent fixture</button>{view==='team'?<ManagerTeamLinks scope={{selectedAgents:agents}} onAgent={(id,dest)=>{setAgent(id);setInitial(dest==='clients'?'clients':'current');setView('sales');}}/>:view==='manager-sales'?<ManagerAccessories userId={user.id} query={'agentId='+agent+'&months=2026-09'} scopeQuery={'agentId='+agent} scopeLabel={'Agent sintetic '+agent.toUpperCase()} initialView="clients" onViewChange={()=>{}}/>:view.startsWith('agent-')?<AgentCommerce key={view} user={{...agents.find(item=>item.id===agent),distributionConfigured:configured,canViewActivations:false}} mode={view==='agent-sales'?'sales':'activations'} initialView={view==='agent-sales'?'clients':undefined} onViewChange={()=>{}}/>:view==='prepay'?<ManagerPrepay userId={user.id} query={'agentId='+agent+'&month=2026-09'} scopeLabel={'Agent sintetic '+agent.toUpperCase()} distributionConfigured={false} canViewActivations={false}/>:<SalesPanel user={user} users={agents} scopeQuery={'agentId='+agent} scopeLabel={'Agent sintetic '+agent.toUpperCase()} initialView={initial}/>}</main>;}createRoot(document.getElementById('root')).render(<Fixture/>);
 
 `;
 await build({stdin:{contents:source,resolveDir:root,sourcefile:'monthly-fixture.tsx',loader:'tsx'},outfile:join(directory,'after.js'),bundle:true,minify:true,platform:'browser',jsx:'automatic',define:{'process.env.NODE_ENV':'"production"'},tsconfig:join(root,'tsconfig.json'),logLevel:'silent',loader:{'.woff2':'empty'}});
@@ -188,6 +188,16 @@ try {
   check(await evaluate("document.querySelector('[aria-label=\"Caută client în raport\"]').value===''") ,'Manager scope change clears previous agent search');
   check(await evaluate("document.querySelector('.client-sales-chips button:first-child')?.getAttribute('aria-pressed')==='true'"),'Manager scope change resets previous filter');
   check(!(await evaluate("document.body.textContent.includes('Client sintetic a 07')||document.querySelector('dialog[open]')!==null")),'Manager scope change closes the prior agent partner detail');
+  // Keep a desktop viewport while constraining the actual nested report container.
+  await send('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:1,mobile:false});
+  for(const width of [440,320]){
+   await evaluate("document.querySelector('main').style.width='"+width+"px';true");
+   const geometry=await evaluate("(()=>{const period=document.querySelector('.client-sales .report-period'),controls=period.parentElement,rect=period.getBoundingClientRect();return {width:rect.width,parentWidth:controls.getBoundingClientRect().width,buttons:[...period.querySelectorAll('.report-month-grid button')].map(button=>({width:button.getBoundingClientRect().width,height:button.getBoundingClientRect().height,nowrap:getComputedStyle(button).whiteSpace,overflow:button.scrollWidth>button.clientWidth}))}})()");
+   check(geometry.width>=geometry.parentWidth-2,'Customer calendar spans the controls row at '+width+'px');
+   check(geometry.buttons.length===12&&geometry.buttons.every(button=>button.width>=24&&button.height<=40&&button.nowrap==='nowrap'&&!button.overflow),'Month labels stay on one line in a '+width+'px nested card: '+JSON.stringify(geometry));
+  }
+  await evaluate("document.querySelector('main').style.width='';true");
+  await send('Emulation.setDeviceMetricsOverride',{width:360,height:800,deviceScaleFactor:1,mobile:true});
   const calendar=await evaluate("(()=>{const current=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Bucharest',year:'numeric',month:'2-digit'}).format(new Date());return {current,year:Number(current.slice(0,4))}})()");
   await select('[aria-label="An · Luna raportului pe clienți"]',String(calendar.year+1));
   check(await evaluate("[...document.querySelectorAll('.client-sales .report-month-grid button')].every(button=>button.disabled)"),'Customer calendar disables all months in a future year');
@@ -215,6 +225,61 @@ try {
   check(await evaluate("document.querySelector('.prepay-legacy-sales .distribution-metric>span:last-child').textContent.replaceAll(String.fromCharCode(160),' ')==='40,00 RON'"),'Changing the legacy month updates quantities and value');
   check(requests.some(path=>path.startsWith('/api/sales?')&&path.includes('agentId=a')&&path.includes('month=2026-08')&&!path.includes('months=')),'Legacy month selection uses the ordinary authorized sales API');
 
+  const agentStart=requests.length;
+  await evaluate("localStorage.setItem('agent-report-months-v1:a',JSON.stringify(['2026-09']));[...document.querySelectorAll('button')].find(button=>button.textContent==='Accesorii agent fixture').click();true");
+  await waitFor("document.querySelector('.agent-commerce .client-sales-table')!==null");
+  check(!(await evaluate("document.querySelector('.client-sales').textContent.includes('Reconciliere națională')")),'Agent customer report never exposes national manager reconciliation');
+  check(!(await evaluate("document.querySelector('.agent-report-scope')!==null")),'Agent customer report uses only its contextual monthly selector');
+  await send('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:1,mobile:false});
+  await evaluate("document.querySelector('main').style.width='440px';true");
+  const agentMonths=await evaluate("[...document.querySelectorAll('.client-sales .report-month-grid button')].map(button=>({width:button.getBoundingClientRect().width,nowrap:getComputedStyle(button).whiteSpace,overflow:button.scrollWidth>button.clientWidth}))");
+  check(agentMonths.length===12&&agentMonths.every(button=>button.width>=24&&button.nowrap==='nowrap'&&!button.overflow),'Agent customer calendar fits a 440px nested card');
+  await evaluate("document.querySelector('main').style.width='';true");
+  await evaluate("[...document.querySelectorAll('.agent-commerce .commerce-tabs button')].find(button=>button.textContent==='Accesorii').click();true");
+  await waitFor("document.querySelector('.agent-report-scope .report-month-grid button[aria-pressed=true]')?.getAttribute('aria-label')==='septembrie 2026'");
+  await evaluate("[...document.querySelectorAll('button')].find(button=>button.textContent==='Prepay agent fixture').click();true");
+  await waitFor("document.querySelector('.agent-commerce .prepay-workspace')!==null&&document.querySelector('.prepay-legacy-sales .distribution-metric strong')?.textContent==='7 buc.'");
+  check(await evaluate("document.querySelector('.agent-report-scope .report-month-grid button[aria-pressed=true]')?.getAttribute('aria-label')==='septembrie 2026'"),'Agent report months persist from accessories to Prepay');
+  check(!(await evaluate("document.querySelector('.distribution-projects')!==null||[...document.querySelectorAll('.prepay-workspace .commerce-tabs button')].some(button=>button.textContent==='Activări')")),'Agent has no project selector and denied activation tab');
+  const agentRequests=requests.slice(agentStart);
+  check(agentRequests.some(path=>path.startsWith('/api/sales?')&&path.includes('months=2026-09')),'Configured agent sales use the shared multi-month report');
+  check(agentRequests.some(path=>path.startsWith('/api/sales/clients?')),'Agent customer report remains reachable');
+  check(agentRequests.every(path=>!/[?&](agentId|managerId|siteCode)=/.test(path)),'Agent report queries never forge manager or seller scope');
+  check(!agentRequests.some(path=>path.includes('/activations')||path.includes('/reconciliation')),'Denied agent never requests activation or national reconciliation APIs');
+  check(agentRequests.filter(path=>path.startsWith('/api/sales/clients?')).every(path=>!/[?&](months|projects)=/.test(path)),'Own customer report never receives product-report period filters');
+  // Component defaults must preserve the established first-day reporting month in Bucharest.
+  await evaluate("window.fixtureRealDate=Date;true");
+  for(const [instant,expected,stored] of [['2026-09-30T22:15:00.000Z','septembrie 2026',null],['2026-12-31T23:15:00.000Z','decembrie 2026',JSON.stringify(['invalid-month'])]]){
+   await evaluate("[...document.querySelectorAll('button')].find(button=>button.textContent==='Echipă fixture').click();true");
+   await waitFor("document.querySelector('.manager-team-links')!==null");
+   await evaluate(`Date=class extends window.fixtureRealDate{constructor(...args){super(...(args.length?args:[${JSON.stringify(instant)}]));}};${stored===null?"localStorage.removeItem('agent-report-months-v1:a')":"localStorage.setItem('agent-report-months-v1:a',"+JSON.stringify(stored)+")"};[...document.querySelectorAll('button')].find(button=>button.textContent==='Accesorii agent fixture').click();true`);
+   await waitFor("document.querySelector('.agent-commerce .client-sales')!==null");
+   await evaluate("[...document.querySelectorAll('.agent-commerce .commerce-tabs button')].find(button=>button.textContent==='Accesorii').click();true");
+   await waitFor("document.querySelector('.agent-report-scope .report-month-grid button[aria-pressed=true]')?.getAttribute('aria-label')==="+JSON.stringify(expected));
+   check(await evaluate("document.querySelector('.agent-report-scope .report-month-grid button[aria-pressed=true]')?.getAttribute('aria-label')==="+JSON.stringify(expected)),'Agent first-day default/storage fallback uses Bucharest reporting month: '+expected);
+  }
+  await evaluate("[...document.querySelectorAll('button')].find(button=>button.textContent==='Echipă fixture').click();true");
+  await waitFor("document.querySelector('.manager-team-links')!==null");
+  await evaluate("Date=class extends window.fixtureRealDate{constructor(...args){super(...(args.length?args:['2026-09-30T22:15:00.000Z']));}};window.fixture.setConfigured(false);localStorage.setItem('agent-report-months-v1:a','[]');[...document.querySelectorAll('button')].find(button=>button.textContent==='Prepay agent fixture').click();true");
+  await waitFor("document.querySelector('.agent-commerce .prepay-workspace .report-month-grid button[aria-pressed=true]')?.getAttribute('aria-label')==='septembrie 2026'");
+  check(await evaluate("document.querySelector('.agent-commerce .prepay-workspace .report-month-grid button[aria-pressed=true]')?.getAttribute('aria-label')==='septembrie 2026'"),'Empty legacy selection falls back to the first-day reporting month');
+  await evaluate("Date=window.fixtureRealDate;[...document.querySelectorAll('button')].find(button=>button.textContent==='Echipă fixture').click();true");
+  await waitFor("document.querySelector('.manager-team-links')!==null");
+  await evaluate("window.fixture.setConfigured(false);localStorage.setItem('agent-report-months-v1:a',JSON.stringify(['2026-09']));[...document.querySelectorAll('button')].find(button=>button.textContent==='Prepay agent fixture').click();true");
+  await waitFor("document.querySelector('.agent-commerce .prepay-workspace .report-month-grid button[aria-pressed=true]')?.getAttribute('aria-label')==='septembrie 2026'");
+  check(await evaluate("document.querySelector('.agent-commerce .prepay-workspace .report-month-grid button[aria-pressed=true]')?.getAttribute('aria-label')==='septembrie 2026'"),'Unconfigured Prepay follows asynchronously restored September');
+  await click('[aria-label="august 2026"]');
+  await waitFor("document.querySelector('.agent-commerce .prepay-legacy-sales .distribution-metric strong')?.textContent==='4 buc.'");
+  check(await evaluate("localStorage.getItem('agent-report-months-v1:a')==='[\"2026-08\"]'"),'Unconfigured Prepay selector persists the shared report month');
+  await evaluate("[...document.querySelectorAll('button')].find(button=>button.textContent==='Accesorii agent fixture').click();true");
+  await waitFor("document.querySelector('.agent-commerce .client-sales')!==null");
+  await evaluate("[...document.querySelectorAll('.agent-commerce .commerce-tabs button')].find(button=>button.textContent==='Accesorii').click();true");
+  await waitFor("document.querySelector('.agent-commerce .report-month-grid button[aria-pressed=true]')?.getAttribute('aria-label')==='august 2026'");
+  check(await evaluate("document.querySelector('.agent-commerce .report-month-grid button[aria-pressed=true]')?.getAttribute('aria-label')==='august 2026'"),'Returning to unconfigured accessories preserves the Prepay month');
+  await click('[aria-label="septembrie 2026"]');
+  await evaluate("[...document.querySelectorAll('button')].find(button=>button.textContent==='Prepay agent fixture').click();true");
+  await waitFor("document.querySelector('.agent-commerce .prepay-workspace .report-month-grid button[aria-pressed=true]')?.getAttribute('aria-label')==='septembrie 2026'");
+  check(await evaluate("document.querySelector('.agent-commerce .prepay-workspace .report-month-grid button[aria-pressed=true]')?.getAttribute('aria-label')==='septembrie 2026'"),'Returning to Prepay preserves a month chosen in accessories');
   console.log('PASS: '+checks+' synthetic monthly browser checks, Team navigation, pagination/search/filter, loading/error/retry, stale responses, month/drilldown, scope, legacy Prepay month/totals and 360px overflow.');
 } catch (error) {
   testError = error;

@@ -91,7 +91,7 @@ try{
  await browser.evaluate('[...document.querySelectorAll(".main-nav [role=tab]")].find(button=>button.textContent==="Accesorii").click()');
  await waitFor(()=>browser.evaluate('document.querySelectorAll(".commerce-category-card").length===3'),'accessory categories');
  assert(!(await browser.evaluate('document.querySelector(".manager-commerce").textContent.includes("Media / SIM")')),'accessories do not duplicate prepay');
- await browser.evaluate('[...document.querySelectorAll(".commerce-tabs button")].find(button=>button.textContent==="Alte produse").click()');
+ await browser.evaluate('[...document.querySelectorAll(".commerce-tabs button")].find(button=>button.textContent==="Telefoane & Prepay").click()');
  await waitFor(()=>browser.evaluate('document.querySelector(".manager-commerce").textContent.includes("Telefoane")&&document.querySelector(".manager-commerce").textContent.includes("vouchere")'),'other useful reports retained');
  await browser.evaluate('[...document.querySelectorAll(".commerce-tabs button")].find(button=>button.textContent==="Pe clienți").click()');
  await waitFor(()=>browser.evaluate('!!document.querySelector(".client-sales")'),'customer report contextual month');
@@ -112,6 +112,44 @@ try{
  assert.equal(await browser.evaluate(`document.querySelector('[aria-label="septembrie 2025"]')?.getAttribute('aria-pressed')`),'true');
  await browser.evaluate(`document.querySelector('[aria-label="Resetează filtrele"]').click()`);
  await waitFor(()=>browser.evaluate('document.querySelectorAll(".report-month-grid button[aria-pressed=true]").length===1&&document.querySelector(".report-year select")?.value===String(new Date().getFullYear())'),'reset follows current selected year');
+ // Use the authenticated agent sessions with the real shared reports and unchanged policy API.
+ for(const [id,october,union] of [['north',3,3],['south',1,2],['non',0,0]]){
+  await browser.send('Network.setCookie',{name:'mobiup_session',value:cookies[id],url:origin});
+  await browser.evaluate(`localStorage.setItem('agent-report-months-v1:${id}',JSON.stringify(['2026-10']));location.reload();`);
+  await waitFor(()=>browser.evaluate('document.querySelector(".profile strong")?.textContent==='+JSON.stringify('Synthetic '+id)),'agent session '+id);
+  await browser.evaluate('window.agentRequests=[];window.agentOriginalFetch=window.fetch;window.fetch=(...args)=>{window.agentRequests.push(String(args[0]));return window.agentOriginalFetch(...args);};true');
+  const destinations=await browser.evaluate('[...document.querySelectorAll(".main-nav [role=tab]")].map(button=>button.textContent)');
+  assert(['Comenzi','Avize','Transfer','Parteneri','Accesorii','Prepay','Stocul meu'].every(label=>destinations.includes(label)),'agent operational destinations and shared commercial labels remain reachable');
+  await browser.evaluate('[...document.querySelectorAll(".main-nav [role=tab]")].find(button=>button.textContent==="Accesorii").click()');
+  await waitFor(()=>browser.evaluate('document.querySelectorAll(".agent-commerce .commerce-category-card").length===3'),'agent accessory reports '+id);
+  assert(!(await browser.evaluate('!!document.querySelector(".manager-scope-bar")||!!document.querySelector(".distribution-projects")')),'agent reports never expose manager or project selectors');
+  await browser.evaluate('[...document.querySelectorAll(".main-nav [role=tab]")].find(button=>button.textContent==="Prepay").click()');
+  await waitFor(()=>browser.evaluate('!!document.querySelector(".agent-commerce .prepay-sales")'),'agent Prepay sales '+id);
+  await browser.evaluate('[...document.querySelectorAll(".prepay-workspace .commerce-tabs button")].find(button=>button.textContent==="Activări").click()');
+  await waitFor(()=>browser.evaluate('document.querySelector(".activation-primary strong")?.textContent==='+JSON.stringify(String(october))),'agent activation policy '+id);
+  assert.equal(await browser.evaluate('document.querySelectorAll(".agent-commerce .report-period").length'),1,'agent activation and sales share one period');
+  assert(!(await browser.evaluate('!!document.querySelector(".activation-workspace input[type=month]")')),'shared agent period replaces the separate activation month');
+  await browser.evaluate(`document.querySelector('[aria-label="septembrie 2026"]').click()`);
+  await waitFor(()=>browser.evaluate('document.querySelector(".activation-primary strong")?.textContent==='+JSON.stringify(String(union))),'agent multi-month activation union '+id);
+  assert.equal(await browser.evaluate('document.querySelectorAll(".agent-report-scope .report-month-grid button[aria-pressed=true]").length'),2);
+  await browser.evaluate('[...document.querySelectorAll(".main-nav [role=tab]")].find(button=>button.textContent==="Accesorii").click()');
+  await waitFor(()=>browser.evaluate('!!document.querySelector(".agent-commerce .commerce-tabs")&&!document.querySelector(".prepay-workspace")'),'return to agent accessory reports');
+  await browser.evaluate('[...document.querySelectorAll(".agent-commerce .commerce-tabs button")].find(button=>button.textContent==="Pe clienți").click()');
+  await waitFor(()=>browser.evaluate('!!document.querySelector(".agent-commerce .client-sales")'),'agent own customer report '+id);
+  assert(!(await browser.evaluate('document.querySelector(".agent-commerce .client-sales").textContent.includes("Reconciliere națională")||!!document.querySelector(".agent-report-scope")')),'agent customer report keeps own monthly context without national manager controls');
+  const requests=await browser.evaluate('window.agentRequests.filter(path=>path.startsWith("/api/sales?")||path.startsWith("/api/sales/clients?")||path.startsWith("/api/activations?"))');
+  assert(requests.some(path=>path.startsWith('/api/sales?')&&path.includes('months=2026-10')),'agent sales use authenticated multi-month report');
+  assert(requests.some(path=>path.startsWith('/api/sales/clients?')),'agent own portfolio endpoint is requested');
+  assert(requests.every(path=>!/[?&](managerId|agentId|siteCode)=/.test(path)),'agent requests never supply another seller/manager scope');
+  assert(requests.filter(path=>path.startsWith('/api/sales/clients?')).every(path=>!/[?&](months|projects)=/.test(path)),'agent customer report excludes product-report query fields');
+  assert(!(await browser.evaluate('window.agentRequests.some(path=>path.includes("/sales/clients/reconciliation"))')),'agent never requests national reconciliation');
+  await browser.send('Emulation.setDeviceMetricsOverride',{width:320,height:800,deviceScaleFactor:1,mobile:true});
+  await browser.evaluate('[...document.querySelectorAll(".main-nav [role=tab]")].find(button=>button.textContent==="Stocul meu").scrollIntoView({block:"nearest",inline:"nearest"})');
+  const stockTarget=await browser.evaluate('(()=>{const button=[...document.querySelectorAll(".main-nav [role=tab]")].find(button=>button.textContent==="Stocul meu"),r=button.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2,visible:r.left>=0&&r.right<=innerWidth,hit:button.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))}})()');
+  assert(stockTarget.visible&&stockTarget.hit,'last agent operational tab remains reachable by horizontal navigation at320px');
+  await browser.send('Input.dispatchMouseEvent',{type:'mousePressed',button:'left',clickCount:1,x:stockTarget.x,y:stockTarget.y});await browser.send('Input.dispatchMouseEvent',{type:'mouseReleased',button:'left',clickCount:1,x:stockTarget.x,y:stockTarget.y});
+  await waitFor(()=>browser.evaluate('[...document.querySelectorAll(".main-nav [role=tab]")].some(button=>button.textContent==="Stocul meu"&&button.getAttribute("aria-selected")==="true")'),'agent stock navigation '+id);
+ }
  const source=new DatabaseSync(root+'/activations.sqlite');source.prepare("UPDATE activation_meta SET value=CAST(value AS INTEGER)+1 WHERE key='generation'").run();source.close();
  assert.equal((await request('activations?month=2026-10','north')).status,503,'generation mismatch fails closed');
  db.close();console.log('PASS: authenticated North/South/nonexclusive policies, forged filters, detail/export, combined partners, weighted months, responsive UI and generation staleness.');

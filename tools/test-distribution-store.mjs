@@ -30,9 +30,28 @@ try{
  assert.equal(read(null,'manager',{months:['2026-09','2026-10']}).totals.total,9);
  assert.equal(read(null,'manager',{projects:['vodafone_sud','vodafone_nord']}).totals.total,7);
  assert.equal(read(null,'manager',{projects:[]}).totals.total,0);assert.equal(read(null,'manager',{projects:[]}).totals.eligible,0,'empty selections retain explicit eligibility zero');assert.equal(read(null,'manager',{months:[]}).totals.total,0);
- assert.throws(()=>read(null,'manager',{rules:{...rules,revision:'changed'}}),/Stale distribution/);
+ const revisedRules={...rules,revision:'changed'};
+ const revised=read(null,'manager',{rules:revisedRules});
+ assert.deepEqual(revised.totals,manager.totals);assert.deepEqual(revised.history,manager.history,'rules revision alone does not change activation history');
+ assert.equal(revised.rulesRevision,'changed');assert.notEqual(revised.revision,manager.revision,'current rules revision invalidates selection identity');
+ const productRules={...rules,products:{...rules.products,ZERO:'accessories',CREDIT:'vodafone_0'}};
+ const productReport=read(null,'manager',{rules:productRules});
+ assert.deepEqual(productReport.totals,manager.totals);assert.deepEqual(productReport.history,manager.history,'product remapping never changes distinct activation facts or eligibility');
+ assert.notEqual(productReport.revision,manager.revision,'product-only changes invalidate selections even without a rules revision change');
+ assert.deepEqual(read(null,'manager',{months:['2026-08','2026-10']}).simZero,{distributed:2,activated:1,withoutReportedActivation:1});
+ assert.deepEqual(read(null,'manager',{months:['2026-08','2026-10'],rules:productRules}).simZero,{distributed:8,activated:8,withoutReportedActivation:0},'SIM0 cohort grouping uses current product codes without rebuilding raw cohorts');
+ for(const changed of [
+  {...rules,assignments:rules.assignments.map((a,i)=>i===0?{...a,territoryId:'nord_b'}:a)},
+  {...rules,futureStructure:{version:1}},
+  {...rules,version:2},
+  {...rules,history:'recent'},
+  {...rules,products:null},
+  {...rules,products:{...rules.products,CREDIT:'invalid-group'}},
+ ])assert.throws(()=>read(null,'manager',{rules:changed}),/Stale distribution/,'structural and malformed rule changes still fail closed');
  const partners=read(['N'],'north',{view:'partners',portfolio:[{id:'zero-point',client:'EXAMPLE',codes:['C'],name:'Synthetic zero point'}]});assert.equal(partners.partners.rows.reduce((n,r)=>n+r.total,0),3);assert.equal(partners.partners.rows.at(-1).total,0);
  const point=partners.partners.rows[0];assert.equal(read(['N'],'north',{view:'detail',point:point.key}).detail.total,point.total);
+ const detailRevision=read(['N'],'north',{view:'detail',point:point.key}).revision;
+ for(const changedRules of [revisedRules,productRules])for(const view of ['detail','export'])assert.throws(()=>read(['N'],'north',{view,point:point.key,revision:detailRevision,rules:changedRules}),/Stale activation selection/,'detail/export tokens bind the complete current rules');
  assert.equal(read(['S'],'south',{view:'detail',point:point.key}).detail.total,1,'same workpoint still intersects the authenticated seller');
  assert.equal(read(['N'],'north',{view:'detail',point:'foreign'}).detail.total,0);
  assert.equal(read(['N'],'north',{view:'export',company:JSON.stringify(['ExampleCo','EXAMPLE'])}).detail.total,3);
@@ -41,6 +60,8 @@ try{
  const database=new DatabaseSync(join(root,'activation-report.sqlite'));
  try{
   const meta=Object.fromEntries(database.prepare('SELECT key,value FROM report_meta').all().map(r=>[r.key,r.value]));
+  for(const invalid of ['', '{',JSON.stringify({...rules,version:2}),JSON.stringify({...rules,products:{CREDIT:'invalid-group'}})])assert.throws(()=>distributionReport(database,manager,{...meta,rules:invalid},null,{rules,months:['2026-10'],projects,policy:'manager'}),/Stale distribution/,'missing or malformed projection rules fail closed');
+  assert.throws(()=>distributionReport(database,manager,{...meta,rules:JSON.stringify({...rules,futureStructure:{version:1}})},null,{rules,months:['2026-10'],projects,policy:'manager'}),/Stale distribution/,'unknown stored structural fields cannot be silently discarded');
   const plans=[];
   let planIdentity=point.key;
   const traced={function:(...args)=>database.function(...args),prepare(sql){
@@ -70,5 +91,5 @@ try{
  const generation=join(root,'generations','synthetic');mkdirSync(generation,{recursive:true});for(const name of ['activations.sqlite','activation-report.sqlite'])renameSync(join(root,name),join(generation,name));
  symlinkSync('generations/synthetic',join(root,'current'),'dir');assert.equal(read(null).totals.total,8,'published generation is pinned');
  unlinkSync(join(root,'current'));symlinkSync('generations/missing',join(root,'current'),'dir');assert.throws(()=>read(null),/ENOENT/,'dangling pointer fails closed');
- console.log('PASS: indexed projections, weighted disjoint counts, exact geography, projects/months union, fail-closed scopes, point/company/detail/export.');
+ console.log('PASS: indexed projections, live product grouping with structural compatibility, selection revision fences, exact scoped counts and point/company/detail/export.');
 }finally{rmSync(root,{recursive:true,force:true});}
