@@ -5,6 +5,7 @@ import {join} from 'node:path';
 import {performance} from 'node:perf_hooks';
 import {clientSalesTestRuntime} from './client-sales-test-runtime.mjs';
 import {seedReportScale} from './performance/report-fixture.mjs';
+import {assertEquivalentSearchReports} from './performance/report-comparison.mjs';
 import {lab,payloadBytes,positiveInt,distribution} from './performance/lab.mjs';
 const n=positiveInt(process.env.LAB_COMPANIES,35581),samples=positiveInt(process.env.LAB_SAMPLES,30);
 const digest=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -33,7 +34,7 @@ try{
  await profile('national','agent','first role access',1,()=>t.call());
  const agent=await profile('national','agent','warm',samples,()=>t.call());agent.record.bytes=payloadBytes(agent.result);
  const searches=['q=ȘTIINȚĂ&county=RO-IS','county=Iași&q=stiinta'];
- const a=await t.call(searches[0],'manager'),z=await t.call(searches[1],'manager');assert.deepEqual(a,z);assert.equal(a.total,n);
+ const a=await t.call(searches[0],'manager'),z=await t.call(searches[1],'manager');assertEquivalentSearchReports(a,z);assert.equal(a.total,n);
  await profile('search-equivalent','manager','warm; alternating equivalent filters',samples,i=>t.call(searches[i%2],'manager'));
  const recon=()=>m.clientSalesReconciliation(t.user('manager'),new URLSearchParams('month=2026-09'),new Date('2026-09-30T12:00:00Z')).then(r=>r.json());
  const first=await profile('reconciliation','manager','cold facts',1,recon);first.record.bytes=payloadBytes(first.result);first.record.semanticResultSha256=semanticDigest(first.result);first.record.freshnessShape=freshnessShape(first.result);assert.deepEqual(first.record.freshnessShape,{builtAt:true,sourceRevision:true,portfolioRevision:true});

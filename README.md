@@ -181,6 +181,13 @@ The derived activity format is version 8 and requires the supported activity-sna
 
 ## Synthetic performance measurements
 
+API responses expose `Server-Timing: app;dur=…` for elapsed handler time,
+including response construction. This response-local measurement records no
+identifiers or query strings and creates no telemetry store. It excludes proxy,
+network transfer and browser rendering; it is not SQL-only time or a measure
+of when a screen becomes usable. Authentication errors retain the same timing
+shape and existing no-store policy.
+
 See [the LAB harness guide](tools/performance/README.md) for repeatable report,
 bootstrap/search and inventory measurements. Artifacts are written only under
 ignored `work/performance/`. The report cache keeps bounded compact chunks within

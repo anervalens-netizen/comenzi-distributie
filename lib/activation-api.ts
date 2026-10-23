@@ -70,7 +70,9 @@ export async function activationReport(user:User,params:URLSearchParams,internal
    if(view==='partners'){
      const scope=partnerScope(user);
      const agentSites=rules.assignments.filter(a=>projects.includes(a.projectId)&&(sites===null||sites.some(s=>s.toUpperCase()===a.siteCode.toUpperCase()))).map(a=>a.siteCode.toUpperCase());
-     const rows=(await db().prepare(`SELECT c.id,c.data FROM customers c WHERE c.active=1 AND ${scope.sql} AND EXISTS(SELECT 1 FROM users u JOIN json_each(COALESCE(json_extract(c.data,'$.warehouseIds'),json_array(c.warehouse_id))) w ON w.value=u.warehouse_id WHERE u.role='agent' AND u.active=1 AND UPPER(TRIM(u.site_code)) IN (SELECT value FROM json_each(?))) ORDER BY c.id`).bind(...scope.args,JSON.stringify(agentSites)).all<{id:string;data:string}>()).results;
+     // Materialize the permitted warehouses once inside this read, rather than
+     // scanning the agent roster again for every customer membership.
+     const rows=(await db().prepare(`SELECT c.id,c.data FROM customers c WHERE c.active=1 AND ${scope.sql} AND EXISTS(SELECT 1 FROM json_each(COALESCE(json_extract(c.data,'$.warehouseIds'),json_array(c.warehouse_id))) w WHERE w.value IN (SELECT u.warehouse_id FROM users u WHERE u.role='agent' AND u.active=1 AND UPPER(TRIM(u.site_code)) IN (SELECT value FROM json_each(?)))) ORDER BY c.id`).bind(...scope.args,JSON.stringify(agentSites)).all<{id:string;data:string}>()).results;
      query.portfolio=rows.map(r=>{const p=JSON.parse(r.data);return {id:r.id,name:p.name||'',client:normalizedCui(p.cui||''),codes:[...new Set([...(p.historyFranchises||[]),p.historyCatalog?.franchiseCode||''].filter(Boolean).map(c=>String(c).trim().toUpperCase()))] as string[]};});
      // Include current membership in pagination identity; no authorization result is cached.
      query.portfolioRevision=sha256(JSON.stringify(query.portfolio));

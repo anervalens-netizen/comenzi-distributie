@@ -12,7 +12,7 @@ const number=(n:number)=>n.toLocaleString('ro-RO');
 export function ActivationOperatorCard({userId,query,provider,reload}:{userId:string;query:string;provider:ActivationProvider;reload:number}){
  const params=new URLSearchParams(query);params.set('provider',provider);const search=params.toString(),key=userId+'|'+search+'|'+reload;
  const [result,setResult]=useState<{key:string;data:ActivationReport}|null>(null),[error,setError]=useState<{key:string;text:string}|null>(null);
- useEffect(()=>{const c=new AbortController();api<ActivationReport>('activations?'+search,'GET',undefined,c.signal).then(data=>{if(!c.signal.aborted)setResult({key,data});}).catch(e=>{if(!c.signal.aborted)setError({key,text:errorMessage(e)});});return()=>c.abort();},[key,search]);
+ useEffect(()=>{const c=new AbortController();api<ActivationReport>('activations?'+search,'GET',undefined,c.signal).then(data=>{if(!c.signal.aborted){setResult({key,data});setError(null);}}).catch(e=>{if(!c.signal.aborted)setError({key,text:errorMessage(e)});});return()=>c.abort();},[key,search]);
  const data=result?.key===key?result.data:null,message=error?.key===key?error.text:'';
  return <article className="panel distribution-card activation-operator" aria-label={'Activări '+provider}>
   <OperatorLogo provider={provider}/>
