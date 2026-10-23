@@ -1,7 +1,7 @@
 import {activationPartnerView} from './activation-partners-node';
 import type {DatabaseSync} from 'node:sqlite';
 import {createHash} from 'node:crypto';
-import {vodafoneEligibility,type DistributionRules} from './distribution-rules';
+import {parseDistributionRules,vodafoneEligibility,type DistributionRules} from './distribution-rules';
 import {visibleActivation,type ActivationQuery} from './activation-distribution';
 import {emptyActivationCounts,type ActivationReport,type ActivationCounts,type ActivationProvider} from './activation-types';
 export const canonicalRules=(r:unknown):string=>JSON.stringify(r&&typeof r==='object'&&!Array.isArray(r)?Object.fromEntries(Object.entries(r).sort(([a],[b])=>a.localeCompare(b)).map(([k,v])=>[k,JSON.parse(canonicalRules(v))])):Array.isArray(r)?r.map(v=>JSON.parse(canonicalRules(v))):r);
@@ -16,9 +16,17 @@ function add(t:ActivationCounts,r:Dimension,rules:DistributionRules,provider:Act
 }
 /** Every read, including month discovery and drill-down, uses this same SQL scope. */
 export function distributionReport(report:DatabaseSync,base:ActivationReport,meta:Record<string,string>,sites:string[]|null,query:ActivationQuery):ActivationReport{
- if(!meta.rules||canonicalRules(JSON.parse(meta.rules))!==canonicalRules(query.rules))throw new Error('Stale distribution rules');
- const {provider}=base,{rules}=query;
- const revision=createHash('sha256').update(meta.version+'|'+meta.builtAt+'|'+meta.sourceImports+'|'+meta.sourceGeneration+'|'+meta.rules+'|'+query.policy+'|'+JSON.stringify(sites)+'|'+JSON.stringify([query.projects,query.months,query.q,query.point,query.company,query.portfolioRevision])).digest('hex');
+ let rules:DistributionRules;
+ try{
+  const projectedRules=parseDistributionRules(meta.rules);rules=parseDistributionRules(query.rules);
+  // Facts, dimensions and cohorts retain raw item codes. Product groups and
+  // their revision are evaluated below at read time; every other field must
+  // remain identical, including unknown future structural fields.
+  const structural=(r:DistributionRules)=>Object.fromEntries(Object.entries(r).filter(([key])=>key!=='products'&&key!=='revision'));
+  if(canonicalRules(structural(projectedRules))!==canonicalRules(structural(rules)))throw new Error();
+ }catch{throw new Error('Stale distribution rules');}
+ const {provider}=base;
+ const revision=createHash('sha256').update(meta.version+'|'+meta.builtAt+'|'+meta.sourceImports+'|'+meta.sourceGeneration+'|'+meta.rules+'|'+canonicalRules(rules)+'|'+query.policy+'|'+JSON.stringify(sites)+'|'+JSON.stringify([query.projects,query.months,query.q,query.point,query.company,query.portfolioRevision])).digest('hex');
  if(query.revision&&query.revision!==revision)throw new Error('Stale activation selection');
  const clauses=['provider=?','is_tr=1'],args:(string|number)[]=[provider];
  const selectedSites=rules.assignments.filter(a=>query.projects.includes(a.projectId)).map(a=>a.siteCode.toUpperCase());
