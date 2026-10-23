@@ -52,6 +52,10 @@ try{
  await account('pilot-agent');assert(await browser.evaluate('[...document.querySelectorAll(".main-nav [role=tab]")].some(x=>x.textContent==="Activări")'));
  await browser.evaluate('[...document.querySelectorAll(".main-nav [role=tab]")].find(x=>x.textContent==="Activări").click()');
  await waitFor(()=>browser.evaluate('document.querySelector(".activation-primary strong")?.textContent==="12"'),'agent totals');
+ assert.equal(await browser.evaluate('getComputedStyle(document.querySelector(".activation-source-date")).fontSize'),'12px','cold agent activation owns source-date styles before commerce is loaded');
+ assert.equal(await browser.evaluate('getComputedStyle(document.querySelector(".activation-operator .commerce-details summary")).fontSize'),'13px','cold agent activation loads shared disclosure styles');
+ assert.equal(await browser.evaluate('getComputedStyle(document.querySelector(".activation-operator .commerce-details")).borderTopWidth'),'1px','cold agent activation disclosure separation is styled');
+
  assert(!(await browser.evaluate('document.querySelector(".activation-workspace").textContent.includes("TR Example B")')));
  // A stale source must replace data with an error, never leave old totals visible.
  const changed=new DatabaseSync(folder+'/activations.sqlite');changed.exec("INSERT INTO activation_imports VALUES('new','example',1,2,'complete')");changed.close();

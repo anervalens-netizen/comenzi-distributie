@@ -35,11 +35,17 @@ try{
  const multi=await request('sales?month=2026-10&months=2026-09,2026-10,2026-10&projects=vodafone_nord');assert.equal(multi.status,200,JSON.stringify(multi.data));assert.equal(multi.data.distribution.vodafoneCredit.quantity,3);assert.equal(multi.data.distribution.vodafoneCredit.average,20);
  assert.equal((await request('sales?month=2026-10&months=2026-09,2026-10&projects=vodafone_sud','north')).data.summary.quantity,0);
  const allSales=await request('sales?month=2026-10&months=2026-09,2026-10&projects=vodafone_nord,vodafone_sud,non_exclusiv');assert.equal(allSales.data.summary.quantity,5,'all projects preserve authorized historical sellers without current mappings');assert.equal(allSales.data.distribution.groups.unmapped.quantity,2);
- browser=await browserFixture(origin);await browser.send('Network.setCookie',{name:'mobiup_session',value:cookies.manager,url:origin});await browser.send('Page.navigate',{url:origin});
+ browser=await browserFixture(origin);await browser.send('Emulation.setDeviceMetricsOverride',{width:1280,height:900,deviceScaleFactor:1,mobile:false});await browser.send('Network.setCookie',{name:'mobiup_session',value:cookies.manager,url:origin});await browser.send('Page.navigate',{url:origin});
  await waitFor(()=>browser.evaluate('document.querySelector(".profile strong")?.textContent==="Synthetic manager"'),'manager session');
  await browser.evaluate(`localStorage.setItem('distribution-selection-v1:manager',JSON.stringify({months:['2026-09','2026-10'],projects:['vodafone_sud','vodafone_nord','non_exclusiv']}));location.reload();`);
  await waitFor(()=>browser.evaluate('document.querySelector(".manager-overview h1")?.textContent==="Sinteză"'),'operational summary');
  assert(!(await browser.evaluate('!!document.querySelector(".manager-overview .distribution-card")')),'summary contains no duplicated commercial reports');
+ assert.equal(await browser.evaluate('getComputedStyle(document.querySelector(".manager-overview .manager-summary-grid")).gridTemplateColumns.split(" ").length'),4,'cold summary has four operational metric columns before opening commerce');
+ assert.equal(await browser.evaluate('getComputedStyle(document.querySelector(".manager-operational-title")).fontSize'),'16px','cold summary owns its heading styles');
+ await browser.send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
+ assert.equal(await browser.evaluate('getComputedStyle(document.querySelector(".manager-overview .manager-summary-grid")).gridTemplateColumns.split(" ").length'),2,'cold mobile summary has two operational metric columns');
+ await browser.send('Emulation.setDeviceMetricsOverride',{width:1280,height:900,deviceScaleFactor:1,mobile:false});
+
  assert(!(await browser.evaluate('!!document.querySelector(".distribution-projects")')),'project controls do not pretend to filter operational activity');
  assert.equal(await browser.evaluate('document.querySelectorAll(".report-period").length'),1,'one effective summary period');
  assert(!(await browser.evaluate('document.querySelector(".manager-agent-table")?.textContent.includes("Vânzări")')),'operational table contains no commercial sales column');
