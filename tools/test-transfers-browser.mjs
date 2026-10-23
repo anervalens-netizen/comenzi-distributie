@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
-import {mkdtempSync,rmSync,mkdirSync,writeFileSync,readdirSync,readFileSync} from 'node:fs';
+import {mkdtempSync,rmSync,mkdirSync,writeFileSync,readFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
+import * as XLSX from 'xlsx';
 
 export async function testTransferBrowser(origin,cookies){
  const profile=mkdtempSync(join(tmpdir(),'transfer-chrome-')),downloads=mkdtempSync(join(tmpdir(),'transfer-downloads-')),port=9467;
- const downloaded=()=>readdirSync(downloads).filter(name=>name.endsWith('.xlsx'));
+ const downloadEvents=new Map();
+ const completedDownloads=()=>[...downloadEvents.values()].filter(event=>event.state==='completed');
  const chrome=spawn(process.env.CHROME_BIN,['--headless=new','--no-sandbox','--disable-dev-shm-usage',`--remote-debugging-port=${port}`,`--user-data-dir=${profile}`,'about:blank'],{stdio:'ignore'});
  let socket;let checks=0;const pending=new Map();let next=0;
  const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
@@ -21,9 +23,9 @@ export async function testTransferBrowser(origin,cookies){
  try{
   let target;await wait(async()=>{try{target=await fetch(`http://127.0.0.1:${port}/json/new?about:blank`,{method:'PUT'}).then(response=>response.json());return !!target.webSocketDebuggerUrl;}catch{return false;}},'Chrome start');
   socket=new WebSocket(target.webSocketDebuggerUrl);await new Promise(resolve=>socket.addEventListener('open',resolve,{once:true}));
-  socket.addEventListener('message',event=>{const message=JSON.parse(event.data);if(!message.id)return;const request=pending.get(message.id);if(!request)return;clearTimeout(request.timer);pending.delete(message.id);if(message.error)request.reject(new Error(JSON.stringify(message.error)));else request.resolve(message.result);});
+  socket.addEventListener('message',event=>{const message=JSON.parse(event.data);if(message.method==='Browser.downloadWillBegin'||message.method==='Browser.downloadProgress'){const details=message.params;downloadEvents.set(details.guid,{...downloadEvents.get(details.guid),...details});}if(!message.id)return;const request=pending.get(message.id);if(!request)return;clearTimeout(request.timer);pending.delete(message.id);if(message.error)request.reject(new Error(JSON.stringify(message.error)));else request.resolve(message.result);});
   await send('Page.enable');await send('Network.enable');
-  await send('Browser.setDownloadBehavior',{behavior:'allow',downloadPath:downloads});
+  await send('Browser.setDownloadBehavior',{behavior:'allow',downloadPath:downloads,eventsEnabled:true});
   await send('Page.addScriptToEvaluateOnNewDocument',{source:"Object.defineProperty(navigator,'share',{value:undefined});Object.defineProperty(navigator,'canShare',{value:undefined});"});await send('Emulation.setDeviceMetricsOverride',{width:820,height:1180,deviceScaleFactor:1,mobile:false});
   const login=async(id)=>{await send('Network.setCookie',{name:'mobiup_session',value:cookies[id].split('=')[1],url:origin,httpOnly:true,sameSite:'Strict'});await send('Page.navigate',{url:origin});await wait(()=>evaluate("!!document.querySelector('.app-shell')"),'Authenticated app');};
   await login('ta');
@@ -42,16 +44,37 @@ export async function testTransferBrowser(origin,cookies){
   await wait(()=>evaluate("document.querySelector('.transfer-editor output')?.textContent==='Ciornă salvată'"),'Autosaved transfer');
   check(await evaluate("document.documentElement.scrollWidth<=window.innerWidth"),'Tablet editor fits viewport');await screenshot('agent-editor-tablet');
   await button('Finalizează solicitarea');await wait(()=>evaluate("!!document.querySelector('.transfer-result')"),'Finalized transfer result');
-  await wait(()=>downloaded().length===1,'Automatic Excel download without Web Share');
-  check(readFileSync(join(downloads,downloaded()[0])).subarray(0,2).toString()==='PK','Automatic download is an XLSX archive');
-  const downloadName=downloaded()[0];check(downloadName.startsWith('transfer-')&&downloadName.endsWith('.xlsx'),'Automatic download uses transfer filename');
+  await wait(()=>completedDownloads().length===1,'Automatic Excel download without Web Share');
+  const automaticDownload=completedDownloads()[0],downloadName=automaticDownload.suggestedFilename;
+  const readDownload=download=>readFileSync(download.filePath||join(downloads,download.suggestedFilename));
+  const automaticBytes=readDownload(automaticDownload);
+  check(automaticBytes.subarray(0,2).toString()==='PK','Automatic download is an XLSX archive');
+  check(downloadName.startsWith('transfer-')&&downloadName.endsWith('.xlsx'),'Automatic download uses transfer filename');
+  const automaticWorkbook=XLSX.read(automaticBytes,{type:'buffer'});check(automaticWorkbook.SheetNames.includes('Transfer'),'Automatic download has the transfer worksheet');
+  const finalizedNumber=await evaluate("document.querySelector('.transfer-result .eyebrow').textContent"),finalizedUrl=await evaluate('document.querySelector(\'.transfer-result a[href$="/excel"]\').href');
+  check(automaticWorkbook.Sheets.Transfer.B2?.v===finalizedNumber,'Automatic workbook identifies the finalized transfer');
   check(await evaluate("document.querySelector('.email-preview')?.textContent.includes('manager-b@example.invalid')"),'Result shows manager from destination region');
   check(await evaluate("[...document.querySelectorAll('.transfer-result a')].some(node=>node.textContent.includes('.eml'))"),'Result offers eml with attachment');await screenshot('agent-result-tablet');
-  await button('Înapoi la transferuri');await wait(()=>evaluate("document.querySelectorAll('.transfer-history-row').length>0"),'Transfer history');
-  await click('.transfer-history-row');await wait(()=>evaluate("!!document.querySelector('.transfer-result')"),'Reopened transfer');
-  await pause(800);check(downloaded().length===1,'History does not download Excel again');
-  await click('.transfer-result a[href$="/excel"]');await wait(()=>downloaded().length===2,'Manual Excel download from history');
-  await send('Page.reload');await wait(()=>evaluate("!!document.querySelector('.app-shell')"),'Reloaded app');await pause(800);check(downloaded().length===2,'Reload does not repeat finalization download');
+  await button('Înapoi la transferuri');
+  // Closing starts an async history refresh; existing rows may remain visible.
+  // Wait for this document, rather than opening the first stale history row.
+  const historyRow=`[...document.querySelectorAll('.transfer-history-row')].find(row=>row.querySelector('small')?.textContent.startsWith(${JSON.stringify(finalizedNumber+' ·')}))`;
+  await wait(()=>evaluate(`!!(${historyRow})`),'Finalized transfer appears in refreshed history');
+  check(await evaluate(`(()=>{const row=${historyRow};if(!row||row.disabled)return false;row.click();return true;})()`),'Reopen the finalized transfer by document number');
+  await wait(()=>evaluate("!!document.querySelector('.transfer-result')"),'Reopened transfer');
+  await pause(800);check(downloadEvents.size===1,'History does not download Excel again');
+  const manualUrl=await evaluate('document.querySelector(\'.transfer-result a[href$="/excel"]\').href');
+  check(manualUrl===finalizedUrl,'History reopens the same finalized transfer identity');
+  await click('.transfer-result a[href$="/excel"]');await wait(()=>completedDownloads().length===2,'Manual Excel download from history');
+  const manualDownload=completedDownloads().find(download=>download.guid!==automaticDownload.guid);
+  check(manualDownload.url===manualUrl,'Manual download URL matches the selected historical transfer: '+JSON.stringify({expected:manualUrl,actual:manualDownload.url}));
+  check(manualDownload.suggestedFilename===downloadName,'Manual download filename matches the finalized transfer: '+JSON.stringify({automatic:downloadName,manual:manualDownload.suggestedFilename}));
+  // CDP allow may overwrite the same suggested filename instead of adding (1).
+  // GUID completion and workbook bytes prove both downloads on either browser.
+  const manualBytes=readDownload(manualDownload);check(manualBytes.subarray(0,2).toString()==='PK','Manual download is an XLSX archive');
+  const manualWorkbook=XLSX.read(manualBytes,{type:'buffer'});check(manualWorkbook.SheetNames.includes('Transfer'),'Manual download has the transfer worksheet');
+  check(JSON.stringify(XLSX.utils.sheet_to_json(manualWorkbook.Sheets.Transfer,{header:1}))===JSON.stringify(XLSX.utils.sheet_to_json(automaticWorkbook.Sheets.Transfer,{header:1})),'Manual history download preserves the finalized transfer contents');
+  await send('Page.reload');await wait(()=>evaluate("!!document.querySelector('.app-shell')"),'Reloaded app');await pause(800);check(downloadEvents.size===2,'Reload does not repeat finalization download');
 
   await login('tm-a');await evaluate("[...document.querySelectorAll('[role=tab]')].find(node=>node.textContent==='Operațiuni').click();true");
   await wait(()=>evaluate("!!document.querySelector('.manager-operation-nav')"),'Manager operations');await button('Transferuri');

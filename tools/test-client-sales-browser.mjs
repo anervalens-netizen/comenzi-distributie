@@ -12,12 +12,13 @@ const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 let checks=0;function check(value,label){assert.ok(value,label);checks++;}
 const source=`
 import React,{useState} from 'react';import {createRoot} from 'react-dom/client';
-import {SalesPanel} from './components/sales';import {ManagerTeamLinks} from './components/manager-workspace';
+import {SalesPanel} from './components/sales';import {ManagerAccessories,ManagerPrepay} from './components/manager-commerce';import {ManagerTeamLinks} from './components/manager-workspace';
 import {setLocalWorkUserId} from './lib/local-work';
 setLocalWorkUserId('synthetic-manager');
 const user={id:'synthetic-manager',role:'manager',managerScope:'global',name:'Manager sintetic'};
 const agents=[{id:'a',name:'Agent sintetic A',role:'agent',active:1},{id:'b',name:'Agent sintetic B',role:'agent',active:1}];
-function Fixture(){const [view,setView]=useState('team'),[agent,setAgent]=useState('a'),[initial,setInitial]=useState('clients');window.fixture={setAgent};return <main className="main-content"><button onClick={()=>setView('team')}>Echipă fixture</button>{view==='team'?<ManagerTeamLinks scope={{selectedAgents:agents}} onAgent={(id,dest)=>{setAgent(id);setInitial(dest==='clients'?'clients':'current');setView('sales');}}/>:<SalesPanel user={user} users={agents} scopeQuery={'agentId='+agent} scopeLabel={'Agent sintetic '+agent.toUpperCase()} initialView={initial}/>}</main>;}createRoot(document.getElementById('root')).render(<Fixture/>);
+function Fixture(){const [view,setView]=useState('team'),[agent,setAgent]=useState('a'),[initial,setInitial]=useState('clients');window.fixture={setAgent};return <main className="main-content"><button onClick={()=>setView('team')}>Echipă fixture</button><button onClick={()=>{setAgent('a');setView('manager-sales');}}>Accesorii manager fixture</button><button onClick={()=>{setAgent('a');setView('prepay');}}>Prepay fără proiecte fixture</button>{view==='team'?<ManagerTeamLinks scope={{selectedAgents:agents}} onAgent={(id,dest)=>{setAgent(id);setInitial(dest==='clients'?'clients':'current');setView('sales');}}/>:view==='manager-sales'?<ManagerAccessories userId={user.id} query={'agentId='+agent+'&months=2026-09'} scopeQuery={'agentId='+agent} scopeLabel={'Agent sintetic '+agent.toUpperCase()} initialView="clients" onViewChange={()=>{}}/>:view==='prepay'?<ManagerPrepay userId={user.id} query={'agentId='+agent+'&month=2026-09'} scopeLabel={'Agent sintetic '+agent.toUpperCase()} distributionConfigured={false} canViewActivations={false}/>:<SalesPanel user={user} users={agents} scopeQuery={'agentId='+agent} scopeLabel={'Agent sintetic '+agent.toUpperCase()} initialView={initial}/>}</main>;}createRoot(document.getElementById('root')).render(<Fixture/>);
+
 `;
 await build({stdin:{contents:source,resolveDir:root,sourcefile:'monthly-fixture.tsx',loader:'tsx'},outfile:join(directory,'after.js'),bundle:true,minify:true,platform:'browser',jsx:'automatic',define:{'process.env.NODE_ENV':'"production"'},tsconfig:join(root,'tsconfig.json'),logLevel:'silent',loader:{'.woff2':'empty'}});
 const requests=[];let failNext=false;
@@ -37,6 +38,15 @@ const server=createServer(async(request,response)=>{
   requests.push(url.pathname+url.search);response.setHeader('Content-Type','application/json');
   if(url.pathname==='/api/fail-next'){failNext=true;response.end('{}');return;}
   if(url.pathname==='/api/sales/clients/reconciliation'){response.end(JSON.stringify({state:'ready',scope:'national',month:url.searchParams.get('month'),explanation:'Istoricul tuturor vânzătorilor, nu vânzări personale ale responsabilului actual.',window:{from:'2026-09-01',to:'2026-09-28',imported:true},source:{revision:'synthetic-revision',builtAt:'2026-09-29'},buckets:{raw:{knownCents:10000,missingValues:0,sourceRows:3},consumer:{knownCents:1000,missingValues:0,sourceRows:1},linkedCompany:{knownCents:9000,missingValues:0,sourceRows:2}},exceptions:[{key:'identity:1',category:'identity',companyId:null,clientCode:'SYNTH',reason:'Synthetic identity exception',knownCents:-123,missingValues:1,sourceRows:1}],total:1,hasMore:false}));return;}
+  if(url.pathname==='/api/sales'){
+   const historical=url.searchParams.get('month')==='2026-08',month=url.searchParams.get('month');
+   const product=(itemCode,quantity,value,segment,subsegment)=>({itemCode,itemName:'Produs sintetic '+itemCode,brand:'Example',category:segment==='accessories'?'Cabluri':'Cartele',subCategory:'',rows:1,quantity,value,segment,subsegment});
+   const products=[product('SIM',historical?3:5,historical?30:50,'cardsSim','sim'),product('CARD',historical?1:2,historical?10:20,'cardsSim','cards'),product('CABLE',99,990,'accessories'),product('VOUCHER',40,400,'cardsSim','vouchers')];
+   const aggregate=items=>({rows:items.length,quantity:items.reduce((sum,p)=>sum+p.quantity,0),value:items.reduce((sum,p)=>sum+p.value,0)});
+   const segments=Object.fromEntries(['cardsSim','accessories','phones','unclassified'].map(segment=>{const items=products.filter(p=>p.segment===segment);return [segment,{summary:aggregate(items),products:items}]}));
+   segments.cardsSim.subsegments=Object.fromEntries(['cards','sim','vouchers','valueVouchers'].map(subsegment=>[subsegment,aggregate(products.filter(p=>p.subsegment===(subsegment==='valueVouchers'?'vouchers':subsegment)))]));
+   response.end(JSON.stringify({month,filename:'synthetic.xlsx',importedAt:'2026-09-29T00:00:00Z',products,segments,summary:aggregate(products),sites:[],daily:[{date:month+'-20',...aggregate(products)}],months:[],monthly:[]}));return;
+  }
   if(url.pathname==='/api/sales/clients'){
    if(failNext){failNext=false;response.statusCode=503;response.end(JSON.stringify({error:'Eroare sintetică'}));return;}
    await delay(url.searchParams.get('q')==='slow'?700:50);response.end(JSON.stringify(report(url.searchParams)));return;
@@ -163,9 +173,49 @@ try {
   await evaluate("[...document.querySelectorAll('.client-sales-chips button')].find(b=>b.textContent.startsWith('Fără facturare')).click();true");await waitFor("document.body.textContent.includes('Nu există clienți pentru filtrele selectate.')");
   await evaluate("window.fixture.setAgent('b');true");await waitFor("document.querySelector('.client-sales-source')!==null&&document.body.textContent.includes('Agent sintetic B')");
   check(await evaluate("document.querySelector('[aria-label=\"Luna raportului pe clienți\"]').value!=='2026-09'||document.querySelector('.client-sales-table')?.textContent.includes('b 00')"),'Changing scope clears old rows');
+  // The simplified manager view owns a separately keyed customer report.
+  await evaluate("[...document.querySelectorAll('button')].find(b=>b.textContent==='Accesorii manager fixture').click();true");
+  await waitFor("document.querySelector('.manager-commerce')!==null&&document.querySelector('.client-sales-table')?.textContent.includes('a 00')");
+  await click('[aria-label="septembrie 2026"]');
+  await waitFor("document.querySelector('.client-sales-source')?.textContent.includes('28.09.2026')");
+  await click('.client-sales-cards button:nth-child(2)');
+  await fill('[aria-label="Caută client în raport"]','a 07');
+  await waitFor("document.querySelector('.client-sales-table')?.textContent.includes('a 07')");
+  await click('.client-sales-table tbody th button');await waitFor("document.querySelector('dialog[open]')!==null");
+  await waitFor("document.querySelector('dialog')?.textContent.includes('Fișă sintetică')");
+  await evaluate("window.fixture.setAgent('b');true");
+  await waitFor("document.querySelector('.client-sales header')?.textContent.includes('Agent sintetic B')&&document.querySelector('.client-sales-table')?.textContent.includes('b 00')&&!document.querySelector('dialog[open]')");
+  check(await evaluate("document.querySelector('[aria-label=\"Caută client în raport\"]').value===''") ,'Manager scope change clears previous agent search');
+  check(await evaluate("document.querySelector('.client-sales-chips button:first-child')?.getAttribute('aria-pressed')==='true'"),'Manager scope change resets previous filter');
+  check(!(await evaluate("document.body.textContent.includes('Client sintetic a 07')||document.querySelector('dialog[open]')!==null")),'Manager scope change closes the prior agent partner detail');
+  const calendar=await evaluate("(()=>{const current=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Bucharest',year:'numeric',month:'2-digit'}).format(new Date());return {current,year:Number(current.slice(0,4))}})()");
+  await select('[aria-label="An · Luna raportului pe clienți"]',String(calendar.year+1));
+  check(await evaluate("[...document.querySelectorAll('.client-sales .report-month-grid button')].every(button=>button.disabled)"),'Customer calendar disables all months in a future year');
+  const previousRequests=requests.filter(path=>path.startsWith('/api/sales/clients?')).length;
+  const previousSelection=await evaluate("document.querySelector('.client-sales .report-period-selection').textContent");
+  await click('.client-sales .report-month-grid button:first-child');await delay(100);
+  check(await evaluate("document.querySelector('.client-sales .report-period-selection').textContent")==previousSelection,'Disabled future month preserves selected report period');
+  check(requests.filter(path=>path.startsWith('/api/sales/clients?')).length===previousRequests,'Disabled future month never requests a customer report');
+  await select('[aria-label="An · Luna raportului pe clienți"]',String(calendar.year));
+  check(await evaluate("[...document.querySelectorAll('.client-sales .report-month-grid button')].slice(0,"+Number(calendar.current.slice(5))+").every(button=>!button.disabled)"),'Current and past months stay selectable');
   check(errors.length===0,JSON.stringify(errors));
   check(!requests.some(p=>p.startsWith('/api/sales?')),'All monthly filters/refreshes remain separate from daily sales');
-  console.log('PASS: '+checks+' synthetic monthly browser checks, Team navigation, pagination/search/filter, loading/error/retry, stale responses, month/drilldown, scope and 360px overflow.');
+  await evaluate("[...document.querySelectorAll('button')].find(b=>b.textContent==='Prepay fără proiecte fixture').click();true");
+  await waitFor("document.querySelector('.prepay-legacy-sales .distribution-metric strong')?.textContent==='7 buc.'");
+  check(await evaluate("document.querySelector('.prepay-legacy-sales .distribution-metric>span:last-child').textContent.replaceAll(String.fromCharCode(160),' ')==='70,00 RON'"),'Unconfigured Prepay preserves legacy card and SIM quantities/value');
+  check(await evaluate("document.querySelectorAll('.prepay-workspace .report-period').length===1"),'Unconfigured Prepay offers one monthly selector');
+  check(!(await evaluate("document.querySelector('.distribution-filters')!==null")),'Unconfigured sales do not depend on project filters');
+  check(!(await evaluate("[...document.querySelectorAll('.prepay-workspace .commerce-tabs button')].some(button=>button.textContent==='Activări')")),'Unconfigured sales retain the activation permission gate');
+  check(!(await evaluate("document.querySelector('.prepay-legacy-sales').textContent.includes('CABLE')||document.querySelector('.prepay-legacy-sales').textContent.includes('VOUCHER')")),'Legacy Prepay excludes accessory and voucher product duplication');
+  check(!(await evaluate("document.querySelector('.prepay-legacy-sales').textContent.includes('Media')")),'Legacy segment totals do not invent a credit-only mean');
+  await click('.prepay-legacy-sales .commerce-details summary');
+  check(await evaluate("document.querySelectorAll('.prepay-legacy-sales .commerce-product-table tbody tr').length===2"),'Legacy Prepay keeps the underlying SIM and card products reachable');
+  await click('[aria-label="august 2026"]');
+  await waitFor("document.querySelector('.prepay-legacy-sales .distribution-metric strong')?.textContent==='4 buc.'");
+  check(await evaluate("document.querySelector('.prepay-legacy-sales .distribution-metric>span:last-child').textContent.replaceAll(String.fromCharCode(160),' ')==='40,00 RON'"),'Changing the legacy month updates quantities and value');
+  check(requests.some(path=>path.startsWith('/api/sales?')&&path.includes('agentId=a')&&path.includes('month=2026-08')&&!path.includes('months=')),'Legacy month selection uses the ordinary authorized sales API');
+
+  console.log('PASS: '+checks+' synthetic monthly browser checks, Team navigation, pagination/search/filter, loading/error/retry, stale responses, month/drilldown, scope, legacy Prepay month/totals and 360px overflow.');
 } catch (error) {
   testError = error;
   throw error;

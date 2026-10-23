@@ -1,4 +1,5 @@
 import type {ActivationReport,CombinedActivationPartners} from './activation-types';
+import {activationPartnerSummary} from './activation-partner-summary';
 import {partnerScope} from './partner-portfolio';
 import {normalizedCui} from './partner-company-identity';
 import {canViewActivations} from './activation-access';
@@ -32,7 +33,7 @@ export async function activationReport(user:User,params:URLSearchParams,internal
    if(params.has('revision')&&params.get('revision')!==revision)fail(409,'Proiecția s-a modificat. Reîncarcă lista.');
    const activePortfolio=new Set([...groups.values()].filter(p=>p.total>0&&p.portfolioId).map(p=>p.portfolioId));
    const values=[...groups.values()].filter(p=>p.total>0||!p.portfolioId||!activePortfolio.has(p.portfolioId)).sort((a,b)=>b.total-a.total||a.key.localeCompare(b.key));
-   return {provider:'both' as const,operators,revision,partners:{rows:values.slice(page*50,(page+1)*50),total:values.length,page,hasMore:(page+1)*50<values.length}};
+   return {provider:'both' as const,operators,revision,partners:{...activationPartnerSummary(values),rows:values.slice(page*50,(page+1)*50),total:values.length,page,hasMore:(page+1)*50<values.length}};
  }
 
  if(provider!=='vodafone'&&provider!=='digi')fail(400,'Alege un operator valid.');

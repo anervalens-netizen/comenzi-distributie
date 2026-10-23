@@ -8,7 +8,7 @@ type Report=UsageSnapshot&{from:string;to:string;generatedAt:number;users:Accoun
 const day=(date:Date)=>new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Bucharest',year:'numeric',month:'2-digit',day:'2-digit'}).format(date);
 const stamp=(at:number)=>at?new Date(at).toLocaleString('ro-RO',{timeZone:'Europe/Bucharest'}):'—';
 const duration=(ms:number)=>ms<60_000?`${Math.floor(ms/1000)} s`:`${Math.floor(ms/3600000)} h ${Math.floor(ms/60000)%60} min`;
-const screenLabels:Record<string,string>={orders:'Comenzi',sim:'Avize',transfers:'Transferuri',partner:'Parteneri',sales:'Vânzări',activations:'Activări',stock:'Stoc',catalog:'Catalog',activity:'Sinteză',team:'Echipă',settings:'Setări',editor:'Editor',result:'Document'};
+const screenLabels:Record<string,string>={orders:'Comenzi',sim:'Avize',transfers:'Transferuri',partner:'Parteneri',sales:'Accesorii / vânzări',activations:'Prepay / activări',stock:'Stoc',catalog:'Catalog',activity:'Sinteză',team:'Echipă',settings:'Setări',editor:'Editor',result:'Document'};
 export function UsageReport({scopeQuery}:{scopeQuery:string}){
   const [from,setFrom]=useState(()=>day(new Date(Date.now()-6*86400000))),[to,setTo]=useState(()=>day(new Date())),[role,setRole]=useState('agent'),[detail,setDetail]=useState(''),[reload,setReload]=useState(0);
   const requestKey=[from,to,detail,reload,scopeQuery].join('|');

@@ -2,6 +2,7 @@
 """Build an atomic, serial-free read model from the private activation ledger."""
 import argparse
 import fcntl
+from activation_versions import FACTS_VERSION
 from activation_projection import build_details,validate_rules
 import datetime as dt
 import json
@@ -29,6 +30,9 @@ def _build_report(directory, rules=None):
             raise ValueError('Unsupported activation ledger')
         imports = source.execute("SELECT sha256,operator,row_count,parser_version FROM activation_imports WHERE status='complete' ORDER BY sha256").fetchall()
         schema = dict(source.execute('SELECT key,value FROM activation_meta'))['schema_version']
+        facts_version=dict(source.execute('SELECT key,value FROM activation_meta')).get('facts_version','')
+        if schema=='3' and facts_version!=FACTS_VERSION:
+            raise ValueError('Activation facts require semantic rebuild through activation_job')
         # Determine TR relevance only after the whole movement ledger was reconciled.
         source.execute("CREATE TEMP TABLE tr_keys AS SELECT DISTINCT company,provider,serial FROM " + ("activation_effective_movements" if schema == "3" else "activation_movements") + " WHERE is_tr=1 AND serial<>''")
         source.execute('CREATE UNIQUE INDEX temp.tr_identity ON tr_keys(company,provider,serial)')
@@ -51,6 +55,7 @@ def _build_report(directory, rules=None):
                 'latestDate': source.execute('SELECT MAX(activation_date) FROM activation_facts').fetchone()[0] or '',
                 'sourcePeriods': json.dumps([{'from':r[0],'to':r[1]} for r in source.execute("SELECT period_start,period_end FROM activation_imports WHERE status='complete'")]) if schema == '3' else '[]',
                 'sourceGeneration': dict(source.execute('SELECT key,value FROM activation_meta')).get('generation',''),
+                'factsVersion': facts_version,
                 'builtAt': dt.datetime.now(dt.timezone.utc).isoformat(),
                 'importedAt': source.execute("SELECT COALESCE(MAX(imported_at),'') FROM activation_imports WHERE status='complete'").fetchone()[0]}
         target.executemany('INSERT INTO report_meta VALUES(?,?)', meta.items())

@@ -1,4 +1,5 @@
 import {distributionReport} from './activation-distribution-node';
+import {activationFactsVersion} from './activation-semantics';
 import type {ActivationQuery} from './activation-distribution';
 import {DatabaseSync} from 'node:sqlite';
 import {resolve,dirname} from 'node:path';
@@ -29,7 +30,9 @@ export function readActivations(month:string,sites:string[]|null,provider:Activa
     const meta=Object.fromEntries(report.prepare('SELECT key,value FROM report_meta').all().map(r=>[String(r.key),String(r.value)]));
     if(!['1','2','3','4'].includes(meta.version))throw new Error('Unsupported activation report');
     source=new DatabaseSync(resolve(directory,'activations.sqlite'),{readOnly:true});
-    if(!['2','3'].includes(String(source.prepare("SELECT value FROM activation_meta WHERE key='schema_version'").get()?.value)))throw new Error('Unsupported activation ledger');
+    const schema=String(source.prepare("SELECT value FROM activation_meta WHERE key='schema_version'").get()?.value);
+    if(!['2','3'].includes(schema))throw new Error('Unsupported activation ledger');
+    if(schema==='3'&&(meta.factsVersion!==activationFactsVersion||String(source.prepare("SELECT value FROM activation_meta WHERE key='facts_version'").get()?.value||'')!==activationFactsVersion))throw new Error('Activation facts require semantic rebuild');
     const imports=source.prepare("SELECT sha256,operator,row_count,parser_version FROM activation_imports WHERE status='complete' ORDER BY sha256").all().map(r=>[r.sha256,r.operator,r.row_count,r.parser_version]);
     if(JSON.stringify(imports)!==meta.sourceImports)throw new Error('Stale activation report');
     if(meta.sourceGeneration!==undefined&&meta.sourceGeneration!==String(source.prepare("SELECT value FROM activation_meta WHERE key='generation'").get()?.value||''))throw new Error('Stale activation generation');

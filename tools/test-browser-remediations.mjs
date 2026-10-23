@@ -445,22 +445,22 @@ try {
   const managerLogin=await cdp.evaluate(`fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:'stock-manager',password:${JSON.stringify(password)}})}).then(r=>r.ok)`);
   check(managerLogin,'Manager browser login');await cdp.send('Page.reload',{ignoreCache:true});
   await waitFor(()=>cdp.evaluate("document.querySelector('.manager-overview h1')?.textContent==='Sinteză'"),'manager default activity dashboard');
-  check(await cdp.evaluate("(()=>{const tabs=[...document.querySelectorAll('.main-nav [role=tab]')];return tabs.length===5&&['Sinteză','Parteneri','Vânzări','Echipă','Operațiuni'].every((label,index)=>tabs[index]?.textContent?.includes(label))&&tabs[0]?.getAttribute('aria-selected')==='true';})()"),'Manager defaults to Sinteză with exactly five approved destinations');
-  check(await cdp.evaluate("document.querySelectorAll('.manager-summary-grid .manager-metric').length===5&&!document.querySelector('.activity-partners-card')"),'Manager overview has five compact metrics without an approval queue instead of dominant partner card');
+  check(await cdp.evaluate("(()=>{const tabs=[...document.querySelectorAll('.main-nav [role=tab]')];return tabs.length===6&&['Sinteză','Parteneri','Accesorii','Prepay','Echipă','Operațiuni'].every((label,index)=>tabs[index]?.textContent?.includes(label))&&tabs[0]?.getAttribute('aria-selected')==='true';})()"),'Manager defaults to Sinteză with all six approved destinations');
+  check(await cdp.evaluate("document.querySelectorAll('.manager-summary-grid .manager-metric').length===4&&!document.querySelector('.activity-partners-card')"),'Manager overview has four operational metrics without an approval queue');
 
   await cdp.send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
   await cdp.send('Page.reload',{ignoreCache:true});
   await waitFor(()=>cdp.evaluate("document.querySelector('.manager-overview h1')?.textContent==='Sinteză'"),'mobile manager activity dashboard');
-  await clickTab(cdp,'Vânzări');
-  await waitFor(()=>cdp.evaluate("document.querySelectorAll('.sales-subnav [role=tab]').length===3"),'mobile sales sub-tabs');
-  const mobileSalesNav=await cdp.evaluate("(()=>{const tabs=[...document.querySelectorAll('.sales-subnav [role=tab]')];const rects=tabs.map(tab=>tab.getBoundingClientRect());return {labels:tabs.map(tab=>tab.textContent?.trim()),inside:rects.every(rect=>rect.left>=-0.5&&rect.right<=innerWidth+0.5),viewportWidth:innerWidth,scrollWidth:document.documentElement.scrollWidth};})()");
-  check(mobileSalesNav.labels.some(label=>label?.includes('Luna curentă'))&&mobileSalesNav.labels.some(label=>label?.includes('Istoric'))&&mobileSalesNav.labels.some(label=>label?.includes('Pe clienți')),'Mobile Sales shows all three approved sub-tabs');
+  await clickTab(cdp,'Accesorii');
+  await waitFor(()=>cdp.evaluate("document.querySelectorAll('.manager-commerce .commerce-tabs button').length===3"),'mobile sales sub-tabs');
+  const mobileSalesNav=await cdp.evaluate("(()=>{const tabs=[...document.querySelectorAll('.manager-commerce .commerce-tabs button')];const rects=tabs.map(tab=>tab.getBoundingClientRect());return {labels:tabs.map(tab=>tab.textContent?.trim()),inside:rects.every(rect=>rect.left>=-0.5&&rect.right<=innerWidth+0.5),viewportWidth:innerWidth,scrollWidth:document.documentElement.scrollWidth};})()");
+  check(mobileSalesNav.labels.some(label=>label?.includes('Accesorii'))&&mobileSalesNav.labels.some(label=>label?.includes('Alte produse'))&&mobileSalesNav.labels.some(label=>label?.includes('Pe clienți')),'Mobile accessories show accessory, other-product and client reports');
   check(mobileSalesNav.inside,'Mobile Sales sub-tabs stay fully inside the viewport');
   check(mobileSalesNav.scrollWidth<=mobileSalesNav.viewportWidth+1,'Mobile Sales does not create document-level horizontal scrolling');
-  await cdp.evaluate("([...document.querySelectorAll('.sales-subnav [role=tab]')].find(tab=>tab.textContent?.includes('Istoric'))).click();true");
-  await waitFor(()=>cdp.evaluate("[...document.querySelectorAll('.sales-subnav [role=tab]')].some(tab=>tab.textContent?.includes('Istoric')&&tab.getAttribute('aria-selected')==='true')"),'mobile sales history tab');
-  check(await cdp.evaluate("(()=>{const tabs=[...document.querySelectorAll('.sales-subnav [role=tab]')];return tabs.every(tab=>{const rect=tab.getBoundingClientRect();return rect.left>=-0.5&&rect.right<=innerWidth+0.5;});})()"),'Mobile Sales keeps all three sub-tabs visible after switching to Istoric');
-  await cdp.evaluate("window.__monthlyOriginalFetch=window.fetch;window.__monthlyUrls=[];window.fetch=(...args)=>{window.__monthlyUrls.push(String(args[0]));return window.__monthlyOriginalFetch(...args)};[...document.querySelectorAll('.sales-subnav [role=tab]')].find(t=>t.textContent.includes('Pe clienți')).click();true");
+  await cdp.evaluate("([...document.querySelectorAll('.manager-commerce .commerce-tabs button')].find(tab=>tab.textContent?.includes('Alte produse'))).click();true");
+  await waitFor(()=>cdp.evaluate("[...document.querySelectorAll('.manager-commerce .commerce-tabs button')].some(tab=>tab.textContent?.includes('Alte produse')&&tab.getAttribute('aria-pressed')==='true')"),'mobile other-products tab');
+  check(await cdp.evaluate("(()=>{const tabs=[...document.querySelectorAll('.manager-commerce .commerce-tabs button')];return tabs.every(tab=>{const rect=tab.getBoundingClientRect();return rect.left>=-0.5&&rect.right<=innerWidth+0.5;});})()"),'Mobile Sales keeps all three sub-tabs visible after switching to other products');
+  await cdp.evaluate("window.__monthlyOriginalFetch=window.fetch;window.__monthlyUrls=[];window.fetch=(...args)=>{window.__monthlyUrls.push(String(args[0]));return window.__monthlyOriginalFetch(...args)};[...document.querySelectorAll('.manager-commerce .commerce-tabs button')].find(t=>t.textContent.includes('Pe clienți')).click();true");
   await waitFor(()=>cdp.evaluate("!!document.querySelector('.client-sales [role=alert]')"),'monthly report explicitly requests snapshot rebuild');
   check(await cdp.evaluate("window.__monthlyUrls.some(u=>u.startsWith('/api/sales/clients?'))&&!window.__monthlyUrls.some(u=>u.startsWith('/api/sales?'))"),'Real monthly tab fetches separate client history without daily sales');
   await cdp.send('Emulation.setDeviceMetricsOverride',{width:360,height:800,deviceScaleFactor:1,mobile:true});
@@ -476,7 +476,7 @@ try {
   await cdp.send('Emulation.clearDeviceMetricsOverride');
   await cdp.send('Page.reload',{ignoreCache:true});
   await waitFor(()=>cdp.evaluate("document.querySelector('.manager-overview h1')?.textContent==='Sinteză'"),'manager activity after mobile viewport regression');
-  await waitFor(()=>cdp.evaluate("document.querySelectorAll('.manager-summary-grid .manager-metric').length===5"),'activity partner card ready after viewport reset');
+  await waitFor(()=>cdp.evaluate("document.querySelectorAll('.manager-summary-grid .manager-metric').length===4"),'activity partner card ready after viewport reset');
 
   const unreadBefore=await cdp.evaluate("fetch('/api/notifications/inbox').then(r=>r.json()).then(r=>r.count)");
   await cdp.evaluate("document.querySelector('.request-bell').click();true");
@@ -521,22 +521,24 @@ try {
   await waitFor(()=>cdp.evaluate("[...document.querySelectorAll('[role=alert]')].some(e=>e.textContent.includes('Failed to fetch'))"),'visible network toggle error');checks++;
   await cdp.evaluate('window.fetch=window.originalFetch;true');
 
-  await cdp.evaluate("window.kpiOriginalFetch=window.fetch;window.fetch=async(...args)=>{const response=await window.kpiOriginalFetch(...args);if(String(args[0]).startsWith('/api/sales?')&&response.ok){const data=await response.json();data.filename='synthetic-kpi.xlsx';data.summary.value=1426066.81;return new Response(JSON.stringify(data),{status:200,headers:{'Content-Type':'application/json'}});}return response;};true");
+  await cdp.evaluate("window.kpiOriginalFetch=window.fetch;window.kpiUrls=[];window.fetch=(...args)=>{window.kpiUrls.push(String(args[0]));return window.kpiOriginalFetch(...args);};true");
   await clickTab(cdp,'Sinteză');
-  await waitFor(()=>cdp.evaluate("!!document.querySelector('.manager-sales-amount')&&!!document.querySelector('.manager-agent-table')"),'manager summary data and synthetic large sales value');
-  check(await cdp.evaluate("(()=>{const labels=[...document.querySelectorAll('.manager-summary-grid .manager-metric>span')].map(node=>node.textContent);return JSON.stringify(labels)===JSON.stringify(['VÂNZĂRI','CLIENȚI NOI','INVENTARE FINALIZATE','COMENZI FINALIZATE','AVIZE FINALIZATE']);})()"),'Manager summary shows five KPI labels without an approval counter');
-  check(await cdp.evaluate("(()=>{const headings=[...document.querySelectorAll('.manager-agent-table thead th')].map(node=>node.textContent);return headings.includes('Clienți noi')&&!headings.includes('Confirmați');})()"),'New clients replaces confirmation terminology in agent table');
-  check(await cdp.evaluate("(async()=>{const month=document.querySelector('.activity-toolbar input[type=month]').value;const data=await fetch('/api/manager/activity?month='+month).then(response=>response.json());const cards=document.querySelectorAll('.manager-summary-grid .manager-metric');return cards[3].querySelector('strong').textContent===String(data.finalizedOrders)&&cards[4].querySelector('strong').textContent===String(data.finalizedNotices);})()"),'Finalized document cards display actual scoped API totals');
+  await waitFor(()=>cdp.evaluate("!!document.querySelector('.manager-agent-table')&&document.querySelectorAll('.manager-summary-grid .manager-metric').length===4"),'manager operational summary');
+  await cdp.evaluate("document.querySelector('[aria-label=\"Actualizează sinteza\"]').click();true");
+  await waitFor(()=>cdp.evaluate("window.kpiUrls.some(url=>url.startsWith('/api/manager/activity?'))"),'operational summary refresh request');
+  check(await cdp.evaluate("(()=>{const labels=[...document.querySelectorAll('.manager-summary-grid .manager-metric>span')].map(node=>node.textContent);return JSON.stringify(labels)===JSON.stringify(['CLIENȚI NOI','INVENTARE FINALIZATE','COMENZI FINALIZATE','AVIZE FINALIZATE'])&&!window.kpiUrls.some(url=>url.startsWith('/api/sales?'));})()"),'Manager summary shows only operational KPIs and never fetches commercial sales');
+  check(await cdp.evaluate("(()=>{const headings=[...document.querySelectorAll('.manager-agent-table thead th')].map(node=>node.textContent);return headings.includes('Clienți noi')&&!headings.includes('Confirmați')&&!headings.includes('Vânzări');})()"),'Operational agent table retains new-client terminology without duplicate sales');
+  check(await cdp.evaluate("(async()=>{const url=window.kpiUrls.findLast(url=>url.startsWith('/api/manager/activity?'));const data=await window.kpiOriginalFetch(url).then(response=>response.json());const cards=document.querySelectorAll('.manager-summary-grid .manager-metric');return cards[2].querySelector('strong').textContent===String(data.finalizedOrders)&&cards[3].querySelector('strong').textContent===String(data.finalizedNotices);})()"),'Finalized document cards display actual scoped API totals');
   for(const width of [320,390,768,1440]){
     await cdp.send('Emulation.setDeviceMetricsOverride',{width,height:900,deviceScaleFactor:1,mobile:width<1024});
     await sleep(120);
     const geometry=await cdp.evaluate("(()=>{const nav=document.querySelector('.manager-shell .main-nav'),rect=nav.getBoundingClientRect();return {width:innerWidth,scroll:document.documentElement.scrollWidth,count:nav.querySelectorAll('[role=tab]').length,left:rect.left,right:rect.right,bottom:rect.bottom};})()");
     check(geometry.scroll<=geometry.width+1,`Manager summary has no document overflow at ${width}px`);
-    check(geometry.count===5&&geometry.left>=0&&geometry.right<=width+1,`All five manager destinations fit at ${width}px`);
+    check(geometry.count===6&&geometry.left>=0&&geometry.right<=width+1,`All six manager destinations fit at ${width}px: ${JSON.stringify(geometry)}`);
     if(width<1024)check(geometry.bottom<=900&&geometry.bottom>=830,`Manager navigation stays at viewport bottom at ${width}px`);
-    const metrics=await cdp.evaluate("(()=>{const grid=document.querySelector('.manager-summary-grid'),amount=document.querySelector('.manager-sales-amount'),currency=document.querySelector('.manager-sales-currency');return {columns:getComputedStyle(grid).gridTemplateColumns.split(' ').length,count:grid.children.length,amountFits:amount.scrollWidth<=amount.clientWidth+1,currencyFits:currency.scrollWidth<=currency.clientWidth+1,currencyText:currency.textContent,currencyOnNextLine:currency.getBoundingClientRect().top>=amount.getBoundingClientRect().bottom};})()");
-    check(metrics.count===5&&metrics.columns===(width>1100?3:2),`Five manager cards use responsive columns at ${width}px`);
-    check(metrics.amountFits&&metrics.currencyFits&&metrics.currencyText==='RON'&&metrics.currencyOnNextLine,`Large sales amount and RON remain readable without splitting at ${width}px`);
+    const metrics=await cdp.evaluate("(()=>{const grid=document.querySelector('.manager-summary-grid');return {columns:getComputedStyle(grid).gridTemplateColumns.split(' ').length,count:grid.children.length,valuesFit:[...grid.querySelectorAll('strong')].every(value=>value.scrollWidth<=value.clientWidth+1)};})()");
+    check(metrics.count===4&&metrics.columns===(width>900?4:2),`Four operational cards use responsive columns at ${width}px`);
+    check(metrics.valuesFit,`Operational values remain readable without clipping at ${width}px`);
     if(process.env.MANAGER_SCREENSHOT_DIR&&(width===390||width===1440)){const shot=await cdp.send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});writeFileSync(join(process.env.MANAGER_SCREENSHOT_DIR,`manager-summary-${width}.png`),Buffer.from(shot.data,'base64'));}
   }
   await cdp.evaluate('window.fetch=window.kpiOriginalFetch;true');
@@ -549,9 +551,9 @@ try {
   check(await cdp.evaluate("![...document.querySelectorAll('.manager-partner-hub button')].some(button=>button.textContent.includes('Adaugă partener')||button.textContent.includes('Vizite și traseu'))"),'Manager does not expose agent-only request/planner actions');
   await cdp.evaluate("(()=>{const input=document.querySelector('.manager-partner-hub .partner-filters input');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'browser-ph');input.dispatchEvent(new Event('input',{bubbles:true}));window.managerMapNode=document.querySelector('.manager-partner-hub .partner-map');return true;})()");
   await waitFor(()=>cdp.evaluate("document.querySelectorAll('.manager-partner-hub .partner-card').length===2"),'manager partner code search');
-  await clickTab(cdp,'Vânzări');
+  await clickTab(cdp,'Accesorii');
   check(await cdp.evaluate("!document.querySelector('.manager-partner-hub .partner-map')"),'Hidden manager portfolio releases the map');
-  await waitFor(()=>cdp.evaluate("!!document.querySelector('.sales-scope')"),'scoped manager sales');
+  await waitFor(()=>cdp.evaluate("!!document.querySelector('.manager-commerce h1')"),'scoped manager sales');
   check(await cdp.evaluate("JSON.parse(localStorage.getItem('manager-selection-v1:stock-manager')).agentId==='stock-agent'"),'Agent selection persists across manager sections');
   await clickTab(cdp,'Operațiuni');
   check(await cdp.evaluate("(()=>{const buttons=[...document.querySelectorAll('.manager-operation-nav button')];return buttons.length===5&&['Comenzi','Avize','Transferuri','Stocuri','Catalog produse'].every((label,index)=>buttons[index].textContent===label);})()"),'Operations keeps existing destinations and adds transfers after notices');

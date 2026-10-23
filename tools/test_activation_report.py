@@ -37,4 +37,11 @@ class ReportTests(unittest.TestCase):
         try:self.assertEqual(c.execute('SELECT COUNT(*),SUM(activated) FROM cohorts').fetchone(),(1,1))
         finally:c.close()
 
+    def test_stale_semantics_never_publish_a_fresh_looking_report(self):
+        self.load([row()]);build_report(self.root/'data')
+        report=self.root/'data'/'activation-report.sqlite';before=report.read_bytes()
+        self.c.execute("DELETE FROM activation_meta WHERE key='facts_version'");self.c.commit()
+        with self.assertRaisesRegex(ValueError,'semantic rebuild'):build_report(self.root/'data')
+        self.assertEqual(report.read_bytes(),before)
+
 if __name__=='__main__':unittest.main()

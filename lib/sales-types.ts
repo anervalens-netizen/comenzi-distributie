@@ -50,6 +50,7 @@ export type SalesProduct = SalesAggregate & {
   subCategory: string;
   segment?: 'accessories' | 'cardsSim' | 'phones' | 'unclassified';
   subsegment?: 'cards' | 'sim' | 'vouchers';
+  distributionGroup?: import('./distribution-rules').ProductGroup;
 };
 
 export type SalesSegment = {
