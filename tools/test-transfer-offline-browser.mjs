@@ -55,8 +55,13 @@ try{
  const shot=await browser.send('Page.captureScreenshot',{format:'png'});writeFileSync(join(directory,'first-offline-render.png'),Buffer.from(shot.data,'base64'));
  if(process.env.TRANSFER_SCREENSHOT)writeFileSync(process.env.TRANSFER_SCREENSHOT,Buffer.from(shot.data,'base64'));
  await click('Înapoi la transferuri');await waitFor(()=>evaluate("!!document.querySelector('.transfer-history-row')"),'offline cached list');await evaluate("document.querySelector('.transfer-history-row').click()");await waitFor(()=>evaluate("document.querySelector('input[aria-label^=Cantitate]')?.value==='4'"),'offline reopen restores quantity');
- // Reload uses the same origin/IndexedDB; the fixture HTML remains available in the harness.
+ // The fixture briefly reconnects only to serve its HTML. Quiesce both editor
+ // and background sender first: unloading an in-flight replay would strand its
+ // 45-second durable lease and test the artificial online blip instead of the
+ // subsequent real reconnect. The new page still starts its real sync listener.
+ await click('Înapoi la transferuri');await waitFor(()=>evaluate("!!document.querySelector('.transfer-workspace')"),'offline list before fixture reload');await manualSender('agent');const reloadWrites=requests.length;
  await browser.send('Network.emulateNetworkConditions',{offline:false,latency:0,downloadThroughput:0,uploadThroughput:0});await reload('reload');await browser.send('Network.emulateNetworkConditions',{offline:true,latency:0,downloadThroughput:0,uploadThroughput:0});await init();await waitFor(()=>evaluate("!!document.querySelector('.transfer-history-row')"),'reload offline list');await evaluate("document.querySelector('.transfer-history-row').click()");await waitFor(()=>evaluate("document.querySelector('input[aria-label^=Cantitate]')?.value==='4'"),'reload retains local quantity');
+ check(requests.length===reloadWrites&&await evaluate(`(await m.pendingOperations('agent')).some(op=>op.path==='transfers/${id}'&&op.attempts===0&&op.body.lines[0].quantity===4)`),'Fixture HTML reload preserves the unsent offline edit until the real reconnect');
  await browser.send('Network.emulateNetworkConditions',{offline:false,latency:0,downloadThroughput:0,uploadThroughput:0});await evaluate("window.dispatchEvent(new Event('online'))");await waitFor(()=>evaluate("document.querySelector('.transfer-editor output').textContent==='Ciornă salvată pe server'"),'reconnect confirms offline edit');check(await evaluate(`(await transport('transfers/${id}','GET')).transfer.lines[0].quantity===4&&(await m.pendingOperationCount())===0`),'Server quantity is four and update barrier clears only after acknowledgement');
  // A real HTTP retry sends the original identity and byte-equivalent payload.
  await click('Înapoi la transferuri');await waitFor(()=>evaluate("!!document.querySelector('.transfer-workspace')"),'pure retry fixture without an editor timer');await manualSender('agent');
