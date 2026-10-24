@@ -57,7 +57,7 @@ try{
  const send=(method,params={})=>new Promise((resolve,reject)=>{const id=next++,timer=setTimeout(()=>{pending.delete(id);reject(Error('CDP timeout '+method));},method==='Page.navigate'?45000:15000);pending.set(id,{resolve,reject,timer});socket.send(JSON.stringify({id,method,params}));});
  closeBrowser=()=>send('Browser.close');
  const evaluate=async expression=>{const result=await send('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true});if(result.exceptionDetails)throw Error(JSON.stringify(result.exceptionDetails));return result.result.value;};
- const waitFor=async expression=>{for(let i=0;i<120;i++){if(await evaluate(expression))return;await delay(50);}throw Error('Not ready: '+expression);};
+ const waitFor=async expression=>{for(let i=0;i<120;i++){if(await (typeof expression==='function'?expression():evaluate(expression)))return;await delay(50);}throw Error('Not ready: '+expression);};
  const clickText=text=>evaluate(`(()=>{const button=[...document.querySelectorAll('button')].find(b=>b.textContent.trim()===${JSON.stringify(text)});if(!button)throw Error('Button missing');button.click();return true;})()`);
  const fill=query=>evaluate(`(()=>{const input=document.querySelector('.partner-filters input');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,${JSON.stringify(query)});input.dispatchEvent(new Event('input',{bubbles:true}));return true;})()`);
  const mark=()=>requests.length;
@@ -88,8 +88,14 @@ try{
  await evaluate("document.querySelector('.maplibregl-canvas').focus();true");await send('Input.dispatchKeyEvent',{type:'keyDown',key:'ArrowRight',code:'ArrowRight',windowsVirtualKeyCode:39});await send('Input.dispatchKeyEvent',{type:'keyUp',key:'ArrowRight',code:'ArrowRight',windowsVirtualKeyCode:39});await delay(850);
  check(since(smallPan,'/api/partner/map').length===0,'Small pan within padded bbox does not request duplicate GeoJSON');
  evidence.scenarios.containedNavigation={zoomRequests:1,panRequests:0};
- const expanded=mark();await evaluate("document.querySelector('.maplibregl-ctrl-zoom-out').click();true");await delay(700);await evaluate("document.querySelector('.maplibregl-ctrl-zoom-out').click();true");await delay(850);
+ // Complete each camera transition and its debounced GET before the next click;
+ // overlapping animations intentionally coalesce and do not test two transitions.
+ const expanded=mark(),expandedZoom=(await camera()).zoom;
+ await evaluate("document.querySelector('.maplibregl-ctrl-zoom-out').click();true");await waitFor(async()=>since(expanded,'/api/partner/map').length>=1&&Math.abs((await camera()).zoom-(expandedZoom-1))<1e-8);
+ check(since(expanded,'/api/partner/map').length===1,'First completed zoom-out fetches its new aggregation exactly once');
+ await evaluate("document.querySelector('.maplibregl-ctrl-zoom-out').click();true");await waitFor(async()=>since(expanded,'/api/partner/map').length>=2&&Math.abs((await camera()).zoom-(expandedZoom-2))<1e-8);
  check(since(expanded,'/api/partner/map').length===2,'Two integer zoom-out transitions each fetch their new aggregation once');evidence.scenarios.expandedNavigation={mapRequests:since(expanded,'/api/partner/map').length};
+ check(since(expanded,'/api/partner/map').every((request,index)=>Number(request.params.zoom)===Math.floor(expandedZoom-index-1)),'Each completed zoom-out requests its own integer aggregation level');
  const beforeHidden=await camera(),sameScopeHidden=mark();await evaluate('window.fixture.setActive(false)');await delay(400);check(await evaluate("!document.querySelector('.maplibregl-canvas')"),'Same-scope hidden tab releases WebGL');check(since(sameScopeHidden).length===0,'Same-scope hidden tab makes no requests');await evaluate('window.fixture.setActive(true)');await mapSettled();const afterHidden=await camera();check(sameCamera(beforeHidden,afterHidden),'Zoom/pan camera is preserved exactly across hidden tab unmount/remount');evidence.scenarios.sameScopeViewport={before:beforeHidden,after:afterHidden};
  const beforeList=await camera(),list=mark();await clickText('Listă');await delay(600);check(await evaluate("!document.querySelector('.maplibregl-canvas')"),'List mode releases WebGL map');check(since(list,'/api/partner/map').length===0,'List mode makes zero hidden map requests');
  await send('Emulation.setDeviceMetricsOverride',{width:900,height:900,deviceScaleFactor:1,mobile:false});await delay(350);check(since(list,'/api/partner/map').length===0,'List resize makes zero hidden map requests');

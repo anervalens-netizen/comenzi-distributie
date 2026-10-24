@@ -572,7 +572,9 @@ try {
   check(await cdp.evaluate("!!document.querySelector('.manager-scope-choice summary[aria-label=\"Regiune\"]')"),'Regional manager can select all regions');
 
   await clickTab(cdp,'Echipă');
-  await waitFor(()=>cdp.evaluate("!!document.querySelector('.manager-team-admin')"),'regional team administration');
+  // auth/session renders the account shell before compact bootstrap supplies
+  // its roster. Assert access only after the assigned agent's row is visible.
+  await waitFor(()=>cdp.evaluate("document.querySelector('.profile strong')?.textContent==='Browser regional QA'&&[...document.querySelectorAll('.team-table .person small')].some(node=>node.textContent==='stock-agent · Agent')"),'regional team roster');
   check(await cdp.evaluate("[...document.querySelectorAll('button')].some(b=>b.textContent.includes('Schimbă parola mea'))"),'Regional manager has explicit own-password entry point');
   check(await cdp.evaluate("document.querySelectorAll('.team-table button[aria-label^=\"Resetează parola\"]').length===1"),'Only assigned agent has a password-reset control');
   await clickTab(cdp,'Parteneri');
