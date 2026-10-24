@@ -40,6 +40,8 @@ try{
  await cdp.eval(`await work.enqueue('real-tabs','partner/portfolio/p/visits','POST',{id:crypto.randomUUID(),notes:'once'});window.tabWrites=0`);await secondCdp.eval('window.tabWrites=0');
  const sendExpression=`await work.replay('real-tabs',async()=>{window.tabWrites++;await new Promise(r=>setTimeout(r,500));return {};},()=> 'real-tabs')`;
  await Promise.all([cdp.eval(sendExpression),secondCdp.eval(sendExpression)]);check((await cdp.eval('window.tabWrites'))+(await secondCdp.eval('window.tabWrites'))===1,'two real tabs share exclusive replay lock');secondSocket.close();await fetch(`http://127.0.0.1:${port}/json/close/${second.id}`);
+ // Target closure can return before Chrome restores the first tab's visibility.
+ await cdp.send('Page.bringToFront');await wait(()=>cdp.eval("document.visibilityState==='visible'"),'foreground sender after second tab');
  // Lost response: first POST is retained with its exact stable UUID, then reconciled by the server.
  check(await cdp.eval(`const id=crypto.randomUUID();await work.enqueue('lost','partner/portfolio/p/visits','POST',{id,notes:'same'});await work.replay('lost',async()=>{throw new TypeError('lost reply')},()=> 'lost');const op=(await work.pendingOperations('lost'))[0];op.body.id===id&&op.attempts===1&&op.state==='pending'`),'lost reply retains original identity');
  // Transaction abort leaves both stores unchanged.
