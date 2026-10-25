@@ -17,7 +17,7 @@ assert.equal((await request('usage/pulse',{method:'POST',cookie:manager.cookie,b
 assert.equal((await request('usage/pulse',{method:'POST',cookie:agent.cookie,body:pulse,headers:{Origin:'https://invalid.example'}})).status,403);
 assert.equal((await request('usage/pulse',{method:'POST',cookie:agent.cookie,body:{...pulse,spans:[{from:1e20,to:0,active:true}]}})).status,400);
 assert.equal((await request('usage/pulse',{method:'POST',cookie:agent.cookie,body:pulse})).body.recorded,true);
-let report=await request('usage/report?userId=usage-agent',{cookie:manager.cookie});assert.equal(report.status,200);assert.equal(report.body.users.find(u=>u.id==='usage-agent').visibleMs,30000);assert.equal(report.body.visits.length,1);
+let report=await request('usage/report?userId=usage-agent',{cookie:manager.cookie});assert.equal(report.status,200);assert.equal(report.body.users.find(u=>u.id==='usage-agent').visibleMs,30000);assert.equal(report.body.users.find(u=>u.id==='usage-agent').opens,1);assert.equal(report.body.visits.length,1);
 assert.equal((await request('usage/report?userId=missing',{cookie:manager.cookie})).status,404);assert.equal((await request('usage/report?from=invalid',{cookie:manager.cookie})).status,400);
 const managerReport=await request('usage/report?userId=usage-manager',{cookie:manager.cookie});assert.equal(managerReport.body.events[0].ip,'192.0.2.10');assert.equal(managerReport.body.events[0].device,'Synthetic usage test');
 const usageDb=new DatabaseSync(folder+'/usage.sqlite');usageDb.exec('BEGIN IMMEDIATE');assert.equal((await request('usage/pulse',{method:'POST',cookie:agent.cookie,body:{...pulse,id:randomUUID()}})).body.recorded,false);assert.equal((await request('auth/session',{cookie:agent.cookie})).status,200);usageDb.exec('ROLLBACK');
