@@ -25,13 +25,21 @@ try{
     setup(build){
       build.onResolve({filter:/^(?:\.\/server|#mobiup-activation-store)$/},({path})=>({path,namespace:'synthetic-activation'}));
       build.onLoad({filter:/.*/,namespace:'synthetic-activation'},({path})=>({contents:path==='#mobiup-activation-store'
-        ?`export function readActivations(month,sites,provider,query){return {month,sites,provider,portfolio:query?.portfolio,portfolioRevision:query?.portfolioRevision,partners:{rows:globalThis.__activationPortfolioFixture.partnerRows?.[provider]||[]}};}`
+        ?`import {activationPartnerView} from '${process.cwd()}/lib/activation-partners-node.ts';
+          export function readActivations(month,sites,provider,query){const fixture=globalThis.__activationPortfolioFixture;
+            if(fixture.ledger){
+              const report={provider,latestDate:query.todayWindow.to};
+              const allowed=query.rules.assignments.filter(a=>query.projects.includes(a.projectId)&&(sites===null||sites.some(s=>s.toUpperCase()===a.siteCode.toUpperCase()))).map(a=>a.siteCode.toUpperCase());
+              const where='provider=? AND site IN (SELECT value FROM json_each(?))';
+              activationPartnerView(fixture.database,report,where,[provider,JSON.stringify(allowed)],query);return report;
+            }
+            return {month,sites,provider,portfolio:query?.portfolio,portfolioRevision:query?.portfolioRevision,partners:{rows:fixture.partnerRows?.[provider]||[]}};}`
         :`import {createHash} from 'node:crypto';
           export const db=()=>globalThis.__activationPortfolioFixture;
           export function fail(status,message){throw Object.assign(new Error(message),{status});}
           export const isGlobalManager=user=>user.role==='manager'&&user.managerScope==='global';
           export const sha256=value=>createHash('sha256').update(value).digest('hex');
-          export const textField=(value,max=500)=>typeof value==='string'?value.trim().slice(0,max):'';`,loader:'js'}));
+          export const textField=(value,max=500)=>typeof value==='string'?value.trim().slice(0,max):'';`,loader:'js',resolveDir:process.cwd()}));
     },
   }]});
   const {activationReport}=await import('data:text/javascript;base64,'+Buffer.from(bundled.outputFiles[0].text).toString('base64'));
@@ -131,6 +139,72 @@ try{
   const second=await activationReport(user('global'),new URLSearchParams({provider:'both',view:'partners',month:'2026-10',sort:'recentToday',direction:'desc',page:'1'}));
   assert.equal(second.partners.rows[0].key,'50','sorting precedes pagination');
   for(const filters of [{sort:'unknown'},{direction:'invalid'}])await assert.rejects(()=>activationReport(user('global'),new URLSearchParams({provider:'both',view:'partners',...filters})),e=>e.status===400);
+  // Use the real per-provider SQL projection and API merge. Reporting January
+  // leaves today's activations recent-only, independent of the test run date.
+  database.exec('CREATE TABLE details(company,provider,is_tr,month,activation_date,point_key,client_code,point_code,label,site)');
+  fixture.ledger=true;
+  const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Bucharest',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+  const addActivation=database.prepare('INSERT INTO details VALUES(?,?,?,?,?,?,?,?,?,?)');
+  const key=JSON.stringify(['Example','EXAMPLE','A']);
+  const add=(provider,date)=>addActivation.run('Example',provider,1,date.slice(0,7),date,key,'EXAMPLE','A','Synthetic north','N');
+  const report=filters=>activationReport(user('global'),new URLSearchParams({provider:'both',view:'partners',month:'2024-01',siteCode:'N',...filters}));
+  for(const provider of ['vodafone','digi']){
+    database.exec('DELETE FROM details');
+    add(provider,today);
+    const result=await report({});
+    assert.equal(result.partners.total,north.length,'recent-only '+provider+' must suppress the opposite-provider placeholder');
+    const rows=result.partners.rows.filter(row=>row.portfolioId==='north');
+    assert.equal(rows.length,1,'exactly one real recent-only row');
+    assert.equal(rows[0].key,key,'retain source identity for detail/export');
+    assert.equal(rows[0].recentToday,1);assert.equal(rows[0].total,0);
+    assert.equal(rows[0].vodafone,0);assert.equal(rows[0].digi,0);
+    assert.equal(result.partners.realPointCount,north.length);
+    for(const id of north.filter(id=>id!=='north')){
+      const empty=result.partners.rows.filter(row=>row.portfolioId===id);
+      assert.equal(empty.length,1);assert.equal(empty[0].key,'portfolio:'+id);
+      assert.equal(empty[0].total,0);assert.equal(empty[0].recentToday,0);
+    }
+    const filtered=await report({q:'north',projects:'vodafone_nord'});
+    assert.equal(filtered.partners.total,1);assert.equal(filtered.partners.rows[0].key,key);
+    assert.equal((await report({q:'no-match'})).partners.total,0);
+    assert.equal((await report({projects:'vodafone_sud'})).partners.total,0,'project scope is applied before merging');
+  }
+  add('vodafone','2024-01-02');add('digi','2024-01-03');add('vodafone',today);
+  const both=await report({});
+  const real=both.partners.rows.find(row=>row.key===key);
+  assert.equal(both.partners.total,north.length);
+  assert.equal(real.total,2);assert.equal(real.vodafone,1);assert.equal(real.digi,1);
+  assert.equal(real.recentToday,2,'both provider recent counts are summed once');
+  // One point may have distinct company/source identities; retain those rows.
+  addActivation.run('Other','vodafone',1,today.slice(0,7),today,JSON.stringify(['Other','EXAMPLE','A']),'EXAMPLE','A','Synthetic north','N');
+  assert.equal((await report({q:'north'})).partners.total,2,'distinct source identities are not collapsed by portfolio id');
+  database.exec('DELETE FROM details');
+  for(let i=0;i<103;i++){
+    const id='page-'+String(i).padStart(3,'0'),code='PAGE'+i;
+    customer(id,'WN',['WN'],{historyFranchises:[code]});
+    addActivation.run('Example',i%2?'digi':'vodafone',1,today.slice(0,7),today,JSON.stringify(['Example','EXAMPLE',code]),'EXAMPLE',code,'Synthetic '+id,'N');
+  }
+  for(const direction of ['asc','desc']){
+    const pages=[];
+    for(let page=0;page<3;page++){
+      const result=await report({q:'page-',sort:'label',direction,page:String(page)});
+      assert.equal(result.partners.total,103);assert.equal(result.partners.realPointCount,103);
+      assert.equal(result.partners.rows.length,page<2?50:3);assert.equal(result.partners.hasMore,page<2);
+      pages.push(...result.partners.rows);
+    }
+    assert.equal(new Set(pages.map(row=>row.portfolioId)).size,103);
+    assert(pages.every(row=>!row.key.startsWith('portfolio:')&&row.recentToday===1&&row.total===0));
+    const expected=Array.from({length:103},(_,i)=>'page-'+String(i).padStart(3,'0'));
+    assert.deepEqual(pages.map(row=>row.portfolioId),direction==='asc'?expected:expected.reverse());
+  }
+  for(const page of ['3','999999']){
+    const result=await report({q:'page-',page});
+    assert.equal(result.partners.total,103);assert.equal(result.partners.rows.length,0);assert.equal(result.partners.hasMore,false);
+  }
+  for(const page of ['-1','1.5','1000000','abc'])await assert.rejects(()=>report({page}),e=>e.status===400);
+  const revision=(await report({q:'page-'})).revision;
+  await assert.rejects(()=>report({q:'page-',sort:'label',revision}),e=>e.status===409);
+  console.log('PASS: recent-only for either provider, empty points, both providers, source identities, filters, summary counts, sorting, 103 points across pages, page limits and revision.');
   console.log('PASS: activation portfolio scopes, current-window merge, full-list sorting, validated inputs and manager/team-specific Digi presentation.');
 }finally{
   database.close();delete globalThis.__activationPortfolioFixture;
