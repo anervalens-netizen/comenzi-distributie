@@ -36,7 +36,7 @@ export async function activationReport(user:User,params:URLSearchParams,internal
    }
    const revision=sha256(JSON.stringify([revisions,user.id,params.get('months'),params.get('projects'),params.get('q'),sort,direction,recentWindow,showDigi]));
    if(params.has('revision')&&params.get('revision')!==revision)fail(409,'Proiecția s-a modificat. Reîncarcă lista.');
-   const activePortfolio=new Set([...groups.values()].filter(p=>p.total>0&&p.portfolioId).map(p=>p.portfolioId));
+   const activePortfolio=new Set([...groups.values()].filter(p=>(p.total>0||(p.recentToday||0)>0)&&p.portfolioId).map(p=>p.portfolioId));
    const values=[...groups.values()].filter(p=>p.total>0||(p.recentToday||0)>0||!p.portfolioId||!activePortfolio.has(p.portfolioId)).sort((a,b)=>compareActivationPartners(a,b,sort as ActivationPartnerSort,direction as ActivationSortDirection));
    return {provider:'both' as const,showDigi,recentWindow,operators,revision,partners:{...activationPartnerSummary(values),rows:values.slice(page*50,(page+1)*50),total:values.length,page,hasMore:(page+1)*50<values.length}};
  }
