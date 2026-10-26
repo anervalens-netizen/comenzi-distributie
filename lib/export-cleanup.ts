@@ -11,7 +11,17 @@ export function cleanWorkbook(files:Record<string,Uint8Array>, accessory:boolean
     let xml=strFromU8(bytes);const original=xml;
     if(name.endsWith('.rels'))xml=xml.replace(/<Relationship\b[^>]*\/>/g,tag=>/Type="[^"]*\/(?:image|drawing|calcChain)"/.test(tag)?'':tag);
     if(name==='[Content_Types].xml')xml=xml.replace(/<Override\b[^>]*\/>/g,tag=>removed.has(tag.match(/PartName="\/([^"]+)"/)?.[1]||'')?'':tag);
-    if(/^xl\/worksheets\/sheet\d+\.xml$/.test(name))xml=xml.replace(/<(?:drawing|picture)\b[^>]*\/>/g,'');
+    if(/^xl\/worksheets\/sheet\d+\.xml$/.test(name)){
+      xml=xml.replace(/<(?:drawing|picture)\b[^>]*\/>/g,'');
+      // Historical exports accidentally treated the custom-product sentinel as
+      // an Excel row. Row zero is invalid; custom lines live in their own section.
+      xml=xml.replace(/<row\b[^>]*\br="0"[^>]*?(?:\/>|>[\s\S]*?<\/row>)/g,'');
+      // Replacing template prices can remove a shared-formula anchor while
+      // leaving followers in blank/retired catalogue rows. Preserve their cached
+      // value rather than retaining a formula reference Excel cannot resolve.
+      const anchors=new Set([...xml.matchAll(/<f\b([^>]*?)>([^<]+)<\/f>/g)].filter(m=>/\bt="shared"/.test(m[1])).map(m=>m[1].match(/\bsi="([^"]+)"/)?.[1]));
+      xml=xml.replace(/<f\b([^>]*?)(?:\/>|><\/f>)/g,(tag,attrs:string)=>/\bt="shared"/.test(attrs)&&!anchors.has(attrs.match(/\bsi="([^"]+)"/)?.[1])?'':tag);
+    }
     if(accessory&&name==='xl/worksheets/sheet1.xml') {
       xml=xml.replace(/<pane\b[^>]*state="frozen(?:Split)?"[^>]*\/>/g,'').replace(/<selection\b[^>]*pane="[^"]*"[^>]*\/>/g,'');
       // Images required tall rows in the source catalogue; text-only exports do not.

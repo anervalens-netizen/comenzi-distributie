@@ -1,6 +1,7 @@
 import {countyLabel} from './portfolio-facets';
 import { unzipSync, zipSync, strFromU8, strToU8 } from 'fflate';
 import { cleanWorkbook } from './export-cleanup';
+import {orderProductGroup} from './order-product-group';
 import mailDefaults from '@/resources/mail-defaults.json';
 import type { Order, Mail, Settings, Product } from './types';
 
@@ -30,6 +31,7 @@ function putInRow(rowXml:string,ref:string,value:string|number|null,formula?:str
   return rowXml.replace('</row>',cell(ref,value,newAttrs,formula)+'</row>');
 }
 export function templateExport(template: Uint8Array, order: Order, rows: number[], products?: Product[], includeSupplementary=true) {
+  rows=[...new Set(rows.filter(row=>Number.isInteger(row)&&row>0))];
   const files=unzipSync(template);
   cleanWorkbook(files,order.kind==='accessories');
   const path='xl/worksheets/sheet1.xml';
@@ -95,9 +97,16 @@ export function templateExport(template: Uint8Array, order: Order, rows: number[
   workbook=workbook.replace(/<calcPr[^>]*\/>/,'<calcPr calcId="0" fullCalcOnLoad="1" forceFullCalc="1"/>');
   files['xl/workbook.xml']=strToU8(workbook);
   if(includeSupplementary) addSupplementaryProducts(files,order);
+  cleanWorkbook(files,order.kind==='accessories');
   return zipSync(files,{level:1});
 }
 
+function stockLabels(order:Order) {
+  const lines=order.kind==='combined'?order.standItems||[]:order.items;
+  const merchandising=lines.some(p=>orderProductGroup(p)==='merchandising');
+  const stands=!lines.length||lines.some(p=>orderProductGroup(p)==='stands');
+  return {groups:[stands?'cartele, telefoane & standuri':'',merchandising?'mercantizare și consumabile':''].filter(Boolean),sheet:merchandising?(stands?'Prepay și mercantizare':'Mercantizare și consumabile'):'Cartele, telefoane & standuri'};
+}
 function stockSheet(files:Record<string,Uint8Array>, order:Order) {
   let styles=strFromU8(files['xl/styles.xml']);
   const add=(section:string,tag:string,items:string[])=>{
@@ -120,7 +129,7 @@ function stockSheet(files:Record<string,Uint8Array>, order:Order) {
   files['xl/styles.xml']=strToU8(styles);
   const lines=order.standItems||[];const last=7+Math.max(lines.length,1),total=last+1;
   const row=(r:number,values:(string|number|null)[],style:number,height=30)=>`<row r="${r}" ht="${height}" customHeight="1">${values.map((v,j)=>cell(`${String.fromCharCode(65+j)}${r}`,v,` s="${style}"`)).join('')}</row>`;
-  const data=[row(1,['COMANDĂ CARTELE, TELEFOANE & STANDURI',null,null,null],st,40),
+  const data=[row(1,['COMANDĂ '+(stockLabels(order).groups.join(' + ')||'CARTELE, TELEFOANE & STANDURI').toLocaleUpperCase('ro-RO'),null,null,null],st,40),
     row(2,['MOBIUP · DISTRIBUȚIE',null,null,null],st+3,24),
     row(3,['Gestiune',order.warehouseName,null,null],st+2),
     row(4,['Agent',order.agentName,null,null],st+3),
@@ -131,7 +140,7 @@ function stockSheet(files:Record<string,Uint8Array>, order:Order) {
     ...(order.notes?[row(total+2,['Observații',order.notes,null,null],st+3,48)]:[]),
   ].join('');
   const merges=['A1:D1','A2:D2','B3:D3','B4:D4','B5:D5',`A${total}:C${total}`,...(!lines.length?['A8:D8']:[]),...(order.notes?[`B${total+2}:D${total+2}`]:[])];
-  files['xl/worksheets/sheet2.xml']=strToU8(`<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><!-- mobiup-stock-v2 --><sheetPr><pageSetUpPr fitToPage="1"/></sheetPr><dimension ref="A1:D${total+2}"/><sheetViews><sheetView showGridLines="0" workbookViewId="0"/></sheetViews><cols><col min="1" max="1" width="22" customWidth="1"/><col min="2" max="2" width="60" customWidth="1"/><col min="3" max="3" width="22" customWidth="1"/><col min="4" max="4" width="20" customWidth="1"/></cols><sheetData>${data}</sheetData>${lines.length?`<autoFilter ref="A7:D${last}"/>`:''}<mergeCells count="${merges.length}">${merges.map(r=>`<mergeCell ref="${r}"/>`).join('')}</mergeCells><pageMargins left="0.3" right="0.3" top="0.5" bottom="0.5" header="0.2" footer="0.2"/><pageSetup paperSize="9" orientation="landscape" fitToWidth="1" fitToHeight="0"/></worksheet>`);
+  files['xl/worksheets/sheet2.xml']=strToU8(`<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><!-- mobiup-stock-v3 --><sheetPr><pageSetUpPr fitToPage="1"/></sheetPr><dimension ref="A1:D${total+2}"/><sheetViews><sheetView showGridLines="0" workbookViewId="0"/></sheetViews><cols><col min="1" max="1" width="22" customWidth="1"/><col min="2" max="2" width="60" customWidth="1"/><col min="3" max="3" width="22" customWidth="1"/><col min="4" max="4" width="20" customWidth="1"/></cols><sheetData>${data}</sheetData>${lines.length?`<autoFilter ref="A7:D${last}"/>`:''}<mergeCells count="${merges.length}">${merges.map(r=>`<mergeCell ref="${r}"/>`).join('')}</mergeCells><pageMargins left="0.3" right="0.3" top="0.5" bottom="0.5" header="0.2" footer="0.2"/><pageSetup paperSize="9" orientation="landscape" fitToWidth="1" fitToHeight="0"/></worksheet>`);
 }
 
 export function combinedExport(template: Uint8Array, order: Order, rows: number[], products?: Product[]) {
@@ -142,16 +151,30 @@ export function combinedExport(template: Uint8Array, order: Order, rows: number[
   const extras=order.items.filter(p=>!p.sourceRow);
   if(extras.length){const start=Math.max(...rows,1)+3;sheet=put(sheet,`A${start}`,'Produse suplimentare');extras.forEach((p,i)=>{const r=start+i+1;for(const [col,value] of Object.entries({A:p.code,C:p.brand,D:p.name,E:p.netPrice,F:p.price,G:p.quantity,H:(p.price||0)*p.quantity}))sheet=put(sheet,`${col}${r}`,value);});sheet=sheet.replace(/<dimension ref="[^"]*"\s*\/>/,`<dimension ref="A1:L${start+extras.length}"/>`);files['xl/worksheets/sheet1.xml']=strToU8(sheet);}
   stockSheet(files,order);
-  files['xl/workbook.xml']=strToU8(strFromU8(files['xl/workbook.xml']).replace('</sheets>','<sheet name="Cartele, telefoane &amp; standuri" sheetId="2" r:id="rIdCombined"/></sheets>'));
+  files['xl/workbook.xml']=strToU8(strFromU8(files['xl/workbook.xml']).replace('</sheets>',`<sheet name="${xmlEscape(stockLabels(order).sheet)}" sheetId="2" r:id="rIdCombined"/></sheets>`));
   files['xl/_rels/workbook.xml.rels']=strToU8(strFromU8(files['xl/_rels/workbook.xml.rels']).replace('</Relationships>','<Relationship Id="rIdCombined" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/></Relationships>'));
   files['[Content_Types].xml']=strToU8(strFromU8(files['[Content_Types].xml']).replace('</Types>','<Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>'));
+  configureCombinedWorkbook(files,order);
+  cleanWorkbook(files,true);
   return zipSync(files,{level:6});
+}
+
+function configureCombinedWorkbook(files:Record<string,Uint8Array>,order:Order){
+  let book=strFromU8(files['xl/workbook.xml']);
+  book=book.replace(/<sheet\b[^>]*r:id="rIdCombined"[^>]*\/>/,tag=>tag.replace(/name="[^"]*"/,`name="${xmlEscape(stockLabels(order).sheet)}"`));
+  const active=order.items.length?0:1;
+  if(!/<workbookView\b/.test(book))book=book.replace('<sheets>','<bookViews><workbookView/></bookViews><sheets>');
+  book=book.replace(/<workbookView\b[^>]*\/>/,tag=>tag.replace(/\s+activeTab="[^"]*"/,'').replace('/>',` activeTab="${active}"/>`));
+  files['xl/workbook.xml']=strToU8(book);
+  for(const [i,name] of ['xl/worksheets/sheet1.xml','xl/worksheets/sheet2.xml'].entries()){
+    files[name]=strToU8(strFromU8(files[name]).replace(/<sheetView\b[^>]*>/,tag=>tag.replace(/\s+tabSelected="[^"]*"/,'').replace(/(\/?>)$/,` tabSelected="${i===active?1:0}"$1`)));
+  }
 }
 
 export function repairOrderExport(bytes:Uint8Array,order:Order) {
   if(order.kind==='sim')return bytes;
   const files=unzipSync(bytes);let changed=cleanWorkbook(files,order.kind==='combined'||order.kind==='accessories');
-  if(order.kind==='combined'&&!strFromU8(files['xl/worksheets/sheet2.xml']).includes('mobiup-stock-v2')){stockSheet(files,order);changed=true;}
+  if(order.kind==='combined'&&!strFromU8(files['xl/worksheets/sheet2.xml']).includes('mobiup-stock-v3')){stockSheet(files,order);configureCombinedWorkbook(files,order);changed=true;}
   return changed?zipSync(files,{level:6}):bytes;
 }
 
@@ -180,8 +203,8 @@ export function mailFor(order: Order,settings: Settings): Mail {
   const hasAccessories=order.kind==='accessories'||order.kind==='combined'&&order.items.length>0;
   const hasStands=order.kind==='stands'||order.kind==='combined'&&(order.standItems||[]).length>0;
   const hasSim=order.kind==='sim';
-  const groups=[hasAccessories?'accesorii':'',hasStands?'cartele, telefoane & standuri':'',hasSim?'SIM 0':''].filter(Boolean);
-  const label=order.kind==='sim'?'Aviz SIM 0':order.kind==='stands'?'Comandă standuri, cartele & telefoane':order.kind==='combined'?`Comandă: ${groups.join(' + ')}`:'Comandă accesorii';
+  const groups=[hasAccessories?'accesorii':'',...(hasStands?stockLabels(order).groups:[]),hasSim?'SIM 0':''].filter(Boolean);
+  const label=order.kind==='sim'?'Aviz SIM 0':order.kind==='stands'?`Comandă: ${stockLabels(order).groups.join(' + ')}`:order.kind==='combined'?`Comandă: ${groups.join(' + ')}`:'Comandă accesorii';
   const recipientGroups=[...(hasAccessories?[settings.accessoriesEmail]:[]),...(hasStands?[settings.standsEmail]:[]),...(hasSim?[settings.simEmail]:[])];
   const to=[...new Set(recipientGroups.filter(Boolean))].join(',');
   const cc=[...new Set([...(hasAccessories?settings.accessoriesCc:[]),...(hasStands?settings.standsCc:[]),...(hasSim?settings.simCc:[])].filter(Boolean))];
