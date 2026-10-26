@@ -291,7 +291,7 @@ ok(acc.status==='finalized'&&!!acc.finalizedAt,'Finalization persisted');
   combined=await save(combined,agent,{items:[{id:'acc-2',quantity:2}],standItems:[{id:'stand-9',quantity:123}],notes:'Livrare la gestiune'});
   combined=(await call(`orders/${combined.id}/finalize`,'POST',{revision:combined.revision},agent)).data.order;
   const combinedMail=(await call(`orders/${combined.id}/mail`,'GET',null,agent)).data.mail;
-  ok(combinedMail.body.includes('cartele, telefoane & standuri')&&!combinedMail.body.includes('SIM 0')&&combinedMail.body.includes('accesorii'),'Combined mail identifies stock sections without client SIM notes');
+  ok(combinedMail.subject.startsWith('Comandă mixtă |')&&combinedMail.body.includes('Cartele, telefoane și standuri: 123 buc.')&&!combinedMail.body.includes('SIM 0')&&combinedMail.body.includes('Accesorii: 2 buc.'),'Combined mail identifies stock sections without client SIM notes');
   ok(combinedMail.to===cfg.accessoriesEmail+','+cfg.standsEmail&&combinedMail.cc.length===9&&combinedMail.cc.includes(regionalMail.accessories)&&combinedMail.cc.includes(regionalMail.stands),'Combined mail merges operational and assigned manager recipients');
   const combinedFile=await fetch(root+`orders/${combined.id}/excel`,{headers:{Cookie:agent}});const combinedBytes=new Uint8Array(await combinedFile.arrayBuffer());const combinedZip=unzipSync(combinedBytes);
   ok(combinedFile.ok&&!!combinedZip['xl/worksheets/sheet2.xml']&&strFromU8(combinedZip['xl/workbook.xml']).includes('Cartele, telefoane')&&strFromU8(combinedZip['xl/_rels/workbook.xml.rels']).includes('sheet2.xml'),'Combined Excel has a second order sheet');

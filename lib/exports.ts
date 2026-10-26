@@ -1,6 +1,7 @@
 import {countyLabel} from './portfolio-facets';
 import { unzipSync, zipSync, strFromU8, strToU8 } from 'fflate';
 import { cleanWorkbook } from './export-cleanup';
+import {orderWorkbook,orderedProductGroups} from './order-workbook';
 import mailDefaults from '@/resources/mail-defaults.json';
 import type { Order, Mail, Settings, Product } from './types';
 
@@ -30,6 +31,7 @@ function putInRow(rowXml:string,ref:string,value:string|number|null,formula?:str
   return rowXml.replace('</row>',cell(ref,value,newAttrs,formula)+'</row>');
 }
 export function templateExport(template: Uint8Array, order: Order, rows: number[], products?: Product[], includeSupplementary=true) {
+  rows=[...new Set(rows.filter(row=>Number.isInteger(row)&&row>0))];
   const files=unzipSync(template);
   cleanWorkbook(files,order.kind==='accessories');
   const path='xl/worksheets/sheet1.xml';
@@ -95,63 +97,19 @@ export function templateExport(template: Uint8Array, order: Order, rows: number[
   workbook=workbook.replace(/<calcPr[^>]*\/>/,'<calcPr calcId="0" fullCalcOnLoad="1" forceFullCalc="1"/>');
   files['xl/workbook.xml']=strToU8(workbook);
   if(includeSupplementary) addSupplementaryProducts(files,order);
+  cleanWorkbook(files,order.kind==='accessories');
   return zipSync(files,{level:1});
 }
 
-function stockSheet(files:Record<string,Uint8Array>, order:Order) {
-  let styles=strFromU8(files['xl/styles.xml']);
-  const add=(section:string,tag:string,items:string[])=>{
-    const pattern=new RegExp(`<${section}\\b([^>]*)>([\\s\\S]*?)</${section}>`);
-    const match=styles.match(pattern);if(!match)throw new Error('Missing workbook styles');
-    const count=[...match[2].matchAll(new RegExp(`<${tag}\\b`,'g'))].length;
-    styles=styles.replace(pattern,()=>`<${section}${match[1].replace(/count="\d+"/,`count="${count+items.length}"`)}>${match[2]}${items.join('')}</${section}>`);
-    return count;
-  };
-  const font=add('fonts','font',[
-    '<font><sz val="11"/><color rgb="FF243247"/><name val="Calibri"/></font>',
-    '<font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font>',
-    '<font><b/><sz val="17"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font>',
-    '<font><b/><sz val="11"/><color rgb="FF243247"/><name val="Calibri"/></font>',
-  ]);
-  const fill=add('fills','fill',['FFE52430','FFF4F6F9','FFFFECEE'].map(c=>`<fill><patternFill patternType="solid"><fgColor rgb="${c}"/><bgColor indexed="64"/></patternFill></fill>`));
-  const border=add('borders','border',['<border><left/><right/><top/><bottom style="thin"><color rgb="FFE1E6EC"/></bottom><diagonal/></border>']);
-  const xf=(f:number,fl:number,align='left',num=0)=>`<xf numFmtId="${num}" fontId="${f}" fillId="${fl}" borderId="${border}" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1" applyNumberFormat="1"><alignment horizontal="${align}" vertical="center" wrapText="1"/></xf>`;
-  const st=add('cellXfs','xf',[xf(font+2,fill),xf(font+1,fill),xf(font,0),xf(font,fill+1),xf(font+3,fill+2),xf(font,0,'center',1),xf(font,fill+1,'center',1),xf(font+3,fill+2,'center',1)]);
-  files['xl/styles.xml']=strToU8(styles);
-  const lines=order.standItems||[];const last=7+Math.max(lines.length,1),total=last+1;
-  const row=(r:number,values:(string|number|null)[],style:number,height=30)=>`<row r="${r}" ht="${height}" customHeight="1">${values.map((v,j)=>cell(`${String.fromCharCode(65+j)}${r}`,v,` s="${style}"`)).join('')}</row>`;
-  const data=[row(1,['COMANDĂ CARTELE, TELEFOANE & STANDURI',null,null,null],st,40),
-    row(2,['MOBIUP · DISTRIBUȚIE',null,null,null],st+3,24),
-    row(3,['Gestiune',order.warehouseName,null,null],st+2),
-    row(4,['Agent',order.agentName,null,null],st+3),
-    row(5,['Data',new Date(order.finalizedAt||order.createdAt).toLocaleString('ro-RO',{timeZone:'Europe/Bucharest'}),null,null],st+2),
-    row(7,['Cod produs','Denumire','Categorie','Cantitate (buc.)'],st+1,30),
-    ...(lines.length?lines.map((l,i)=>`<row r="${8+i}" ht="36" customHeight="1">${[l.code,l.name,l.category,l.quantity].map((v,j)=>cell(`${String.fromCharCode(65+j)}${8+i}`,v,` s="${st+(j===3?(i%2?6:5):(i%2?3:2))}"`)).join('')}</row>`):[row(8,['Nu sunt produse comandate în această secțiune.',null,null,null],st+2,32)]),
-    `<row r="${total}" ht="32" customHeight="1">${cell(`A${total}`,'TOTAL BUCĂȚI',` s="${st+4}"`)}${cell(`D${total}`,lines.reduce((a,l)=>a+l.quantity,0),` s="${st+7}"`,lines.length?`SUM(D8:D${last})`:undefined)}</row>`,
-    ...(order.notes?[row(total+2,['Observații',order.notes,null,null],st+3,48)]:[]),
-  ].join('');
-  const merges=['A1:D1','A2:D2','B3:D3','B4:D4','B5:D5',`A${total}:C${total}`,...(!lines.length?['A8:D8']:[]),...(order.notes?[`B${total+2}:D${total+2}`]:[])];
-  files['xl/worksheets/sheet2.xml']=strToU8(`<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><!-- mobiup-stock-v2 --><sheetPr><pageSetUpPr fitToPage="1"/></sheetPr><dimension ref="A1:D${total+2}"/><sheetViews><sheetView showGridLines="0" workbookViewId="0"/></sheetViews><cols><col min="1" max="1" width="22" customWidth="1"/><col min="2" max="2" width="60" customWidth="1"/><col min="3" max="3" width="22" customWidth="1"/><col min="4" max="4" width="20" customWidth="1"/></cols><sheetData>${data}</sheetData>${lines.length?`<autoFilter ref="A7:D${last}"/>`:''}<mergeCells count="${merges.length}">${merges.map(r=>`<mergeCell ref="${r}"/>`).join('')}</mergeCells><pageMargins left="0.3" right="0.3" top="0.5" bottom="0.5" header="0.2" footer="0.2"/><pageSetup paperSize="9" orientation="landscape" fitToWidth="1" fitToHeight="0"/></worksheet>`);
-}
-
-export function combinedExport(template: Uint8Array, order: Order, rows: number[], products?: Product[]) {
-  const accessory={...order,kind:'accessories' as const,items:order.items,serials:[],client:null};
-  const files=unzipSync(templateExport(template,accessory,rows,products,false));
-  // New catalogue products have no source row. Keep them on the accessory sheet.
-  let sheet=strFromU8(files['xl/worksheets/sheet1.xml']);
-  const extras=order.items.filter(p=>!p.sourceRow);
-  if(extras.length){const start=Math.max(...rows,1)+3;sheet=put(sheet,`A${start}`,'Produse suplimentare');extras.forEach((p,i)=>{const r=start+i+1;for(const [col,value] of Object.entries({A:p.code,C:p.brand,D:p.name,E:p.netPrice,F:p.price,G:p.quantity,H:(p.price||0)*p.quantity}))sheet=put(sheet,`${col}${r}`,value);});sheet=sheet.replace(/<dimension ref="[^"]*"\s*\/>/,`<dimension ref="A1:L${start+extras.length}"/>`);files['xl/worksheets/sheet1.xml']=strToU8(sheet);}
-  stockSheet(files,order);
-  files['xl/workbook.xml']=strToU8(strFromU8(files['xl/workbook.xml']).replace('</sheets>','<sheet name="Cartele, telefoane &amp; standuri" sheetId="2" r:id="rIdCombined"/></sheets>'));
-  files['xl/_rels/workbook.xml.rels']=strToU8(strFromU8(files['xl/_rels/workbook.xml.rels']).replace('</Relationships>','<Relationship Id="rIdCombined" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/></Relationships>'));
-  files['[Content_Types].xml']=strToU8(strFromU8(files['[Content_Types].xml']).replace('</Types>','<Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>'));
-  return zipSync(files,{level:6});
+export function combinedExport(_template:Uint8Array,order:Order,_rows:number[],_products?:Product[]){
+  return orderWorkbook(order);
 }
 
 export function repairOrderExport(bytes:Uint8Array,order:Order) {
   if(order.kind==='sim')return bytes;
-  const files=unzipSync(bytes);let changed=cleanWorkbook(files,order.kind==='combined'||order.kind==='accessories');
-  if(order.kind==='combined'&&!strFromU8(files['xl/worksheets/sheet2.xml']).includes('mobiup-stock-v2')){stockSheet(files,order);changed=true;}
+  const files=unzipSync(bytes);
+  if(order.kind==='combined')return strFromU8(files['xl/workbook.xml']).includes('mobiup-order-v4')?bytes:orderWorkbook(order);
+  const changed=cleanWorkbook(files,order.kind==='accessories');
   return changed?zipSync(files,{level:6}):bytes;
 }
 
@@ -180,8 +138,9 @@ export function mailFor(order: Order,settings: Settings): Mail {
   const hasAccessories=order.kind==='accessories'||order.kind==='combined'&&order.items.length>0;
   const hasStands=order.kind==='stands'||order.kind==='combined'&&(order.standItems||[]).length>0;
   const hasSim=order.kind==='sim';
-  const groups=[hasAccessories?'accesorii':'',hasStands?'cartele, telefoane & standuri':'',hasSim?'SIM 0':''].filter(Boolean);
-  const label=order.kind==='sim'?'Aviz SIM 0':order.kind==='stands'?'Comandă standuri, cartele & telefoane':order.kind==='combined'?`Comandă: ${groups.join(' + ')}`:'Comandă accesorii';
+  const ordered=orderedProductGroups(order);
+  const combinedLabel=ordered.length>1?'Comandă mixtă':`Comandă ${(ordered[0]?.label||'stoc').toLocaleLowerCase('ro-RO').replace(' & ',' și ')}`;
+  const label=order.kind==='sim'?'Aviz SIM 0':order.kind==='stands'?'Comandă standuri, cartele & telefoane':order.kind==='combined'?combinedLabel:'Comandă accesorii';
   const recipientGroups=[...(hasAccessories?[settings.accessoriesEmail]:[]),...(hasStands?[settings.standsEmail]:[]),...(hasSim?[settings.simEmail]:[])];
   const to=[...new Set(recipientGroups.filter(Boolean))].join(',');
   const cc=[...new Set([...(hasAccessories?settings.accessoriesCc:[]),...(hasStands?settings.standsCc:[]),...(hasSim?settings.simCc:[])].filter(Boolean))];
@@ -190,7 +149,7 @@ export function mailFor(order: Order,settings: Settings): Mail {
   const body=order.kind==='accessories'
     ? `Bună ziua,\n\nFișierul Excel pentru comanda de accesorii este atașat.\nGestiune: ${order.warehouseName}\nAgent: ${order.agentName}`
     : order.kind==='combined'
-    ? `Bună ziua,\n\nTip comandă: ${groups.join(' + ')}.\nFișierul Excel cu detaliile este atașat.\nGestiune: ${order.warehouseName}\nAgent: ${order.agentName}`
+    ? `Bună ziua,\n\n${combinedLabel} pentru ${order.warehouseName}:\n${ordered.map(g=>`• ${g.label.replace(' & ',' și ')}: ${g.lines.reduce((sum,p)=>sum+p.quantity,0)} buc.`).join('\n')}\n\nAgent: ${order.agentName}\nDetaliile sunt în Excelul atașat.${order.notes?`\nObservații: ${order.notes}`:''}`
     : `Bună ziua,\n\n${label}\nGestiune: ${order.warehouseName}\nAgent: ${order.agentName}\n\n${detail}${order.notes?`\n\nObservații: ${order.notes}`:''}`;
   const stamp=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Bucharest'}).format(new Date(order.finalizedAt||order.createdAt));
   const filename=`${order.kind==='sim'?'aviz-sim-0':order.kind==='stands'?'comanda-standuri-cartele-telefoane':order.kind==='combined'?'comanda-combinata':'comanda-accesorii'}-${stamp}-${order.agentName.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9.-]/gi,'_')}.xlsx`;

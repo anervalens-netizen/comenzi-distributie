@@ -280,3 +280,5 @@ reject incompatible derived versions rather than rewriting source data.
 The aggregate counts distinct TR activation identities, includes unresolved
 attribution only in the national total, and never calculates commissions.
 This development module does not deploy or initialize production storage.
+
+Combined order exports contain only positive ordered quantities, split into up to three sheets matching the product groups. Empty groups are omitted. Every sheet has header filters with quantity greater than zero selected. Historical combined downloads are regenerated from the saved order snapshot. Mail subjects distinguish single-category orders from mixed orders; the body lists only the ordered groups and their quantities.
