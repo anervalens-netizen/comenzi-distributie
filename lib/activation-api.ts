@@ -1,5 +1,6 @@
 import type {ActivationReport,CombinedActivationPartners} from './activation-types';
 import {activationPartnerSummary} from './activation-partner-summary';
+import {activationPartnerSortKeys,compareActivationPartners,activationTodayWindow,type ActivationPartnerSort,type ActivationSortDirection} from './activation-partner-sort';
 import {partnerScope} from './partner-portfolio';
 import {normalizedCui} from './partner-company-identity';
 import {canViewActivations} from './activation-access';
@@ -11,29 +12,33 @@ import {readDistributionRules} from './distribution-config';
 import {assignmentFor,projectIds,type DistributionProject} from './distribution-rules';
 import type {ActivationPolicy,ActivationQuery} from './activation-distribution';
 import type {User} from './types';
-export async function activationReport(user:User,params:URLSearchParams,internal?:{allPartners:boolean}):Promise<ActivationReport|CombinedActivationPartners>{
+export async function activationReport(user:User,params:URLSearchParams,internal?:{allPartners:boolean;todayWindow?:{from:string;to:string}}):Promise<ActivationReport|CombinedActivationPartners>{
  if(!canViewActivations(user))fail(403,'Secțiunea Activări nu este disponibilă pentru acest cont.');
- for(const key of params.keys())if(!['provider','month','months','projects','managerId','agentId','siteCode','view','point','company','q','page','revision'].includes(key))fail(400,'Filtru necunoscut.');
+ for(const key of params.keys())if(!['provider','month','months','projects','managerId','agentId','siteCode','view','point','company','q','page','revision','sort','direction'].includes(key))fail(400,'Filtru necunoscut.');
+ const sort=params.get('sort')||'total',direction=params.get('direction')||'desc';
+ if(!(activationPartnerSortKeys as readonly string[]).includes(sort)||!['asc','desc'].includes(direction))fail(400,'Sortare invalidă.');
  const provider=params.get('provider')||'vodafone';
  if(provider==='both'){
    if(params.get('view')!=='partners')fail(400,'Vedere invalidă pentru ambii operatori.');
    const rawPage=params.get('page')||'0';if(!/^\d{1,6}$/.test(rawPage))fail(400,'Pagină invalidă.');
    const page=Number(rawPage),operators:CombinedActivationPartners['operators']={},groups=new Map<string,import('./activation-types').ActivationPartner&{vodafone:number;digi:number}>();
-   const revisions:string[]=[];
+   const revisions:string[]=[],recentWindow=activationTodayWindow();
+   const managerIds=(process.env.MOBIUP_ACTIVATIONS_VODAFONE_ONLY_MANAGER_IDS||'').split(',').map(id=>id.trim()).filter(Boolean);
+   const showDigi=user.role==='manager'?!managerIds.includes(user.id):!managerIds.length||!await db().prepare('SELECT 1 ok FROM manager_agents WHERE agent_id=? AND manager_id IN (SELECT value FROM json_each(?)) LIMIT 1').bind(user.id,JSON.stringify(managerIds)).first();
    for(const network of ['vodafone','digi'] as const){
      const q=new URLSearchParams(params);q.set('provider',network);q.set('page','0');q.delete('revision');
      try{
-       const report=await activationReport(user,q,{allPartners:true});
+       const report=await activationReport(user,q,{allPartners:true,todayWindow:recentWindow});
        if(report.provider==='both')throw new Error('Invalid network report');
        operators[network]={available:report.available,latestDate:report.latestDate,importedAt:report.importedAt};revisions.push(report.revision||'');
-       for(const p of report.partners?.rows||[]){const existing=groups.get(p.key)||{...p,total:0,vodafone:0,digi:0,recent:{'7':0,'14':0,'30':0}};existing.total+=p.total;existing[network]+=p.total;for(const days of ['7','14','30'])existing.recent[days]+=p.recent[days]||0;if(p.lastDate&&(!existing.lastDate||p.lastDate>existing.lastDate))existing.lastDate=p.lastDate;groups.set(p.key,existing);}
+       for(const p of report.partners?.rows||[]){const existing=groups.get(p.key)||{...p,total:0,recentToday:0,vodafone:0,digi:0,recent:{'7':0,'14':0,'30':0}};existing.total+=p.total;existing.recentToday=(existing.recentToday||0)+(p.recentToday||0);existing[network]+=p.total;for(const days of ['7','14','30'])existing.recent[days]+=p.recent[days]||0;if(p.lastDate&&(!existing.lastDate||p.lastDate>existing.lastDate))existing.lastDate=p.lastDate;groups.set(p.key,existing);}
      }catch{operators[network]={available:false,error:'Datele operatorului nu sunt disponibile.'};revisions.push('unavailable');}
    }
-   const revision=sha256(JSON.stringify([revisions,user.id,params.get('months'),params.get('projects'),params.get('q')]));
+   const revision=sha256(JSON.stringify([revisions,user.id,params.get('months'),params.get('projects'),params.get('q'),sort,direction,recentWindow,showDigi]));
    if(params.has('revision')&&params.get('revision')!==revision)fail(409,'Proiecția s-a modificat. Reîncarcă lista.');
    const activePortfolio=new Set([...groups.values()].filter(p=>p.total>0&&p.portfolioId).map(p=>p.portfolioId));
-   const values=[...groups.values()].filter(p=>p.total>0||!p.portfolioId||!activePortfolio.has(p.portfolioId)).sort((a,b)=>b.total-a.total||a.key.localeCompare(b.key));
-   return {provider:'both' as const,operators,revision,partners:{...activationPartnerSummary(values),rows:values.slice(page*50,(page+1)*50),total:values.length,page,hasMore:(page+1)*50<values.length}};
+   const values=[...groups.values()].filter(p=>p.total>0||(p.recentToday||0)>0||!p.portfolioId||!activePortfolio.has(p.portfolioId)).sort((a,b)=>compareActivationPartners(a,b,sort as ActivationPartnerSort,direction as ActivationSortDirection));
+   return {provider:'both' as const,showDigi,recentWindow,operators,revision,partners:{...activationPartnerSummary(values),rows:values.slice(page*50,(page+1)*50),total:values.length,page,hasMore:(page+1)*50<values.length}};
  }
 
  if(provider!=='vodafone'&&provider!=='digi')fail(400,'Alege un operator valid.');
@@ -68,6 +73,7 @@ export async function activationReport(user:User,params:URLSearchParams,internal
    for(const k of ['point','company','q','revision'])if((params.get(k)?.length||0)>500)fail(400,'Filtru prea lung.');
    query={allPartners:internal?.allPartners,rules,policy,months,projects:projects as DistributionProject[],view:view as ActivationQuery['view'],point:params.get('point')||undefined,company:params.get('company')||undefined,q:params.get('q')||'',page:Number(page),revision:params.get('revision')||undefined};
    if(view==='partners'){
+     query.todayWindow=internal?.todayWindow||activationTodayWindow();
      const scope=partnerScope(user);
      const agentSites=rules.assignments.filter(a=>projects.includes(a.projectId)&&(sites===null||sites.some(s=>s.toUpperCase()===a.siteCode.toUpperCase()))).map(a=>a.siteCode.toUpperCase());
      // Materialize the permitted warehouses once inside this read, rather than

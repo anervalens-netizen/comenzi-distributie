@@ -309,7 +309,7 @@ try {
   const openedDeletedDraft=await cdp.evaluate(`(()=>{const button=[...document.querySelectorAll('.order-link')].find(node=>node.textContent?.includes(${JSON.stringify(deletedDraft.number)}));if(!button)return false;button.click();return true;})()`);
   check(openedDeletedDraft,'Synthetic combined draft opens before remote deletion');
   await waitFor(()=>cdp.evaluate("!!document.querySelector('.unified-group-tabs')"),'combined editor group controls');
-  const groupSemantics=await cdp.evaluate(`(()=>{const group=document.querySelector('.unified-group-tabs'),buttons=[...group.querySelectorAll('button')];return !group.hasAttribute('role')&&buttons.length===2&&buttons.every(button=>!button.hasAttribute('role')&&['true','false'].includes(button.getAttribute('aria-pressed')))&&buttons.filter(button=>button.getAttribute('aria-pressed')==='true').length===1;})()`);
+  const groupSemantics=await cdp.evaluate(`(()=>{const group=document.querySelector('.unified-group-tabs'),buttons=[...group.querySelectorAll('button')];return !group.hasAttribute('role')&&buttons.length===3&&buttons.some(button=>button.textContent.includes('Mercantizare și consumabile'))&&buttons.every(button=>!button.hasAttribute('role')&&['true','false'].includes(button.getAttribute('aria-pressed')))&&buttons.filter(button=>button.getAttribute('aria-pressed')==='true').length===1;})()`);
   check(groupSemantics,'Combined product groups use button semantics with one aria-pressed selection');
   await cdp.evaluate(`(()=>{const area=document.querySelector('.cart textarea');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(area,'LOCAL DELETE RECOVERY');area.dispatchEvent(new Event('input',{bubbles:true}));return true;})()`);
   await sleep(50);

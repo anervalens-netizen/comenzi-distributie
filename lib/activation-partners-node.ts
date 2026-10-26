@@ -3,6 +3,7 @@ import {vodafoneEligibility} from './distribution-rules';
 import type {ActivationQuery} from './activation-distribution';
 import type {ActivationReport,ActivationPartner} from './activation-types';
 import {activationPartnerSummary} from './activation-partner-summary';
+import {activationTodayWindow} from './activation-partner-sort';
 const start=(asOf:string,days:number)=>new Date(Date.parse(asOf+'T12:00:00Z')-(days-1)*86400000).toISOString().slice(0,10);
 /** Source keys reuse client-sales CIF/franchise conventions; names never join points. */
 export function activationPartnerView(db:DatabaseSync,result:ActivationReport,where:string,args:(string|number)[],query:ActivationQuery){
@@ -17,7 +18,14 @@ export function activationPartnerView(db:DatabaseSync,result:ActivationReport,wh
  // identities group only by existing source identity and seller, never by name.
  const keySql="CASE WHEN client_code='CLIENTGEN' THEN 'generic:'||json_array(company,site) WHEN point_key<>'' THEN point_key ELSE 'unassigned:'||json_array(company,client_code,point_code,site) END";
  if(query.view==='partners'){
+   const today=query.todayWindow||activationTodayWindow();
+   const todayRows=db.prepare(`SELECT ${keySql} key,company,client_code clientCode,CASE WHEN client_code='CLIENTGEN' THEN '' ELSE point_code END pointCode,MIN(label) label,MIN(site) siteCode,MAX(point_key<>'') identified,COUNT(*) total,MAX(activation_date) lastDate FROM details WHERE ${where} AND activation_date>=? AND activation_date<=? GROUP BY ${keySql}`).all(...args,today.from,today.to);
+   const todayByKey=new Map(todayRows.map(r=>[String(r.key),Number(r.total)]));
    const rows=db.prepare(`SELECT ${keySql} key,company,client_code clientCode,CASE WHEN client_code='CLIENTGEN' THEN '' ELSE point_code END pointCode,MIN(label) label,MIN(site) siteCode,MAX(point_key<>'') identified,COUNT(*) total,MAX(activation_date) lastDate,${recentSql} FROM details WHERE ${periodWhere} GROUP BY ${keySql} ORDER BY total DESC,key`).all(...recentArgs,...periodArgs);
+   // At a month boundary, a point may have recent activations but none in the
+   // selected months. Retain that identity without inflating its period total.
+   const periodKeys=new Set(rows.map(r=>String(r.key)));
+   for(const row of todayRows)if(!periodKeys.has(String(row.key)))rows.push({...row,total:0});
    const recentRows=db.prepare(`SELECT ${keySql} key,${recentSql} FROM details WHERE ${where} AND activation_date>=? AND activation_date<=? GROUP BY ${keySql}`).all(...recentArgs,...args,windows[2],asOf||'0000-01-01');
    const recentByKey=new Map(recentRows.map(r=>[String(r.key),r]));
    const points=new Map<string,ActivationPartner>(),represented=new Set<string>();
@@ -37,6 +45,7 @@ export function activationPartnerView(db:DatabaseSync,result:ActivationReport,wh
      if(p.client==='CLIENTGEN')continue;
      points.set(key,{key,company:'',clientCode:p.client,pointCode:p.codes.length===1?p.codes[0]:'',label:p.name,portfolioId:p.id,total:0,lastDate:null,recent:{'7':0,'14':0,'30':0},kind:'point'});
    }
+   for(const p of points.values())p.recentToday=todayByKey.get(p.key)||0;
    const q=(query.q||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase();
    const all=[...points.values()].filter(p=>!q||[p.label,p.clientCode,p.pointCode].join(' ').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().includes(q)).sort((a,b)=>b.total-a.total||a.key.localeCompare(b.key));
    const page=query.page||0;result.partners={...activationPartnerSummary(all),rows:query.allPartners?all:all.slice(page*50,(page+1)*50),total:all.length,page,hasMore:(page+1)*50<all.length,asOf};

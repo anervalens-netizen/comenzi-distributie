@@ -17,7 +17,7 @@ const fixture={
   },
 };
 globalThis.__activationPortfolioFixture=fixture;
-const environmentKeys=['MOBIUP_ACTIVATIONS_PILOT_MANAGER_ID','MOBIUP_ACTIVATIONS_PILOT_AGENT_ID','MOBIUP_ACTIVATIONS_PILOT_ADDITIONAL_MANAGER_IDS','MOBIUP_ACTIVATIONS_PILOT_ADDITIONAL_AGENT_IDS'];
+const environmentKeys=['MOBIUP_ACTIVATIONS_PILOT_MANAGER_ID','MOBIUP_ACTIVATIONS_PILOT_AGENT_ID','MOBIUP_ACTIVATIONS_PILOT_ADDITIONAL_MANAGER_IDS','MOBIUP_ACTIVATIONS_PILOT_ADDITIONAL_AGENT_IDS','MOBIUP_ACTIVATIONS_VODAFONE_ONLY_MANAGER_IDS'];
 const previousEnvironment=Object.fromEntries(environmentKeys.map(key=>[key,process.env[key]]));
 try{
   const bundled=await build({entryPoints:['lib/activation-api.ts'],bundle:true,platform:'node',format:'esm',write:false,plugins:[{
@@ -25,7 +25,7 @@ try{
     setup(build){
       build.onResolve({filter:/^(?:\.\/server|#mobiup-activation-store)$/},({path})=>({path,namespace:'synthetic-activation'}));
       build.onLoad({filter:/.*/,namespace:'synthetic-activation'},({path})=>({contents:path==='#mobiup-activation-store'
-        ?`export function readActivations(month,sites,provider,query){return {month,sites,provider,portfolio:query?.portfolio,portfolioRevision:query?.portfolioRevision};}`
+        ?`export function readActivations(month,sites,provider,query){return {month,sites,provider,portfolio:query?.portfolio,portfolioRevision:query?.portfolioRevision,partners:{rows:globalThis.__activationPortfolioFixture.partnerRows?.[provider]||[]}};}`
         :`import {createHash} from 'node:crypto';
           export const db=()=>globalThis.__activationPortfolioFixture;
           export function fail(status,message){throw Object.assign(new Error(message),{status});}
@@ -118,7 +118,20 @@ try{
   const ancestors=[];for(let row=byId.get(roster[0].parent);row;row=byId.get(row.parent))ancestors.push(row.detail);
   assert(ancestors.some(detail=>detail.startsWith('LIST SUBQUERY')),'roster is materialized as an uncorrelated membership list: '+JSON.stringify(plan));
   assert(!ancestors.some(detail=>detail.includes('CORRELATED')),'roster is not scanned again for each customer');
-  console.log('PASS: activation portfolio global/regional/agent scopes, projects, shared/fallback/empty/numeric membership, identity parity and one roster scan per read.');
+  process.env.MOBIUP_ACTIVATIONS_VODAFONE_ONLY_MANAGER_IDS='regional';
+  const combined=id=>activationReport(user(id),new URLSearchParams({provider:'both',view:'partners',month:'2026-10'}));
+  assert.equal((await combined('regional')).showDigi,false);
+  assert.equal((await combined('north')).showDigi,false,'membership in the configured manager team controls presentation');
+  assert.equal((await combined('global')).showDigi,true,'other managers keep Digi even when browsing the same team');
+  assert.equal((await combined('south')).showDigi,true,'unrelated agents retain Digi');
+  fixture.partnerRows={vodafone:Array.from({length:60},(_,i)=>({key:String(i),company:'Example',clientCode:String(i),pointCode:String(i),label:'Point '+i,kind:'point',total:i,recentToday:60-i,recent:{},lastDate:'2026-10-01'})),digi:[{key:'0',company:'Example',clientCode:'0',pointCode:'0',label:'Point 0',kind:'point',total:2,recentToday:2,recent:{},lastDate:'2026-10-02'}]};
+  const sorted=await activationReport(user('global'),new URLSearchParams({provider:'both',view:'partners',month:'2026-10',sort:'recentToday',direction:'desc'}));
+  assert.equal(sorted.partners.rows[0].recentToday,62,'combined current window sums the two provider quantities once');
+  assert.equal(sorted.partners.rows[0].key,'0');assert.equal(sorted.partners.rows.length,50);
+  const second=await activationReport(user('global'),new URLSearchParams({provider:'both',view:'partners',month:'2026-10',sort:'recentToday',direction:'desc',page:'1'}));
+  assert.equal(second.partners.rows[0].key,'50','sorting precedes pagination');
+  for(const filters of [{sort:'unknown'},{direction:'invalid'}])await assert.rejects(()=>activationReport(user('global'),new URLSearchParams({provider:'both',view:'partners',...filters})),e=>e.status===400);
+  console.log('PASS: activation portfolio scopes, current-window merge, full-list sorting, validated inputs and manager/team-specific Digi presentation.');
 }finally{
   database.close();delete globalThis.__activationPortfolioFixture;
   for(const key of environmentKeys){if(previousEnvironment[key]===undefined)delete process.env[key];else process.env[key]=previousEnvironment[key];}

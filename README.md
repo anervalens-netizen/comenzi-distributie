@@ -4,6 +4,19 @@ This public repository contains source code, reusable configuration examples and
 
 ## Development and CI
 
+The combined order catalog separates merchandising and consumables (including
+the existing rolls category) into a presentation tab. Product IDs, saved lines,
+quantities and existing export routing remain stable. Private catalogs supply
+the product descriptions and photographs.
+
+Activation partner headers sort the entire authorized result before pagination.
+The recent column counts today and the four preceding calendar dates in
+Europe/Bucharest, independently of selected reporting months. Source dates stay
+visible because operator delivery can lag the current date. The optional
+`MOBIUP_ACTIVATIONS_VODAFONE_ONLY_MANAGER_IDS` configuration hides the Digi column
+for those manager accounts and their currently assigned agents. It changes table
+presentation only; provider authorization and ledger separation are unchanged.
+
 Use the Node.js and package-manager versions specified by the CI workflow.
 
 ```sh

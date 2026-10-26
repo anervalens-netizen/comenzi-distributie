@@ -26,7 +26,7 @@ export function distributionReport(report:DatabaseSync,base:ActivationReport,met
   if(canonicalRules(structural(projectedRules))!==canonicalRules(structural(rules)))throw new Error();
  }catch{throw new Error('Stale distribution rules');}
  const {provider}=base;
- const revision=createHash('sha256').update(meta.version+'|'+meta.builtAt+'|'+meta.sourceImports+'|'+meta.sourceGeneration+'|'+meta.rules+'|'+canonicalRules(rules)+'|'+query.policy+'|'+JSON.stringify(sites)+'|'+JSON.stringify([query.projects,query.months,query.q,query.point,query.company,query.portfolioRevision])).digest('hex');
+ const revision=createHash('sha256').update(meta.version+'|'+meta.builtAt+'|'+meta.sourceImports+'|'+meta.sourceGeneration+'|'+meta.rules+'|'+canonicalRules(rules)+'|'+query.policy+'|'+JSON.stringify(sites)+'|'+JSON.stringify([query.projects,query.months,query.q,query.point,query.company,query.portfolioRevision,query.todayWindow])).digest('hex');
  if(query.revision&&query.revision!==revision)throw new Error('Stale activation selection');
  const clauses=['provider=?','is_tr=1'],args:(string|number)[]=[provider];
  const selectedSites=rules.assignments.filter(a=>query.projects.includes(a.projectId)).map(a=>a.siteCode.toUpperCase());

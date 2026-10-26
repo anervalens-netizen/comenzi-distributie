@@ -39,7 +39,7 @@ export async function changeProduct(method:string,id:string|undefined,body:Recor
     for(const key of ['price','netPrice'] as const)if(body[key]!==null&&(typeof body[key]!=='number'||!Number.isFinite(body[key])||Number(body[key])<0||Number(body[key])>1000000))fail(400,'Prețurile trebuie să fie pozitive sau necompletate.');
     if(kind==='accessories'&&(body.price===null||body.netPrice===null))fail(400,'Completează ambele prețuri pentru accesorii.');
     const storedProduct=current.state.overrides[productId]||(seed.products as Product[]).find(p=>p.id===productId);
-    current.state.overrides[productId]={id:productId,code,name,brand,category,kind:String(kind),price:body.price as number|null,netPrice:body.netPrice as number|null,sourceRow:existing?.sourceRow||0,image:existing?.image||null,...(ean===existing?.ean&&storedProduct?.ean===undefined?{}:{ean})};
+    current.state.overrides[productId]={id:productId,code,name,brand,category,kind:String(kind),price:body.price as number|null,netPrice:body.netPrice as number|null,sourceRow:existing?.sourceRow||0,image:existing?.image||null,...(existing?.description?{description:existing.description}:{}),...(ean===existing?.ean&&storedProduct?.ean===undefined?{}:{ean})};
   }
   const value=JSON.stringify(current.state);
   // Compare the mapping snapshot in the same statement: an import racing a

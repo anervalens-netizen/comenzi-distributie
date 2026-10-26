@@ -25,6 +25,7 @@ node tools/test-distribution-sales.mjs
 node tools/test-manager-commerce.mjs
 node tools/test-distribution-store.mjs
 node tools/test-activation-partners.mjs
+node tools/test-activation-current-window.mjs
 node tools/test-activation-portfolio.mjs
 node tools/test-activation-access.mjs
 node tools/test-activation-presentation.mjs
