@@ -1,0 +1,11 @@
+[Unit]
+Description=Collect abandoned managed backup and restore scratch
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=root
+UMask=0077
+ExecStart=/usr/bin/python3 /opt/Mobiup/ops/scripts/storage-workdir.py gc
+Nice=10
+IOSchedulingClass=idle

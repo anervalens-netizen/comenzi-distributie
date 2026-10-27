@@ -1,0 +1,11 @@
+[Unit]
+Description=Hourly cleanup of abandoned managed backup and restore scratch
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=120
+Persistent=true
+Unit=agent-storage-scratch-gc.service
+
+[Install]
+WantedBy=timers.target

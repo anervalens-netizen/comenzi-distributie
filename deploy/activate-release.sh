@@ -71,6 +71,16 @@ release_sha="$(node -e "const f=require('fs');const p=process.argv[1];const x=JS
 if [[ "$input" =~ ^[0-9a-f]{40}$ && "$release_sha" != "$input" ]]; then
   fail "release metadata SHA does not match requested SHA"
 fi
+# Private installations may bind this gate to the same canonical source
+# registry used by monitoring. Failure is before any runtime/service change.
+source_gate="${MOBIUP_SOURCE_SYNC_GATE:-}"
+if [[ -z "$source_gate" && -f /etc/mobiup-comenzi-source-sync-gate ]]; then
+  source_gate="$(cat /etc/mobiup-comenzi-source-sync-gate)"
+fi
+if [[ -n "$source_gate" ]]; then
+  [[ -x "$source_gate" ]] || fail "canonical source synchronization gate is unavailable"
+  "$source_gate" "$release_sha" || fail "canonical source synchronization failed; production unchanged"
+fi
 # New private-map releases must pass the owner-provisioned receiver gate before
 # any active link or service changes. Historical releases retain rollback support.
 map_mode="$(node -e 'const x=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));if(!Object.hasOwn(x,"sourceMaps")){process.stdout.write("legacy");}else if(x.sourceMaps && typeof x.sourceMaps==="object" && !Array.isArray(x.sourceMaps) && x.sourceMaps.schema===1){process.stdout.write("mapped");}else process.exit(2)' "$release/RELEASE.json")" || fail "unsupported or invalid sourceMaps metadata"

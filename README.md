@@ -64,6 +64,40 @@ and activity models are rebuildable and do not replace authoritative history.
 Synthetic recovery tests are not evidence of a production restore or a real
 reboot, and cannot establish production RPO/RTO.
 
+Scheduled backup snapshots and retention restore checks use
+`deploy/storage_workdir.py`. Configure `MOBIUP_SCRATCH_ROOT` to a local filesystem
+outside long-term backup directories. The default reserve is 40 GiB and maximum
+projected occupancy is 75%; private test environments may explicitly configure
+`MOBIUP_SCRATCH_MIN_FREE_BYTES` and `MOBIUP_SCRATCH_MAX_USED_RATIO`. Scratch uses
+physical allocation, bounded writes and process leases. Its root GC command
+preserves live leases and collects abandoned work, including interrupted SQLite
+snapshots and archive construction. Manual CLI allocations require the live
+owning job's `--owner-pid`; finish that job before `release`. External commands
+must respect their declared size; this helper is not a host filesystem quota.
+
+Retention preserves the newest two hash-complete local generations plus the
+latest restore-validated fallback when different. Without any validated fallback,
+it refuses to prune. Successful NAS restore validation publishes a hash-bound
+`.validated.json` receipt before older NAS generations are removed; the matching
+local archive receives the same validation identity. `deploy/receive_backup.py`
+receives only validated source bytes and publishes a receiver receipt before
+pruning. Its caller must check the source mount identity. A NAS or validation
+failure preserves the last validated recovery generation and fails visibly.
+Keep the periodic scratch GC installed and the normal backup schedule enabled.
+
+`deploy/restore.py` remains the separate explicit recovery path to a new
+destination. `MOBIUP_RESTORE_MAX_BYTES` can size an attended recovery independently
+of temporary-test space policy. It never overwrites production or starts services.
+
+Installations can provision `MOBIUP_SOURCE_SYNC_GATE`, or the path-only file
+`/etc/mobiup-comenzi-source-sync-gate`, to reconcile the canonical checkout before
+activation. `deploy/sync_source.py` reads that checkout from the same application
+registry used by monitoring and accepts only clean fast-forwards to commits in
+the authorized remote branch. Dirty/divergent work is preserved and prevents
+activation; selecting an older runtime never resets source history. Optional
+`project_ops.source_mirrors` are compatibility workspaces, not competing canonical
+definitions. Runtime releases and persistent data retain their separate roles.
+
 Backend frame URLs use unique basenames derived from the Debug ID, so basename
 fallback cannot confuse RSC and SSR entries. Runtime filenames stay unchanged.
 Receiver uploads must also use those unique basenames for the private JS/map

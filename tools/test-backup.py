@@ -31,6 +31,10 @@ class BackupTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory(prefix='comenzi-backup-test-')
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
+        environment = mock.patch.dict(backup.os.environ, {
+            'MOBIUP_SCRATCH_ROOT': str(self.root / 'scratch'),
+            'MOBIUP_SCRATCH_MIN_FREE_BYTES': '0', 'MOBIUP_SCRATCH_MAX_USED_RATIO': '1'})
+        environment.start(); self.addCleanup(environment.stop)
         self.data = self.root / 'data'
         self.local = self.root / 'local'
         self.mount = self.root / 'nas'
@@ -168,6 +172,11 @@ class BackupTests(unittest.TestCase):
         checksum.write_text(f'{backup.digest(archive)}  {archive.name}\n')
         return archive, checksum
 
+    def mark_fixture_validated(self, archive):
+        # Unit fixture for the receipt boundary. Full restore-to-receipt behavior
+        # is exercised with actual synthetic recovery archives in test-recovery.
+        backup.record_validation(archive, backup.digest(archive), {'status': 'restored_not_started', 'sha': 'a'*40})
+
     def test_email_only_stand_notice_preserves_payload_without_export(self):
         payload = {'kind': 'stand_client', 'notes': 'Synthetic email-only notice'}
         with contextlib.closing(sqlite3.connect(self.data / 'mobiup.sqlite')) as db:
@@ -268,6 +277,7 @@ class BackupTests(unittest.TestCase):
     def test_unmounted_nas_still_prunes_only_old_local_generations(self):
         old_local = self.old_generation(self.local, 20)
         recent_local = self.old_generation(self.local, 1)
+        self.mark_fixture_validated(recent_local[0])
         old_nas = self.old_generation(self.nas, 20)
         unrelated = self.local / 'other-application.tar.gz'
         unrelated.write_bytes(b'keep me')
@@ -281,6 +291,8 @@ class BackupTests(unittest.TestCase):
     def test_success_retains_recent_and_prunes_old_on_both_destinations(self):
         old = self.old_generation(self.local, 20) + self.old_generation(self.nas, 20)
         recent = self.old_generation(self.local, 1) + self.old_generation(self.nas, 1)
+        self.mark_fixture_validated(recent[0])
+        self.mark_fixture_validated(recent[2])
         self.run_backup()
         self.assertTrue(all(not path.exists() for path in old))
         self.assertTrue(all(path.exists() for path in recent))
@@ -301,6 +313,7 @@ class BackupTests(unittest.TestCase):
     def test_retention_removes_archive_with_mismatched_checksum(self):
         self.local.mkdir(parents=True, exist_ok=True)
         archive, checksum = self.old_generation(self.local, 30)
+        self.mark_fixture_validated(self.old_generation(self.local, 1)[0])
         checksum.write_text(f"{'0' * 64}  {archive.name}\n")
         self.run_backup()
         self.assertFalse(archive.exists())
@@ -311,9 +324,35 @@ class BackupTests(unittest.TestCase):
         self.local.mkdir(parents=True, exist_ok=True)
         orphan = self.local / 'mobiup-comenzi-20000101T000000Z.tar.gz'
         orphan.write_bytes(b'incomplete archive')
+        self.mark_fixture_validated(self.old_generation(self.local, 1)[0])
         self.run_backup()
         self.assertFalse(orphan.exists())
         self.assert_local_snapshot()
+
+    def test_hash_only_generations_never_remove_last_validated_generation(self):
+        last_good, sidecar = self.old_generation(self.local, 20)
+        self.mark_fixture_validated(last_good)
+        self.old_generation(self.local, 2)
+        self.old_generation(self.local, 1)
+        backup.prune_backups(self.local)
+        self.assertTrue(last_good.exists())
+        self.assertTrue(sidecar.exists())
+        self.assertEqual(len(list(self.local.glob('*.tar.gz'))), 3)
+
+    def test_without_any_validated_generation_retention_is_non_destructive(self):
+        old, sidecar = self.old_generation(self.local, 20)
+        self.old_generation(self.local, 2)
+        self.old_generation(self.local, 1)
+        backup.prune_backups(self.local)
+        self.assertTrue(old.exists())
+        self.assertTrue(sidecar.exists())
+
+    def test_changed_archive_invalidates_its_validation_receipt(self):
+        good, sidecar = self.old_generation(self.local, 20)
+        self.mark_fixture_validated(good)
+        good.write_bytes(b'changed since restoration')
+        sidecar.write_text(backup.digest(good)+'  '+good.name+'\n')
+        self.assertIsNone(backup.validation_receipt(good, backup.digest(good)))
 
     def test_checksum_mismatch_never_publishes_corrupt_nas_archive(self):
         def corrupt_copy(source, destination):

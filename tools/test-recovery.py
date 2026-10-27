@@ -17,11 +17,15 @@ def load(name):
     result = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(result)
     return result
-backup, recovery = load('backup'), load('restore')
+backup, recovery, receiver = load('backup'), load('restore'), load('receive_backup')
 
 class RecoveryTests(unittest.TestCase):
     def setUp(self):
         t = tempfile.TemporaryDirectory(); self.addCleanup(t.cleanup); self.root = Path(t.name)
+        environment = patch.dict(backup.os.environ, {
+            'MOBIUP_SCRATCH_ROOT': str(self.root / 'scratch'),
+            'MOBIUP_SCRATCH_MIN_FREE_BYTES': '0', 'MOBIUP_SCRATCH_MAX_USED_RATIO': '1'})
+        environment.start(); self.addCleanup(environment.stop)
         self.data=self.root/'data';self.data.mkdir()
         with contextlib.closing(sqlite3.connect(self.data/'mobiup.sqlite')) as db:
             db.execute('CREATE TABLE orders(kind TEXT,status TEXT,payload TEXT)');db.commit()
@@ -83,6 +87,40 @@ class RecoveryTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'checksum'):
             backup.prune_nas_latest(nas, nas / archive.name)
         self.assertTrue(old.exists())
+
+    def test_actual_restore_receipt_promotes_receiver_and_ignores_newer_unvalidated(self):
+        archive = self.make_backup()
+        nas = self.root / 'nas'
+        destination = self.root / 'receiver'
+        backup.validate_archive(nas / archive.name)
+        result = receiver.receive(nas, destination)
+        self.assertEqual(result['sha256'], backup.digest(archive))
+        self.assertTrue(backup.validation_receipt(destination / archive.name, result['sha256']))
+        broken = nas / 'mobiup-comenzi-20990101T000000Z.tar.gz'
+        broken.write_bytes(b'newer but not restorable')
+        broken.with_suffix('.gz.sha256').write_text(backup.digest(broken) + '  ' + broken.name)
+        result2 = receiver.receive(nas, destination)
+        self.assertEqual(result2['archive'], archive.name)
+        self.assertFalse((destination / broken.name).exists())
+
+    def test_receiver_without_validated_source_preserves_existing_copy(self):
+        archive = self.make_backup()
+        destination = self.root / 'receiver'; destination.mkdir()
+        old = destination / 'mobiup-comenzi-20000101T000000Z.tar.gz'; old.write_bytes(b'keep')
+        with self.assertRaisesRegex(RuntimeError, 'No restore-validated'):
+            receiver.receive(self.root / 'nas', destination)
+        self.assertEqual(old.read_bytes(), b'keep')
+
+    def test_failed_managed_restore_keeps_fallback_and_cleans_scratch(self):
+        archive = self.make_backup()
+        nas = self.root / 'nas'
+        old = nas / 'mobiup-comenzi-20000101T000000Z.tar.gz'; old.write_bytes(b'keep')
+        with patch.object(backup.storage.Scratch, 'consume', side_effect=RuntimeError('synthetic write failure')):
+            with self.assertRaisesRegex(RuntimeError, 'synthetic write failure'):
+                backup.prune_nas_latest(nas, nas / archive.name)
+        self.assertEqual(old.read_bytes(), b'keep')
+        self.assertFalse(any(p.is_dir() for p in (self.root / 'scratch').iterdir()))
+        self.assertFalse(backup.validation_path(nas / archive.name).exists())
 
     def test_usage_database_roundtrip(self):
         with contextlib.closing(sqlite3.connect(self.data / 'usage.sqlite')) as db:

@@ -114,6 +114,8 @@ node tools/test-r2-inventory.mjs
 node tools/test-r2-interface.mjs
 ./tools/test-activate-release.sh
 python3 -W error::ResourceWarning tools/test-backup.py
+python3 -W error::ResourceWarning tools/test_storage_workdir.py
+python3 -W error::ResourceWarning tools/test_source_sync.py
 python3 -W error::ResourceWarning tools/test-recovery.py
 node tools/test-password-race.mjs
 node tools/test-agent-account-authorization.mjs

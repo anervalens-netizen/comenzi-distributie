@@ -33,6 +33,13 @@ if [[ "$mode" == fail-new && "$current" == */33333333333333333333333333333333333
 exit 0
 EOF
 chmod +x "$root/systemctl" "$root/curl"
+cat > "$root/source-sync" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$1" >> "$MOBIUP_TEST_SOURCE_SYNC_LOG"
+[[ "${MOBIUP_TEST_SOURCE_SYNC_FAIL:-0}" != 1 ]]
+EOF
+chmod +x "$root/source-sync"
+export MOBIUP_SOURCE_SYNC_GATE="$root/source-sync" MOBIUP_TEST_SOURCE_SYNC_LOG="$root/source-sync.log"
 export MOBIUP_RUNTIME_ROOT="$runtime" MOBIUP_CURRENT_LINK="$runtime/current"
 export MOBIUP_SYSTEMCTL="$root/systemctl" MOBIUP_CURL="$root/curl"
 export MOBIUP_TEST_SYSTEMCTL_LOG="$log" MOBIUP_TEST_CURL_LOG="$curl_log" MOBIUP_TEST_HEALTH_MODE="$mode"
@@ -46,6 +53,14 @@ check "$(grep -c '^http://10.44.0.9:39222/api/health$' "$curl_log")" "1" 'health
 check "$(grep -c '^http://10.44.0.9:39222/api/bootstrap$' "$curl_log")" "1" 'readiness probe uses service HOST and PORT'
 check "$(readlink "$runtime/current")" "$releases/$new" 'SHA activation uses absolute symlink'
 check "$(readlink -f "$runtime/current")" "$releases/$new" 'SHA activation selects requested release'
+check "$(tail -1 "$MOBIUP_TEST_SOURCE_SYNC_LOG")" "$new" 'canonical source gate receives requested release identity'
+export MOBIUP_TEST_SOURCE_SYNC_FAIL=1
+before_restarts="$(wc -l < "$log")"
+set +e; "$script" "$old" >/dev/null 2>&1; rc=$?; set -e
+check "$rc" "2" 'failed source reconciliation refuses activation'
+check "$(readlink -f "$runtime/current")" "$releases/$new" 'source failure preserves active release'
+check "$(wc -l < "$log")" "$before_restarts" 'source failure never restarts production'
+unset MOBIUP_TEST_SOURCE_SYNC_FAIL
 ln -sfn "$releases/$old" "$runtime/current"; echo fail-new > "$mode"
 set +e; "$script" "$bad" >/dev/null 2>&1; rc=$?; set -e
 check "$rc" "1" 'healthy liveness with failed database readiness triggers rollback'

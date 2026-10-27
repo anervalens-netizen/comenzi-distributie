@@ -19,7 +19,7 @@ def digest(path: Path) -> str:
         return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 
-def restore(archive: Path, destination: Path, checksum: Path | None = None) -> dict:
+def max_restore_bytes():
     # Count uncompressed bytes, including every archive member. Keep the default
     # conservative, while allowing explicitly sized full-history recoveries.
     try:
@@ -28,6 +28,30 @@ def restore(archive: Path, destination: Path, checksum: Path | None = None) -> d
         raise ValueError('MOBIUP_RESTORE_MAX_BYTES must be a positive integer') from error
     if max_bytes <= 0:
         raise ValueError('MOBIUP_RESTORE_MAX_BYTES must be a positive integer')
+    return max_bytes
+
+
+def inspect_archive(archive):
+    """Bound header scanning before allocating any extracted data."""
+    limit = max_restore_bytes()
+    seen = set()
+    total = 0
+    with tarfile.open(archive, 'r:gz') as source:
+        for member in source:
+            path = PurePosixPath(member.name)
+            if path.is_absolute() or '..' in path.parts or member.name in seen:
+                raise RuntimeError('Unsafe or duplicate archive path')
+            if member.size < 0 or (not member.isfile() and not member.isdir()):
+                raise RuntimeError('Only regular files and directories may be restored')
+            seen.add(member.name)
+            total += member.size
+            if len(seen) > 100000 or total > limit:
+                raise RuntimeError('Recovery archive exceeds the bounded restore budget')
+    return total, len(seen)
+
+
+def restore(archive: Path, destination: Path, checksum: Path | None = None, *, scratch=None) -> dict:
+    max_bytes = max_restore_bytes()
     archive = archive.resolve(strict=True)
     checksum = checksum or archive.with_suffix(archive.suffix + '.sha256')
     expected = checksum.read_text().split()[0]
@@ -46,7 +70,7 @@ def restore(archive: Path, destination: Path, checksum: Path | None = None) -> d
                 path = PurePosixPath(member.name)
                 if path.is_absolute() or '..' in path.parts or member.name in seen:
                     raise RuntimeError('Unsafe or duplicate archive path')
-                if not member.isfile() and not member.isdir():
+                if member.size < 0 or (not member.isfile() and not member.isdir()):
                     raise RuntimeError('Only regular files and directories may be restored')
                 seen.add(member.name)
                 total += member.size
@@ -58,7 +82,10 @@ def restore(archive: Path, destination: Path, checksum: Path | None = None) -> d
                     continue
                 target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
                 with source.extractfile(member) as src, target.open('xb') as dst:
-                    shutil.copyfileobj(src, dst)
+                    while chunk := src.read(1024*1024):
+                        if scratch is not None:
+                            scratch.consume(len(chunk))
+                        dst.write(chunk)
                 target.chmod(0o700 if member.mode & 0o111 else 0o600)
         manifest = json.loads((temporary / 'recovery/manifest.json').read_text())
         if manifest.get('schema') != 1 or not manifest.get('files'):

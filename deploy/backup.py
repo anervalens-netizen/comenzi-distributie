@@ -12,6 +12,53 @@ import tempfile
 from datetime import datetime, timezone, timedelta
 
 
+def load_helper(name):
+    spec = importlib.util.spec_from_file_location('backup_' + name, Path(__file__).with_name(name + '.py'))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+storage = load_helper('storage_workdir')
+
+
+def validation_path(archive):
+    return Path(str(archive) + '.validated.json')
+
+
+def validation_receipt(archive, checksum):
+    try:
+        path = validation_path(archive)
+        if path.is_symlink():
+            return None
+        receipt = json.loads(path.read_text())
+        if (receipt.get('schema') == 1 and receipt.get('archive') == archive.name
+                and receipt.get('sha256') == checksum and receipt.get('status') == 'restored_not_started'):
+            return receipt
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def record_validation(archive, checksum, result):
+    if result.get('status') != 'restored_not_started' or digest(archive) != checksum:
+        raise RuntimeError('Recovery generation changed or was not restored')
+    receipt = {'schema': 1, 'archive': archive.name, 'sha256': checksum,
+               'status': result['status'], 'release': result.get('sha'),
+               'verified_at': datetime.now(timezone.utc).isoformat()}
+    target = validation_path(archive)
+    fd, temporary = tempfile.mkstemp(prefix=target.name + '.', suffix='.partial', dir=archive.parent)
+    try:
+        with os.fdopen(fd, 'w') as output:
+            json.dump(receipt, output)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, target)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+    return receipt
+
+
 def digest(path: Path) -> str:
     with path.open('rb') as stream:
         return hashlib.file_digest(stream, 'sha256').hexdigest()
@@ -23,6 +70,8 @@ def prune_backups(folder: Path, keep_count: int = 2) -> None:
         raise ValueError('Backup retention must keep at least one generation')
     root = folder.resolve()
     complete = []
+    invalid = []
+    validated = []
     for archive in sorted(folder.glob('mobiup-comenzi-????????T??????Z.tar.gz'), reverse=True):
         if archive.is_symlink() or not archive.resolve().is_relative_to(root):
             continue
@@ -33,33 +82,79 @@ def prune_backups(folder: Path, keep_count: int = 2) -> None:
             expected = []
         if (len(expected) != 2 or expected[1] != archive.name or len(expected[0]) != 64
                 or expected[0] != digest(archive)):
-            archive.unlink(missing_ok=True)
-            checksum_file.unlink(missing_ok=True)
+            invalid.append(archive)
             continue
         complete.append(archive)
-    for old in complete[keep_count:]:
+        if validation_receipt(archive, expected[0]):
+            validated.append(archive)
+    if not validated:
+        # A checksum alone is not authority to remove the last restorable copy.
+        return
+    keep = set(complete[:keep_count]) | {validated[0]}
+    for old in [p for p in complete if p not in keep] + invalid:
         old.unlink()
         old.with_suffix(old.suffix + '.sha256').unlink(missing_ok=True)
+        validation_path(old).unlink(missing_ok=True)
 
 
-def prune_nas_latest(folder: Path, current: Path, validation_root: Path | None = None) -> None:
+def validate_archive(current: Path, validation_root: Path | None = None) -> dict:
+    module = load_helper('restore')
+    content_bytes, members = module.inspect_archive(current)
+    root = (validation_root or current.parent).parent / '.managed-restore-work'
+    checksum = digest(current)
+    with storage.configured(root, content_bytes, tag='retention-verify',
+                            overhead_bytes=64*1024**2 + members*8192) as work:
+        result = module.restore(current, work.path / 'restored', scratch=work)
+    return record_validation(current, checksum, result)
+
+
+def prune_nas_latest(folder: Path, current: Path, validation_root: Path | None = None) -> dict:
     """Retain the latest complete verified recovery generation when configured."""
     if current.parent != folder or current.is_symlink():
         raise RuntimeError('Unsafe NAS generation')
     expected = current.with_suffix(current.suffix + '.sha256').read_text().split()
     if expected != [digest(current), current.name]:
         raise RuntimeError('NAS retention checksum mismatch')
-    # Before deleting the last offsite fallback, exercise the same supported
-    # restore gates (budget, paths, resources, runtime and database integrity).
-    spec = importlib.util.spec_from_file_location('backup_retention_restore', Path(__file__).with_name('restore.py'))
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    with tempfile.TemporaryDirectory(prefix='retention-verify-', dir=validation_root) as temporary:
-        module.restore(current, Path(temporary) / 'restored')
-    for old in folder.glob('mobiup-comenzi-????????T??????Z.tar.gz'):
-        if old.name < current.name and old.is_file() and not old.is_symlink():
-            old.unlink()
-            old.with_suffix(old.suffix + '.sha256').unlink(missing_ok=True)
+    receipt = validate_archive(current, validation_root)
+    prune_backups(folder, keep_count=1)
+    return receipt
+
+
+def snapshot_budget(data):
+    paths = [data / name for name in ('mobiup.sqlite', 'sales.sqlite', 'usage.sqlite',
+                                     'client-history/client-sales-history.sqlite')]
+    for relative in ('activations', 'activations/digi'):
+        root = data / relative
+        if (root / 'current').is_symlink():
+            root = (root / 'current').resolve(strict=True)
+        paths.extend(root / name for name in ('activations.sqlite', 'activation-report.sqlite'))
+    size = sum(p.stat().st_size + (Path(str(p)+'-wal').stat().st_size if Path(str(p)+'-wal').exists() else 0)
+               for p in paths if p.is_file())
+    return int(size * 1.1) + 16*1024**2
+
+
+def sqlite_snapshot(source, copy, work):
+    page_size = source.execute('PRAGMA page_size').fetchone()[0]
+    accounted = 0
+    def progress(status, remaining, total):
+        nonlocal accounted
+        size = (total - remaining) * page_size
+        if size > accounted:
+            work.consume(size - accounted)
+            accounted = size
+    source.backup(copy, pages=256, progress=progress)
+
+
+class BudgetWriter:
+    def __init__(self, stream, work):
+        self.stream, self.work = stream, work
+
+    def write(self, value):
+        self.work.consume(len(value))
+        return self.stream.write(value)
+
+    def __getattr__(self, name):
+        return getattr(self.stream, name)
 
 
 def prune_partials(folder: Path, cutoff: datetime) -> None:
@@ -171,11 +266,12 @@ def run_backup(
     stamp = now.strftime('%Y%m%dT%H%M%SZ')
     name = f'mobiup-comenzi-{stamp}.tar.gz'
     archive = local / name
-    local_partial = Path(str(archive) + '.partial')
-    with tempfile.TemporaryDirectory(prefix='snapshot-', dir=local) as temporary:
+    with storage.configured(local.parent / '.managed-restore-work', snapshot_budget(data), tag='snapshot') as work:
+        temporary = work.path
+        local_partial = work.path / (name + '.partial')
         snapshot = Path(temporary) / 'mobiup.sqlite'
         with closing(sqlite3.connect(f'file:{data / "mobiup.sqlite"}?mode=ro', uri=True)) as source, closing(sqlite3.connect(snapshot)) as copy:
-            source.backup(copy)
+            sqlite_snapshot(source, copy, work)
             verify_sqlite_snapshot(copy, 'Application snapshot')
             keys = []
             for row in copy.execute("SELECT kind,payload FROM orders WHERE status='finalized'"):
@@ -195,12 +291,12 @@ def run_backup(
             if (data / 'usage.sqlite').is_symlink():
                 raise RuntimeError('Invalid usage database location')
             with closing(sqlite3.connect(f'file:{data / "usage.sqlite"}?mode=ro', uri=True)) as source, closing(sqlite3.connect(usage_snapshot)) as copy:
-                source.backup(copy)
+                sqlite_snapshot(source, copy, work)
                 verify_sqlite_snapshot(copy, 'Usage snapshot')
         sales_snapshot = Path(temporary) / 'sales.sqlite'
         if (data / 'sales.sqlite').exists():
             with closing(sqlite3.connect(f'file:{data / "sales.sqlite"}?mode=ro', uri=True)) as source, closing(sqlite3.connect(sales_snapshot)) as copy:
-                source.backup(copy)
+                sqlite_snapshot(source, copy, work)
                 verify_sqlite_snapshot(copy, 'Sales snapshot')
         # Sources are immutable and published before their database transaction.
         # Enumerating after the snapshot includes all its sources; extra newer files
@@ -214,7 +310,7 @@ def run_backup(
             if history_root.is_symlink() or history_db.is_symlink():
                 raise RuntimeError('Invalid customer history location')
             with closing(sqlite3.connect(f'file:{history_db}?mode=ro', uri=True)) as source, closing(sqlite3.connect(history_snapshot)) as copy:
-                source.backup(copy)
+                sqlite_snapshot(source, copy, work)
                 verify_sqlite_snapshot(copy, 'Customer history snapshot')
                 for expected, relative in copy.execute('SELECT sha256,original_path FROM history_imports'):
                     path = history_root / relative
@@ -246,7 +342,7 @@ def run_backup(
                     raise RuntimeError('Missing or invalid activation database')
                 snapshot_path = Path(temporary) / (activation_relative.replace('/', '-') + '-' + activation_name)
                 with closing(sqlite3.connect(original.as_uri() + '?mode=ro', uri=True)) as source, closing(sqlite3.connect(snapshot_path)) as copy:
-                    source.backup(copy)
+                    sqlite_snapshot(source, copy, work)
                     verify_sqlite_snapshot(copy, 'Activation snapshot')
                     if activation_name == 'activations.sqlite':
                         for (expected,) in copy.execute("SELECT sha256 FROM activation_imports WHERE status='complete'"):
@@ -270,8 +366,16 @@ def run_backup(
                         if json.dumps(imports,separators=(',',':'))!=report_meta.get('sourceImports'):
                             raise RuntimeError('Stale activation projection in backup')
         captured_release = release.read_bytes()
+        archive_inputs = [p for p in work.path.iterdir() if p.is_file() and p.suffix == '.sqlite']
+        archive_inputs += [p for p, _, _ in activation_sources] + [p for p, _, _ in history_sources] + sales_sources
+        archive_inputs += [data / 'files' / key for key in keys] + [release]
+        if recovery:
+            archive_inputs += [p for root in recovery.values() for p in root.rglob('*') if p.is_file()]
+        archive_bytes = sum(p.stat().st_size for p in archive_inputs)
+        # Tar headers/padding and worst-case gzip growth, not its compressed size.
+        work.extend(int(archive_bytes * 1.01) + len(archive_inputs)*2048 + 64*1024**2)
         try:
-            with tarfile.open(local_partial, 'w:gz', compresslevel=2) as output:
+            with local_partial.open('xb') as raw, tarfile.open(fileobj=BudgetWriter(raw, work), mode='w:gz', compresslevel=2) as output:
                 output.add(snapshot, arcname='mobiup.sqlite')
                 if usage_snapshot.exists():
                     output.add(usage_snapshot, arcname='usage.sqlite')
@@ -327,7 +431,9 @@ def run_backup(
         temporary_copy.replace(nas / name)
         shutil.copyfile(checksum_file, nas / checksum_file.name)
         if nas_latest_only:
-            prune_nas_latest(nas, nas / name, local)
+            receipt = prune_nas_latest(nas, nas / name, local)
+            record_validation(archive, checksum, {'status': receipt['status'], 'sha': receipt['release']})
+            prune_backups(local)
         else:
             prune_backups(nas)
     except (OSError, RuntimeError) as error:
@@ -340,6 +446,8 @@ def run_backup(
 
 
 if __name__ == '__main__':
+    if not os.environ.get('MOBIUP_SCRATCH_ROOT'):
+        raise RuntimeError('MOBIUP_SCRATCH_ROOT must be configured outside permanent backup directories')
     configured = {name: os.environ.get('MOBIUP_RECOVERY_' + name.upper(), '') for name in ('runtime', 'resources', 'products')}
     if any(configured.values()) and not all(configured.values()):
         raise RuntimeError('Incomplete recovery configuration')

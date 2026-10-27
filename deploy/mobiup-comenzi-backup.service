@@ -9,6 +9,7 @@ Type=oneshot
 User=operator
 UMask=0077
 ExecStart=/usr/bin/python3 /opt/Mobiup/comenzi-distributie/deploy/backup.py
+Environment=MOBIUP_SCRATCH_ROOT=/storage/.agent-restore-work
 NoNewPrivileges=true
 Nice=10
 IOSchedulingClass=idle

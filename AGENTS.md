@@ -6,6 +6,10 @@ This repository is public. Use wholly synthetic fixtures and generic examples. N
 
 Production operations must use explicitly configured hosts, secrets and data directories; a repository checkout is not evidence of runtime identity or deployment health. Preserve a verified recovery copy before changing persistent production data.
 
+## Source roles
+
+Resolve the official checkout through the installed application registry's `source_path` / `dell_source_path`; use that checkout or its temporary worktrees for new work. A compatibility build mirror does not redefine source authority. Release activation uses the configured source synchronization gate; never substitute manual resets for a failed reconciliation. Keep immutable runtime releases, private data/configuration and disposable build/restore work separate. Preserve existing worktrees and unpublished work before consolidating older clones.
+
 ## Backup and storage budget (mandatory for all agents)
 
 - Code-only edits and repeat tests do not require another full production-data backup. First inspect the existing verified recovery point.
