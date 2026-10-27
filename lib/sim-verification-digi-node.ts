@@ -32,7 +32,7 @@ export function verifyDigiSim(serial:string):SimVerification{
   const commercial=rows.filter(r=>!inventory(r));
   if(!commercial.length){result.status='recorded';return result;}
   // Repeated indistinguishable source observations cannot establish one sale.
-  const duplicate=db.prepare(`SELECT 1 FROM activation_occurrences o JOIN activation_movements m ON m.id=o.movement_id WHERE o.movement_id IN (${marks}) AND m.company IN ('MobiUp','MobiCell') GROUP BY o.import_id,o.movement_id HAVING COUNT(*)>1 LIMIT 1`).get(...ids);
+  const duplicate=db.prepare(`SELECT 1 FROM activation_occurrences o INDEXED BY activation_occurrences_movement JOIN activation_movements m ON m.id=o.movement_id WHERE o.movement_id IN (${marks}) AND m.company IN ('MobiUp','MobiCell') GROUP BY o.import_id,o.movement_id HAVING COUNT(*)>1 LIMIT 1`).get(...ids);
   let uncertain=!!duplicate||commercial.some(r=>r.conflict||!r.movement_date||![1,-1].includes(r.quantity as number));
   const customer=(r:Movement)=>field(r,'Denumire Client').normalize('NFKC').trim().toUpperCase();
   const outstanding:Movement[]=[];

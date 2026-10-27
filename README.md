@@ -365,3 +365,8 @@ require a unique earlier sale with the same company, product and nonempty exact
 normalized customer label; uncertain histories remain explicit. The configured
 `MOBIUP_ACTIVATIONS_VODAFONE_ONLY_MANAGER_IDS` excludes currently assigned agents
 from Digi verification in both the UI and API; manager access remains available.
+
+Existing Digi ledgers require `tools/prepare-sim-verification.py --provider digi
+--data-dir <digi-root>` once, under the import lock. It adds only the
+`activation_occurrences_movement` index, verifies unchanged business rows and
+checks the query plan. New imports create the index automatically.
