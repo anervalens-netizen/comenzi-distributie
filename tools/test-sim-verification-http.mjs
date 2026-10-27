@@ -30,6 +30,7 @@ try{
  await waitFor(()=>browser.evaluate('[...document.querySelectorAll(".commerce-tabs button")].some(x=>x.textContent==="Verificare Sim")'),'SIM tab');
  await browser.evaluate('[...document.querySelectorAll(".commerce-tabs button")].find(x=>x.textContent==="Verificare Sim").click()');
  await waitFor(()=>browser.evaluate('!!document.querySelector("#sim-serial")'),'scanner input');
+ await waitFor(()=>browser.evaluate('document.activeElement?.id==="sim-serial"'),'scanner input focus');
  await browser.send('Input.insertText',{text:serial});await browser.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',windowsVirtualKeyCode:13});await browser.send('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13});
  await waitFor(()=>browser.evaluate('document.querySelector(".sim-sale")?.textContent.includes("TEST-99")'),'scanner Enter result');
  assert(await browser.evaluate('document.querySelector(".sim-sale").textContent.includes("03.01.2024")'));
@@ -38,4 +39,4 @@ try{
  await browser.send('Input.insertText',{text:'9999999999999999999'});await browser.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Tab',code:'Tab',windowsVirtualKeyCode:9});await browser.send('Input.dispatchKeyEvent',{type:'keyUp',key:'Tab',code:'Tab',windowsVirtualKeyCode:9});
  await waitFor(()=>browser.evaluate('document.querySelector(".sim-result")?.textContent.includes("nu a fost comercializat")'),'scanner Tab no match');assert(!(await browser.evaluate('!!document.querySelector(".sim-sale")')),'previous seller cleared');
  console.log('PASS: SIM HTTP auth, both roles, global exact lookup, CSRF, validation, revocation, scanner Enter/Tab, stale-result clearing and mobile');
-}finally{db?.close();await browser?.close();child.kill();await new Promise(r=>child.once('exit',r));rmSync(folder,{recursive:true,force:true});}
+}catch(error){if(browser)console.error('Scanner diagnostic',await browser.evaluate('({active:document.activeElement?.id,value:document.querySelector("#sim-serial")?.value,text:document.querySelector(".sim-verification")?.textContent})'));throw error;}finally{db?.close();await browser?.close();child.kill();await new Promise(r=>child.once('exit',r));rmSync(folder,{recursive:true,force:true});}
