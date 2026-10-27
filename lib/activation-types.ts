@@ -7,6 +7,8 @@ export type ActivationReport = {
   partners?:ActivationPartnerSummary&{rows:ActivationPartner[];total:number;page:number;hasMore:boolean;asOf:string|null};
   detail?:{rows:ActivationDetail[];total:number;page:number;hasMore:boolean;lastDate:string|null;recent:Record<string,number>;asOf:string|null};
   revision?:string;rulesRevision?:string;builtAt?:string;selectedMonths?:string[];coveredMonths?:string[];sourcePeriods?:{from:string;to:string}[];reconciliation?:number;
+  productBreakdown?:{zero:number;credit:number;packages:number;other:number;unknown:number};
+  ineligibleSourceTypes?:Record<string,number>;
   simZero?:{distributed:number;activated:number;withoutReportedActivation:number};
   month:string;provider:ActivationProvider;available:boolean;scoped:boolean;importedAt:string;latestDate:string|null;
   months:{month:string;total:number}[];totals:ActivationCounts;
