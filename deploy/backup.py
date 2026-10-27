@@ -1,5 +1,6 @@
 """Consistent application and sales snapshots, with immutable source/export files."""
-from contextlib import closing
+from contextlib import closing, contextmanager, ExitStack
+import fcntl
 import hashlib
 import importlib.util
 import json
@@ -120,9 +121,75 @@ def prune_nas_latest(folder: Path, current: Path, validation_root: Path | None =
     return receipt
 
 
+def include_customer_history():
+    value = os.environ.get('MOBIUP_BACKUP_CUSTOMER_HISTORY', '1')
+    if value not in ('0', '1'):
+        raise ValueError('MOBIUP_BACKUP_CUSTOMER_HISTORY must be 0 or 1')
+    return value == '1'
+
+
+@contextmanager
+def activation_read_locks(data):
+    # Match import/retention locks while pinning and copying immutable generations.
+    with ExitStack() as stack:
+        for relative in ('activations', 'activations/digi'):
+            root = data / relative
+            if root.is_dir():
+                handle = stack.enter_context((root / '.activation-job.lock').open('a'))
+                fcntl.flock(handle, fcntl.LOCK_SH)
+        yield
+
+
+def prune_activation_generations(root):
+    """Collect superseded copies only; preserve current, unique imports and readers."""
+    removed, retained = [], []
+    if not root.is_dir() or root.is_symlink():
+        return {'removed': removed, 'retained': retained}
+    with (root / '.activation-job.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        generations, pointer = root / 'generations', root / 'current'
+        if not pointer.is_symlink() or generations.is_symlink():
+            return {'removed': removed, 'retained': retained}
+        current = pointer.resolve(strict=True)
+        if current.parent != generations.resolve() or not current.is_dir():
+            raise RuntimeError('Invalid current activation generation')
+        def imports(path):
+            db = path / 'activations.sqlite'
+            if db.is_symlink() or not db.is_file():
+                raise ValueError('Invalid generation database')
+            with closing(sqlite3.connect(db.as_uri() + '?mode=ro', uri=True)) as c:
+                return set(c.execute('SELECT sha256,status FROM activation_imports'))
+        current_imports = imports(current)
+        for old in sorted(generations.iterdir()):
+            if old == current:
+                continue
+            if old.is_symlink() or not old.is_dir() or storage.active_users(old):
+                retained.append(old.name)
+                continue
+            try:
+                old_imports = imports(old)
+                if not old_imports or not old_imports.issubset(current_imports):
+                    raise ValueError('Unique or unknown imports')
+                for original in (old / 'activation-originals').glob('*'):
+                    kept = current / 'activation-originals' / original.name
+                    if (original.is_symlink() or kept.is_symlink() or not original.is_file()
+                            or not kept.is_file() or digest(original) != digest(kept)):
+                        raise ValueError('Unique original')
+            except (ValueError, OSError, sqlite3.Error):
+                retained.append(old.name)
+                continue
+            if pointer.resolve(strict=True) != current or storage.active_users(old):
+                retained.append(old.name)
+                continue
+            shutil.rmtree(old)
+            removed.append(old.name)
+    return {'removed': removed, 'retained': retained}
+
+
 def snapshot_budget(data):
-    paths = [data / name for name in ('mobiup.sqlite', 'sales.sqlite', 'usage.sqlite',
-                                     'client-history/client-sales-history.sqlite')]
+    paths = [data / name for name in ('mobiup.sqlite', 'sales.sqlite', 'usage.sqlite')]
+    if include_customer_history():
+        paths.append(data / 'client-history/client-sales-history.sqlite')
     for relative in ('activations', 'activations/digi'):
         root = data / relative
         if (root / 'current').is_symlink():
@@ -260,13 +327,14 @@ def run_backup(
     Path arguments allow isolated tests without accessing production storage.
     The systemd invocation and default production locations remain unchanged.
     """
+    history_enabled = include_customer_history()
     local.mkdir(parents=True, exist_ok=True)
     now = datetime.now(timezone.utc)
     prune_partials(local, now - timedelta(days=1))
     stamp = now.strftime('%Y%m%dT%H%M%SZ')
     name = f'mobiup-comenzi-{stamp}.tar.gz'
     archive = local / name
-    with storage.configured(local.parent / '.managed-restore-work', snapshot_budget(data), tag='snapshot') as work:
+    with activation_read_locks(data), storage.configured(local.parent / '.managed-restore-work', snapshot_budget(data), tag='snapshot') as work:
         temporary = work.path
         local_partial = work.path / (name + '.partial')
         snapshot = Path(temporary) / 'mobiup.sqlite'
@@ -306,7 +374,7 @@ def run_backup(
         history_root = data / 'client-history'
         history_db = history_root / 'client-sales-history.sqlite'
         history_sources = []
-        if history_db.exists():
+        if history_enabled and history_db.exists():
             if history_root.is_symlink() or history_db.is_symlink():
                 raise RuntimeError('Invalid customer history location')
             with closing(sqlite3.connect(f'file:{history_db}?mode=ro', uri=True)) as source, closing(sqlite3.connect(history_snapshot)) as copy:
@@ -365,6 +433,8 @@ def run_backup(
                         imports = ledger.execute("SELECT sha256,operator,row_count,parser_version FROM activation_imports WHERE status='complete' ORDER BY sha256").fetchall()
                         if json.dumps(imports,separators=(',',':'))!=report_meta.get('sourceImports'):
                             raise RuntimeError('Stale activation projection in backup')
+        policy = work.path / 'BACKUP-POLICY.json'
+        policy.write_text(json.dumps({'schema': 1, 'customerHistory': 'included' if history_enabled else 'reimport_required'}))
         captured_release = release.read_bytes()
         archive_inputs = [p for p in work.path.iterdir() if p.is_file() and p.suffix == '.sqlite']
         archive_inputs += [p for p, _, _ in activation_sources] + [p for p, _, _ in history_sources] + sales_sources
@@ -376,6 +446,8 @@ def run_backup(
         work.extend(int(archive_bytes * 1.01) + len(archive_inputs)*2048 + 64*1024**2)
         try:
             with local_partial.open('xb') as raw, tarfile.open(fileobj=BudgetWriter(raw, work), mode='w:gz', compresslevel=2) as output:
+                if not history_enabled:
+                    output.add(policy, arcname='BACKUP-POLICY.json')
                 output.add(snapshot, arcname='mobiup.sqlite')
                 if usage_snapshot.exists():
                     output.add(usage_snapshot, arcname='usage.sqlite')
@@ -434,6 +506,10 @@ def run_backup(
             receipt = prune_nas_latest(nas, nas / name, local)
             record_validation(archive, checksum, {'status': receipt['status'], 'sha': receipt['release']})
             prune_backups(local)
+            if os.environ.get('MOBIUP_PRUNE_ACTIVATION_GENERATIONS') == '1':
+                for relative in ('activations', 'activations/digi'):
+                    result = prune_activation_generations(data / relative)
+                    print('Activation retention: ' + json.dumps(result), flush=True)
         else:
             prune_backups(nas)
     except (OSError, RuntimeError) as error:
