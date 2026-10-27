@@ -22,7 +22,7 @@ export function verifySim(serial:string):SimVerification{
   for(const company of ['MobiUp','MobiCell']){
    add(db.prepare("SELECT id FROM activation_movements WHERE company=? AND provider='vodafone' AND imei=? LIMIT 101").all(company,serial));
    if(serial.length===18){
-    add(db.prepare("SELECT id FROM activation_movements WHERE company=? AND provider='vodafone' AND imei>=? AND imei<=? AND item_type='SIM' LIMIT 101").all(company,serial+'0',serial+'9'));
+    add(db.prepare("SELECT id FROM activation_movements WHERE company=? AND provider='vodafone' AND imei>=? AND imei<=? AND item_type='SIM' AND length(imei)=19 LIMIT 101").all(company,serial+'0',serial+'9'));
     add(db.prepare("SELECT id FROM activation_movements INDEXED BY activation_movements_serial WHERE company=? AND provider='vodafone' AND serial=? LIMIT 101").all(company,serial));
     add(db.prepare("SELECT movement_id id FROM activation_effective_movements WHERE company=? AND provider='vodafone' AND serial=? LIMIT 101").all(company,serial));
    }
@@ -30,11 +30,11 @@ export function verifySim(serial:string):SimVerification{
   if(ids.size>100)throw new Error('Too many movements');
   if(!ids.size)return result;
   // An observed activation serial is a lookup key, not a commercial-history
-  // boundary. Load every effective movement of each matched company/IMEI,
+  // boundary. Load every effective movement of each matched IMEI across companies,
   // including returns and conflicting activation observations.
-  const matched=db.prepare(`SELECT DISTINCT company,imei FROM activation_movements WHERE id IN (${[...ids].map(()=>'?').join(',')})`).all(...ids);
+  const matched=db.prepare(`SELECT DISTINCT imei FROM activation_movements WHERE id IN (${[...ids].map(()=>'?').join(',')})`).all(...ids);
   ids.clear();
-  for(const identity of matched)add(db.prepare("SELECT id FROM activation_movements WHERE company=? AND provider='vodafone' AND imei=? LIMIT 101").all(String(identity.company),String(identity.imei)));
+  for(const identity of matched)for(const company of ['MobiUp','MobiCell'])add(db.prepare("SELECT id FROM activation_movements WHERE company=? AND provider='vodafone' AND imei=? LIMIT 101").all(company,String(identity.imei)));
   if(ids.size>100)throw new Error('Too many movements');
   if(!ids.size)return result;
   const rows=db.prepare(`SELECT e.*,m.item_type,EXISTS(SELECT 1 FROM activation_meta WHERE key='conflict:'||m.movement_key) conflict,(EXISTS(SELECT 1 FROM activation_facts f,json_each(f.reasons) reason WHERE f.company=e.company AND f.provider=e.provider AND f.serial=e.serial AND reason.value IN ('serial_conflict','serial_identity_conflict','unverified_serial_relationship'))) association_conflict FROM activation_effective_movements e JOIN activation_movements m ON m.id=e.movement_id WHERE e.movement_id IN (${[...ids].map(()=>'?').join(',')}) AND m.item_type IN ('SIM','TELSIM') AND e.item_code NOT IN ('V03EVDF','V04EVDF','V05EVDF','V06EVDF') ORDER BY e.movement_date,e.movement_id`).all(...ids) as Movement[];
@@ -55,7 +55,7 @@ export function verifySim(serial:string):SimVerification{
   if(!commercial.length){result.status='recorded';return result;}
   const sales=outstanding.filter(r=>present(r).kind!=='central');
   const identities=new Set(commercial.filter(r=>physicalMatch(r)).map(r=>r.imei));
-  if(uncertain||identities.size>1||sales.length>1)result.status='ambiguous';
+  if(uncertain||identities.size>1||sales.length>1||sales.some(r=>!physicalMatch(r)&&r.serial!==serial))result.status='ambiguous';
   else if(sales.length===1){result.status='sold';result.sale=present(sales[0]);}
   else result.status=rows.some(r=>r.quantity===1)?'returned':'recorded';
   return result;
