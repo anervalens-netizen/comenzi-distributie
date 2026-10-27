@@ -82,6 +82,9 @@ def locked(base):
         raise RuntimeError('Scratch ancestors must not be symlinks')
     fd = os.open(base / '.allocation.lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     try:
+        if os.geteuid() == 0:
+            owner = base.stat()
+            os.fchown(fd, owner.st_uid, owner.st_gid)
         fcntl.flock(fd, fcntl.LOCK_EX)
         yield base
     finally:

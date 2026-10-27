@@ -127,6 +127,13 @@ class ScratchTests(unittest.TestCase):
                 with self.work():
                     self.fail('Must not restore SQLite over a network mount')
 
+    def test_root_gc_lock_retains_the_scratch_directory_owner(self):
+        self.base.mkdir()
+        owner = self.base.stat()
+        with patch.object(storage.os, 'geteuid', return_value=0), patch.object(storage.os, 'fchown') as chown:
+            with storage.locked(self.base):
+                self.assertEqual(chown.call_args.args[1:], (owner.st_uid, owner.st_gid))
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
