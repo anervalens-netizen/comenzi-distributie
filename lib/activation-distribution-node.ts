@@ -50,7 +50,7 @@ export function distributionReport(report:DatabaseSync,base:ActivationReport,met
  }
  // Use the same authorized scope and selected activation months; raw product codes
  // already exist in details, so no projection migration or reimport is required.
- if(provider==='vodafone'){
+ if(provider==='vodafone'&&!query.view){
    const selected=report.prepare(`SELECT item_code,item_type,county,handset,contradictory,site,COUNT(*) count FROM details WHERE ${where} AND ${monthWhere} GROUP BY item_code,item_type,county,handset,contradictory,site`).all(...args,...query.months) as (Dimension & {item_code:string})[];
    const products={zero:0,credit:0,packages:0,other:0,unknown:0},sources:Record<string,number>={};
    for(const row of selected){
