@@ -36,12 +36,14 @@ export function verifySim(serial:string):SimVerification{
   // Match only unambiguous prior sales in the same legal company and product.
   // Same-day and unidentified returns require inspection instead of row-order guesses.
   for(const row of rows){
-   if(row.quantity===1)outstanding.push(row);
+   if(row.quantity===1&&present(row).kind!=='central')outstanding.push(row);
    if(row.quantity===-1){const matches=outstanding.filter(s=>s.company===row.company&&s.imei===row.imei&&s.item_code===row.item_code&&!!row.customer_key&&s.customer_key===row.customer_key&&!!s.movement_date&&!!row.movement_date&&s.movement_date<row.movement_date);
     if(matches.length===1)outstanding.splice(outstanding.indexOf(matches[0]),1);else uncertain=true;
    }
   }
-  const identities=new Set(rows.map(r=>r.company+'|'+r.imei));
+  const commercial=rows.filter(r=>present(r).kind!=='central');
+  if(!commercial.length){result.status='recorded';return result;}
+  const identities=new Set(commercial.map(r=>r.company+'|'+r.imei));
   if(uncertain||identities.size>1||outstanding.length>1)result.status='ambiguous';
   else if(outstanding.length===1){const sale=present(outstanding[0]);result.status=sale.kind==='central'?'recorded':'sold';if(result.status==='sold')result.sale=sale;}
   else result.status=rows.some(r=>r.quantity===1)?'returned':'recorded';
