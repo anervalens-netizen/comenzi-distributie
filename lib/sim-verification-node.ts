@@ -54,7 +54,7 @@ export function verifySim(serial:string):SimVerification{
   const commercial=rows.filter(r=>present(r).kind!=='central');
   if(!commercial.length){result.status='recorded';return result;}
   const sales=outstanding.filter(r=>present(r).kind!=='central');
-  const identities=new Set(commercial.map(r=>r.company+'|'+r.imei));
+  const identities=new Set(commercial.filter(r=>physicalMatch(r)).map(r=>r.imei));
   if(uncertain||identities.size>1||sales.length>1)result.status='ambiguous';
   else if(sales.length===1){result.status='sold';result.sale=present(sales[0]);}
   else result.status=rows.some(r=>r.quantity===1)?'returned':'recorded';

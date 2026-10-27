@@ -27,6 +27,7 @@ CREATE TABLE activation_imports(imported_at,source_at,status,operator,source_kin
  add(full,{date:'2026-01-02',quantity:-1});assert.equal(verifySim(full).status,'returned');
  add(full,{date:'2026-01-03',site:'B',tr:0,receipt:'SALE-02'});result=verifySim(full);assert.equal(result.status,'sold');assert.equal(result.sale.kind,'store');assert.equal(result.sale.receipt,'SALE-02');
  const retail='2000000000000000001';add(retail,{company:'MobiCell',tr:0});assert.equal(verifySim(retail).sale.company,'MobiCell');add(retail,{company:'MobiUp',site:'NOM',tr:0});assert.equal(verifySim(retail).sale.company,'MobiCell','central inventory is not a competing retail sale');
+ const moved='2000000000000000002';add(moved);add(moved,{quantity:-1,date:'2026-01-02'});add(moved,{company:'MobiCell',tr:0,date:'2026-01-03'});assert.equal(verifySim(moved).sale.company,'MobiCell','cross-company resale reconciles returns within each company');
  const central='3000000000000000001';add(central,{site:'NOM',tr:0});assert.equal(verifySim(central).status,'recorded');
  const ambiguous='4000000000000000001';add(ambiguous);add(ambiguous,{quantity:-1});assert.equal(verifySim(ambiguous).status,'ambiguous','same day return order unknown');
  const collision='500000000000000000';add(collision+'1');add(collision+'2');assert.equal(verifySim(collision).status,'ambiguous');assert.equal(verifySim(collision+'1').status,'sold');
