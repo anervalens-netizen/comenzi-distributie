@@ -28,6 +28,14 @@ export function verifySim(serial:string):SimVerification{
   }
   if(ids.size>100)throw new Error('Too many movements');
   if(!ids.size)return result;
+  // An observed activation serial is a lookup key, not a commercial-history
+  // boundary. Load every effective movement of each matched company/IMEI,
+  // including returns and conflicting activation observations.
+  const matched=db.prepare(`SELECT DISTINCT company,imei FROM activation_effective_movements WHERE movement_id IN (${[...ids].map(()=>'?').join(',')})`).all(...ids);
+  ids.clear();
+  for(const identity of matched)add(db.prepare("SELECT id FROM activation_movements WHERE company=? AND provider='vodafone' AND imei=? LIMIT 101").all(String(identity.company),String(identity.imei)));
+  if(ids.size>100)throw new Error('Too many movements');
+  if(!ids.size)return result;
   const rows=db.prepare(`SELECT e.*,EXISTS(SELECT 1 FROM activation_meta WHERE key='conflict:'||m.movement_key) conflict FROM activation_effective_movements e JOIN activation_movements m ON m.id=e.movement_id WHERE e.movement_id IN (${[...ids].map(()=>'?').join(',')}) AND m.item_type IN ('SIM','TELSIM') AND e.item_code NOT IN ('V03EVDF','V04EVDF','V05EVDF','V06EVDF') ORDER BY e.movement_date,e.movement_id`).all(...ids) as Movement[];
   if(!rows.length)return result;
   const present=(row:Movement):SimSale=>{const raw=JSON.parse(row.raw_json);return {company:row.company,serial:row.imei,seller:String(raw.TR||row.site||'Nespecificat'),kind:row.is_tr?'agent':row.site==='NOM'||String(raw.TR).toUpperCase()==='SEDIU CENTRAL'?'central':'store',date:row.movement_date,receipt:String(raw.Nr||''),quantity:row.quantity};};

@@ -29,6 +29,9 @@ try{
  const ambiguous='4000000000000000001';add(ambiguous);add(ambiguous,{quantity:-1});assert.equal(verifySim(ambiguous).status,'ambiguous','same day return order unknown');
  const collision='500000000000000000';add(collision+'1');add(collision+'2');assert.equal(verifySim(collision).status,'ambiguous');assert.equal(verifySim(collision+'1').status,'sold');
  const conflict='6000000000000000001',conflictId=add(conflict);db.prepare('INSERT INTO activation_meta VALUES(?,?)').run('conflict:k'+conflictId,'1');assert.equal(verifySim(conflict).status,'ambiguous');
+ const handset='100000000000001';add(handset,{type:'TELSIM',serial:'123456789012345678'});add(handset,{type:'TELSIM',serial:'123456789012345679'});
+ const complete=verifySim('123456789012345678');assert.equal(complete.status,'ambiguous');assert.equal(complete.history.length,2,'serial match expands to complete handset commercial identity');
+ const returnedHandset='100000000000002';add(returnedHandset,{type:'TELSIM',serial:'123456789012345680'});add(returnedHandset,{type:'TELSIM',quantity:-1,date:'2026-01-02'});assert.equal(verifySim('123456789012345680').status,'returned','return without activation serial included');
  const digi='7000000000000000001';add(digi,{provider:'digi'});assert.equal(verifySim(digi).status,'not_found');
  const voucher='8000000000000000001',voucherId=add(voucher);db.prepare('UPDATE activation_effective_movements SET item_code=? WHERE movement_id=?').run('V05EVDF',voucherId);assert.equal(verifySim(voucher).status,'not_found','scratch vouchers are not physical SIMs');
  assert.throws(()=>verifySim("' OR 1=1"));assert.throws(()=>verifySim('1e18'));
