@@ -101,6 +101,42 @@ class BackupTests(unittest.TestCase):
             self.assertEqual(saved.extractfile('client-history/client-sales-originals/example.xlsx').read(),original.read_bytes())
             self.assertNotIn('client-history/partner-activity.sqlite',saved.getnames())
 
+    def test_regenerable_history_is_explicitly_excluded(self):
+        original = self.history_fixture()
+        original.unlink()  # Excluded history must not be opened or validated.
+        with mock.patch.dict(backup.os.environ, {'MOBIUP_BACKUP_CUSTOMER_HISTORY': '0'}):
+            archive = self.run_backup()
+        with tarfile.open(archive) as saved:
+            self.assertFalse(any(n.startswith('client-history/') for n in saved.getnames()))
+            self.assertIn('mobiup.sqlite', saved.getnames())
+            self.assertEqual(json.load(saved.extractfile('BACKUP-POLICY.json'))['customerHistory'], 'reimport_required')
+
+    def test_generation_retention_preserves_current_unique_and_open_readers(self):
+        root = self.data / 'activations'
+        generations = root / 'generations'
+        for name, hashes in [('current', ['one', 'two']), ('old', ['one']), ('unique', ['other']), ('open', ['one'])]:
+            folder = generations / name
+            folder.mkdir(parents=True)
+            with contextlib.closing(sqlite3.connect(folder / 'activations.sqlite')) as c, c:
+                c.execute('CREATE TABLE activation_imports(sha256 TEXT,status TEXT)')
+                c.executemany('INSERT INTO activation_imports VALUES (?, ?)', [(h, 'complete') for h in hashes])
+        (root / 'current').symlink_to('generations/current')
+        with mock.patch.object(backup.storage, 'active_users', side_effect=lambda p: p.name == 'open'):
+            result = backup.prune_activation_generations(root)
+        self.assertEqual(result['removed'], ['old'])
+        self.assertEqual(set(result['retained']), {'open', 'unique'})
+        self.assertTrue((generations / 'current/activations.sqlite').exists())
+        with mock.patch.object(backup.storage, 'active_users', return_value=False):
+            result = backup.prune_activation_generations(root)
+        self.assertEqual(result['removed'], ['open'])
+        self.assertEqual(result['retained'], ['unique'])
+
+    def test_invalid_history_policy_fails_before_publication(self):
+        with mock.patch.dict(backup.os.environ, {'MOBIUP_BACKUP_CUSTOMER_HISTORY': 'false'}):
+            with self.assertRaisesRegex(ValueError, 'must be 0 or 1'):
+                backup.run_backup(data=self.data, local=self.local)
+        self.assertFalse(self.local.exists())
+
     def test_customer_history_missing_original_prevents_publication(self):
         self.history_fixture().unlink()
         with self.assertRaisesRegex(RuntimeError,'original missing'):

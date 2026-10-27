@@ -175,6 +175,14 @@ class RecoveryTests(unittest.TestCase):
         result=recovery.restore(self.make_backup(),self.root/'history-restored')
         self.assertEqual(result['databases']['client-history/client-sales-history.sqlite'],'ok')
         self.assertEqual((self.root/'history-restored/client-history/client-sales-originals/example.xlsx').read_bytes(),original.read_bytes())
+    def test_regenerable_history_restore_requires_reimport(self):
+        with patch.dict(backup.os.environ, {'MOBIUP_BACKUP_CUSTOMER_HISTORY': '0'}):
+            archive = self.make_backup()
+        result = recovery.restore(archive, self.root / 'without-history')
+        self.assertEqual(result['reimportRequired'], ['customer_history'])
+        self.assertEqual(result['databases'], {'mobiup.sqlite': 'ok'})
+        self.assertFalse((self.root / 'without-history/client-history').exists())
+
     def activation_fixture(self, relative='activations'):
         root=self.data/relative;(root/'activation-originals').mkdir(parents=True)
         payload=b'synthetic activation original';sha=hashlib.sha256(payload).hexdigest()

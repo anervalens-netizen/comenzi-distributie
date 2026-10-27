@@ -120,6 +120,13 @@ def restore(archive: Path, destination: Path, checksum: Path | None = None, *, s
             raise RuntimeError('Recovery resources do not match the compiled release')
         if not any(name.startswith('recovery/products/') for name in manifest['files']):
             raise RuntimeError('Required recovery products are missing')
+        policy_path = temporary / 'BACKUP-POLICY.json'
+        policy = json.loads(policy_path.read_text()) if policy_path.exists() else {}
+        if policy and (policy.get('schema') != 1 or policy.get('customerHistory') != 'reimport_required'):
+            raise RuntimeError('Invalid backup data policy')
+        reimport = ['customer_history'] if policy else []
+        if reimport and (temporary / 'client-history/client-sales-history.sqlite').exists():
+            raise RuntimeError('Backup data policy contradicts archive contents')
         databases = {}
         for name in ('mobiup.sqlite', 'sales.sqlite', 'usage.sqlite', 'client-history/client-sales-history.sqlite', 'activations/activations.sqlite', 'activations/activation-report.sqlite', 'activations/digi/activations.sqlite', 'activations/digi/activation-report.sqlite'):
             path = temporary / name
@@ -153,7 +160,8 @@ def restore(archive: Path, destination: Path, checksum: Path | None = None, *, s
             # Preserve any partially moved data for inspection; do not delete others' paths.
             raise RuntimeError('Restore publication failed; inspect the isolated destination')
         return {'status': 'restored_not_started', 'sha': release.get('sha'), 'databases': databases,
-                'recoveryFiles': len(manifest['files']), 'destination': str(destination)}
+                'recoveryFiles': len(manifest['files']), 'destination': str(destination),
+                'reimportRequired': reimport}
     finally:
         shutil.rmtree(temporary)
 

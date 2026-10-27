@@ -316,3 +316,16 @@ attribution only in the national total, and never calculates commissions.
 This development module does not deploy or initialize production storage.
 
 Combined order exports contain only positive ordered quantities, split into up to three sheets matching the product groups. Empty groups are omitted. Every sheet has header filters with quantity greater than zero selected. Historical combined downloads are regenerated from the saved order snapshot. Mail subjects distinguish single-category orders from mixed orders; the body lists only the ordered groups and their quantities.
+
+For externally regenerable customer history, set
+`MOBIUP_BACKUP_CUSTOMER_HISTORY=0`. The archive then omits the customer history
+database and its source workbooks and records `reimport_required` in
+`BACKUP-POLICY.json`; recovery needs a fresh history import. The default remains
+`1` for installations whose history is authoritative. Primary application data,
+orders, sales and activation ledgers remain protected.
+
+Set `MOBIUP_PRUNE_ACTIVATION_GENERATIONS=1` to collect superseded activation
+generations after a successful NAS restore validation. Retention shares the
+import/backup lock, preserves current and open readers, and requires every old
+import and original file to exist in current. Unique/unknown generations are
+reported and retained. Temporary audit databases are not permanent backups.

@@ -84,7 +84,11 @@ imports. This module does not introduce an application page or public endpoint.
 Run `python3 tools/test_client_sales_history.py -v`.
 Check row counts, integer amount/quantity totals per year and month, source hashes,
 allocation coverage, missing amounts, SQLite integrity and foreign keys.
-Keep an independent copy of the completed database and original XLSX files.
+For authoritative history, keep an independent copy of the completed database
+and original XLSX files. When the owner can regenerate the complete history from
+an external source, configure `MOBIUP_BACKUP_CUSTOMER_HISTORY=0` instead; recovery
+then explicitly requires reimport. Do not retain historical test/upload database
+copies as an additional backup layer.
 When copying a live database, use SQLite backup rather than copying only the main
 file while WAL is active. Reimport from the retained sources is also supported.
 
