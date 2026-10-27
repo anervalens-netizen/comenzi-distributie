@@ -324,8 +324,10 @@ database and its source workbooks and records `reimport_required` in
 `1` for installations whose history is authoritative. Primary application data,
 orders, sales and activation ledgers remain protected.
 
-Set `MOBIUP_PRUNE_ACTIVATION_GENERATIONS=1` to collect superseded activation
-generations after a successful NAS restore validation. Retention shares the
+Configure a root `ExecStartPost` running `deploy/backup.py
+--prune-activation-generations` after the backup service succeeds with NAS restore
+validation enabled. The privileged retention process collects superseded activation
+generations; the backup itself retains its existing unprivileged service identity. Retention shares the
 import/backup lock, preserves current and open readers, and requires every old
 import and original file to exist in current. Unique/unknown generations are
 reported and retained. Temporary audit databases are not permanent backups.
