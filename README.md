@@ -334,6 +334,13 @@ sales are shown as requiring review; central-office movements are not store
 sales. Missing/unavailable sources fail explicitly instead of returning a
 negative match. Source dates are shown; absence applies to imported history.
 Digi reporting, activation eligibility and commission rules are unchanged.
+Historical activation serial observations remain lookup keys, including conflicting
+or superseded observations. Such associations are explicitly ambiguous unless
+the physical ICCID itself confirms the identity. Before enabling this reader on
+an existing ledger, run `python3 tools/prepare-sim-verification.py --data-dir
+/private/activations`; it adds the indexed lookup under the normal import lock,
+checks row counts and checkpoints the index. Future imports create the same
+index automatically. An unprepared lookup fails unavailable, never not-found.
 
 For externally regenerable customer history, set
 `MOBIUP_BACKUP_CUSTOMER_HISTORY=0`. The archive then omits the customer history

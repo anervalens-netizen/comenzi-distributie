@@ -177,6 +177,7 @@ CREATE TABLE IF NOT EXISTS activation_movements(
  customer_key TEXT NOT NULL, quantity INTEGER, issues TEXT NOT NULL, raw_json TEXT NOT NULL,
  UNIQUE(movement_key,payload_hash));
 CREATE INDEX IF NOT EXISTS activation_movements_identity ON activation_movements(company,provider,imei);
+CREATE INDEX IF NOT EXISTS activation_movements_serial ON activation_movements(company,provider,serial);
 CREATE TABLE IF NOT EXISTS activation_occurrences(
  import_id INTEGER NOT NULL REFERENCES activation_imports(id), source_row INTEGER NOT NULL,
  movement_id INTEGER NOT NULL REFERENCES activation_movements(id), PRIMARY KEY(import_id,source_row));

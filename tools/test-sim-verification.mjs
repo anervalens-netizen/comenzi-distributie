@@ -15,12 +15,12 @@ try{
  db.exec(`CREATE TABLE activation_meta(key TEXT PRIMARY KEY,value);INSERT INTO activation_meta VALUES('schema_version','3');
  CREATE TABLE activation_facts(company,provider,serial,reasons,PRIMARY KEY(company,provider,serial));
 CREATE TABLE activation_imports(imported_at,source_at,status,operator,source_kind);INSERT INTO activation_imports VALUES('2026-10-27T10:00:00Z','2026-10-26','complete','vodafone','internal');
- CREATE TABLE activation_movements(id INTEGER PRIMARY KEY,movement_key,company,provider,imei,item_type);
- CREATE INDEX activation_movements_identity ON activation_movements(company,provider,imei);
+ CREATE TABLE activation_movements(id INTEGER PRIMARY KEY,movement_key,company,provider,imei,item_type,serial);
+ CREATE INDEX activation_movements_identity ON activation_movements(company,provider,imei);CREATE INDEX activation_movements_serial ON activation_movements(company,provider,serial);
  CREATE TABLE activation_effective_movements(movement_id INTEGER PRIMARY KEY,company,provider,imei,serial,movement_date,site,is_tr,item_code,customer_key,quantity,raw_json);
  CREATE INDEX effective_serial ON activation_effective_movements(company,provider,serial);`);
  let id=0;
- const add=(imei,{company='MobiUp',provider='vodafone',serial='',date='2026-01-01',site='A',tr=1,quantity=1,customer='c',receipt='TEST-01',type='SIM',effective=true}={})=>{id++;db.prepare('INSERT INTO activation_movements VALUES(?,?,?,?,?,?)').run(id,'k'+id,company,provider,imei,type);if(effective)db.prepare('INSERT INTO activation_effective_movements VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').run(id,company,provider,imei,serial,date,site,tr,'SIM-TEST',customer,quantity,JSON.stringify({TR:tr?'Example TR':'Example Store',Nr:receipt}));return id;};
+ const add=(imei,{company='MobiUp',provider='vodafone',serial='',date='2026-01-01',site='A',tr=1,quantity=1,customer='c',receipt='TEST-01',type='SIM',effective=true}={})=>{id++;db.prepare('INSERT INTO activation_movements VALUES(?,?,?,?,?,?,?)').run(id,'k'+id,company,provider,imei,type,serial);if(effective)db.prepare('INSERT INTO activation_effective_movements VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').run(id,company,provider,imei,serial,date,site,tr,'SIM-TEST',customer,quantity,JSON.stringify({TR:tr?'Example TR':'Example Store',Nr:receipt}));return id;};
  const full='1000000000000000001';add(full);let result=verifySim(full);assert.equal(result.status,'sold');assert.equal(result.sale.seller,'Example TR');assert.equal(result.sale.date,'2026-01-01');assert.equal(result.sale.receipt,'TEST-01');assert.equal(verifySim(full.slice(0,-1)).status,'sold','unactivated SIM searchable by 18 digits');
  assert.equal(verifySim('1000000000000000002').status,'not_found','wrong full check digit never prefix-matches');
  add(full,{effective:false});assert.equal(verifySim(full).history.length,1,'obsolete versions excluded');
@@ -55,10 +55,15 @@ try:
  assert c.execute('SELECT COUNT(*) FROM activation_effective_movements').fetchone()[0]==1
  assert 'serial_conflict' in c.execute('SELECT reasons FROM activation_facts LIMIT 1').fetchone()[0]
  assert not c.execute("SELECT 1 FROM activation_meta WHERE key LIKE 'conflict:%'").fetchone()
+ f=fixture(root/'mismatched.xlsx',[row(Firma='MobiUp',Activat='123456789012345673',DocumentDetailId='MISMATCH')]);a.import_files(c,root/'data',[f],operator='vodafone',source_at='2026-10-27')
+ central=dict(Firma='MobiUp',IMEI='0000000000000000020',Activat='000000000000000002')
+ f=fixture(root/'central.xlsx',[row(**central,TR='SEDIU CENTRAL',SiteCode='NOM',DocumentDetailId='C1',DataVDF='20240101'),row(**central,TR='SEDIU CENTRAL',SiteCode='NOM',DocumentDetailId='C2',DataVDF='20240102',Qtty='-1'),row(**central,DocumentDetailId='C3',DataVDF='20240103')]);a.import_files(c,root/'data',[f],operator='vodafone',source_at='2026-10-27')
 finally:c.close()
 `,imported]);
  process.env.MOBIUP_ACTIVATIONS_DIR=join(imported,'data');
- const association=verifySim('123456789012345671');assert.equal(association.status,'ambiguous','real importer serial-observation conflict must not claim a verified handset association');assert.equal(association.history.length,1);
+ const importedDb=new DatabaseSync(join(imported,'data','activations.sqlite'));importedDb.exec('DROP INDEX activation_movements_serial');importedDb.close();assert.throws(()=>verifySim('123456789012345671'),'unprepared index fails closed');
+ for(let pass=0;pass<2;pass++){const preparation=JSON.parse(execFileSync('python3',['tools/prepare-sim-verification.py','--data-dir',join(imported,'data')],{encoding:'utf8'}));assert.equal(preparation.status,'PASS');assert.equal(preparation.rowChanges,0);}
+ const association=verifySim('123456789012345671');assert.equal(association.status,'ambiguous','real importer serial-observation conflict must not claim a verified handset association');assert.equal(association.history.length,1);assert.equal(verifySim('123456789012345672').status,'ambiguous','non-selected conflicting observation must remain searchable');assert.equal(verifySim('123456789012345673').status,'ambiguous','mismatched physical SIM observation is unverified');assert.equal(verifySim('0000000000000000010').status,'sold','direct physical identity does not depend on activation association');assert.equal(verifySim('0000000000000000020').status,'sold','balanced central pair must not obscure later sale');
  process.env.MOBIUP_ACTIVATIONS_DIR=folder;
  mkdirSync(join(folder,'generations'));symlinkSync(tmpdir(),join(folder,'current'));assert.throws(()=>verifySim(full),'unsafe generation pointer');
  console.log('SIM verification: unactivated, retail, returns/resale, ambiguity, version selection, provider isolation and validation PASS');

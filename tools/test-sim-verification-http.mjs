@@ -11,9 +11,9 @@ const ledger=new DatabaseSync(join(folder,'activations.sqlite'));
 ledger.exec(`CREATE TABLE activation_meta(key TEXT PRIMARY KEY,value);INSERT INTO activation_meta VALUES('schema_version','3');
 CREATE TABLE activation_facts(company,provider,serial,reasons,PRIMARY KEY(company,provider,serial));
 CREATE TABLE activation_imports(imported_at,source_at,status,operator,source_kind);INSERT INTO activation_imports VALUES('2026-10-27','2026-10-26','complete','vodafone','internal');
-CREATE TABLE activation_movements(id INTEGER PRIMARY KEY,movement_key,company,provider,imei,item_type);CREATE INDEX activation_movements_identity ON activation_movements(company,provider,imei);
+CREATE TABLE activation_movements(id INTEGER PRIMARY KEY,movement_key,company,provider,imei,item_type,serial);CREATE INDEX activation_movements_identity ON activation_movements(company,provider,imei);CREATE INDEX activation_movements_serial ON activation_movements(company,provider,serial);
 CREATE TABLE activation_effective_movements(movement_id INTEGER PRIMARY KEY,company,provider,imei,serial,movement_date,site,is_tr,item_code,customer_key,quantity,raw_json);CREATE INDEX effective_serial ON activation_effective_movements(company,provider,serial);`);
-ledger.prepare('INSERT INTO activation_movements VALUES(1,?,?,?,?,?)').run('test','MobiCell','vodafone',serial,'SIM');
+ledger.prepare('INSERT INTO activation_movements VALUES(1,?,?,?,?,?,?)').run('test','MobiCell','vodafone',serial,'SIM','');
 ledger.prepare('INSERT INTO activation_effective_movements VALUES(1,?,?,?,?,?,?,?,?,?,?,?)').run('MobiCell','vodafone',serial,'','2024-01-03','STORE',0,'SIM-TEST','private-client',1,JSON.stringify({TR:'Example Store',Nr:'TEST-99'}));ledger.close();
 const child=spawn(process.execPath,['dist/standalone/server.js'],{env:{...process.env,MOBIUP_DATA_DIR:folder,MOBIUP_ACTIVATIONS_DIR:folder,MOBIUP_USAGE_DISABLED:'1',HOST:'127.0.0.1',PORT:'3098'},stdio:'ignore'});let browser,db;
 async function check(token,body={serial},extra={}){const r=await fetch(origin+'/api/sim/verify',{method:'POST',headers:{Origin:origin,'Content-Type':'application/json',...(token?{Cookie:'mobiup_session='+token}:{}),...extra},body:JSON.stringify(body)});return {status:r.status,body:await r.json()};}
