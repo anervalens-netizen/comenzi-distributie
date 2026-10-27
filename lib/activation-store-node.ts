@@ -60,3 +60,5 @@ export function readActivations(month:string,sites:string[]|null,provider:Activa
     return result;
   }finally{source?.close();report.close();}
 }
+
+export {verifySim} from './sim-verification-node';
