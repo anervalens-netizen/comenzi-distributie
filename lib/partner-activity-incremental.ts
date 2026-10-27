@@ -282,7 +282,25 @@ export function refreshActivitySnapshotMonth(directory:string,month:string,today
 
     const catalogPartners=catalog.prepare("SELECT id,json_extract(data,'$.cui') cui FROM customers").all();
     const canonical=(rows:typeof catalogPartners)=>JSON.stringify(rows.map(row=>[String(row.id),row.cui]).sort((a,b)=>String(a[0]).localeCompare(String(b[0]))));
-    if(!Array.isArray(previous.catalogPartners)||canonical(previous.catalogPartners)!==canonical(catalogPartners))return fallback('catalog_membership_changed');
+    if(!Array.isArray(previous.catalogPartners))return fallback('catalog_membership_changed');
+    if(canonical(previous.catalogPartners)!==canonical(catalogPartners)){
+      const prior=new Map<string,unknown>(previous.catalogPartners.map((row:{id:unknown;cui:unknown})=>[String(row.id),row.cui]));
+      const current=new Map<string,unknown>(catalogPartners.map(row=>[String(row.id),row.cui]));
+      // Removal/CUI changes can affect old facts; accept only pure additions.
+      if([...prior].some(([id,cui])=>!current.has(id)||current.get(id)!==cui))return fallback('catalog_membership_changed');
+      const added=[...current.keys()].filter(id=>!prior.has(id));
+      if(!added.length)return fallback('catalog_membership_changed');
+      // A new point that already has historical links/candidates still needs
+      // the full rebuild. An unrelated catalog addition changes no old facts.
+      for(const ids of batch(added)){
+        const values=JSON.stringify(ids);
+        if(out.prepare('SELECT 1 FROM point_identity_links WHERE partner_id IN (SELECT value FROM json_each(?)) LIMIT 1').get(values)
+          ||out.prepare('SELECT 1 FROM point_unresolved_candidates WHERE partner_id IN (SELECT value FROM json_each(?)) LIMIT 1').get(values)
+          ||out.prepare('SELECT 1 FROM daily WHERE partner_id IN (SELECT value FROM json_each(?)) LIMIT 1').get(values)){
+          return fallback('catalog_addition_with_history');
+        }
+      }
+    }
     const partners=new Map<string,string>();
     for(const row of catalogPartners)partners.set(String(row.id),normalizedCui(String(row.cui||'')));
     const master=JSON.parse(String(source.prepare('SELECT master_json FROM history_references WHERE id=?').get(stamp.reference)?.master_json||'[]'));

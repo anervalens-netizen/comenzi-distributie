@@ -99,10 +99,22 @@ try{
   assert.equal(refreshActivitySnapshotMonth(root,'2026-09','2026-09-30'),null,'historical source hash drift forces full rebuild');
   const undoHash=new DatabaseSync(history);undoHash.exec("UPDATE history_imports SET sha256='old' WHERE id=1");undoHash.close();
 
-  // A catalog membership change needs historical point facts rebuilt.
+  // A catalog-only new customer without historic allocation is safe to refresh.
   const changedCatalog=new DatabaseSync(join(root,'mobiup.sqlite'));changedCatalog.prepare('INSERT INTO customers VALUES(?,?)').run('new-card','{"cui":"999"}');changedCatalog.close();
-  assert.equal(refreshActivitySnapshotMonth(root,'2026-09','2026-09-30'),null,'catalog membership drift forces full rebuild');
+  assert(refreshActivitySnapshotMonth(root,'2026-09','2026-09-30'),'unlinked catalog addition uses incremental refresh');
+  const withNewCustomer=readSnapshot();buildActivitySnapshot(root,'2026-09-30');
+  assert.deepEqual(withNewCustomer,readSnapshot(),'unlinked catalog addition produces the same snapshot as a full rebuild');
   const undoCatalog=new DatabaseSync(join(root,'mobiup.sqlite'));undoCatalog.exec("DELETE FROM customers WHERE id='new-card'");undoCatalog.close();
+  assert.equal(refreshActivitySnapshotMonth(root,'2026-09','2026-09-30'),null,'catalog removal still forces full rebuild');
+  buildActivitySnapshot(root,'2026-09-30');
+  // A new catalog customer with a historical point relationship cannot skip
+  // the full rebuild, even when only one customer was added.
+  const linked=new DatabaseSync(join(root,'client-history','partner-activity.sqlite'));
+  linked.prepare('INSERT INTO point_identity_links VALUES(?,?)').run('new-card',1);linked.close();
+  const addLinked=new DatabaseSync(join(root,'mobiup.sqlite'));addLinked.prepare('INSERT INTO customers VALUES(?,?)').run('new-card','{"cui":"999"}');addLinked.close();
+  assert.equal(refreshActivitySnapshotMonth(root,'2026-09','2026-09-30'),null,'new customer with historical link forces full rebuild');
+  const resetCatalog=new DatabaseSync(join(root,'mobiup.sqlite'));resetCatalog.exec("DELETE FROM customers WHERE id='new-card'");resetCatalog.close();
+  buildActivitySnapshot(root,'2026-09-30');
 
   // Old snapshots cannot prove which older import generations they contain.
   const oldMeta=new DatabaseSync(join(root,'client-history','partner-activity.sqlite'));
