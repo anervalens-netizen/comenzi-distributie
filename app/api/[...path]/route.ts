@@ -1,4 +1,4 @@
-import {simVerification} from '@/lib/sim-verification-api';
+import {simVerification,simVerificationAccess} from '@/lib/sim-verification-api';
 import {operationalWriteGuard} from '@/lib/operational-write-guard';
 import {activationReport} from '@/lib/activation-api';
 import {timedResponse} from '@/lib/request-timing';
@@ -314,7 +314,8 @@ async function dispatch(req: Request) {
   const user=await requireUser(req,path[0]==='auth'||(path[0]==='admin'&&path[1]==='templates'));
   const readUser=nationalReadScope(user);
   if(path.join('/')==='usage/pulse'&&req.method==='POST')return response(await usagePulse(req,user));
-  if(path.join('/')==='sim/verify'&&req.method==='POST')return response(simVerification(user,await jsonBody(req)));
+  if(path.join('/')==='sim/verify'&&req.method==='GET')return response(await simVerificationAccess(user));
+  if(path.join('/')==='sim/verify'&&req.method==='POST')return response(await simVerification(user,await jsonBody(req)));
   if(path.join('/')==='activations'&&req.method==='GET')return response(await activationReport(readUser,new URL(req.url).searchParams));
   if(path.join('/')==='usage/report'&&req.method==='GET')return response(await usageReport(readUser,new URL(req.url).searchParams));
   if(path.join('/')==='notifications/inbox'&&req.method==='GET')return response(await managerRequestInbox(user));

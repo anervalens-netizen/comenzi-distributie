@@ -1,9 +1,12 @@
+import {verifyDigiSim} from './sim-verification-digi-node';
 import {DatabaseSync} from 'node:sqlite';
 import {resolve,dirname} from 'node:path';
 import {lstatSync,realpathSync} from 'node:fs';
 import type {SimSale,SimVerification} from './sim-verification-types';
 type Movement={movement_id:number;company:string;imei:string;serial:string;movement_date:string|null;site:string;is_tr:number;item_code:string;item_type:string;customer_key:string;quantity:number|null;raw_json:string;conflict:number;association_conflict:number};
-export function verifySim(serial:string):SimVerification{
+export function verifySim(serial:string,provider:'vodafone'|'digi'='vodafone'):SimVerification{
+ if(provider==='digi')return verifyDigiSim(serial);
+ if(provider!=='vodafone')throw new Error('Invalid provider');
  if(!/^[0-9]{18,22}$/.test(serial))throw new Error('Invalid serial');
  const base=resolve(process.env.MOBIUP_ACTIVATIONS_DIR||process.env.MOBIUP_DATA_DIR||'./work/server-data');
  let directory=base;const pointer=resolve(base,'current'),info=lstatSync(pointer,{throwIfNoEntry:false});

@@ -356,3 +356,17 @@ generations; the backup itself retains its existing unprivileged service identit
 import/backup lock, preserves current and open readers, and requires every old
 import and original file to exist in current. Unique/unknown generations are
 reported and retained. Temporary audit databases are not permanent backups.
+
+Digi verification appears below Vodafone in the same SIM verification tab. Digi
+uses its separate ledger and exact 19-digit identifiers; movement dates are
+separate from activation dates. The export has no document numbers, so the UI
+labels them unavailable. Inventory channels are evidence, not sales. Returns
+require a unique earlier sale with the same company, product and nonempty exact
+normalized customer label; uncertain histories remain explicit. The configured
+`MOBIUP_ACTIVATIONS_VODAFONE_ONLY_MANAGER_IDS` excludes currently assigned agents
+from Digi verification in both the UI and API; manager access remains available.
+
+Existing Digi ledgers require `tools/prepare-sim-verification.py --provider digi
+--data-dir <digi-root>` once, under the import lock. It adds only the
+`activation_occurrences_movement` index, verifies unchanged business rows and
+checks the query plan. New imports create the index automatically.

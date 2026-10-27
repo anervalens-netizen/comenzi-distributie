@@ -186,6 +186,7 @@ CREATE TABLE IF NOT EXISTS activation_facts(
  activation_date TEXT, month TEXT, item_code TEXT, item_type TEXT,
  candidate_site TEXT, status TEXT NOT NULL, reasons TEXT NOT NULL, net_quantity INTEGER,
  evidence_json TEXT NOT NULL, PRIMARY KEY(company,provider,serial));
+CREATE INDEX IF NOT EXISTS activation_occurrences_movement ON activation_occurrences(movement_id,import_id);
 CREATE INDEX IF NOT EXISTS activation_facts_month ON activation_facts(month,status);
 CREATE TABLE IF NOT EXISTS activation_observations(
  import_id INTEGER NOT NULL REFERENCES activation_imports(id), source_row INTEGER NOT NULL,
