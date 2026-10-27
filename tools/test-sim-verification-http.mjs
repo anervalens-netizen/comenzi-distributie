@@ -9,6 +9,7 @@ import {browserFixture,waitFor} from './offline-browser-fixture.mjs';
 const folder=mkdtempSync(join(tmpdir(),'sim-verification-http-')),origin='http://127.0.0.1:3098',serial='1000000000000000001';
 const ledger=new DatabaseSync(join(folder,'activations.sqlite'));
 ledger.exec(`CREATE TABLE activation_meta(key TEXT PRIMARY KEY,value);INSERT INTO activation_meta VALUES('schema_version','3');
+CREATE TABLE activation_facts(company,provider,serial,reasons,PRIMARY KEY(company,provider,serial));
 CREATE TABLE activation_imports(imported_at,source_at,status,operator,source_kind);INSERT INTO activation_imports VALUES('2026-10-27','2026-10-26','complete','vodafone','internal');
 CREATE TABLE activation_movements(id INTEGER PRIMARY KEY,movement_key,company,provider,imei,item_type);CREATE INDEX activation_movements_identity ON activation_movements(company,provider,imei);
 CREATE TABLE activation_effective_movements(movement_id INTEGER PRIMARY KEY,company,provider,imei,serial,movement_date,site,is_tr,item_code,customer_key,quantity,raw_json);CREATE INDEX effective_serial ON activation_effective_movements(company,provider,serial);`);

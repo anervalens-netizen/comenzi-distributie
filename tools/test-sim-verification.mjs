@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {build} from 'esbuild';
+import {execFileSync} from 'node:child_process';
 import {DatabaseSync} from 'node:sqlite';
 import {mkdtempSync,rmSync,mkdirSync,symlinkSync} from 'node:fs';
 import {tmpdir} from 'node:os';
@@ -12,7 +13,8 @@ try{
  assert.throws(()=>verifySim('1234567890123456789'),'missing source is not a negative match');
  db=new DatabaseSync(join(folder,'activations.sqlite'));
  db.exec(`CREATE TABLE activation_meta(key TEXT PRIMARY KEY,value);INSERT INTO activation_meta VALUES('schema_version','3');
- CREATE TABLE activation_imports(imported_at,source_at,status,operator,source_kind);INSERT INTO activation_imports VALUES('2026-10-27T10:00:00Z','2026-10-26','complete','vodafone','internal');
+ CREATE TABLE activation_facts(company,provider,serial,reasons,PRIMARY KEY(company,provider,serial));
+CREATE TABLE activation_imports(imported_at,source_at,status,operator,source_kind);INSERT INTO activation_imports VALUES('2026-10-27T10:00:00Z','2026-10-26','complete','vodafone','internal');
  CREATE TABLE activation_movements(id INTEGER PRIMARY KEY,movement_key,company,provider,imei,item_type);
  CREATE INDEX activation_movements_identity ON activation_movements(company,provider,imei);
  CREATE TABLE activation_effective_movements(movement_id INTEGER PRIMARY KEY,company,provider,imei,serial,movement_date,site,is_tr,item_code,customer_key,quantity,raw_json);
@@ -37,6 +39,27 @@ try{
  assert.throws(()=>verifySim("' OR 1=1"));assert.throws(()=>verifySim('1e18'));
  assert(!JSON.stringify(result).includes('customer_key'));assert(!JSON.stringify(result).includes('raw_json'));
  db.close();db=null;
+ const imported=join(folder,'imported');
+ execFileSync('python3',['-c',`
+import sys,json
+from pathlib import Path
+sys.path.insert(0,'tools')
+import activations as a
+from test_activations import row,fixture
+root=Path(sys.argv[1]);root.mkdir()
+c=a.connect(root/'data')
+try:
+ for n,serial in enumerate(['123456789012345671','123456789012345672']):
+  f=fixture(root/f'revision-{n}.xlsx',[row(Firma='MobiUp',ItemType='TELSIM',IMEI='100000000000003',Activat=serial)])
+  a.import_files(c,root/'data',[f],operator='vodafone',source_at='2026-10-27')
+ assert c.execute('SELECT COUNT(*) FROM activation_effective_movements').fetchone()[0]==1
+ assert 'serial_conflict' in c.execute('SELECT reasons FROM activation_facts LIMIT 1').fetchone()[0]
+ assert not c.execute("SELECT 1 FROM activation_meta WHERE key LIKE 'conflict:%'").fetchone()
+finally:c.close()
+`,imported]);
+ process.env.MOBIUP_ACTIVATIONS_DIR=join(imported,'data');
+ const association=verifySim('123456789012345671');assert.equal(association.status,'ambiguous','real importer serial-observation conflict must not claim a verified handset association');assert.equal(association.history.length,1);
+ process.env.MOBIUP_ACTIVATIONS_DIR=folder;
  mkdirSync(join(folder,'generations'));symlinkSync(tmpdir(),join(folder,'current'));assert.throws(()=>verifySim(full),'unsafe generation pointer');
  console.log('SIM verification: unactivated, retail, returns/resale, ambiguity, version selection, provider isolation and validation PASS');
 }finally{db?.close();rmSync(folder,{recursive:true,force:true});}
