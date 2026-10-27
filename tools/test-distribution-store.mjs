@@ -23,9 +23,13 @@ try{
   semanticReport.prepare("UPDATE report_meta SET value='2' WHERE key='factsVersion'").run();
  }finally{semanticSource.close();semanticReport.close();}
  const manager=read(null);assert.equal(manager.totals.total,8);assert.equal(manager.totals.eligible,5);assert.equal(manager.totals.ineligible,3);assert.equal(manager.totals.total,manager.totals.eligible+manager.totals.ineligible);assert.equal(manager.totals.eligible,manager.totals.ownRegion+manager.totals.otherRegion+manager.totals.unknownRegion);
+ assert.equal(Object.values(manager.productBreakdown).reduce((a,b)=>a+b,0),manager.totals.total,'product breakdown exactly covers visible activations');
+ assert.equal(Object.values(manager.ineligibleSourceTypes).reduce((a,b)=>a+b,0),manager.totals.ineligible,'source categories partition all ineligible activations');
  assert.equal(manager.reconciliation,1,'non-distribution observations stay in the separately aggregated reconciliation count');
  const north=read(['N'],'north');assert.equal(north.totals.total,3);assert.equal(north.totals.eligible,2);assert.equal(north.totals.ineligible,1);assert.equal(north.sites.length,1);
+ assert.equal(Object.values(north.productBreakdown).reduce((a,b)=>a+b,0),north.totals.total);
  const south=read(['S'],'south');assert.equal(south.totals.total,1);assert.equal(south.totals.eligible,1);assert.equal(south.totals.ineligible||0,0);
+ assert.equal(south.ineligibleSourceTypes,undefined,'restricted south policy does not expose ineligible source data');
  assert.equal(read(['X'],'nonexclusive').totals.total,0);assert.equal(read([],'north').totals.total,0);
  assert.equal(read(null,'manager',{months:['2026-09','2026-10']}).totals.total,9);
  assert.equal(read(null,'manager',{projects:['vodafone_sud','vodafone_nord']}).totals.total,7);
@@ -36,6 +40,7 @@ try{
  assert.equal(revised.rulesRevision,'changed');assert.notEqual(revised.revision,manager.revision,'current rules revision invalidates selection identity');
  const productRules={...rules,products:{...rules.products,ZERO:'accessories',CREDIT:'vodafone_0'}};
  const productReport=read(null,'manager',{rules:productRules});
+ assert.notDeepEqual(productReport.productBreakdown,manager.productBreakdown,'product grouping follows current rules');
  assert.deepEqual(productReport.totals,manager.totals);assert.deepEqual(productReport.history,manager.history,'product remapping never changes distinct activation facts or eligibility');
  assert.notEqual(productReport.revision,manager.revision,'product-only changes invalidate selections even without a rules revision change');
  assert.deepEqual(read(null,'manager',{months:['2026-08','2026-10']}).simZero,{distributed:2,activated:1,withoutReportedActivation:1});

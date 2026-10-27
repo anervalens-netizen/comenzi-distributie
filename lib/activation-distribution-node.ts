@@ -48,6 +48,24 @@ export function distributionReport(report:DatabaseSync,base:ActivationReport,met
    if(!query.months.includes(row.month))continue;
    add(result.totals,row,rules,provider);const a=agents.get(row.site)||newCounts();add(a,row,rules,provider);agents.set(row.site,a);
  }
+ // Use the same authorized scope and selected activation months; raw product codes
+ // already exist in details, so no projection migration or reimport is required.
+ if(provider==='vodafone'&&!query.view){
+   const selected=report.prepare(`SELECT item_code,item_type,county,handset,contradictory,site,COUNT(*) count FROM details WHERE ${where} AND ${monthWhere} GROUP BY item_code,item_type,county,handset,contradictory,site`).all(...args,...query.months) as (Dimension & {item_code:string})[];
+   const products={zero:0,credit:0,packages:0,other:0,unknown:0},sources:Record<string,number>={};
+   for(const row of selected){
+     const group=rules.products[row.item_code];
+     const key=row.item_type==='TELSIM'?'packages':group==='vodafone_0'?'zero':['vodafone_3','vodafone_5','vodafone_credit'].includes(group)?'credit':!row.item_code?'unknown':'other';
+     products[key]+=row.count;
+     if(query.policy!=='south'){
+       const assignment=rules.assignments.find(a=>a.siteCode.toUpperCase()===row.site.toUpperCase());
+       const eligibility=vodafoneEligibility(row.county,row.handset,assignment?.territoryId||null,!!row.contradictory);
+       if(!eligibility.eligible){const source=row.handset?.trim()||'-';sources[source]=(sources[source]||0)+row.count;}
+     }
+   }
+   result.productBreakdown=products;
+   if(query.policy!=='south')result.ineligibleSourceTypes=sources;
+ }
  result.history=[...history].map(([month,counts])=>({month,...counts}));result.months=result.history.map(({month,total})=>({month,total}));
  result.sites=[...agents].map(([site,counts])=>({site,label:site?(labels.get(site)||site):'Agent de verificat',...counts})).sort((a,b)=>b.total-a.total||a.site.localeCompare(b.site));
  result.coveredMonths=query.months.filter(m=>result.months.some(r=>r.month===m));
