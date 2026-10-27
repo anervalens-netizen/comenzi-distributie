@@ -121,12 +121,12 @@ class BackupTests(unittest.TestCase):
                 c.execute('CREATE TABLE activation_imports(sha256 TEXT,status TEXT)')
                 c.executemany('INSERT INTO activation_imports VALUES (?, ?)', [(h, 'complete') for h in hashes])
         (root / 'current').symlink_to('generations/current')
-        with mock.patch.object(backup.storage, 'active_users', side_effect=lambda p: p.name == 'open'):
+        with mock.patch.object(backup.os, 'geteuid', return_value=0), mock.patch.object(backup.storage, 'active_users', side_effect=lambda p: p.name == 'open'):
             result = backup.prune_activation_generations(root)
         self.assertEqual(result['removed'], ['old'])
         self.assertEqual(set(result['retained']), {'open', 'unique'})
         self.assertTrue((generations / 'current/activations.sqlite').exists())
-        with mock.patch.object(backup.storage, 'active_users', return_value=False):
+        with mock.patch.object(backup.os, 'geteuid', return_value=0), mock.patch.object(backup.storage, 'active_users', return_value=False):
             result = backup.prune_activation_generations(root)
         self.assertEqual(result['removed'], ['open'])
         self.assertEqual(result['retained'], ['unique'])

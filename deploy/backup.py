@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import shutil
 import sqlite3
+import sys
 import tarfile
 import tempfile
 from datetime import datetime, timezone, timedelta
@@ -142,6 +143,8 @@ def activation_read_locks(data):
 
 def prune_activation_generations(root):
     """Collect superseded copies only; preserve current, unique imports and readers."""
+    if os.geteuid() != 0:
+        raise RuntimeError('Activation retention requires root process visibility')
     removed, retained = [], []
     if not root.is_dir() or root.is_symlink():
         return {'removed': removed, 'retained': retained}
@@ -506,10 +509,6 @@ def run_backup(
             receipt = prune_nas_latest(nas, nas / name, local)
             record_validation(archive, checksum, {'status': receipt['status'], 'sha': receipt['release']})
             prune_backups(local)
-            if os.environ.get('MOBIUP_PRUNE_ACTIVATION_GENERATIONS') == '1':
-                for relative in ('activations', 'activations/digi'):
-                    result = prune_activation_generations(data / relative)
-                    print('Activation retention: ' + json.dumps(result), flush=True)
         else:
             prune_backups(nas)
     except (OSError, RuntimeError) as error:
@@ -522,6 +521,10 @@ def run_backup(
 
 
 if __name__ == '__main__':
+    if sys.argv[1:] == ['--prune-activation-generations']:
+        for relative in ('activations', 'activations/digi'):
+            print(json.dumps(prune_activation_generations(Path('/storage/comenzi-distributie') / relative)), flush=True)
+        raise SystemExit(0)
     if not os.environ.get('MOBIUP_SCRATCH_ROOT'):
         raise RuntimeError('MOBIUP_SCRATCH_ROOT must be configured outside permanent backup directories')
     configured = {name: os.environ.get('MOBIUP_RECOVERY_' + name.upper(), '') for name in ('runtime', 'resources', 'products')}
