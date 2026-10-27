@@ -33,6 +33,7 @@ python3 -W error::ResourceWarning tools/test_activations.py
 python3 -W error::ResourceWarning tools/test_activation_report.py
 node tools/test-activation-store.mjs
 node tools/test-sim-verification.mjs
+node tools/test-sim-verification-digi.mjs
 python3 tools/test_client_sales_history.py
 python3 tools/test_client_history_upload.py
 python3 -W error::ResourceWarning tools/test_history_revision_backup.py
