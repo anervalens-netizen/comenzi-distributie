@@ -32,6 +32,7 @@ node tools/test-activation-presentation.mjs
 python3 -W error::ResourceWarning tools/test_activations.py
 python3 -W error::ResourceWarning tools/test_activation_report.py
 node tools/test-activation-store.mjs
+node tools/test-sim-verification.mjs
 python3 tools/test_client_sales_history.py
 python3 tools/test_client_history_upload.py
 python3 -W error::ResourceWarning tools/test_history_revision_backup.py
@@ -97,6 +98,7 @@ node tools/test-interaction-offline.mjs
 node tools/test-usage.mjs
 node tools/test-usage-http.mjs
 node tools/test-activation-http.mjs
+node tools/test-sim-verification-http.mjs
 node tools/test-distribution-http.mjs
 node tools/test-client-api.mjs
 node tools/test-partner-map-health.mjs

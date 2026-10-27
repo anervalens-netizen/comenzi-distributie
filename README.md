@@ -316,3 +316,21 @@ attribution only in the national total, and never calculates commissions.
 This development module does not deploy or initialize production storage.
 
 Combined order exports contain only positive ordered quantities, split into up to three sheets matching the product groups. Empty groups are omitted. Every sheet has header filters with quantity greater than zero selected. Historical combined downloads are regenerated from the saved order snapshot. Mail subjects distinguish single-category orders from mixed orders; the body lists only the ordered groups and their quantities.
+
+## SIM verification
+
+Prepay → Verificare Sim is an authenticated exact-serial Vodafone lookup for all
+active managers and agents, independently of the activation pilot. It searches
+all imported periods and sellers across the two legal companies, exposing only
+seller/location, company, sale date and document number. Monthly, project and
+agent report filters do not constrain this explicit network lookup. Scanner
+Enter/Tab and manual submission are supported; changing the input cancels old
+results. Requests use POST so serials are not included in URLs or offline caches.
+
+The reader uses effective commercial movements and existing identity indexes,
+including unactivated SIMs. Recharge scratch cards are excluded even when the
+upstream item type is SIM. Same-day, unmatched, conflicting or multiple remaining
+sales are shown as requiring review; central-office movements are not store
+sales. Missing/unavailable sources fail explicitly instead of returning a
+negative match. Source dates are shown; absence applies to imported history.
+Digi reporting, activation eligibility and commission rules are unchanged.

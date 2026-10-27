@@ -6,6 +6,7 @@ import {bucharestReportingMonthKey} from '@/lib/bucharest-month';
 import type {SalesProduct,SalesView} from '@/lib/sales-types';
 import {managerCategoryLabels,managerCategoryRows,managerProductCategory,type ManagerProductCategory} from '@/lib/manager-sales-report';
 import {DistributionSalesCards,Metric} from './distribution-cards';
+import {SimVerificationPanel} from './sim-verification';
 import {ActivationsPanel} from './activations';
 import {ReportPeriod,periodLabel} from './report-period';
 import './manager-commerce.css';
@@ -70,10 +71,10 @@ export function ManagerPrepay({userId,query,scopeLabel,distributionConfigured,ca
   const month=controlledMonth??localMonth;
   function selectMonth(next:string){if(controlledMonth===undefined)setLocalMonth(next);onMonthChange?.(next);}
   const params=new URLSearchParams(query);if(!distributionConfigured)params.set('month',month);
-  const [view,setView]=useState<'sales'|'activations'>(!distributionConfigured&&canViewActivations?'activations':'sales'),{reload,refresh}=useSalesRefresh(),{data,error}=useReport(userId,params.toString(),reload,view==='sales');
+  const [view,setView]=useState<'sales'|'activations'|'verify'>(!distributionConfigured&&canViewActivations?'activations':'sales'),{reload,refresh}=useSalesRefresh(),{data,error}=useReport(userId,params.toString(),reload,view==='sales');
   return <div className="manager-commerce prepay-workspace"><div className="page-heading"><div><span className="eyebrow">VODAFONE + DIGI</span><h1>Prepay</h1><p>{scopeLabel}</p></div><button className="icon-button" aria-label="Actualizează Prepay" onClick={refresh}><RefreshCw size={18}/></button></div>
-    <nav className="commerce-tabs" aria-label="Prepay"><button type="button" aria-pressed={view==='sales'} onClick={()=>setView('sales')}>Vânzări</button>{canViewActivations&&<button type="button" aria-pressed={view==='activations'} onClick={()=>setView('activations')}>Activări</button>}</nav>
-    {view==='sales'||!canViewActivations?<>{!distributionConfigured&&<ReportPeriod label="Luna vânzărilor Prepay" selected={[month]} multiple={false} onChange={months=>selectMonth(months[0])}/>}<ReportStatus data={data} error={error}/>{data&&!error&&<>{data.distribution?<><DistributionSalesCards data={data.distribution}/><ProductDetails products={data.products.filter(product=>product.distributionGroup&&['vodafone_0','vodafone_3','vodafone_5','vodafone_credit','digi'].includes(product.distributionGroup))} label="Produse Prepay"/></>:<LegacyPrepaySales data={data}/>}<SalesCoverage data={data}/></>}</>:<ActivationsPanel refreshVersion={reload} embedded distributionConfigured={distributionConfigured} userId={userId} scopeQuery={query} scopeLabel={scopeLabel}/>}
+    <nav className="commerce-tabs" aria-label="Prepay"><button type="button" aria-pressed={view==='sales'} onClick={()=>setView('sales')}>Vânzări</button>{canViewActivations&&<button type="button" aria-pressed={view==='activations'} onClick={()=>setView('activations')}>Activări</button>}<button type="button" aria-pressed={view==='verify'} onClick={()=>setView('verify')}>Verificare Sim</button></nav>
+    {view==='verify'?<SimVerificationPanel key={userId+'|'+reload}/>:view==='sales'||!canViewActivations?<>{!distributionConfigured&&<ReportPeriod label="Luna vânzărilor Prepay" selected={[month]} multiple={false} onChange={months=>selectMonth(months[0])}/>}<ReportStatus data={data} error={error}/>{data&&!error&&<>{data.distribution?<><DistributionSalesCards data={data.distribution}/><ProductDetails products={data.products.filter(product=>product.distributionGroup&&['vodafone_0','vodafone_3','vodafone_5','vodafone_credit','digi'].includes(product.distributionGroup))} label="Produse Prepay"/></>:<LegacyPrepaySales data={data}/>}<SalesCoverage data={data}/></>}</>:<ActivationsPanel refreshVersion={reload} embedded distributionConfigured={distributionConfigured} userId={userId} scopeQuery={query} scopeLabel={scopeLabel}/>}
     {view==='sales'&&<p className="commerce-link-note"><ArrowRight size={15}/> Telefoanele și voucherele sunt în Accesorii → Telefoane & Prepay.</p>}
   </div>;
 }
