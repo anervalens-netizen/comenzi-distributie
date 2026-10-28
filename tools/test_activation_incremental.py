@@ -98,3 +98,28 @@ class JobIncrementalTests(unittest.TestCase):
             self.assertEqual(values[0][1]['DATE_OF_ACTIVATION'],'1904-03-02')
             write(style='0')
             with self.assertRaisesRegex(a.ImportError,'date style'):list(a.versions.operator_records(path,a.workbook))
+
+    def test_connected_identity_lookups_use_complete_index_keys(self):
+        # Without statistics SQLite can otherwise choose the opposite identity
+        # index and scan an entire company/provider for every touched identity.
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d); data=root/'data'; c=a.connect(data)
+            first=fixture(root/'one.xlsx',[row()])
+            second=fixture(root/'two.xlsx',[row(SiteCode='SITE-B')])
+            a.import_files(c,data,[first],operator='vodafone')
+            receipt=a.import_files(c,data,[second],operator='vodafone',source_at='2026-10-28',defer_rebuild=True)
+            statements=[]
+            c.set_trace_callback(statements.append)
+            c.execute('BEGIN IMMEDIATE');a.reconcile_imports(c,[receipt['files'][0]['import_id']]);c.commit()
+            c.set_trace_callback(None)
+            lookups=[q for q in statements if 'INDEXED BY' in q and q.startswith('SELECT')]
+            self.assertGreaterEqual(len(lookups),4)
+            observed=set()
+            for q in lookups:
+                if 'WHERE company=' not in q: continue
+                expected='serial' if ' AND serial=' in q else 'imei'
+                plan=' '.join(r[3] for r in c.execute('EXPLAIN QUERY PLAN '+q))
+                self.assertIn('company=? AND provider=? AND '+expected+'=?',plan,plan)
+                observed.add(('activation_effective_movements' if 'activation_effective_movements' in q else 'activation_movements',expected))
+            self.assertEqual(observed,{('activation_movements','serial'),('activation_movements','imei'),('activation_effective_movements','serial'),('activation_effective_movements','imei')})
+            c.close()

@@ -530,8 +530,8 @@ def reconcile_imports(c, import_ids):
             key=pending_i.pop()
             if key in imeis: continue
             imeis.add(key)
-            for table in ('activation_movements','activation_effective_movements'):
-                for serial,site in c.execute(f'SELECT DISTINCT serial,site FROM {table} WHERE company=? AND provider=? AND imei=?',key):
+            for table, index in (('activation_movements','activation_movements_identity'),('activation_effective_movements','effective_imei')):
+                for serial,site in c.execute(f'SELECT DISTINCT serial,site FROM {table} INDEXED BY {index} WHERE company=? AND provider=? AND imei=?',key):
                     if site: sites.add(site)
                     if serial and (key[0],key[1],serial) not in serials: pending_s.append((key[0],key[1],serial))
             if key[1]=='vodafone' and re.fullmatch(r'[0-9]{19}',key[2]):
@@ -540,13 +540,13 @@ def reconcile_imports(c, import_ids):
             key=pending_s.pop()
             if key in serials: continue
             serials.add(key)
-            for table in ('activation_movements','activation_effective_movements'):
-                for (imei,) in c.execute(f'SELECT DISTINCT imei FROM {table} WHERE company=? AND provider=? AND serial=?',key):
+            for table, index in (('activation_movements','activation_movements_serial'),('activation_effective_movements','effective_serial')):
+                for (imei,) in c.execute(f'SELECT DISTINCT imei FROM {table} INDEXED BY {index} WHERE company=? AND provider=? AND serial=?',key):
                     if (key[0],key[1],imei) not in imeis: pending_i.append((key[0],key[1],imei))
             if key[1]=='vodafone' and re.fullmatch(r'[0-9]{18}',key[2]):
                 for digit in '0123456789':
                     candidate=(key[0],key[1],key[2]+digit)
-                    if candidate not in imeis and c.execute('SELECT 1 FROM activation_movements WHERE company=? AND provider=? AND imei=? LIMIT 1',candidate).fetchone(): pending_i.append(candidate)
+                    if candidate not in imeis and c.execute('SELECT 1 FROM activation_movements INDEXED BY activation_movements_identity WHERE company=? AND provider=? AND imei=? LIMIT 1',candidate).fetchone(): pending_i.append(candidate)
     c.executemany('INSERT OR IGNORE INTO affected_imei VALUES(?,?,?)',imeis)
     c.executemany('INSERT OR IGNORE INTO affected_serial VALUES(?,?,?)',serials)
     if import_ids:
