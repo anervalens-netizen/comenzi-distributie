@@ -31,6 +31,8 @@ node tools/test-activation-access.mjs
 node tools/test-activation-presentation.mjs
 python3 -W error::ResourceWarning tools/test_activations.py
 python3 -W error::ResourceWarning tools/test_activation_report.py
+python3 -W error::ResourceWarning tools/test_activation_incremental.py
+python3 -W error::ResourceWarning tools/test_activation_report_incremental.py
 node tools/test-activation-store.mjs
 node tools/test-sim-verification.mjs
 node tools/test-sim-verification-digi.mjs
