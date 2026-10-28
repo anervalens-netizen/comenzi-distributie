@@ -51,7 +51,6 @@ class IncrementalTests(unittest.TestCase):
             rec(old)
             c.close()
 
-if __name__=='__main__': unittest.main()
 from unittest.mock import patch
 from activation_job import run_job
 from test_activations import digi_row
@@ -123,3 +122,5 @@ class JobIncrementalTests(unittest.TestCase):
                 observed.add(('activation_effective_movements' if 'activation_effective_movements' in q else 'activation_movements',expected))
             self.assertEqual(observed,{('activation_movements','serial'),('activation_movements','imei'),('activation_effective_movements','serial'),('activation_effective_movements','imei')})
             c.close()
+
+if __name__=='__main__': unittest.main()
