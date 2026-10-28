@@ -9,7 +9,7 @@ import shutil
 import sqlite3
 import uuid
 import activations
-from activation_report import build_report
+from activation_report import build_report, build_report_incremental, IncrementalReportUnavailable
 
 
 def run_job(directory,batches,rules=None,before_publish=None):
@@ -35,18 +35,40 @@ def run_job(directory,batches,rules=None,before_publish=None):
                         if p.is_symlink() or not p.is_file() or activations.digest(p)!=p.stem:raise ValueError('Invalid retained original')
                         os.link(p,stage/'activation-originals'/p.name)
             c=activations.connect(stage)
-            receipts=[]
+            receipts=[]; import_ids=[]; old_generation=None; delta=None
             try:
+                old=c.execute("SELECT value FROM activation_meta WHERE key='generation'").fetchone()
+                old_generation=old[0] if old else None
                 for batch in batches:
                     options=dict(batch);paths=[Path(p) for p in options.pop('files')]
-                    receipts.append(activations.import_files(c,stage,paths,**options))
-                # No-op jobs also migrate derived semantics in the staged copy.
-                if activations.facts_need_rebuild(c):
-                    activations.rebuild(c);c.commit()
+                    receipt=activations.import_files(c,stage,paths,defer_rebuild=True,**options)
+                    import_ids.extend(r['import_id'] for r in receipt['files'] if r['status']=='imported')
+                    receipts.append(receipt)
+                # The staged copy is private; commit all affected components as a
+                # single reconciliation after every source has been imported.
+                c.execute('BEGIN IMMEDIATE')
+                try:
+                    delta=activations.reconcile_imports(c,import_ids)
+                    c.commit()
+                except BaseException:
+                    c.rollback()
+                    raise
                 if c.execute('PRAGMA integrity_check').fetchone()[0]!='ok' or c.execute('PRAGMA foreign_key_check').fetchall():raise ValueError('Invalid ledger')
                 c.execute('PRAGMA wal_checkpoint(TRUNCATE)')
             finally:c.close()
-            report=build_report(stage,rules)
+            report_path=current/'activation-report.sqlite'
+            fallback=None
+            if delta['full'] or not report_path.is_file() or not old_generation:
+                fallback='full ledger reconciliation or no previous report'
+            else:
+                os.link(report_path,stage/'activation-report.sqlite')
+                try:
+                    report=build_report_incremental(stage,delta,old_generation,rules)
+                except IncrementalReportUnavailable as exc:
+                    fallback=str(exc)
+            if fallback:
+                report=build_report(stage,rules)
+                report['rebuildReason']=fallback
             if before_publish:before_publish(stage)
             for name in ['activations.sqlite','activation-report.sqlite']:
                 with (stage/name).open('rb') as f:os.fsync(f.fileno())

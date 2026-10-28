@@ -77,10 +77,39 @@ def xml_rows(archive, target, strings):
                         value = ''.join(n.text or '' for n in cell.findall('.//s:t', NS))
                     if cell.find('s:f', NS) is not None or kind == 'e':
                         raise ImportError('Formulas and Excel errors are not accepted')
-                    cells[col] = (value, kind)
+                    cells[col] = (value, kind, cell.get('s', '0'))
                 yield int(element.get('r')), cells
                 parents[-2].remove(element)
             parents.pop()
+
+
+def excel_date(value, date1904=False):
+    """Decode an integral Excel date without guessing dates, fractions or serials."""
+    if not re.fullmatch(r'[0-9]+(?:[.]0+)?', value):
+        raise ImportError('Invalid Excel activation date')
+    serial=int(float(value))
+    if (not date1904 and serial <= 0) or serial < 0 or serial > 2958465 or (not date1904 and serial == 60):
+        raise ImportError('Invalid Excel activation date')
+    base=dt.date(1904,1,1) if date1904 else dt.date(1899,12,31)
+    try:
+        return (base + dt.timedelta(days=serial - (1 if not date1904 and serial > 60 else 0))).isoformat()
+    except OverflowError:
+        raise ImportError('Invalid Excel activation date') from None
+
+
+def date_style_ids(archive):
+    """Return style indexes explicitly formatted as calendar dates."""
+    if 'xl/styles.xml' not in archive.namelist(): return set()
+    styles=ET.fromstring(archive.read('xl/styles.xml'))
+    custom={int(x.get('numFmtId')): x.get('formatCode','') for x in styles.findall('s:numFmts/s:numFmt',NS)}
+    result=set()
+    for index,xf in enumerate(styles.findall('s:cellXfs/s:xf',NS)):
+        fmt=int(xf.get('numFmtId','0'))
+        code=custom.get(fmt,'').lower()
+        code=re.sub(r'"[^"]*"|\\.|\[[^]]*\]', '', code)
+        if fmt in set(range(14,18)) | {22} | set(range(27,37)) | set(range(50,59)) or ('d' in code and ('y' in code or 'm' in code)):
+            result.add(str(index))
+    return result
 
 
 def workbook(path, *, sheet_name="SIM", required_headers=None, header_row=None):
@@ -102,6 +131,9 @@ def workbook(path, *, sheet_name="SIM", required_headers=None, header_row=None):
                         strings.append(''.join(t.text or '' for t in el.findall('.//s:t', NS)))
                         root.clear()
         book = ET.fromstring(archive.read('xl/workbook.xml'))
+        date_styles=date_style_ids(archive) if required_headers is not None else set()
+        props=book.find('s:workbookPr', NS)
+        date1904=props is not None and props.get('date1904','0').lower() in ('1','true')
         sheets = book.findall('s:sheets/s:sheet', NS)
         matches = [s for s in sheets if s.get('name') == sheet_name]
         if len(matches) != 1 or (sheet_name == 'SIM' and len(sheets) != 1):
@@ -131,6 +163,9 @@ def workbook(path, *, sheet_name="SIM", required_headers=None, header_row=None):
                 raw = {key: cells.get(i, ('', ''))[0] for i,key in enumerate(header,1)}
                 if not any(raw.values()): continue
                 for i,key in enumerate(header,1):
+                    if key == 'DATE_OF_ACTIVATION' and raw[key] and cells[i][1] == 'n':
+                        if cells[i][2] not in date_styles: raise ImportError('Numeric operator date lacks a date style')
+                        raw[key] = excel_date(raw[key], date1904)
                     if key == 'SerieText' and raw[key] and cells[i][1] not in ('s','inlineStr','str'):
                         raise ImportError('Numeric operator serial')
                 yield rn,raw
@@ -144,7 +179,10 @@ def workbook(path, *, sheet_name="SIM", required_headers=None, header_row=None):
                 continue
             if not digi and rn == 5:
                 header = [cells.get(i, ('', ''))[0] for i in range(1, 34)]
-                if len(set(header)) != 33 or set(header) != set(HEADERS):
+                present=[cells.get(i, ('', ''))[0] for i in range(1,len(cells)+1)]
+                if len(present)==len(DIGI_HEADERS) and set(present)==set(DIGI_HEADERS):
+                    header,digi=present,True
+                elif len(set(header)) != 33 or set(header) != set(HEADERS):
                     raise ImportError('Unexpected or duplicate headers')
                 continue
             if header is None:
@@ -199,6 +237,9 @@ CREATE TABLE IF NOT EXISTS activation_effective_movements(
  item_code TEXT NOT NULL, customer_key TEXT NOT NULL, quantity INTEGER, raw_json TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS effective_serial ON activation_effective_movements(company,provider,serial);
 CREATE INDEX IF NOT EXISTS effective_period ON activation_effective_movements(provider,movement_date,site);
+CREATE INDEX IF NOT EXISTS effective_imei ON activation_effective_movements(company,provider,imei);
+CREATE INDEX IF NOT EXISTS movement_site_agent ON activation_movements(site,is_tr,agent);
+CREATE INDEX IF NOT EXISTS facts_activation_date ON activation_facts(activation_date);
 
 '''
 
@@ -391,23 +432,34 @@ def facts_need_rebuild(c):
     return not version or version[0]!=versions.FACTS_VERSION or not c.execute("SELECT 1 FROM activation_meta WHERE key='generation'").fetchone()
 
 
-def rebuild(c, operator=None):
+def rebuild(c, operator=None, incremental=False):
     # A semantic migration must reconcile the entire ledger before certifying
     # its derived version, including no-op imports and old complete generations.
-    if facts_need_rebuild(c):operator=None
-    if operator is None:
+    if facts_need_rebuild(c):operator=None; incremental=False
+    if incremental:
+        c.execute('DELETE FROM activation_facts WHERE (company,provider,serial) IN (SELECT company,provider,serial FROM affected_serial)')
+        c.execute('DELETE FROM activation_effective_movements WHERE movement_id IN (SELECT e.movement_id FROM affected_imei a CROSS JOIN activation_effective_movements e ON e.company=a.company AND e.provider=a.provider AND e.imei=a.imei)')
+        c.execute("DELETE FROM activation_meta WHERE key IN (SELECT 'conflict:' || m.movement_key FROM affected_imei a CROSS JOIN activation_movements m ON m.company=a.company AND m.provider=a.provider AND m.imei=a.imei)")
+    elif operator is None:
         c.execute('DELETE FROM activation_facts')
     else:
         c.execute('DELETE FROM activation_facts WHERE provider=?', (operator,))
-    c.execute('DELETE FROM activation_effective_movements' + (' WHERE provider=?' if operator else ''), (operator,) if operator else ())
-    c.execute("DELETE FROM activation_meta WHERE key LIKE 'conflict:%'")
+    if not incremental:
+        c.execute('DELETE FROM activation_effective_movements' + (' WHERE provider=?' if operator else ''), (operator,) if operator else ())
+        c.execute("DELETE FROM activation_meta WHERE key LIKE 'conflict:%'")
     official = collections.defaultdict(list)
-    for o in c.execute("SELECT o.*,i.source_at FROM activation_observations o JOIN activation_imports i ON i.id=o.import_id WHERE i.status='complete'"):
+    if incremental:
+        observation_query = "SELECT o.*,i.source_at FROM affected_serial s CROSS JOIN activation_observations o ON o.company=s.company AND o.provider=s.provider AND o.serial=s.serial JOIN activation_imports i ON i.id=o.import_id WHERE i.status='complete'"
+        digi_query = "SELECT o.movement_id FROM affected_imei a CROSS JOIN activation_movements m ON m.company=a.company AND m.provider=a.provider AND m.imei=a.imei JOIN activation_occurrences o ON o.movement_id=m.id WHERE m.provider='digi' GROUP BY o.import_id,o.movement_id HAVING COUNT(*)>1"
+        query = "SELECT m.*,COALESCE(MAX(i.source_at),'') source_at FROM affected_imei a CROSS JOIN activation_movements m ON m.company=a.company AND m.provider=a.provider AND m.imei=a.imei JOIN activation_occurrences o ON o.movement_id=m.id JOIN activation_imports i ON i.id=o.import_id GROUP BY m.id ORDER BY m.company,m.provider,m.imei,m.id"
+    else:
+        observation_query = "SELECT o.*,i.source_at FROM activation_observations o JOIN activation_imports i ON i.id=o.import_id WHERE i.status='complete'"
+        digi_query = "SELECT o.movement_id FROM activation_occurrences o JOIN activation_movements m ON m.id=o.movement_id WHERE m.provider='digi' GROUP BY o.import_id,o.movement_id HAVING COUNT(*)>1"
+        query = "SELECT m.*,COALESCE(MAX(i.source_at),'') source_at FROM activation_movements m JOIN activation_occurrences o ON o.movement_id=m.id JOIN activation_imports i ON i.id=o.import_id" + (' WHERE m.provider=?' if operator else '') + ' GROUP BY m.id ORDER BY m.company,m.provider,m.imei,m.id'
+    for o in c.execute(observation_query):
         official[(o['company'],o['provider'],o['serial'])].append(dict(serial=o['serial'],activation_date=o['activation_date'],county=o['county'],handset=o['handset'],priority=1,source_at=o['source_at'],ref={'importId':o['import_id'],'row':o['source_row']}))
     used=set()
-    repeated_digi = {r[0] for r in c.execute("SELECT o.movement_id FROM activation_occurrences o JOIN activation_movements m ON m.id=o.movement_id WHERE m.provider='digi' GROUP BY o.import_id,o.movement_id HAVING COUNT(*)>1")}
-    query="SELECT m.*,COALESCE(MAX(i.source_at),'') source_at FROM activation_movements m JOIN activation_occurrences o ON o.movement_id=m.id JOIN activation_imports i ON i.id=o.import_id"
-    query+=(' WHERE m.provider=?' if operator else '')+' GROUP BY m.id ORDER BY m.company,m.provider,m.imei,m.id'
+    repeated_digi = {r[0] for r in c.execute(digi_query)}
     cursor=c.execute(query,(operator,) if operator else ())
     for identity,group in itertools.groupby(cursor,key=lambda r:(r['company'],r['provider'],r['imei'])):
         rows,conflicts=versions.effective([dict(r) for r in group])
@@ -453,6 +505,55 @@ def rebuild(c, operator=None):
     c.execute("INSERT OR REPLACE INTO activation_meta VALUES('facts_version',?)",(versions.FACTS_VERSION,))
 
 
+def reconcile_imports(c, import_ids):
+    """Rebuild the complete connected components touched by new immutable evidence.
+
+    The old effective rows remain available until closure has been computed. The
+    closure includes all raw versions, previous effective rows, and Vodafone's
+    explicit IMEI-to-operator-observation lookup. Absence from an export is not
+    a deletion. All changes and the generation marker commit together.
+    """
+    if facts_need_rebuild(c):
+        rebuild(c)
+        return {'full': True, 'serials': set(), 'imeis': set(), 'sites': set()}
+    c.execute('CREATE TEMP TABLE IF NOT EXISTS affected_imei(company TEXT,provider TEXT,imei TEXT,PRIMARY KEY(company,provider,imei)) WITHOUT ROWID')
+    c.execute('CREATE TEMP TABLE IF NOT EXISTS affected_serial(company TEXT,provider TEXT,serial TEXT,PRIMARY KEY(company,provider,serial)) WITHOUT ROWID')
+    c.execute('DELETE FROM affected_imei'); c.execute('DELETE FROM affected_serial')
+    for batch in import_ids:
+        c.execute('INSERT OR IGNORE INTO affected_imei SELECT DISTINCT m.company,m.provider,m.imei FROM activation_movements m JOIN activation_occurrences o ON o.movement_id=m.id WHERE o.import_id=?', (batch,))
+        c.execute("INSERT OR IGNORE INTO affected_serial SELECT DISTINCT company,provider,serial FROM activation_observations WHERE import_id=? AND serial<>''", (batch,))
+    imeis=set(); serials=set(); sites=set()
+    pending_i=list(map(tuple,c.execute('SELECT * FROM affected_imei')))
+    pending_s=list(map(tuple,c.execute('SELECT * FROM affected_serial')))
+    while pending_i or pending_s:
+        while pending_i:
+            key=pending_i.pop()
+            if key in imeis: continue
+            imeis.add(key)
+            for table in ('activation_movements','activation_effective_movements'):
+                for serial,site in c.execute(f'SELECT DISTINCT serial,site FROM {table} WHERE company=? AND provider=? AND imei=?',key):
+                    if site: sites.add(site)
+                    if serial and (key[0],key[1],serial) not in serials: pending_s.append((key[0],key[1],serial))
+            if key[1]=='vodafone' and re.fullmatch(r'[0-9]{19}',key[2]):
+                pending_s.append((key[0],key[1],key[2][:-1]))
+        while pending_s:
+            key=pending_s.pop()
+            if key in serials: continue
+            serials.add(key)
+            for table in ('activation_movements','activation_effective_movements'):
+                for (imei,) in c.execute(f'SELECT DISTINCT imei FROM {table} WHERE company=? AND provider=? AND serial=?',key):
+                    if (key[0],key[1],imei) not in imeis: pending_i.append((key[0],key[1],imei))
+            if key[1]=='vodafone' and re.fullmatch(r'[0-9]{18}',key[2]):
+                for digit in '0123456789':
+                    candidate=(key[0],key[1],key[2]+digit)
+                    if candidate not in imeis and c.execute('SELECT 1 FROM activation_movements WHERE company=? AND provider=? AND imei=? LIMIT 1',candidate).fetchone(): pending_i.append(candidate)
+    c.executemany('INSERT OR IGNORE INTO affected_imei VALUES(?,?,?)',imeis)
+    c.executemany('INSERT OR IGNORE INTO affected_serial VALUES(?,?,?)',serials)
+    if import_ids:
+        rebuild(c, incremental=True)
+    return {'full': False, 'serials': serials, 'imeis': imeis, 'sites': sites}
+
+
 def summary(c):
     return {
         'imports': c.execute("SELECT COUNT(*) FROM activation_imports WHERE status='complete'").fetchone()[0],
@@ -477,7 +578,7 @@ def import_files(c, directory, paths, **options):
         return _import_files(c, directory, paths, **options)
 
 
-def _import_files(c, directory, paths, *, operator, nominal_period='', site_aliases=None, source_kind='internal', source_at='', period_start='', period_end='', company=''):
+def _import_files(c, directory, paths, *, operator, nominal_period='', site_aliases=None, source_kind='internal', source_at='', period_start='', period_end='', company='', defer_rebuild=False):
     if not re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,63}', operator):
         raise ImportError('Explicit stable operator namespace required')
     if source_kind not in ('internal','operator') or (source_kind=='operator' and (operator!='vodafone' or not company)):
@@ -554,14 +655,14 @@ def _import_files(c, directory, paths, *, operator, nominal_period='', site_alia
                     c.execute('INSERT INTO activation_occurrences VALUES(?,?,?)', (batch, rn, movement))
                     count += 1
                 c.execute("UPDATE activation_imports SET status='complete',row_count=? WHERE id=?", (count, batch))
-                results.append({'status': 'imported', 'sha256': sha, 'rows': count})
-        if any(r['status'] == 'imported' for r in results) or facts_need_rebuild(c):
+                results.append({'status': 'imported', 'sha256': sha, 'rows': count, 'import_id': batch})
+        if not defer_rebuild and (any(r['status'] == 'imported' for r in results) or facts_need_rebuild(c)):
             rebuild(c, operator)
         c.commit()
     except BaseException:
         c.rollback()
         raise
-    return {'files': results, **summary(c)}
+    return {'files': results} if defer_rebuild else {'files': results, **summary(c)}
 
 
 def main():

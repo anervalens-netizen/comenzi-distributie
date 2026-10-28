@@ -34,8 +34,18 @@ def build_details(source,target):
         item_code TEXT NOT NULL,distribution_month TEXT NOT NULL,distribution_date TEXT NOT NULL,activated INTEGER NOT NULL);
       CREATE INDEX cohort_scope ON cohorts(provider,distribution_month,site,item_code);
     ''')
+    insert_details(source,target)
+    target.executescript('''CREATE INDEX detail_company_scope ON details(provider,company,client_code,is_tr,month,site,activation_date);
+      CREATE TABLE dimension_monthly AS SELECT provider,month,site,item_type,county,handset,contradictory,is_tr,COUNT(*) count,MAX(activation_date) last_date FROM details GROUP BY provider,month,site,item_type,county,handset,contradictory,is_tr;
+      CREATE INDEX dimension_scope ON dimension_monthly(provider,site,month);
+      CREATE INDEX dimension_month ON dimension_monthly(provider,month);''')
+    # Cohorts include unactivated SIMs; retain only a sole net-positive TR survivor after exact returns.
+    insert_cohorts(source,target)
+
+
+def insert_details(source,target,where='',params=()):
     source.row_factory=__import__('sqlite3').Row
-    for f in source.execute('SELECT f.*,EXISTS(SELECT 1 FROM activation_effective_movements m WHERE m.company=f.company AND m.provider=f.provider AND m.serial=f.serial AND m.is_tr=1) is_tr FROM activation_facts f'):
+    for f in source.execute('SELECT f.*,EXISTS(SELECT 1 FROM activation_effective_movements m WHERE m.company=f.company AND m.provider=f.provider AND m.serial=f.serial AND m.is_tr=1) is_tr FROM activation_facts f' + where, params):
         evidence=json.loads(f['evidence_json']);observation=evidence.get('observation',{})
         remaining=evidence.get('remainingSaleIds',[])
         m=source.execute('SELECT * FROM activation_movements WHERE id=?',(remaining[0],)).fetchone() if len(remaining)==1 else None
@@ -48,14 +58,13 @@ def build_details(source,target):
             f=dict(f);f['is_tr']=0
         contradictory=any(r in json.loads(f['reasons']) for r in ('county_conflict','handset_conflict','activation_date_conflict','serial_conflict','serial_identity_conflict','conflicting_imei_for_serial'))
         target.execute('INSERT INTO details VALUES('+','.join('?'*20)+')',(ident,f['company'],f['provider'],f['serial'],f['activation_date'],f['month'],f['candidate_site'] or '',f['item_type'] or 'OTHER',f['item_code'] or '',observation.get('county',''),observation.get('handset',''),int(contradictory),point_key,client,point,raw.get('Denumire Client','') or ('Partener generic / persoane fizice' if client=='CLIENTGEN' else 'Punct de verificat'),m['movement_date'] if m else None,f['status'],f['reasons'],f['is_tr']))
-    target.executescript('''CREATE INDEX detail_company_scope ON details(provider,company,client_code,is_tr,month,site,activation_date);
-      CREATE TABLE dimension_monthly AS SELECT provider,month,site,item_type,county,handset,contradictory,is_tr,COUNT(*) count,MAX(activation_date) last_date FROM details GROUP BY provider,month,site,item_type,county,handset,contradictory,is_tr;
-      CREATE INDEX dimension_scope ON dimension_monthly(provider,site,month);
-      CREATE INDEX dimension_month ON dimension_monthly(provider,month);''')
-    # Cohorts include unactivated SIMs; retain only a sole net-positive TR survivor after exact returns.
-    query='SELECT * FROM activation_effective_movements ORDER BY company,provider,imei,movement_id'
+
+
+def insert_cohorts(source,target,where='',params=()):
+    source.row_factory=__import__('sqlite3').Row
+    query='SELECT * FROM activation_effective_movements' + where + ' ORDER BY company,provider,imei,movement_id'
     import itertools
-    for _,group in itertools.groupby(source.execute(query),key=lambda r:(r['company'],r['provider'],r['imei'])):
+    for _,group in itertools.groupby(source.execute(query, params),key=lambda r:(r['company'],r['provider'],r['imei'])):
         rows=list(group);outstanding=[];invalid=False
         for candidate in rows:
             original=source.execute('SELECT issues,movement_key FROM activation_movements WHERE id=?',(candidate['movement_id'],)).fetchone()
