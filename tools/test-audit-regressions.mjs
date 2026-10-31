@@ -112,11 +112,16 @@ try {
   for(const mutation of ['password','deactivate','profile']){
     db.prepare('UPDATE users SET active=1,password_hash=?,profile_revision=profile_revision+1 WHERE id=?').run(hash,'reg-race');
     db.prepare('DELETE FROM login_attempts WHERE key=?').run('account:reg-race');
-    const pending=fetch(`${origin}/api/auth/login`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:'reg-race',password})});
+    let settled=false,settledStatus,requestError;
+    const pending=fetch(`${origin}/api/auth/login`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:'reg-race',password})}).then(response=>{settled=true;settledStatus=response.status;return response;},error=>{settled=true;requestError=error;return null;});
     let started=false;
-    for(let i=0;i<100;i++){if(db.prepare('SELECT 1 FROM login_attempts WHERE key=?').get('account:reg-race')){started=true;break;}await sleep(2);}
-    check(started,`${mutation}: login reached password verification`);
+    // Request admission may be delayed on a busy CI host. Observe the SQL
+    // signal within a deadline, and refuse to race a request already completed.
+    const deadline=Date.now()+5000;
+    while(Date.now()<deadline&&!settled){if(db.prepare('SELECT 1 FROM login_attempts WHERE key=?').get('account:reg-race')){started=true;break;}await sleep(5);}
+    check(started&&!settled,`${mutation}: login reached password verification while in flight (status=${settledStatus??'pending'}, error=${requestError?.message??'none'})`);
     await sleep(10);
+    check(!settled,`${mutation}: login remains in flight before revocation (status=${settledStatus??'pending'})`);
     db.exec('BEGIN IMMEDIATE');
     db.prepare('DELETE FROM sessions WHERE user_id=?').run('reg-race');
     if(mutation==='password')db.prepare('UPDATE users SET password_hash=?,profile_revision=profile_revision+1 WHERE id=?').run(hash.replace('scrypt:','scrypt:changed'),'reg-race');
