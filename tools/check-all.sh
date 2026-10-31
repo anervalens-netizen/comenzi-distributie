@@ -20,6 +20,7 @@ node tools/test-operational-status.mjs
 node tools/test-distribution-rules.mjs
 python3 -W error::ResourceWarning tools/test_distribution_configure.py
 python3 -W error::ResourceWarning tools/test_activation_versions.py
+python3 -W error::ResourceWarning tools/test_digi_operator.py
 python3 -W error::ResourceWarning tools/test_activation_job.py
 node tools/test-distribution-sales.mjs
 node tools/test-manager-commerce.mjs

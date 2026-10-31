@@ -156,6 +156,7 @@ def workbook(path, *, sheet_name="SIM", required_headers=None, header_row=None):
                 if rn < header_row: continue
                 if rn == header_row:
                     header = [cells.get(i, ('', ''))[0] for i in range(1, len(cells)+1)]
+                    while header and not header[-1]: header.pop()
                     if len(set(header)) != len(header) or not set(required_headers).issubset(header):
                         raise ImportError('Unexpected operator headers')
                     continue
@@ -163,10 +164,10 @@ def workbook(path, *, sheet_name="SIM", required_headers=None, header_row=None):
                 raw = {key: cells.get(i, ('', ''))[0] for i,key in enumerate(header,1)}
                 if not any(raw.values()): continue
                 for i,key in enumerate(header,1):
-                    if key == 'DATE_OF_ACTIVATION' and raw[key] and cells[i][1] == 'n':
+                    if key in ('DATE_OF_ACTIVATION','Data activare') and raw[key] and cells[i][1] == 'n':
                         if cells[i][2] not in date_styles: raise ImportError('Numeric operator date lacks a date style')
                         raw[key] = excel_date(raw[key], date1904)
-                    if key == 'SerieText' and raw[key] and cells[i][1] not in ('s','inlineStr','str'):
+                    if key in ('SerieText','Seria SIM (iccid)') and raw[key] and cells[i][1] not in ('s','inlineStr','str'):
                         raise ImportError('Numeric operator serial')
                 yield rn,raw
                 continue
@@ -467,6 +468,8 @@ def rebuild(c, operator=None, incremental=False):
         company,provider,imei=identity
         # Explicit operator observation supplies the activation, never an IMEI truncation alone.
         serial_keys={o['serial'] for r in rows for o in r['observations'] if o['serial']}
+        if provider=='digi' and re.fullmatch(r'[0-9]{19}',imei) and all(r['item_type']=='SIM' for r in rows):
+            serial_keys.add(imei)
         if provider=='vodafone' and re.fullmatch(r'[0-9]{19}',imei) and all(r['item_type']=='SIM' for r in rows):
             serial_keys.add(imei[:-1])
         external=[]
@@ -534,6 +537,8 @@ def reconcile_imports(c, import_ids):
                 for serial,site in c.execute(f'SELECT DISTINCT serial,site FROM {table} INDEXED BY {index} WHERE company=? AND provider=? AND imei=?',key):
                     if site: sites.add(site)
                     if serial and (key[0],key[1],serial) not in serials: pending_s.append((key[0],key[1],serial))
+            if key[1]=='digi' and re.fullmatch(r'[0-9]{19}',key[2]):
+                pending_s.append(key)
             if key[1]=='vodafone' and re.fullmatch(r'[0-9]{19}',key[2]):
                 pending_s.append((key[0],key[1],key[2][:-1]))
         while pending_s:
@@ -543,6 +548,8 @@ def reconcile_imports(c, import_ids):
             for table, index in (('activation_movements','activation_movements_serial'),('activation_effective_movements','effective_serial')):
                 for (imei,) in c.execute(f'SELECT DISTINCT imei FROM {table} INDEXED BY {index} WHERE company=? AND provider=? AND serial=?',key):
                     if (key[0],key[1],imei) not in imeis: pending_i.append((key[0],key[1],imei))
+            if key[1]=='digi' and re.fullmatch(r'[0-9]{19}',key[2]):
+                if key not in imeis and c.execute('SELECT 1 FROM activation_movements INDEXED BY activation_movements_identity WHERE company=? AND provider=? AND imei=? LIMIT 1',key).fetchone(): pending_i.append(key)
             if key[1]=='vodafone' and re.fullmatch(r'[0-9]{18}',key[2]):
                 for digit in '0123456789':
                     candidate=(key[0],key[1],key[2]+digit)
@@ -581,8 +588,8 @@ def import_files(c, directory, paths, **options):
 def _import_files(c, directory, paths, *, operator, nominal_period='', site_aliases=None, source_kind='internal', source_at='', period_start='', period_end='', company='', defer_rebuild=False):
     if not re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,63}', operator):
         raise ImportError('Explicit stable operator namespace required')
-    if source_kind not in ('internal','operator') or (source_kind=='operator' and (operator!='vodafone' or not company)):
-        raise ImportError('Operator source requires explicit Vodafone company')
+    if source_kind not in ('internal','operator') or (source_kind=='operator' and (operator not in ('vodafone','digi') or not company)):
+        raise ImportError('Operator source requires explicit supported provider and company')
     for value in (source_at,period_start,period_end):
         if value: dt.date.fromisoformat(value)
     if period_start and period_end and period_start>period_end:raise ImportError('Invalid declared period')
@@ -642,10 +649,12 @@ def _import_files(c, directory, paths, *, operator, nominal_period='', site_alia
                                   (sha, source.name, operator, nominal_period, VERSION, dt.datetime.now(dt.timezone.utc).isoformat())).lastrowid
                 c.execute('UPDATE activation_imports SET source_kind=?,source_at=?,period_start=?,period_end=?,company=? WHERE id=?',(source_kind,source_at,period_start,period_end,company,batch))
                 count = 0
-                records = versions.operator_records(Path(staged.name),workbook) if source_kind=='operator' else workbook(staged.name)
+                records = versions.operator_records(Path(staged.name),workbook,operator) if source_kind=='operator' else workbook(staged.name)
                 for rn, raw in records:
                     if source_kind=='operator':
-                        serial,ad,county,handset=versions.operator_values(raw)
+                        serial,ad,county,handset=versions.operator_values(raw,operator,company)
+                        if operator=='digi' and ((period_start and ad<period_start) or (period_end and ad>period_end) or (source_at and ad>source_at)):
+                            raise ImportError('Digi activation outside declared period')
                         c.execute('INSERT INTO activation_observations VALUES(?,?,?,?,?,?,?,?,?)',(batch,rn,company,operator,serial,ad,county,handset,dump(raw)))
                         count+=1
                         continue

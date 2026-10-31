@@ -77,17 +77,28 @@ def apply_observations(rows, official):
     return selected,refs,conflicts
 
 
-def operator_records(path, workbook_reader):
+def operator_records(path, workbook_reader, provider='vodafone'):
     if path.suffixes[-2:]==['.json','.gz']:
         with gzip.open(path,'rt',encoding='utf-8') as f:
             records=json.load(f)
         if not isinstance(records,list) or len(records)>1_000_000:raise ValueError('Invalid operator extraction')
         for i,r in enumerate(records,1):yield i,r
+    elif provider=='digi':
+        yield from workbook_reader(path,sheet_name='activari',required_headers=['Distribuitor','Seria SIM (iccid)','Data activare'],header_row=1)
     else:
         yield from workbook_reader(path,sheet_name='Detailed SIM',required_headers=['SerieText','DATE_OF_ACTIVATION','COUNTY_OF_ACTIVATION','Paid SIM Category'],header_row=1)
 
 
-def operator_values(raw):
+def operator_values(raw, provider='vodafone', company=''):
+    if provider=='digi':
+        serial=raw.get('Seria SIM (iccid)','')
+        if not isinstance(serial,str) or not re.fullmatch(r'[0-9]{19}',serial):raise ValueError('Invalid Digi operator serial text')
+        distributor=raw.get('Distribuitor','')
+        if not company or not isinstance(distributor,str) or distributor.casefold()!=company.casefold():raise ValueError('Digi distributor does not match explicit company')
+        value=raw.get('Data activare','')
+        try:activation_date=dt.date.fromisoformat(value).isoformat()
+        except (ValueError,TypeError):raise ValueError('Invalid Digi activation date') from None
+        return serial,activation_date,'',''
     serial=raw.get('SerieText','')
     # Excel's explicit text marker is a source encoding, not a digit to trim. Raw provenance is retained.
     if isinstance(serial,str) and re.fullmatch(r"'[0-9]{18}",serial):serial=serial[1:]
