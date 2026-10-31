@@ -181,6 +181,24 @@ category of `-` is explicit noncommissionable evidence, not a missing value.
 
 All managers can view national activity, partners, orders, stock, inventory and sales, with region and agent filters. Regional assignments still govern account changes and order writes. Transfer managers retain national write access. Operational order and transfer mutations revalidate the current account, exact session and applicable scope in the SQL mutation, after asynchronous preparation. Managers change their own password from their profile; regional managers reset assigned agents' passwords under Team → Passwords and accounts (the default subtab). Regional managers cannot change other regions' accounts or manager assignments.
 
+Stock and sales imports revalidate the exact manager session at persistence.
+History import jobs remain revocable until their data commit; completed work is
+preserved. A denied job cannot change active facts. A content-addressed source or
+projection manifest created before revocation may remain under existing archive
+retention, without becoming active report data. Login limits reserve the IP
+allowance before consuming account attempts and delete expired keys in bounded
+batches. Agents can see the stock import date in Europe/Bucharest; the import
+filename remains in the manager presentation.
+
+Recurring SIM installations can configure `MOBIUP_RECOVERY_AUTOMATION` alongside
+the three existing full-recovery roots. An explicit `recovery-files.json`
+allowlist includes only the small automation payload in the existing archive.
+Backup and restore validate the required provider tooling contract, file hashes,
+chronology policy and matching runtime release. Missing or incompatible tooling
+must stop the private runner. Relative tooling paths support isolated recovery;
+restoring never starts the runner or a service. Install the matching
+`sim_tooling.py` helper with backup/restore and include it in the runtime.
+
 ## Lucru mobil și offline
 
 Datele consultate și ciornele se păstrează automat pe dispozitiv, fără activare manuală. Aplicația nu descarcă preventiv întregul portofoliu; fără conexiune sunt disponibile doar datele deja păstrate local. Fundalul hărții necesită conexiune.

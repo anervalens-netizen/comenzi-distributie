@@ -166,6 +166,89 @@ class RecoveryTests(unittest.TestCase):
         for name, expected in manifest['files'].items():
             self.assertEqual(backup.digest(self.root/'restored'/name),expected)
         self.assertEqual((self.root/'restored').stat().st_mode & 0o777,0o700)
+
+    def automation_fixture(self):
+        automation = self.root / 'automation'; automation.mkdir()
+        selected = automation / 'tooling/reviewed'; selected.mkdir(parents=True)
+        (selected / 'activations.py').write_text("CHRONOLOGY_POLICY_VERSION = 'positive-documents-nonblocking-v1'\n")
+        (selected / 'activation_versions.py').write_text("FACTS_VERSION = '2'\n")
+        (automation / 'run_import.py').write_bytes(b"TOOLING_CONTRACT = 'sim-chronology-v1'\n# synthetic runner\n")
+        (automation / 'receipts').mkdir()
+        (automation / 'receipts/example.json').write_bytes(b'{"status":"synthetic"}\n')
+        (automation / 'encrypted-originals').mkdir()
+        (automation / 'encrypted-originals/example.bin').write_bytes(b'synthetic encrypted original')
+        # Large or irrelevant trees are never enumerated into the archive.
+        (automation / 'release').mkdir(); (automation / 'release/excluded.tar.gz').write_bytes(b'exclude release')
+        config = {'schema': 1, 'contract': 'sim-chronology-v1'}
+        for provider in ('vodafone', 'digi'):
+            config[provider] = {'path': 'tooling/reviewed', 'compatibleRuntime': 'a' * 40,
+                                'files': {name: backup.digest(selected / name) for name in ('activations.py', 'activation_versions.py')}}
+        (automation / 'provider-tooling.json').write_text(json.dumps(config))
+        files = ['run_import.py', 'provider-tooling.json', 'tooling/reviewed/activations.py', 'tooling/reviewed/activation_versions.py']
+        (automation / 'recovery-files.json').write_text(json.dumps({'schema': 1, 'contract': 'sim-chronology-v1', 'files': files,
+                                                                   'runnerSha256': backup.digest(automation / 'run_import.py'),
+                                                                   'optionalDirectories': ['receipts', 'encrypted-originals']}))
+        self.kwargs['recovery']['automation'] = automation
+        return automation
+
+    def test_automation_roundtrip_preserves_bytes_and_selects_relocated_tooling(self):
+        automation = self.automation_fixture()
+        archive = self.make_backup()
+        restored = self.root / 'automation-restored'
+        result = recovery.restore(archive, restored)
+        recovered = restored / 'recovery/automation'
+        selected, selections = backup.sim_tooling.recovery_files(recovered, restored / 'recovery/runtime')
+        for name in selected:
+            self.assertEqual((recovered / name).read_bytes(), (automation / name).read_bytes())
+        self.assertEqual(result['automationTooling'], selections)
+        for provider in ('vodafone', 'digi'):
+            actual = backup.sim_tooling.provider_tooling(recovered, provider, restored / 'recovery/runtime')
+            self.assertEqual(Path(actual['path']), recovered / 'tooling/reviewed')
+        self.assertFalse((recovered / 'release').exists())
+        (recovered / 'provider-tooling.json').unlink()
+        with self.assertRaises(FileNotFoundError):
+            backup.sim_tooling.provider_tooling(recovered, 'digi', restored / 'recovery/runtime')
+
+    def test_automation_missing_config_is_not_replaced_by_legacy_config(self):
+        automation = self.automation_fixture()
+        (automation / 'provider-tooling.json').rename(automation / 'digi-tooling.json')
+        with self.assertRaises(FileNotFoundError): self.make_backup()
+
+    def test_automation_restore_rejects_missing_config_even_with_matching_manifest(self):
+        self.automation_fixture()
+        def omit(files):
+            name = 'recovery/automation/provider-tooling.json'; del files[name]
+            manifest = json.loads(files['recovery/manifest.json']); del manifest['files'][name]
+            files['recovery/manifest.json'] = json.dumps(manifest).encode()
+        self.assert_restore_rejected(self.rewrite_archive(omit), 'provider-tooling.json')
+
+    def test_automation_backup_rejects_unselected_tooling_and_budget_overflow(self):
+        automation = self.automation_fixture()
+        policy = automation / 'recovery-files.json'; content = json.loads(policy.read_text())
+        content['files'].remove('tooling/reviewed/activations.py'); policy.write_text(json.dumps(content))
+        with self.assertRaisesRegex(ValueError, 'not selected'): self.make_backup()
+        content['files'].append('tooling/reviewed/activations.py'); policy.write_text(json.dumps(content))
+        with (automation / 'receipts/oversized.json').open('wb') as output: output.truncate(16 * 1024**2)
+        with self.assertRaisesRegex(ValueError, '16 MiB'): self.make_backup()
+
+    def test_automation_restore_rejects_changed_selection_metadata(self):
+        self.automation_fixture()
+        def change(files):
+            manifest = json.loads(files['recovery/manifest.json'])
+            manifest['automation']['providers']['digi']['path'] = 'tooling/older'
+            files['recovery/manifest.json'] = json.dumps(manifest).encode()
+        self.assert_restore_rejected(self.rewrite_archive(change), 'selection mismatch')
+
+    def test_automation_runner_identity_is_explicitly_pinned(self):
+        automation = self.automation_fixture()
+        (automation / 'run_import.py').write_bytes(b'# stale synthetic runner\n')
+        with self.assertRaisesRegex(ValueError, 'runner contract or checksum'): self.make_backup()
+
+    def test_automation_directory_entry_limit_includes_empty_directories(self):
+        automation = self.automation_fixture()
+        receipts = automation / 'receipts'
+        for index in range(1001): (receipts / str(index)).mkdir()
+        with self.assertRaisesRegex(ValueError, '1000 entries'): self.make_backup()
     def test_customer_history_roundtrip(self):
         root=self.data/'client-history';(root/'client-sales-originals').mkdir(parents=True)
         original=root/'client-sales-originals/example.xlsx';original.write_bytes(b'synthetic historical source')

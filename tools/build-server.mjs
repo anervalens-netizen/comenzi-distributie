@@ -10,6 +10,7 @@ copyFileSync('deploy/server.mjs','dist/standalone/server.js');
 copyFileSync('deploy/bind-ready.mjs','dist/standalone/bind-ready.mjs');
 copyFileSync('deploy/error-reporting.mjs','dist/standalone/error-reporting.mjs');
 copyFileSync('deploy/backend-frame-identity.mjs','dist/standalone/backend-frame-identity.mjs');
+copyFileSync('deploy/sim_tooling.py','dist/standalone/sim_tooling.py');
 await build({entryPoints:['lib/sales-parser-worker.ts'],outfile:'dist/standalone/sales-parser-worker.mjs',bundle:true,platform:'node',format:'esm',packages:'external',sourcemap:'external'});
 await build({entryPoints:['lib/sales-view-worker.ts'],outfile:'dist/standalone/sales-view-worker.mjs',bundle:true,platform:'node',format:'esm',packages:'external',sourcemap:'external'});
 await build({entryPoints:['lib/stock-parser-worker.ts'],outfile:'dist/standalone/stock-parser-worker.mjs',bundle:true,platform:'node',format:'esm',packages:'external',sourcemap:'external'});

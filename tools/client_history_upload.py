@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Cumulative monthly uploads. Private inputs stay outside the source repository."""
-import calendar, collections, datetime as dt, fcntl, hashlib, json, os, pathlib, sqlite3, sys, zipfile
+import calendar, collections, datetime as dt, fcntl, hashlib, json, os, pathlib, sqlite3, sys, time, zipfile
 from zoneinfo import ZoneInfo
 import client_sales_history as h
 
@@ -161,6 +161,25 @@ def sync_directory(path):
  try:os.fsync(fd)
  finally:os.close(fd)
 
+def authorized_finish(request,finish):
+ # Serialize authorization and the history commit with session/account writes.
+ # Accepted jobs are revocable until the commit; committed jobs remain intact.
+ if not request.get('requireAuthorization'):
+  return finish() # Offline maintenance callers do not use HTTP sessions.
+ auth=request.get('authorization') or {}
+ path=(pathlib.Path(request['directory'])/'mobiup.sqlite').resolve().as_uri()+'?mode=rw'
+ auth_db=sqlite3.connect(path,timeout=5,uri=True)
+ try:
+  auth_db.execute('BEGIN IMMEDIATE')
+  valid=auth_db.execute("""SELECT 1 FROM users u JOIN sessions s ON s.user_id=u.id
+    WHERE u.id=? AND u.role='manager' AND u.active=1 AND u.must_change_password=0
+    AND u.profile_revision=? AND u.manager_scope=? AND s.token_hash=? AND s.expires_at>?""",
+    (auth.get('userId'),auth.get('profileVersion'),auth.get('managerScope'),auth.get('tokenHash'),int(time.time()*1000))).fetchone()
+  if not valid:raise UploadError('Sesiunea sau drepturile managerului s-au schimbat. Autentifică-te din nou.')
+  return finish()
+ finally:
+  auth_db.rollback();auth_db.close()
+
 def apply(c,rows,summary,month_end,request,root):
  # Reserve the writer BEFORE inspecting facts, backing up or archiving. Stale
  # previews must have no archive/write side effects and WAL writers cannot race.
@@ -173,12 +192,15 @@ def apply(c,rows,summary,month_end,request,root):
   previous_logical=h.sha(logical.encode()) if logical else None
   current=preview(c,rows,summary,month_end)
   if current['alreadyImported']:
-   c.rollback()
+   authorized_finish(request,c.rollback)
    return {**current,'status':'already_imported','previousSourceDigest':previous_generation,'previousLogicalDigest':previous_logical,'sourceLogicalDigest':previous_logical}
   if request.get('revision')!=current['revision'] or request.get('fileHash')!=summary['fileHash']:
    raise UploadError('Datele s-au schimbat după previzualizare. Încarcă fișierul din nou.')
   if current['requiresAcknowledgement'] and request.get('allowRegression') is not True:
    raise UploadError('Confirmă explicit corecțiile sau reducerea perioadei din previzualizare.')
+  # Reject revoked jobs before archiving or preparing any history changes.
+  # The final check below still holds the authorization lock through commit.
+  authorized_finish(request,lambda:None)
   # The history store is append/supersede: prior generations and archived XLSX
   # sources remain intact. BEGIN IMMEDIATE is the rollback boundary for this
   # current-month replacement; the scheduled project backup remains the
@@ -231,7 +253,7 @@ def apply(c,rows,summary,month_end,request,root):
   sync_directory(root/'client-sales-originals')
   logical=h.logical_revision(c)
   applied_logical=h.sha(logical.encode()) if logical else None
-  c.commit()
+  authorized_finish(request,c.commit)
  except BaseException:c.rollback();raise
  return {**current,'status':'imported','importId':imp,'previousSourceDigest':previous_generation,'previousLogicalDigest':previous_logical,'sourceLogicalDigest':applied_logical}
 

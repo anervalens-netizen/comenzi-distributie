@@ -1,5 +1,6 @@
 // Importer-only integration checks. No network, shared dist, application DB or real resources.
 import assert from 'node:assert/strict';
+import {DatabaseSync} from 'node:sqlite';
 import {build} from 'esbuild';
 import {mkdtempSync,mkdirSync,readFileSync,writeFileSync,existsSync,readdirSync,rmSync,symlinkSync,renameSync,utimesSync,openSync,ftruncateSync,closeSync,copyFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
@@ -11,6 +12,9 @@ import {createHash,randomUUID} from 'node:crypto';
 const repo=resolve(import.meta.dirname,'..'),temp=mkdtempSync(join(tmpdir(),'history-import-')),root=join(temp,'data'),originalCwd=process.cwd(),originalRoot=process.env.MOBIUP_DATA_DIR;
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const serverStub={name:'isolated-request-context',setup(b){b.onResolve({filter:/^\.\/server$/},()=>({path:'server',namespace:'test'}));b.onLoad({filter:/.*/,namespace:'test'},()=>({contents:`
+ import {createHash} from 'node:crypto';
+ export const sha256=value=>createHash('sha256').update(value).digest('hex');
+ export const sessionToken=req=>req.headers.get('Cookie')?.split('=')[1]||'';
  export function fail(status,message){throw Object.assign(new Error(message),{status});}
  export function requireManager(user){if(user.role!=='manager')fail(403,'Manager required');}
  export const response=(value,status=200)=>Response.json(value,{status});
@@ -26,7 +30,8 @@ const activityStub={name:'isolated-rebuild-boundary',setup(b){b.onResolve({filte
   writeFileSync(join(root,'rebuild-checked'),'ok');
  }
  `}));}};
-const manager={id:'synthetic-manager',role:'manager'};
+const manager={id:'synthetic-manager',role:'manager',profileVersion:'1',managerScope:'global'};
+const cookie='mobiup_session=synthetic-history-token';
 let children=[];
 try{
  await build({entryPoints:[join(repo,'lib/client-history-import-jobs.ts')],outfile:join(temp,'jobs.mjs'),bundle:true,platform:'node',format:'esm'});
@@ -38,8 +43,8 @@ try{
  const jobs=await import(pathToFileURL(join(temp,'jobs.mjs'))),api=await import(pathToFileURL(join(temp,'api.mjs')));
  process.chdir(temp);
  const status=id=>api.historyImportStatus(new Request('http://local.invalid/status'+(id?'?job='+id:'')),manager);
- const preview=()=>api.historyImportPreview(new Request('http://local.invalid/preview',{method:'POST',headers:{'X-Client-Sales-Filename':'synthetic.xlsx'},body:'synthetic'}),manager);
- const commit=id=>api.historyImportCommit(new Request('http://local.invalid/import',{method:'POST',body:JSON.stringify({jobId:id,allowRegression:true})}),manager);
+ const preview=()=>api.historyImportPreview(new Request('http://local.invalid/preview',{method:'POST',headers:{Cookie:cookie,'X-Client-Sales-Filename':'synthetic.xlsx'},body:'synthetic'}),manager);
+ const commit=id=>api.historyImportCommit(new Request('http://local.invalid/import',{method:'POST',headers:{Cookie:cookie},body:JSON.stringify({jobId:id,allowRegression:true})}),manager);
  delete process.env.MOBIUP_DATA_DIR;
  for(const action of [()=>status(),preview,()=>commit(randomUUID())])await assert.rejects(action,{status:503});
  await assert.rejects(()=>api.historyImportStatus(new Request('http://local.invalid/status'),{id:'agent',role:'agent'}),{status:403});
@@ -60,6 +65,10 @@ f=root/'initial.xlsx';fixture(f,[row(Data='01.02.2024')],'2024-02-01','2024-02-2
 fixture(root/'upload.xlsx',[row(Data='01.02.2024'),row(Data='02.02.2024')],'2024-02-01','2024-02-29')
 fixture(root/'empty.xlsx',[],'2024-02-01','2024-02-29')
 `,repo,root],{encoding:'utf8'});assert.equal(setup.status,0,setup.stderr);
+ const authDb=new DatabaseSync(join(root,'mobiup.sqlite'));
+ authDb.exec("CREATE TABLE users(id TEXT PRIMARY KEY,role TEXT,active INTEGER,must_change_password INTEGER,profile_revision INTEGER,manager_scope TEXT); CREATE TABLE sessions(token_hash TEXT,user_id TEXT,expires_at INTEGER); INSERT INTO users VALUES('synthetic-manager','manager',1,0,1,'global');");
+ const authHash=createHash('sha256').update('synthetic-history-token').digest('hex');
+ authDb.prepare('INSERT INTO sessions VALUES(?,?,?)').run(authHash,manager.id,Date.now()+60000);
  assert.equal(jobs.importRoot(),root);
  const base=jobs.jobFolder(root),old=Date.now()-jobs.RETENTION.ttlMs-1000;
  function makeJob(state='failed',options={}){
@@ -131,12 +140,32 @@ fixture(root/'empty.xlsx',[],'2024-02-01','2024-02-29')
  await assert.rejects(()=>commit(staleReady.id),{status:409},'Only the current ready preview can enter import; unpinned previews stay disposable');
  async function poll(id){for(let n=0;n<250;n++){const job=(await (await status(id)).json()).job;if(job.state!=='running')return job;await sleep(20);}throw Error('Job timeout');}
  async function upload(name){
-  const response=await api.historyImportPreview(new Request('http://local.invalid/preview',{method:'POST',headers:{'X-Client-Sales-Filename':name},body:readFileSync(join(root,name))}),manager);assert.equal(response.status,202);
+  const response=await api.historyImportPreview(new Request('http://local.invalid/preview',{method:'POST',headers:{Cookie:cookie,'X-Client-Sales-Filename':name},body:readFileSync(join(root,name))}),manager);assert.equal(response.status,202);
   const {job}=await response.json(),stored=jobs.readJob(root,join(base,job.id,'status.json'));
   assert(stored.pid>0,'PID persisted before returning to caller');assert(stored.processIdentity);assert(stored.attempt);
   return poll(job.id);
  }
  let ready=await upload('upload.xlsx');assert.equal(ready.state,'ready',ready.error);assert(existsSync(join(base,ready.id,'input.xlsx')));
+ // Revocation during the commit request body must not enqueue a worker.
+ let releaseBody;const waitingBody=new ReadableStream({async start(controller){await new Promise(resolve=>releaseBody=resolve);controller.enqueue(new TextEncoder().encode(JSON.stringify({jobId:ready.id,allowRegression:true})));controller.close();}});
+ const delayed=api.historyImportCommit(new Request('http://local.invalid/import',{method:'POST',headers:{Cookie:cookie},body:waitingBody,duplex:'half'}),manager);
+ authDb.prepare('DELETE FROM sessions WHERE token_hash=?').run(authHash);releaseBody();
+ await assert.rejects(delayed,{status:401});assert.equal((await (await status(ready.id)).json()).job.state,'ready');
+ authDb.prepare('INSERT INTO sessions VALUES(?,?,?)').run(authHash,manager.id,Date.now()+60000);
+ // A commit accepted while valid must still be authorized at the Python
+ // transaction boundary, even if the worker waited for another writer.
+ const deniedHash=createHash('sha256').update(readFileSync(join(root,'upload.xlsx'))).digest('hex');
+ const historyLock=new DatabaseSync(join(root,'client-history','client-sales-history.sqlite'));
+ historyLock.exec('BEGIN IMMEDIATE');
+ assert.equal((await commit(ready.id)).status,202);
+ authDb.prepare('DELETE FROM sessions WHERE token_hash=?').run(authHash);
+ historyLock.exec('ROLLBACK');historyLock.close();
+ const denied=await poll(ready.id);assert.equal(denied.state,'failed');assert.match(denied.error,/Sesiunea/);
+ assert(!existsSync(join(root,'client-history','client-sales-originals',deniedHash+'.xlsx')),'already revoked job does not archive source');
+ const historyCheck=new DatabaseSync(join(root,'client-history','client-sales-history.sqlite'));
+ assert.equal(historyCheck.prepare("SELECT COUNT(*) n FROM history_current WHERE date='2024-02-02'").get().n,0,'revoked accepted job does not commit facts');historyCheck.close();
+ authDb.prepare('INSERT INTO sessions VALUES(?,?,?)').run(authHash,manager.id,Date.now()+60000);
+ ready=await upload('upload.xlsx');assert.equal(ready.state,'ready',ready.error);
  // Commit immediately: launch must handle the preview's exiting flock.
  assert.equal((await commit(ready.id)).status,202);
  let completed=await poll(ready.id);assert.equal(completed.state,'completed',completed.error);await sleep(30);
@@ -148,6 +177,7 @@ fixture(root/'empty.xlsx',[],'2024-02-01','2024-02-29')
  const holder=spawn('flock',['-n','--no-fork',join(root,'client-history','.upload-process.lock'),process.execPath,'-e',"process.stdout.write('locked');setTimeout(()=>{},10000)"],{stdio:['ignore','pipe','pipe']});children.push(holder);await once(holder.stdout,'data');
  const blocked=await upload('upload.xlsx');assert.equal(blocked.state,'failed');
  holder.kill();await once(holder,'exit');children=[];
+ authDb.close();
  console.log('PASS: isolated importer root guards, retention TTL/count/bytes, symlink/outside protection, liveness/EPERM/PID reuse, persisted launch handshake, global flock, cumulative and empty commits, archive-before-cleanup and completed idempotence.');
 }finally{
  for(const child of children)child.kill();

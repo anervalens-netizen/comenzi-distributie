@@ -1,4 +1,5 @@
 import {DatabaseSync} from 'node:sqlite';
+import {importAuthorization,withImportAuthorization} from './import-write-authorization';
 import {spawn} from 'node:child_process';
 import {randomUUID,createHash} from 'node:crypto';
 import {existsSync,mkdirSync,readFileSync,writeFileSync,renameSync,realpathSync} from 'node:fs';
@@ -56,23 +57,27 @@ export async function historyImportPreview(req:Request,user:User){
  if(existsSync(pointer(user))){const prior=JSON.parse(readFileSync(pointer(user),'utf8'));if(load(user,prior.id).state==='running')fail(409,'Ai deja un import în curs.');}
  const bytes=await readLimited(req,32*1024*1024);if(!bytes.length)fail(400,'Fișierul este gol.');
  try{checkUploadCapacity(directory,bytes.length);}catch{fail(503,'Spațiul rezervat importurilor este ocupat sau indisponibil. Finalizează importurile pregătite.');}
+ return withImportAuthorization(req,user,()=>{
  const id=randomUUID(),dir=location(id),now=new Date().toISOString();mkdirSync(dir,{mode:0o700});
  const source=join(dir,'input.xlsx');writeFileSync(source,bytes,{mode:0o600});
  const job:InternalJob={id,userId:user.id,directory:root(),source,filename,operation:'preview',state:'running',phase:'parsing',message:'Se verifică fișierul cumulativ…',createdAt:now,updatedAt:now};
  atomic(join(dir,'status.json'),job);atomic(pointer(user),{id});return response({job:launch(job)},202);
+ });
 }
 export async function historyImportCommit(req:Request,user:User){
  requireManager(user);root();const body=await jsonBody(req);
  if(typeof body.jobId!=='string')fail(400,'Import invalid.');
  const job=load(user,body.jobId),dir=location(job.id);
- if(job.operation==='import'&&(job.state==='running'||job.state==='completed'))return response({job:exposed(job)},job.state==='running'?202:200);
+ if(job.operation==='import'&&(job.state==='running'||job.state==='completed'))return withImportAuthorization(req,user,()=>response({job:exposed(job)},job.state==='running'?202:200));
  const owner=existsSync(pointer(user))?JSON.parse(readFileSync(pointer(user),'utf8')):null;
  if(owner?.id!==job.id)fail(409,'Previzualizarea nu mai este curentă. Reîncarcă fișierul.');
  if(job.state!=='ready'||!job.preview)fail(409,'Reia previzualizarea fișierului.');
  if(job.preview.requiresAcknowledgement&&!job.preview.alreadyImported&&body.allowRegression!==true)fail(409,'Confirmă corecțiile din previzualizare.');
  worker();
- try{writeFileSync(join(dir,'commit.json'),JSON.stringify({revision:job.preview.revision,fileHash:job.preview.fileHash,allowRegression:body.allowRegression===true}),{flag:'wx',mode:0o600});}
+ return withImportAuthorization(req,user,()=>{
+ try{writeFileSync(join(dir,'commit.json'),JSON.stringify({revision:job.preview!.revision,fileHash:job.preview!.fileHash,allowRegression:body.allowRegression===true,authorization:importAuthorization(req,user)}),{flag:'wx',mode:0o600});}
  catch(error){if((error as NodeJS.ErrnoException).code==='EEXIST')fail(409,'Confirmarea acestui import a fost deja transmisă. Verifică progresul.');throw error;}
  job.operation='import';job.state='running';job.phase='import';job.message='Se actualizează luna curentă…';job.updatedAt=new Date().toISOString();delete job.pid;delete job.processIdentity;delete job.attempt;
  atomic(join(dir,'status.json'),job);return response({job:launch(job)},202);
+ });
 }

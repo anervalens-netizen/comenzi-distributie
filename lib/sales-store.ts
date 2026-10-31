@@ -1,6 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync, existsSync, unlinkSync, renameSync, writeFileSync } from 'node:fs';
-import { mkdir } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import type { SalesAggregate, SalesCardsSim, SalesDaily, SalesMonthly, SalesProduct, SalesRow, SalesSegment, SalesSegments, SalesSite, SalesView, SalesCoverageChange } from './sales-types';
@@ -239,8 +238,8 @@ export function getSalesViewSnapshot(month: string, siteCode?: SalesScope, fromM
 }
 
 /** Writes an immutable copy of the source before it can become a durable audit record. */
-export async function saveSalesOriginal(fileHash: string, filename: string, bytes: Uint8Array) {
-  await mkdir(salesOriginalsDirectory, { recursive: true, mode: 0o700 });
+export function saveSalesOriginal(fileHash: string, filename: string, bytes: Uint8Array) {
+  mkdirSync(salesOriginalsDirectory, { recursive: true, mode: 0o700 });
   const extension = /\.xlsx$/i.test(filename) ? '.xlsx' : '.xls';
   const relative = `sales-imports/${fileHash}${extension}`;
   const path = resolve(salesOriginalsDirectory, `${fileHash}${extension}`);
@@ -255,13 +254,14 @@ export async function saveSalesOriginal(fileHash: string, filename: string, byte
   return relative;
 }
 
-export function importSalesRows(args: { rows: SalesRow[]; month: string; fileHash: string; filename: string; importedBy: string; originalPath: string; expectedRevision: number; expectedMappingHash: string; currentMappingHash: string; historicalAcknowledged: boolean; regressionAcknowledged?: boolean; }) {
+export function importSalesRows(args: { rows: SalesRow[]; month: string; fileHash: string; filename: string; importedBy: string; originalPath: string; expectedRevision: number; expectedMappingHash: string; currentMappingHash: string; historicalAcknowledged: boolean; regressionAcknowledged?: boolean; authorizeCommit?: () => void; }) {
   const db = database();
   db.exec('BEGIN IMMEDIATE;');
   try {
     const revision = salesRevision();
     const existing = db.prepare('SELECT m.month,m.imported_at AS importedAt,m.revision,i.imported_by AS importedBy FROM sales_months m JOIN sales_imports i ON i.id=m.import_id WHERE m.month=? AND m.file_hash=?').get(args.month, args.fileHash) as Record<string, unknown> | undefined;
     if (existing) {
+      args.authorizeCommit?.();
       db.exec('COMMIT;');
       return { ok: true, idempotent: true, month: args.month, importedAt: String(existing.importedAt), importedBy: String(existing.importedBy), revision: Number(existing.revision), rows: args.rows.length, fileHash: args.fileHash };
     }
@@ -280,6 +280,7 @@ export function importSalesRows(args: { rows: SalesRow[]; month: string; fileHas
     for (const row of args.rows) add.run(importId, row.rowNumber, row.date, row.month, row.siteCode, row.itemCode, row.itemName, row.quantity, row.brand, row.priceCents, row.valueCents, row.location, row.company, row.asm, row.regional, row.orderNumber, row.category, row.subCategory, row.agent);
     db.prepare('INSERT INTO sales_months(month,import_id,imported_at,filename,file_hash,revision) VALUES(?,?,?,?,?,?) ON CONFLICT(month) DO UPDATE SET import_id=excluded.import_id,imported_at=excluded.imported_at,filename=excluded.filename,file_hash=excluded.file_hash,revision=excluded.revision').run(args.month, importId, importedAt, args.filename, args.fileHash, nextRevision);
     db.prepare("UPDATE sales_meta SET value=? WHERE key='revision'").run(String(nextRevision));
+    args.authorizeCommit?.();
     db.exec('COMMIT;');
     return { ok: true, month: args.month, importedAt, revision: nextRevision, rows: args.rows.length, fileHash: args.fileHash };
   } catch (error) { try { db.exec('ROLLBACK;'); } catch { /* already rolled back */ } throw error; }

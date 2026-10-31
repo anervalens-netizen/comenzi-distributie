@@ -127,6 +127,10 @@ python3 -W error::ResourceWarning tools/test-recovery.py
 node tools/test-password-race.mjs
 node tools/test-agent-account-authorization.mjs
 node tools/test-operational-write-authorization.mjs
+node tools/test-login-rate-limit.mjs
+node tools/test-import-write-authorization.mjs
+node tools/test-import-revocation-http.mjs
+python3 tools/test_sim_tooling.py
 node tools/test-session-persistence.mjs
 # API acceptance on isolated SQLite.
 rm -rf work/qa work/qa-credentials

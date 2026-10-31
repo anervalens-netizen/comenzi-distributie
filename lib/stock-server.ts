@@ -1,4 +1,5 @@
 import {stockSnapshot,stockImpact} from './stock-impact';
+import {operationalWriteGuard} from './operational-write-guard';
 import { db, fail, readLimited, requireManager, requireWarehouseAccess, response, userView } from './server';
 import { readCatalog } from './catalog';
 import { STOCK_FILE_LIMIT, stockHash, stockWarehouseName } from './stock-file';
@@ -113,8 +114,11 @@ export async function stockUpload(req:Request,user:User,apply:boolean) {
   state.history=[{importedAt,filename,userId:user.id,fileHash,warehouses:selected.size,rows:rowCount,decision,confirmation},...state.history].slice(0,30);
   const next=JSON.stringify(state);
   // A single compare-and-swap writes every selected warehouse together.
-  const result=raw===null?await db().prepare('INSERT OR IGNORE INTO settings (key,value) VALUES (?,?)').bind(stateKey,next).run():await db().prepare('UPDATE settings SET value=? WHERE key=? AND value=?').bind(next,stateKey,raw).run();
+  const baseGuard=operationalWriteGuard(req,user);
+  const guard={sql:`${baseGuard.sql} AND EXISTS (SELECT 1 FROM users WHERE id=? AND role='manager' AND manager_scope=?)`,args:[...baseGuard.args,user.id,user.managerScope]};
+  const result=raw===null?await db().prepare(`INSERT OR IGNORE INTO settings (key,value) SELECT ?,? WHERE ${guard.sql}`).bind(stateKey,next,...guard.args).run():await db().prepare(`UPDATE settings SET value=? WHERE key=? AND value=? AND ${guard.sql}`).bind(next,stateKey,raw,...guard.args).run();
   if(!result.meta.changes) {
+    if(!await db().prepare(`SELECT 1 ok WHERE ${guard.sql}`).bind(...guard.args).first())fail(401,'Sesiunea sau drepturile managerului s-au schimbat. Autentifică-te din nou.');
     const latestState=(await readState()).state.history[0];
     if(latestState?.fileHash===fileHash&&latestState.userId!==user.id)fail(409,await duplicateStockImportMessage(latestState.userId));
     fail(409,'Un alt import a fost salvat între timp. Reîncarcă previzualizarea.');

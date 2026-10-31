@@ -1,4 +1,5 @@
 import {readDistributionRules} from './distribution-config';
+import {withImportAuthorization} from './import-write-authorization';
 import {projectIds,productGroup} from './distribution-rules';
 import {distributionSales,combineSalesViews} from './distribution-sales';
 import { catalog, db, fail, isGlobalManager, readLimited, requireManager, response } from './server';
@@ -46,7 +47,7 @@ async function mappingSnapshot() {
     }
   }
   const canonical = actors.map(actor => [actor.id, actor.name, mappingKey(actor.siteCode), salesLocationKey(actor.warehouseName)]);
-  return { actors, grouped, locations, hash: salesHash(JSON.stringify(canonical)) };
+  return { actors, grouped, locations, hash: salesHash(JSON.stringify(canonical)), sourceStamp: JSON.stringify([result.results,aliasRow?.value??null]) };
 }
 
 function validateMonth(value: string | null) {
@@ -227,11 +228,17 @@ export async function salesUpload(req: Request, user: User, apply: boolean) {
   snapshot = latestSnapshot;
   if (historical && req.headers.get('X-Sales-Allow-Historical') !== '1') fail(409, 'Fișierul este pentru o lună mai veche. Confirmă explicit importul istoric.');
   if (requiresRegressionAcknowledgement && req.headers.get('X-Sales-Allow-Regression') !== '1') fail(409, 'Fișierul reduce acoperirea lunii existente. Confirmă explicit înlocuirea.');
-  const originalPath = await saveSalesOriginal(fileHash, filename, bytes);
   const finalSnapshot = await mappingSnapshot();
   if (finalSnapshot.hash !== snapshot.hash) fail(409, 'Maparea agenților s-a modificat. Reîncarcă previzualizarea.');
   try {
-    const result = importSalesRows({ rows, month, fileHash, filename, importedBy: user.id, originalPath, expectedRevision, expectedMappingHash: snapshot.hash, currentMappingHash: finalSnapshot.hash, historicalAcknowledged: req.headers.get('X-Sales-Allow-Historical') === '1', regressionAcknowledged: req.headers.get('X-Sales-Allow-Regression') === '1' });
+    const result = withImportAuthorization(req,user,(check,connection)=>{
+      // Mapping inputs and authorization share the same writer lock until commit.
+      const actors=connection.prepare("SELECT id,name,role,site_code,warehouse_name FROM users WHERE active=1 AND (role='agent' OR (role='manager' AND TRIM(site_code)<>'')) ORDER BY name,id").all();
+      const aliases=connection.prepare("SELECT value FROM settings WHERE key='sales-agent-aliases-v1'").get();
+      if(JSON.stringify([actors,aliases?.value??null])!==finalSnapshot.sourceStamp)fail(409,'Maparea agenților s-a modificat. Reîncarcă previzualizarea.');
+      const originalPath=saveSalesOriginal(fileHash,filename,bytes);
+      return importSalesRows({ rows, month, fileHash, filename, importedBy: user.id, originalPath, expectedRevision, expectedMappingHash: snapshot.hash, currentMappingHash: finalSnapshot.hash, historicalAcknowledged: req.headers.get('X-Sales-Allow-Historical') === '1', regressionAcknowledged: req.headers.get('X-Sales-Allow-Regression') === '1', authorizeCommit:check });
+    });
     if(result.idempotent&&result.importedBy&&result.importedBy!==user.id)fail(409,await duplicateImportMessage('Vânzările',result.importedBy));
     return response(result);
   } catch (error) {

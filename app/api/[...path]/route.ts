@@ -284,8 +284,14 @@ async function dispatch(req: Request) {
     const body=await jsonBody(req); const username=textField(body.username,80).toLowerCase();
     if(typeof body.password!=='string'||body.password.length>128||!username) fail(400,'Completează utilizatorul și parola.');
     const now=Date.now(); const keys=[`account:${username}`,`ip:${sha256(req.headers.get('CF-Connecting-IP')||'local')}`];
-    const results=await db().batch(keys.map(key=>db().prepare('INSERT INTO login_attempts (key,attempts,reset_at) VALUES (?,1,?) ON CONFLICT(key) DO UPDATE SET attempts=CASE WHEN reset_at<? THEN 1 ELSE attempts+1 END, reset_at=CASE WHEN reset_at<? THEN excluded.reset_at ELSE reset_at END RETURNING attempts').bind(key,now+900000,now,now)));
-    if(Number((results[0].results[0] as {attempts:number}).attempts)>10 || Number((results[1].results[0] as {attempts:number}).attempts)>80) fail(429,'Prea multe încercări. Reîncearcă în 15 minute.');
+    // Reserve the IP allowance before touching an account, in the same transaction.
+    // A rejected IP produces no change, so it cannot create keys or lock accounts.
+    const results=await db().batch([
+      db().prepare('DELETE FROM login_attempts WHERE key IN (SELECT key FROM login_attempts WHERE reset_at<? LIMIT 100)').bind(now),
+      db().prepare('INSERT INTO login_attempts (key,attempts,reset_at) VALUES (?,1,?) ON CONFLICT(key) DO UPDATE SET attempts=CASE WHEN reset_at<? THEN 1 ELSE attempts+1 END, reset_at=CASE WHEN reset_at<? THEN excluded.reset_at ELSE reset_at END WHERE reset_at<? OR attempts<80 RETURNING attempts').bind(keys[1],now+900000,now,now,now),
+      db().prepare('INSERT INTO login_attempts (key,attempts,reset_at) SELECT ?,1,? WHERE changes()=1 ON CONFLICT(key) DO UPDATE SET attempts=CASE WHEN reset_at<? THEN 1 ELSE attempts+1 END, reset_at=CASE WHEN reset_at<? THEN excluded.reset_at ELSE reset_at END RETURNING attempts').bind(keys[0],now+900000,now,now),
+    ]);
+    if(!results[1].results.length || Number((results[2].results[0] as {attempts:number}).attempts)>10) fail(429,'Prea multe încercări. Reîncearcă în 15 minute.');
     const row=await db().prepare('SELECT * FROM users WHERE username=? AND active=1').bind(username).first<Record<string,unknown>>();
     const fallback='scrypt:00000000000000000000000000000000:'+ '0'.repeat(64);
     const verified=await verifyPassword(body.password,typeof row?.password_hash==='string'?row.password_hash:fallback);

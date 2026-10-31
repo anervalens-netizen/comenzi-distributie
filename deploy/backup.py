@@ -22,6 +22,7 @@ def load_helper(name):
 
 
 storage = load_helper('storage_workdir')
+sim_tooling = load_helper('sim_tooling')
 
 
 def validation_path(archive):
@@ -246,7 +247,7 @@ def prune_partials(folder: Path, cutoff: datetime) -> None:
 
 def add_recovery_files(output: tarfile.TarFile, recovery: dict[str, Path], release: Path, expected_release: bytes) -> None:
     """Include the exact runnable release and private build inputs, never symlinks."""
-    if set(recovery) != {'runtime', 'resources', 'products'}:
+    if not {'runtime', 'resources', 'products'}.issubset(recovery) or set(recovery) - {'runtime', 'resources', 'products', 'automation'}:
         raise RuntimeError('Full recovery requires runtime, resources and products directories')
     roots = {name: path.resolve(strict=True) for name, path in recovery.items()}
     if (roots['runtime'] / 'RELEASE.json').read_bytes() != expected_release:
@@ -273,7 +274,12 @@ def add_recovery_files(output: tarfile.TarFile, recovery: dict[str, Path], relea
     for name, root in roots.items():
         if not root.is_dir():
             raise RuntimeError(f'Missing recovery directory: {name}')
-        files = sorted(root.rglob('*'))
+        if name == 'automation':
+            selected, selections = sim_tooling.recovery_files(root, roots['runtime'])
+            files = sorted(selected.values())
+            manifest['automation'] = {'contract': sim_tooling.CONTRACT, 'providers': selections}
+        else:
+            files = sorted(root.rglob('*'))
         if not any(path.is_file() for path in files):
             raise RuntimeError(f'Empty recovery directory: {name}')
         for path in files:
@@ -443,7 +449,12 @@ def run_backup(
         archive_inputs += [p for p, _, _ in activation_sources] + [p for p, _, _ in history_sources] + sales_sources
         archive_inputs += [data / 'files' / key for key in keys] + [release]
         if recovery:
-            archive_inputs += [p for root in recovery.values() for p in root.rglob('*') if p.is_file()]
+            for category, root in recovery.items():
+                if category == 'automation':
+                    selected, _ = sim_tooling.recovery_files(root.resolve(strict=True), recovery['runtime'])
+                    archive_inputs += selected.values()
+                else:
+                    archive_inputs += [p for p in root.rglob('*') if p.is_file()]
         archive_bytes = sum(p.stat().st_size for p in archive_inputs)
         # Tar headers/padding and worst-case gzip growth, not its compressed size.
         work.extend(int(archive_bytes * 1.01) + len(archive_inputs)*2048 + 64*1024**2)
@@ -530,5 +541,11 @@ if __name__ == '__main__':
     configured = {name: os.environ.get('MOBIUP_RECOVERY_' + name.upper(), '') for name in ('runtime', 'resources', 'products')}
     if any(configured.values()) and not all(configured.values()):
         raise RuntimeError('Incomplete recovery configuration')
-    run_backup(recovery={name: Path(value) for name, value in configured.items()} if all(configured.values()) else None,
+    automation = os.environ.get('MOBIUP_RECOVERY_AUTOMATION', '')
+    if automation and not all(configured.values()):
+        raise RuntimeError('Automation recovery requires full recovery configuration')
+    recovery = {name: Path(value) for name, value in configured.items()} if all(configured.values()) else None
+    if automation:
+        recovery['automation'] = Path(automation)
+    run_backup(recovery=recovery,
                nas_latest_only=os.environ.get('MOBIUP_NAS_LATEST_ONLY') == '1')

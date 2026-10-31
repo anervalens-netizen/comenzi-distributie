@@ -5,6 +5,7 @@ Does not start services or modify production. Requires the archive SHA-256 sidec
 import argparse
 from contextlib import closing
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -12,6 +13,13 @@ import shutil
 import sqlite3
 import tarfile
 import tempfile
+
+
+def load_tooling_validator():
+    spec = importlib.util.spec_from_file_location('restore_sim_tooling', Path(__file__).with_name('sim_tooling.py'))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def digest(path: Path) -> str:
@@ -120,6 +128,16 @@ def restore(archive: Path, destination: Path, checksum: Path | None = None, *, s
             raise RuntimeError('Recovery resources do not match the compiled release')
         if not any(name.startswith('recovery/products/') for name in manifest['files']):
             raise RuntimeError('Required recovery products are missing')
+        automation = manifest.get('automation')
+        automation_files = {name for name in manifest['files'] if name.startswith('recovery/automation/')}
+        automation_selections = None
+        if automation is not None or automation_files:
+            validator = load_tooling_validator()
+            selected, automation_selections = validator.recovery_files(temporary / 'recovery/automation', runtime)
+            if automation_files != {'recovery/automation/' + name for name in selected}:
+                raise RuntimeError('Automation recovery file selection mismatch')
+            if automation != {'contract': validator.CONTRACT, 'providers': automation_selections}:
+                raise RuntimeError('Automation recovery tooling selection mismatch')
         policy_path = temporary / 'BACKUP-POLICY.json'
         policy = json.loads(policy_path.read_text()) if policy_path.exists() else {}
         if policy and (policy.get('schema') != 1 or policy.get('customerHistory') != 'reimport_required'):
@@ -161,7 +179,7 @@ def restore(archive: Path, destination: Path, checksum: Path | None = None, *, s
             raise RuntimeError('Restore publication failed; inspect the isolated destination')
         return {'status': 'restored_not_started', 'sha': release.get('sha'), 'databases': databases,
                 'recoveryFiles': len(manifest['files']), 'destination': str(destination),
-                'reimportRequired': reimport}
+                'reimportRequired': reimport, 'automationTooling': automation_selections}
     finally:
         shutil.rmtree(temporary)
 

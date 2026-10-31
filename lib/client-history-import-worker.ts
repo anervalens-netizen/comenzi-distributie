@@ -38,7 +38,7 @@ async function parse(request:string){
 try{
  const commit=job.operation==='import'?JSON.parse(readFileSync(join(dir,'commit.json'),'utf8')):{};
  const request=join(dir,'request.json');
- writeFileSync(request,JSON.stringify({operation:job.operation,directory:job.directory,source:job.source,filename:job.filename,jobId:job.id,...commit}),{mode:0o600});save();
+ writeFileSync(request,JSON.stringify({operation:job.operation,directory:job.directory,source:job.source,filename:job.filename,jobId:job.id,requireAuthorization:job.operation==='import',...commit}),{mode:0o600});save();
  const result=await parse(request);
  if(job.operation==='preview'){job.preview=result;job.state='ready';job.phase='preview';job.message='Previzualizarea este pregătită.';save();}
  else{
