@@ -23,6 +23,7 @@ NS = {'s': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
 TR = re.compile(r'(^|[^A-Z0-9])TR([^A-Z0-9]|$)')
 VERSION = 3
 MAX_ROWS = 1_000_000
+CHRONOLOGY_POLICY_VERSION = "positive-documents-nonblocking-v1"
 DIGI_HEADERS = ['Canal', 'Magazin', 'Data', 'Cod', 'Cantitate', 'IMEI', 'Pret', 'Denumire Client', 'Activat', 'DataDigi']
 
 class ImportError(ValueError):
@@ -407,7 +408,9 @@ def reconcile_group(rows, conflicts):
                 links.append([sale['id'], r['id']])
             else:
                 reasons.add('ambiguous_or_unmatched_return')
-        if activation_date and r['movement_date'] and r['movement_date'] > activation_date:
+        # A positive document booked later does not make a uniquely attributable
+        # sale ambiguous. A later return still needs an explicit beneficiary rule.
+        if r['quantity'] == -1 and activation_date and r['movement_date'] and r['movement_date'] > activation_date:
             reasons.add('post_activation_movement_rule_pending')
     net = sum(r['quantity'] or 0 for r in rows)
     candidate = None
@@ -506,6 +509,9 @@ def rebuild(c, operator=None, incremental=False):
         c.execute('INSERT INTO activation_facts VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',(*key,ad,ad[:7] if ad else None,None,None,None,'unresolved',dump(reasons),None,dump({'observation':selected,'observationSources':refs,'movementIds':[],'returnLinks':[],'remainingSaleIds':[],'versionIds':[]})))
     c.execute("INSERT INTO activation_meta VALUES('generation','1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1")
     c.execute("INSERT OR REPLACE INTO activation_meta VALUES('facts_version',?)",(versions.FACTS_VERSION,))
+    if not incremental and operator is None:
+        c.execute("INSERT OR REPLACE INTO activation_meta VALUES('chronology_policy_version',?)",(CHRONOLOGY_POLICY_VERSION,))
+
 
 
 def reconcile_imports(c, import_ids):
@@ -522,6 +528,13 @@ def reconcile_imports(c, import_ids):
     c.execute('CREATE TEMP TABLE IF NOT EXISTS affected_imei(company TEXT,provider TEXT,imei TEXT,PRIMARY KEY(company,provider,imei)) WITHOUT ROWID')
     c.execute('CREATE TEMP TABLE IF NOT EXISTS affected_serial(company TEXT,provider TEXT,serial TEXT,PRIMARY KEY(company,provider,serial)) WITHOUT ROWID')
     c.execute('DELETE FROM affected_imei'); c.execute('DELETE FROM affected_serial')
+    policy=c.execute("SELECT value FROM activation_meta WHERE key='chronology_policy_version'").fetchone()
+    policy_changed=not policy or policy[0]!=CHRONOLOGY_POLICY_VERSION
+    if policy_changed:
+        # Revisit only previously blocked connected components, without replaying
+        # imports or rebuilding the entire historical ledger.
+        c.execute("INSERT OR IGNORE INTO affected_serial SELECT company,provider,serial FROM activation_facts WHERE instr(reasons,'post_activation_movement_rule_pending')>0")
+
     for batch in import_ids:
         c.execute('INSERT OR IGNORE INTO affected_imei SELECT DISTINCT m.company,m.provider,m.imei FROM activation_movements m JOIN activation_occurrences o ON o.movement_id=m.id WHERE o.import_id=?', (batch,))
         c.execute("INSERT OR IGNORE INTO affected_serial SELECT DISTINCT company,provider,serial FROM activation_observations WHERE import_id=? AND serial<>''", (batch,))
@@ -556,8 +569,9 @@ def reconcile_imports(c, import_ids):
                     if candidate not in imeis and c.execute('SELECT 1 FROM activation_movements INDEXED BY activation_movements_identity WHERE company=? AND provider=? AND imei=? LIMIT 1',candidate).fetchone(): pending_i.append(candidate)
     c.executemany('INSERT OR IGNORE INTO affected_imei VALUES(?,?,?)',imeis)
     c.executemany('INSERT OR IGNORE INTO affected_serial VALUES(?,?,?)',serials)
-    if import_ids:
+    if import_ids or policy_changed:
         rebuild(c, incremental=True)
+    c.execute("INSERT OR REPLACE INTO activation_meta VALUES('chronology_policy_version',?)",(CHRONOLOGY_POLICY_VERSION,))
     return {'full': False, 'serials': serials, 'imeis': imeis, 'sites': sites}
 
 
