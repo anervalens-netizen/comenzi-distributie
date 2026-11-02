@@ -35,6 +35,7 @@ const stubs={
   // This in-memory route fixture must not load the host-only upload worker.
   // Its real filesystem/HTTP import contract is exercised by its own suite.
   'client-history-import-runtime':unused(['historyImportStatus','historyImportPreview','historyImportCommit']),
+  'import-engine-runtime':unused(['importsCatalog','importsJobs','importsJob']),
 };
 const serverPlugin={name:'synthetic-infrastructure',setup(b){
   b.onResolve({filter:/^#mobiup-activation-store$/},()=>({path:'activation-store',namespace:'fixture'}));

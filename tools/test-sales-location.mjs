@@ -5,7 +5,7 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { build } from 'esbuild';
-import { createHash } from 'node:crypto';
+import { createHash,randomUUID } from 'node:crypto';
 
 // Entirely fictional identities and places; reproduce a shared source code without private data.
 const root = process.cwd(), directory = mkdtempSync(resolve(tmpdir(), 'sales-location-'));
@@ -81,6 +81,12 @@ try {
   assert.equal(store.salesRevision(),0,'Denied import leaves the sales ledger unchanged');
   app.prepare('INSERT INTO sessions VALUES(?,?,?)').run(sessionHash,'global',Date.now()+3600000);
   await apply(rows, p);
+  const actionId=randomUUID(),authorization={userId:'global',profileVersion:1,managerScope:'global',tokenHash:sessionHash};
+  const internal={authorization,action:{id:actionId,actor:{id:'global',label:'Synthetic global',type:'human'},period:{start:'2026-09-01',end:'2026-09-30'}}};
+  const repeat=await salesUpload(new Request('https://example.invalid/internal',{method:'POST',headers:{'X-Sales-Filename':'synthetic.xlsx','X-Sales-Hash':p.fileHash,'X-Sales-Revision':String(p.revision),'X-Sales-Mapping-Hash':p.mappingHash},body:JSON.stringify(rows)}),user('global'),true,internal);
+  const proof=(await repeat.json()).receipt;assert.equal(proof.effect,'no_change');assert.equal(proof.action_id,actionId);assert.equal(proof.verified,true);
+  const salesDb=new DatabaseSync(resolve(directory,'sales.sqlite'),{readOnly:true});
+  assert.deepEqual(JSON.parse(salesDb.prepare('SELECT value FROM sales_meta WHERE key=?').get('import_action_receipt:'+actionId).value),proof);salesDb.close();
   const national = await read('global');
   assert.deepEqual(national.summary, { rows: 10, quantity: 8, value: 9.54 });
   assert.deepEqual(national.summary, p.summary);

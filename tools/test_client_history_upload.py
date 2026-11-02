@@ -32,6 +32,13 @@ class UploadTests(unittest.TestCase):
   self.assertEqual(result['sourceLogicalDigest'],h.sha(h.logical_revision(self.c).encode()))
   return result
  def facts(self):return [tuple(r) for r in self.c.execute('SELECT date,quantity_micros,value_cents FROM history_current ORDER BY date,value_cents')]
+ def test_action_receipt_commits_with_history_and_rolls_back_on_rejection(self):
+  data=self.upload([row(Data='01.02.2024'),row(Data='02.02.2024')]);action=str(uuid.uuid4());data[3]['actionId']=action
+  with self.assertRaises(u.UploadError):self.commit(data)
+  self.assertIsNone(self.c.execute('SELECT value FROM history_meta WHERE key=?',('import_action_receipt:'+action,)).fetchone())
+  result=self.commit(data,True)
+  record=self.c.execute('SELECT value FROM history_meta WHERE key=?',('import_action_receipt:'+action,)).fetchone()
+  receipt=json.loads(record[0]);self.assertEqual(receipt['source_sha256'],data[1]['fileHash']);self.assertTrue(receipt['verified']);self.assertEqual(receipt['effect'],'published');self.assertEqual(receipt['import_id'],result['importId'])
  def test_incompatible_header_explains_expected_customer_report(self):
   path=self.directory/'incompatible.xlsx';fixture(path,[row(Data='01.02.2024')],'2024-02-01','2024-02-29')
   with zipfile.ZipFile(path) as z:files={name:z.read(name) for name in z.namelist()}

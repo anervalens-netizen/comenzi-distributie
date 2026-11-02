@@ -4,6 +4,7 @@ set -u
 RUNTIME_ROOT="${MOBIUP_RUNTIME_ROOT:-/opt/Mobiup/comenzi-distributie/runtime}"
 CURRENT_LINK="${MOBIUP_CURRENT_LINK:-$RUNTIME_ROOT/current}"
 SERVICE="${MOBIUP_SERVICE:-mobiup-comenzi-distributie.service}"
+IMPORT_WORKER="mobiup-comenzi-import-worker.service"
 SYSTEMCTL="${MOBIUP_SYSTEMCTL:-systemctl}"
 CURL="${MOBIUP_CURL:-curl}"
 RELEASE_PRUNE="${MOBIUP_RELEASE_PRUNE:-1}"
@@ -139,6 +140,50 @@ previous="$(readlink -f "$CURRENT_LINK")"
 [[ -d "$previous" ]] || fail "previous release target is invalid: $previous"
 [[ "$previous" == "$releases_root/"* ]] || fail "previous release must be inside $releases_root"
 
+# A running import worker resolves its executable through current. Never switch
+# that link while it can claim work from the old release. The installation's
+# drain gate must wait until all queued and running imports are quiescent.
+worker_load="$("$SYSTEMCTL" show "$IMPORT_WORKER" -p LoadState --value)" || fail "cannot inspect import worker"
+worker_active=0
+case "$worker_load" in
+  not-found) ;;
+  loaded)
+    worker_state="$("$SYSTEMCTL" show "$IMPORT_WORKER" -p ActiveState --value)" || fail "cannot inspect import worker state"
+    case "$worker_state" in
+      active) worker_active=1 ;;
+      inactive|failed) ;;
+      *) fail "import worker is transitioning ($worker_state)" ;;
+    esac ;;
+  *) fail "unexpected import worker load state ($worker_load)" ;;
+esac
+if [[ "$worker_active" == 1 ]]; then
+  [[ -n "${MOBIUP_IMPORT_DRAIN_GATE:-}" && -x "$MOBIUP_IMPORT_DRAIN_GATE" ]] || fail "active import worker requires an executable MOBIUP_IMPORT_DRAIN_GATE"
+  [[ -f "$release/import-engine-executor.mjs" && -f "$previous/import-engine-executor.mjs" ]] || fail "both releases must support the active import worker"
+fi
+
+quiesce_worker() {
+  "$SYSTEMCTL" stop "$SERVICE" || return 1
+  if ! "$MOBIUP_IMPORT_DRAIN_GATE"; then
+    "$SYSTEMCTL" start "$SERVICE" || true
+    return 1
+  fi
+  if ! "$SYSTEMCTL" stop "$IMPORT_WORKER"; then
+    "$SYSTEMCTL" start "$SERVICE" || true
+    return 1
+  fi
+}
+
+start_services() {
+  if [[ "$worker_active" == 1 ]]; then
+    "$SYSTEMCTL" start "$IMPORT_WORKER" || return 1
+    "$SYSTEMCTL" start "$SERVICE" || return 1
+  else
+    "$SYSTEMCTL" restart "$SERVICE" || return 1
+  fi
+  healthy || return 1
+  [[ "$worker_active" != 1 ]] || "$SYSTEMCTL" is-active --quiet "$IMPORT_WORKER"
+}
+
 switch_link() {
   local target="$1" next="${CURRENT_LINK}.next.$$"
   rm -f "$next"
@@ -171,14 +216,22 @@ healthy() {
 
 rollback() {
   log "activation failed; rolling back to $previous"
+  if [[ "$worker_active" == 1 ]]; then
+    quiesce_worker || return 1
+  fi
   switch_link "$previous" || return 1
-  "$SYSTEMCTL" restart "$SERVICE" || return 1
-  healthy
+  start_services
 }
 
 log "activating sha=$release_sha release=$release previous=$previous"
-switch_link "$release" || fail "atomic symlink switch failed"
-if "$SYSTEMCTL" restart "$SERVICE" && healthy; then
+if [[ "$worker_active" == 1 ]]; then
+  quiesce_worker || fail "could not drain import worker; release unchanged"
+fi
+if ! switch_link "$release"; then
+  [[ "$worker_active" != 1 ]] || start_services || true
+  fail "atomic symlink switch failed"
+fi
+if start_services; then
   active="$(readlink -f "$CURRENT_LINK")"
   prune_releases "$active" "$previous" || fail "release retention failed"
   log "active sha=$release_sha release=$active fallback=$previous"

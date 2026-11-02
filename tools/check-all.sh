@@ -23,6 +23,10 @@ python3 -W error::ResourceWarning tools/test_activation_versions.py
 python3 -W error::ResourceWarning tools/test_digi_operator.py
 python3 -W error::ResourceWarning tools/test_activation_chronology.py
 python3 -W error::ResourceWarning tools/test_activation_job.py
+python3 -W error::ResourceWarning tools/test_import_engine_sim.py
+node tools/test-import-engine-api.mjs
+node tools/test-import-engine-stock.mjs
+node tools/test-import-executor-lock.mjs
 node tools/test-distribution-sales.mjs
 node tools/test-manager-commerce.mjs
 node tools/test-distribution-store.mjs
@@ -40,6 +44,7 @@ node tools/test-sim-verification.mjs
 node tools/test-sim-verification-digi.mjs
 python3 tools/test_client_sales_history.py
 python3 tools/test_client_history_upload.py
+python3 tools/test_import_engine_history.py
 python3 -W error::ResourceWarning tools/test_history_revision_backup.py
 node tools/test-client-history-import-isolated.mjs
 python3 tools/test_client_catalog_plan.py
@@ -74,6 +79,7 @@ npm run build
 node tools/test-cloudflare-module-graph.mjs
 node tools/test-stock-cloudflare.mjs
 npm run build:server
+node tools/test-import-engine-sales.mjs
 node tools/test-runtime-packaging.mjs
 node tools/test-real-worker-maps.mjs
 node tools/test-client-sales-remediation.mjs
@@ -181,6 +187,7 @@ if [ -n "$CHROME_BIN" ]; then
   CHROME_BIN="$CHROME_BIN" node tools/test-list-pagination-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-order-pagination-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-stock-coverage-browser.mjs
+  CHROME_BIN="$CHROME_BIN" node tools/test-imports-journal-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-client-sales-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-report-error-recovery-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-client-history-import-browser.mjs

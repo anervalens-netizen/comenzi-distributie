@@ -6,6 +6,7 @@ import { STOCK_FILE_LIMIT, stockHash, stockWarehouseName } from './stock-file';
 import { parseStockFileRuntime } from './stock-parser-runtime';
 import { stockCode, type StockView, type StockCoverageDecision, type StockCoverage, type StockPreview } from './stock-types';
 import type { User } from './types';
+import type {ImportAuthorization} from './import-write-authorization';
 
 const stateKey='agent-stock-v1';
 type State={warehouses:Record<string,Omit<StockView,'depot'|'depotImportedAt'|'depotCoverage'|'depotObservedAt'>>;depot?:Record<string,number|null>;depotImportedAt?:string;depotCoverage?:StockCoverage;depotObservedAt?:Record<string,string|null>;recovery?:{savedAt:string;userId:string;previous:Omit<State,'recovery'>};mappings:Record<string,string|null>;history:{importedAt:string;filename:string;userId:string;fileHash:string;warehouses:number;rows:number;decision?:StockCoverageDecision;confirmation?:string}[]};
@@ -42,8 +43,9 @@ export async function stockForWarehouse(warehouseId:string):Promise<StockView> {
   const rows=view.rows.map(row=>{const names=categories.get(stockCode(row.code));return {...row,category:names?.size===1?[...names][0]:'Necategorizate'};});
   return {...view,rows,depot:state.depot||{},depotImportedAt:state.depotCoverage?state.depotCoverage.fullSnapshotAt:state.depotImportedAt||null,depotCoverage:state.depotCoverage,depotObservedAt:state.depotObservedAt};
 }
-export async function stockUpload(req:Request,user:User,apply:boolean) {
+export async function stockUpload(req:Request,user:User,apply:boolean,internal?:{authorization:ImportAuthorization;action:{id:string;actor:unknown;period:unknown};onMutationStart?:()=>void}) {
   requireManager(user);
+  if(internal&&(internal.authorization.userId!==user.id||internal.authorization.profileVersion!==Number(user.profileVersion)||internal.authorization.managerScope!==user.managerScope))fail(401,'Sesiunea sau drepturile managerului s-au schimbat.');
   if(Number(req.headers.get('content-length')||0)>STOCK_FILE_LIMIT)fail(413,'Fișierul depășește limita de 8 MB.');
   let filename='';
   try{filename=decodeURIComponent(req.headers.get('X-Stock-Filename')||'');}catch{fail(400,'Numele fișierului este invalid.');}
@@ -114,14 +116,22 @@ export async function stockUpload(req:Request,user:User,apply:boolean) {
   state.history=[{importedAt,filename,userId:user.id,fileHash,warehouses:selected.size,rows:rowCount,decision,confirmation},...state.history].slice(0,30);
   const next=JSON.stringify(state);
   // A single compare-and-swap writes every selected warehouse together.
-  const baseGuard=operationalWriteGuard(req,user);
+  const baseGuard=operationalWriteGuard(req,user,internal?{tokenHash:internal.authorization.tokenHash}:{});
   const guard={sql:`${baseGuard.sql} AND EXISTS (SELECT 1 FROM users WHERE id=? AND role='manager' AND manager_scope=?)`,args:[...baseGuard.args,user.id,user.managerScope]};
-  const result=raw===null?await db().prepare(`INSERT OR IGNORE INTO settings (key,value) SELECT ?,? WHERE ${guard.sql}`).bind(stateKey,next,...guard.args).run():await db().prepare(`UPDATE settings SET value=? WHERE key=? AND value=? AND ${guard.sql}`).bind(next,stateKey,raw,...guard.args).run();
+  const mutation=raw===null?db().prepare(`INSERT OR IGNORE INTO settings (key,value) SELECT ?,? WHERE ${guard.sql}`).bind(stateKey,next,...guard.args):db().prepare(`UPDATE settings SET value=? WHERE key=? AND value=? AND ${guard.sql}`).bind(next,stateKey,raw,...guard.args);
+  const publicResult={ok:true,warehouses:selected.size,rows:rowCount,importedAt};
+  let proof:Record<string,unknown>|undefined;
+  if(internal){
+    if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(internal.action.id))fail(400,'Identificator de acțiune invalid.');
+    proof={verified:true,effect:'published',action_id:internal.action.id,source_sha256:fileHash,actor:internal.action.actor,declared_period:internal.action.period,result:publicResult};
+  }
+  internal?.onMutationStart?.();
+  const result=proof?(await db().batch([mutation,db().prepare('INSERT INTO settings(key,value) SELECT ?,? WHERE changes()=1').bind('import_action_receipt:'+internal!.action.id,JSON.stringify(proof))]))[0]:await mutation.run();
   if(!result.meta.changes) {
     if(!await db().prepare(`SELECT 1 ok WHERE ${guard.sql}`).bind(...guard.args).first())fail(401,'Sesiunea sau drepturile managerului s-au schimbat. Autentifică-te din nou.');
     const latestState=(await readState()).state.history[0];
     if(latestState?.fileHash===fileHash&&latestState.userId!==user.id)fail(409,await duplicateStockImportMessage(latestState.userId));
     fail(409,'Un alt import a fost salvat între timp. Reîncarcă previzualizarea.');
   }
-  return response({ok:true,warehouses:selected.size,rows:rowCount,importedAt});
+  return response({...publicResult,...(proof?{receipt:proof}:{})});
 }

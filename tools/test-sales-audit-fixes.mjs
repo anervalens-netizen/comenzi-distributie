@@ -17,7 +17,7 @@ try {
   // Exercise the real preview handler with only unrelated HTTP/auth/parser infrastructure stubbed.
   const previewStubs = {
     './server': `export const catalog=[]; export const db=()=>({prepare:()=>({all:async()=>({results:[]}),first:async()=>null})}); export const fail=(code,message)=>{throw new Error(code+': '+message)}; export const requireManager=()=>{}; export const isGlobalManager=()=>true; export const readLimited=async req=>new Uint8Array(await req.arrayBuffer()); export const response=value=>Response.json(value);`,
-    './import-write-authorization': 'export const withImportAuthorization=()=>{throw new Error("unexpected import write in preview test")};',
+    './import-write-authorization': 'export const withImportAuthorization=()=>{throw new Error("unexpected import write in preview test")}; export const withCapturedImportAuthorization=withImportAuthorization;',
     './distribution-config': 'export const readDistributionRules=async()=>null;',
     './catalog': 'export const readCatalog=async()=>({products:[]});',
     './sales-parser-runtime': 'export const parseSalesFileRuntime=async bytes=>JSON.parse(new TextDecoder().decode(bytes));',

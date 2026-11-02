@@ -1,5 +1,5 @@
 import {readDistributionRules} from './distribution-config';
-import {withImportAuthorization} from './import-write-authorization';
+import {withImportAuthorization,withCapturedImportAuthorization,type ImportAuthorization} from './import-write-authorization';
 import {projectIds,productGroup} from './distribution-rules';
 import {distributionSales,combineSalesViews} from './distribution-sales';
 import { catalog, db, fail, isGlobalManager, readLimited, requireManager, response } from './server';
@@ -189,7 +189,7 @@ export function salesImportStatus() {
   return latest?{month:String(latest.month),filename:String(latest.filename),importedAt:String(latest.importedAt),rows:Number(latest.rows||0)}:null;
 }
 
-export async function salesUpload(req: Request, user: User, apply: boolean) {
+export async function salesUpload(req: Request, user: User, apply: boolean, internal?:{authorization:ImportAuthorization;action:{id:string;actor:unknown;period:{start:string;end:string}};onMutationStart?:()=>void}) {
   requireManager(user);
   if (Number(req.headers.get('content-length') || 0) > SALES_FILE_LIMIT) fail(413, 'Fișierul depășește limita de 8 MB.');
   const filename = filenameFrom(req);
@@ -207,6 +207,7 @@ export async function salesUpload(req: Request, user: User, apply: boolean) {
   const historical = !!latestSalesMonth() && month < String(latestSalesMonth());
   const firstDate = rows.reduce((earliest, row) => row.date < earliest ? row.date : earliest, rows[0].date);
   const lastDate = rows.reduce((latest, row) => row.date > latest ? row.date : latest, rows[0].date);
+  if(internal&&(firstDate<internal.action.period.start||lastDate>internal.action.period.end))fail(400,'Perioada declarată nu cuprinde datele din fișier.');
   const coverageChange = salesCoverageChange(month, rows);
   const { requiresRegressionAcknowledgement } = coverageChange;
   const currentRevision = salesRevision();
@@ -231,15 +232,17 @@ export async function salesUpload(req: Request, user: User, apply: boolean) {
   const finalSnapshot = await mappingSnapshot();
   if (finalSnapshot.hash !== snapshot.hash) fail(409, 'Maparea agenților s-a modificat. Reîncarcă previzualizarea.');
   try {
-    const result = withImportAuthorization(req,user,(check,connection)=>{
+    const write=(check:()=>void,connection:import('node:sqlite').DatabaseSync)=>{
       // Mapping inputs and authorization share the same writer lock until commit.
       const actors=connection.prepare("SELECT id,name,role,site_code,warehouse_name FROM users WHERE active=1 AND (role='agent' OR (role='manager' AND TRIM(site_code)<>'')) ORDER BY name,id").all();
       const aliases=connection.prepare("SELECT value FROM settings WHERE key='sales-agent-aliases-v1'").get();
       if(JSON.stringify([actors,aliases?.value??null])!==finalSnapshot.sourceStamp)fail(409,'Maparea agenților s-a modificat. Reîncarcă previzualizarea.');
+      internal?.onMutationStart?.();
       const originalPath=saveSalesOriginal(fileHash,filename,bytes);
-      return importSalesRows({ rows, month, fileHash, filename, importedBy: user.id, originalPath, expectedRevision, expectedMappingHash: snapshot.hash, currentMappingHash: finalSnapshot.hash, historicalAcknowledged: req.headers.get('X-Sales-Allow-Historical') === '1', regressionAcknowledged: req.headers.get('X-Sales-Allow-Regression') === '1', authorizeCommit:check });
-    });
-    if(result.idempotent&&result.importedBy&&result.importedBy!==user.id)fail(409,await duplicateImportMessage('Vânzările',result.importedBy));
+      return importSalesRows({ rows, month, fileHash, filename, importedBy: user.id, originalPath, expectedRevision, expectedMappingHash: snapshot.hash, currentMappingHash: finalSnapshot.hash, historicalAcknowledged: req.headers.get('X-Sales-Allow-Historical') === '1', regressionAcknowledged: req.headers.get('X-Sales-Allow-Regression') === '1', authorizeCommit:check,action:internal?.action });
+    };
+    const result=internal?withCapturedImportAuthorization(internal.authorization,write):withImportAuthorization(req,user,write);
+    if('idempotent' in result&&result.idempotent&&'importedBy' in result&&typeof result.importedBy==='string'&&result.importedBy!==user.id)fail(409,await duplicateImportMessage('Vânzările',result.importedBy));
     return response(result);
   } catch (error) {
     const code = error instanceof Error ? error.message : '';

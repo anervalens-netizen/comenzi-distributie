@@ -33,7 +33,7 @@ export function exportBackendMaps(root,release) {
   if(fs.existsSync(target))throw new Error('Backend map output already exists');
   fs.mkdirSync(target,{recursive:true,mode:0o700});
  }
- const workerNames=new Set(['sales-parser-worker.mjs','sales-view-worker.mjs','stock-parser-worker.mjs','client-history-import-worker.mjs']);
+ const workerNames=new Set(['sales-parser-worker.mjs','sales-view-worker.mjs','stock-parser-worker.mjs','client-history-import-worker.mjs','import-engine-sales.mjs','import-engine-refresh.mjs']);
  const backendFiles={},workerFiles={};
  for(const map of fs.globSync('**/*.{js,mjs}.map',{cwd:root,exclude:['node_modules/**','public/**','dist/client/**','.private-source-maps/**']})) {
   const relative=map.slice(0,-4), worker=workerNames.has(relative);
@@ -47,7 +47,7 @@ export function exportBackendMaps(root,release) {
   if(debugId){entry.debug_id=debugId;entry.code_file=backendFrameCodeFile(relative,debugId);}
   (worker?workerFiles:backendFiles)[relative]=entry;
  }
- if(Object.keys(workerFiles).length!==4||Object.keys(backendFiles).length===0)
+ if(Object.keys(workerFiles).length!==workerNames.size||Object.keys(backendFiles).length===0)
   throw new Error('Missing backend maps or application workers');
  for(const [target,files] of [[backend,backendFiles],[workers,workerFiles]])
   fs.writeFileSync(path.join(target,'manifest.json'),JSON.stringify({release,files})+'\n',{mode:0o600});

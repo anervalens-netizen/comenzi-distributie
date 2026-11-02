@@ -1,3 +1,4 @@
+import {importsCatalog,importsJobs,importsJob} from '@/lib/import-engine-runtime';
 import {simVerification,simVerificationAccess} from '@/lib/sim-verification-api';
 import {operationalWriteGuard} from '@/lib/operational-write-guard';
 import {activationReport} from '@/lib/activation-api';
@@ -378,6 +379,12 @@ async function dispatch(req: Request) {
   if(path.join('/')==='sales/clients/reconciliation'&&req.method==='GET')return clientSalesReconciliation(readUser,new URL(req.url).searchParams);
   if(path.join('/')==='sales/clients'&&req.method==='GET')return response(await clientSalesOverview(readUser,new URL(req.url).searchParams));
   if(path.join('/')==='sales'&&req.method==='GET')return salesView(req,readUser);
+  if(path.join('/')==='imports/catalog'&&req.method==='GET')return importsCatalog(req,user);
+  if(path.join('/')==='imports/jobs'&&['GET','POST'].includes(req.method))return importsJobs(req,user);
+  if(path[0]==='imports'&&path[1]==='jobs'&&path[2]&&path.length<=4)return importsJob(req,user,path[2],path[3]);
+  // Once the shared engine is configured, old write routes must not launch a
+  // second queue or bypass its durable journal. Historical status remains readable.
+  if(runtimeKind==='node'&&process.env.IMPORT_ENGINE_URL&&req.method==='POST'&&['client-sales/import/preview','client-sales/import','sales/preview','sales/import','admin/stock/preview','admin/stock/import'].includes(path.join('/')))fail(410,'Folosește secțiunea Importuri actualizată.');
   if(path.join('/')==='client-sales/import/status'&&req.method==='GET')return historyImportStatus(req,user);
   if(path.join('/')==='client-sales/import/preview'&&req.method==='POST')return historyImportPreview(req,user);
   if(path.join('/')==='client-sales/import'&&req.method==='POST')return historyImportCommit(req,user);

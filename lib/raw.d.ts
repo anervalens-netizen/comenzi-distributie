@@ -19,3 +19,9 @@ declare module '#mobiup-client-history-import' {
  export function historyImportPreview(req:Request,user:import('./types').User):Promise<Response>;
  export function historyImportCommit(req:Request,user:import('./types').User):Promise<Response>;
 }
+
+declare module '#mobiup-import-engine' {
+ export function importsCatalog(req:Request,user:import('./types').User):Promise<Response>;
+ export function importsJobs(req:Request,user:import('./types').User):Promise<Response>;
+ export function importsJob(req:Request,user:import('./types').User,id:string,part?:string):Promise<Response>;
+}

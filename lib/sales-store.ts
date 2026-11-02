@@ -254,16 +254,25 @@ export function saveSalesOriginal(fileHash: string, filename: string, bytes: Uin
   return relative;
 }
 
-export function importSalesRows(args: { rows: SalesRow[]; month: string; fileHash: string; filename: string; importedBy: string; originalPath: string; expectedRevision: number; expectedMappingHash: string; currentMappingHash: string; historicalAcknowledged: boolean; regressionAcknowledged?: boolean; authorizeCommit?: () => void; }) {
+export function importSalesRows(args: { rows: SalesRow[]; month: string; fileHash: string; filename: string; importedBy: string; originalPath: string; expectedRevision: number; expectedMappingHash: string; currentMappingHash: string; historicalAcknowledged: boolean; regressionAcknowledged?: boolean; authorizeCommit?: () => void; action?:{id:string;actor:unknown;period:unknown}; }) {
   const db = database();
   db.exec('BEGIN IMMEDIATE;');
   try {
     const revision = salesRevision();
+    const receipt=(effect:'published'|'no_change',result:Record<string,unknown>)=>{
+      if(!args.action)return undefined;
+      if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(args.action.id))throw new Error('INVALID_ACTION');
+      const value={verified:true,effect,action_id:args.action.id,source_sha256:args.fileHash,actor:args.action.actor,declared_period:args.action.period,result};
+      db.prepare('INSERT INTO sales_meta(key,value) VALUES(?,?)').run('import_action_receipt:'+args.action.id,JSON.stringify(value));
+      return value;
+    };
     const existing = db.prepare('SELECT m.month,m.imported_at AS importedAt,m.revision,i.imported_by AS importedBy FROM sales_months m JOIN sales_imports i ON i.id=m.import_id WHERE m.month=? AND m.file_hash=?').get(args.month, args.fileHash) as Record<string, unknown> | undefined;
     if (existing) {
+      const result={ ok: true, idempotent: true, month: args.month, importedAt: String(existing.importedAt), importedBy: String(existing.importedBy), revision: Number(existing.revision), rows: args.rows.length, fileHash: args.fileHash };
+      const proof=receipt('no_change',result);
       args.authorizeCommit?.();
       db.exec('COMMIT;');
-      return { ok: true, idempotent: true, month: args.month, importedAt: String(existing.importedAt), importedBy: String(existing.importedBy), revision: Number(existing.revision), rows: args.rows.length, fileHash: args.fileHash };
+      return {...result,...(proof?{receipt:proof}:{})};
     }
     if (revision !== args.expectedRevision) throw new Error('STALE_REVISION');
     if (args.expectedMappingHash !== args.currentMappingHash) throw new Error('STALE_MAPPING');
@@ -280,9 +289,11 @@ export function importSalesRows(args: { rows: SalesRow[]; month: string; fileHas
     for (const row of args.rows) add.run(importId, row.rowNumber, row.date, row.month, row.siteCode, row.itemCode, row.itemName, row.quantity, row.brand, row.priceCents, row.valueCents, row.location, row.company, row.asm, row.regional, row.orderNumber, row.category, row.subCategory, row.agent);
     db.prepare('INSERT INTO sales_months(month,import_id,imported_at,filename,file_hash,revision) VALUES(?,?,?,?,?,?) ON CONFLICT(month) DO UPDATE SET import_id=excluded.import_id,imported_at=excluded.imported_at,filename=excluded.filename,file_hash=excluded.file_hash,revision=excluded.revision').run(args.month, importId, importedAt, args.filename, args.fileHash, nextRevision);
     db.prepare("UPDATE sales_meta SET value=? WHERE key='revision'").run(String(nextRevision));
+    const result={ ok: true, month: args.month, importedAt, revision: nextRevision, rows: args.rows.length, fileHash: args.fileHash };
+    const proof=receipt('published',result);
     args.authorizeCommit?.();
     db.exec('COMMIT;');
-    return { ok: true, month: args.month, importedAt, revision: nextRevision, rows: args.rows.length, fileHash: args.fileHash };
+    return {...result,...(proof?{receipt:proof}:{})};
   } catch (error) { try { db.exec('ROLLBACK;'); } catch { /* already rolled back */ } throw error; }
 }
 

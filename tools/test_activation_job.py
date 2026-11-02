@@ -1,19 +1,55 @@
 import json
 import gzip
 import hashlib
-from contextlib import closing
+from contextlib import closing, contextmanager
 from pathlib import Path
 import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
-from activation_job import run_job
+from activation_job import authorized_publication, run_job
 import activations
 from test_activations import fixture,row
 
 class JobTests(unittest.TestCase):
+ def test_authorized_publication_serializes_revocation_and_rejects_stale_session(self):
+  with tempfile.TemporaryDirectory() as folder:
+   dbpath=Path(folder)/'settings.sqlite'
+   with closing(sqlite3.connect(dbpath)) as db:
+    db.executescript('CREATE TABLE users(id TEXT,role TEXT,active INTEGER,must_change_password INTEGER,profile_revision INTEGER,manager_scope TEXT); CREATE TABLE sessions(user_id TEXT,token_hash TEXT,expires_at INTEGER);')
+    db.execute('INSERT INTO users VALUES(?,?,?,?,?,?)',('manager','manager',1,0,3,'global'))
+    db.execute('INSERT INTO sessions VALUES(?,?,?)',('manager','synthetic-hash',int(time.time()*1000)+60000))
+    db.commit()
+   auth={'userId':'manager','profileVersion':3,'managerScope':'global','tokenHash':'synthetic-hash'}
+   with authorized_publication(dbpath,auth):
+    with closing(sqlite3.connect(dbpath,timeout=0)) as other:
+     with self.assertRaisesRegex(sqlite3.OperationalError,'locked'):other.execute('DELETE FROM sessions')
+   with closing(sqlite3.connect(dbpath)) as db:db.execute('DELETE FROM sessions');db.commit()
+   with self.assertRaises(PermissionError):
+    with authorized_publication(dbpath,auth):self.fail('revoked session accepted')
+
+ def test_publication_guard_covers_pointer_change_and_denial_preserves_pointer(self):
+  with tempfile.TemporaryDirectory() as folder:
+   root=Path(folder);data=root/'data';file=fixture(root/'one.xlsx',[row()]);batch={'files':[str(file)],'operator':'vodafone'}
+   run_job(data,[batch]);old=(data/'current').resolve();events=[]
+   @contextmanager
+   def guard(stage):
+    events.append(('enter',(data/'current').resolve()))
+    yield
+    events.append(('exit',(data/'current').resolve()))
+   result=run_job(data,[batch],publication_guard=guard)
+   self.assertEqual(events,[('enter',old),('exit',data/'generations'/result['generation'])])
+   current=(data/'current').resolve()
+   @contextmanager
+   def denied(stage):
+    raise PermissionError('authorization revoked')
+    yield
+   with self.assertRaisesRegex(PermissionError,'authorization revoked'):run_job(data,[batch],publication_guard=denied)
+   self.assertEqual((data/'current').resolve(),current)
+
  def test_noop_semantic_migration_is_atomic_and_preserves_prior_generation(self):
   with tempfile.TemporaryDirectory() as folder:
    root=Path(folder);data=root/'data';eligible='SIM with initial credit >= 3 EUR'

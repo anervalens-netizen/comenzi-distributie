@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Cumulative monthly uploads. Private inputs stay outside the source repository."""
-import calendar, collections, datetime as dt, fcntl, hashlib, json, os, pathlib, sqlite3, sys, time, zipfile
+import calendar, collections, datetime as dt, fcntl, hashlib, json, os, pathlib, sqlite3, sys, time, uuid, zipfile
 from zoneinfo import ZoneInfo
 import client_sales_history as h
 
@@ -180,6 +180,22 @@ def authorized_finish(request,finish):
  finally:
   auth_db.rollback();auth_db.close()
 
+def record_action_receipt(c,request,summary,result):
+ action=request.get('actionId')
+ if action is None:return
+ try:
+  if str(uuid.UUID(action))!=action:raise ValueError()
+ except (ValueError,TypeError,AttributeError):raise UploadError('Identificatorul acțiunii este invalid.') from None
+ receipt={'verified':True,'effect':'no_change' if result['status']=='already_imported' else 'published',
+          'action_id':action,'source_sha256':summary['fileHash'],'import_id':result.get('importId')}
+ if request.get('actor') is not None:receipt['actor']=request['actor']
+ if request.get('declaredPeriod') is not None:receipt['declared_period']=request['declaredPeriod']
+ key='import_action_receipt:'+action
+ existing=c.execute('SELECT value FROM history_meta WHERE key=?',(key,)).fetchone()
+ if existing:
+  if existing[0]!=h.dump(receipt):raise UploadError('Acțiunea există cu alt rezultat.')
+ else:c.execute('INSERT INTO history_meta(key,value) VALUES(?,?)',(key,h.dump(receipt)))
+
 def apply(c,rows,summary,month_end,request,root):
  # Reserve the writer BEFORE inspecting facts, backing up or archiving. Stale
  # previews must have no archive/write side effects and WAL writers cannot race.
@@ -192,8 +208,14 @@ def apply(c,rows,summary,month_end,request,root):
   previous_logical=h.sha(logical.encode()) if logical else None
   current=preview(c,rows,summary,month_end)
   if current['alreadyImported']:
-   authorized_finish(request,c.rollback)
-   return {**current,'status':'already_imported','previousSourceDigest':previous_generation,'previousLogicalDigest':previous_logical,'sourceLogicalDigest':previous_logical}
+   result={**current,'status':'already_imported','previousSourceDigest':previous_generation,'previousLogicalDigest':previous_logical,'sourceLogicalDigest':previous_logical}
+   if request.get('actionId') is not None:
+    record_action_receipt(c,request,summary,result)
+    logical=h.logical_revision(c)
+    result['sourceLogicalDigest']=h.sha(logical.encode()) if logical else None
+    authorized_finish(request,c.commit)
+   else:authorized_finish(request,c.rollback)
+   return result
   if request.get('revision')!=current['revision'] or request.get('fileHash')!=summary['fileHash']:
    raise UploadError('Datele s-au schimbat după previzualizare. Încarcă fișierul din nou.')
   if current['requiresAcknowledgement'] and request.get('allowRegression') is not True:
@@ -251,11 +273,13 @@ def apply(c,rows,summary,month_end,request,root):
   if c.execute('PRAGMA foreign_key_check').fetchone():raise UploadError('Validarea asocierilor a eșuat.')
   if source_identity(c)!=source_generation:raise UploadError('Datele s-au schimbat după previzualizare.')
   sync_directory(root/'client-sales-originals')
+  record_action_receipt(c,request,summary,{'status':'imported','importId':imp})
   logical=h.logical_revision(c)
   applied_logical=h.sha(logical.encode()) if logical else None
+  result={**current,'status':'imported','importId':imp,'previousSourceDigest':previous_generation,'previousLogicalDigest':previous_logical,'sourceLogicalDigest':applied_logical}
   authorized_finish(request,c.commit)
  except BaseException:c.rollback();raise
- return {**current,'status':'imported','importId':imp,'previousSourceDigest':previous_generation,'previousLogicalDigest':previous_logical,'sourceLogicalDigest':applied_logical}
+ return result
 
 def main():
  request=json.loads(pathlib.Path(sys.argv[1]).read_text())

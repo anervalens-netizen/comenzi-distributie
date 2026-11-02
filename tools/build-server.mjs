@@ -1,4 +1,5 @@
-import {copyFileSync} from 'node:fs';
+import {copyFileSync,readFileSync} from 'node:fs';
+import {resolve} from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { build } from 'esbuild';
 const result = spawnSync(process.execPath, ['node_modules/vinext/dist/cli.js', 'build'], {
@@ -15,8 +16,10 @@ await build({entryPoints:['lib/sales-parser-worker.ts'],outfile:'dist/standalone
 await build({entryPoints:['lib/sales-view-worker.ts'],outfile:'dist/standalone/sales-view-worker.mjs',bundle:true,platform:'node',format:'esm',packages:'external',sourcemap:'external'});
 await build({entryPoints:['lib/stock-parser-worker.ts'],outfile:'dist/standalone/stock-parser-worker.mjs',bundle:true,platform:'node',format:'esm',packages:'external',sourcemap:'external'});
 
+await build({entryPoints:['lib/import-engine-sales.ts'],outfile:'dist/standalone/import-engine-sales.mjs',bundle:true,platform:'node',format:'esm',packages:'external',sourcemap:'external',alias:{'#mobiup-runtime':'./lib/runtime-node.ts','#mobiup-sales-parser':'./lib/sales-parser-node.ts','#mobiup-sales-view':'./lib/sales-view-node.ts','#mobiup-stock-parser':'./lib/stock-parser-node.ts'},plugins:[{name:'raw-sql',setup(plugin){plugin.onResolve({filter:/^@\/drizzle\/.*\.sql\?raw$/},args=>({path:resolve(args.path.slice(2,-4)),namespace:'raw-sql'}));plugin.onLoad({filter:/.*/,namespace:'raw-sql'},args=>({contents:readFileSync(args.path,'utf8'),loader:'text'}));}}]});
+await build({entryPoints:['lib/import-engine-refresh.ts'],outfile:'dist/standalone/import-engine-refresh.mjs',bundle:true,platform:'node',format:'esm',packages:'external',sourcemap:'external'});
 await build({entryPoints:['lib/client-history-import-worker.ts'],outfile:'dist/standalone/client-history-import-worker.mjs',bundle:true,platform:'node',format:'esm',packages:'external',sourcemap:'external'});
-for(const name of ['client_sales_history.py','client_history_upload.py','client_catalog_plan.py','activation_versions.py','activation_projection.py','activations.py','activation_report.py','activation_job.py','distribution_configure.py'])copyFileSync('tools/'+name,'dist/standalone/'+name);
+for(const name of ['client_sales_history.py','client_history_upload.py','client_catalog_plan.py','activation_versions.py','activation_projection.py','activations.py','activation_report.py','activation_job.py','distribution_configure.py','import_engine_history.py','import_engine_sim.py','import-engine-executor.mjs'])copyFileSync('tools/'+name,'dist/standalone/'+name);
 
 // Workers must be emitted before tracing so their dependencies are included.
 const {packageRuntime} = await import('./package-runtime.mjs');

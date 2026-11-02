@@ -1,18 +1,43 @@
 #!/usr/bin/env python3
 """Stage, validate and atomically publish one network generation under an explicit private root."""
 import argparse
+from contextlib import contextmanager, nullcontext
 import fcntl
 import json
 import os
 from pathlib import Path
 import shutil
 import sqlite3
+import time
 import uuid
 import activations
 from activation_report import build_report, build_report_incremental, IncrementalReportUnavailable
 
 
-def run_job(directory,batches,rules=None,before_publish=None):
+@contextmanager
+def authorized_publication(settings_db, authorization, required_scope='global'):
+    """Hold the session/profile writer lock until publication is durable.
+
+    The authorization is a private server-derived handle, never a raw cookie.
+    This is intentionally separate from offline maintenance callers.
+    """
+    path=Path(settings_db).resolve().as_uri()+'?mode=rw'
+    db=sqlite3.connect(path,timeout=5,uri=True)
+    try:
+        db.execute('BEGIN IMMEDIATE')
+        valid=db.execute('''SELECT 1 FROM users u JOIN sessions s ON s.user_id=u.id
+            WHERE u.id=? AND u.role='manager' AND u.active=1 AND u.must_change_password=0
+            AND u.profile_revision=? AND u.manager_scope=? AND u.manager_scope=?
+            AND s.token_hash=? AND s.expires_at>?''',
+            (authorization.get('userId'),authorization.get('profileVersion'),
+             authorization.get('managerScope'),required_scope,authorization.get('tokenHash'),int(time.time()*1000))).fetchone()
+        if not valid:raise PermissionError('Sesiunea sau drepturile managerului s-au schimbat.')
+        yield db
+    finally:
+        db.rollback();db.close()
+
+
+def run_job(directory,batches,rules=None,before_publish=None,publication_guard=None,before_stage=None):
     root=Path(directory).resolve();root.mkdir(mode=0o700,parents=True,exist_ok=True)
     with (root/'.activation-job.lock').open('a') as lock:
         fcntl.flock(lock,fcntl.LOCK_EX)
@@ -21,6 +46,7 @@ def run_job(directory,batches,rules=None,before_publish=None):
         if generations.is_symlink():raise ValueError('Invalid generation directory')
         generations.mkdir(mode=0o700,exist_ok=True)
         if current!=root and (current.parent!=generations or not current.is_dir()):raise ValueError('Invalid current generation')
+        if before_stage:before_stage(current)
         stage=generations/str(uuid.uuid4());stage.mkdir(mode=0o700)
         try:
             source_path=current/'activations.sqlite'
@@ -75,12 +101,17 @@ def run_job(directory,batches,rules=None,before_publish=None):
             fd=os.open(stage,os.O_RDONLY)
             try:os.fsync(fd)
             finally:os.close(fd)
-            pointer=root/('.current-'+str(uuid.uuid4()))
-            pointer.symlink_to(stage.relative_to(root),target_is_directory=True)
-            os.replace(pointer,root/'current')
-            fd=os.open(root,os.O_RDONLY)
-            try:os.fsync(fd)
-            finally:os.close(fd)
+            # A caller enforcing session revocation must hold its application
+            # writer transaction across the actual pointer change, not merely
+            # check it in before_publish. The guard is entered only after the
+            # stage is durable and remains held through the directory fsync.
+            with publication_guard(stage) if publication_guard else nullcontext():
+                pointer=root/('.current-'+str(uuid.uuid4()))
+                pointer.symlink_to(stage.relative_to(root),target_is_directory=True)
+                os.replace(pointer,root/'current')
+                fd=os.open(root,os.O_RDONLY)
+                try:os.fsync(fd)
+                finally:os.close(fd)
             return {'generation':stage.name,'previousGeneration':current.name if current!=root else 'legacy','imports':receipts,'report':report}
         except BaseException:
             # Keep failed staging and originals for private diagnosis. The old pointer is unchanged.

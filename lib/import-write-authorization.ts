@@ -7,10 +7,14 @@ import type {User} from './types';
 export function importAuthorization(req:Request,user:User) {
   return {userId:user.id,profileVersion:Number(user.profileVersion),managerScope:user.managerScope,tokenHash:sha256(sessionToken(req))};
 }
+export type ImportAuthorization=ReturnType<typeof importAuthorization>;
 
 /** Hold the application writer lock until the separate ledger has committed. */
 export function withImportAuthorization<T>(req:Request,user:User,write:(check:()=>void,connection:DatabaseSync)=>T):T {
-  const auth=importAuthorization(req,user);
+  return withCapturedImportAuthorization(importAuthorization(req,user),write);
+}
+
+export function withCapturedImportAuthorization<T>(auth:ImportAuthorization,write:(check:()=>void,connection:DatabaseSync)=>T):T {
   const path=resolve(process.env.MOBIUP_DATA_DIR || './work/server-data','mobiup.sqlite');
   const connection=new DatabaseSync(path,{open:true});
   try {

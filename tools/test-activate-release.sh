@@ -16,10 +16,13 @@ log="$root/systemctl.log"; curl_log="$root/curl.log"; mode="$root/health-mode"; 
 cat > "$root/systemctl" <<'EOF'
 #!/usr/bin/env bash
 if [[ "$1" == show ]]; then
+  if [[ "$*" == *LoadState* ]]; then printf '%s\n' "${MOBIUP_TEST_WORKER_LOAD:-not-found}"; exit 0; fi
+  if [[ "$*" == *ActiveState* ]]; then printf '%s\n' "${MOBIUP_TEST_WORKER_STATE:-inactive}"; exit 0; fi
   if [[ "$*" == *EnvironmentFiles* ]]; then printf '%s\n' "${MOBIUP_TEST_ENV_FILES:-}"; exit 0; fi
   printf '%s\n' "$MOBIUP_TEST_SERVICE_ENV"
   exit 0
 fi
+if [[ "$1" == is-active ]]; then exit 0; fi
 printf '%s\n' "$*" >> "$MOBIUP_TEST_SYSTEMCTL_LOG"
 exit 0
 EOF
@@ -204,6 +207,38 @@ check "$(readlink -f "$runtime/current")" "$releases/$old" 'corrupt backend iden
 check "$(wc -l < "$log")" "$before_restarts" 'corrupt backend identity never restarts'
 check "$(wc -l < "$root/maps.log")" "$before_maps" 'corrupt backend identity refuses before uploads'
 unset MOBIUP_SOURCE_MAP_GATE MOBIUP_SOURCE_MAP_PROJECT MOBIUP_PUBLIC_ORIGIN MOBIUP_TEST_MAP_LOG MOBIUP_TEST_BACKEND_FAIL
+
+# An active import worker is drained and stopped around both link switches.
+for sha in "$old" "$new" "$bad"; do touch "$releases/$sha/import-engine-executor.mjs"; done
+printf '{"sha":"%s","resourceMode":"private"}\n' "$bad" > "$releases/$bad/RELEASE.json"
+cat > "$root/drain" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' drain >> "$MOBIUP_TEST_SYSTEMCTL_LOG"
+[[ "${MOBIUP_TEST_DRAIN_FAIL:-0}" != 1 ]]
+EOF
+chmod +x "$root/drain"
+export MOBIUP_TEST_WORKER_LOAD=loaded MOBIUP_TEST_WORKER_STATE=active MOBIUP_IMPORT_DRAIN_GATE="$root/drain"
+ln -sfn "$releases/$old" "$runtime/current"; : > "$log"
+"$script" "$new" >/dev/null
+expected=$'stop mobiup-comenzi-distributie.service\ndrain\nstop mobiup-comenzi-import-worker.service\nstart mobiup-comenzi-import-worker.service\nstart mobiup-comenzi-distributie.service'
+check "$(cat "$log")" "$expected" 'active worker drains before switching and starts before API'
+ln -sfn "$releases/$old" "$runtime/current"; : > "$log"; echo fail-new > "$mode"
+set +e; "$script" "$bad" >/dev/null 2>&1; rc=$?; set -e
+check "$rc" 1 'failed new release rolls back with active worker'
+check "$(readlink -f "$runtime/current")" "$releases/$old" 'worker rollback restores previous release'
+check "$(cat "$log")" "$expected"$'\n'"$expected" 'rollback drains and restarts worker around second switch'
+echo success > "$mode"; : > "$log"; export MOBIUP_TEST_DRAIN_FAIL=1
+set +e; "$script" "$new" >/dev/null 2>&1; rc=$?; set -e
+check "$rc" 2 'failed drain refuses activation'
+check "$(readlink -f "$runtime/current")" "$releases/$old" 'failed drain preserves release'
+check "$(cat "$log")" $'stop mobiup-comenzi-distributie.service\ndrain\nstart mobiup-comenzi-distributie.service' 'failed drain restores API without stopping worker'
+unset MOBIUP_TEST_DRAIN_FAIL MOBIUP_IMPORT_DRAIN_GATE
+set +e; "$script" "$new" >/dev/null 2>&1; rc=$?; set -e
+check "$rc" 2 'active worker requires provisioned drain gate'
+export MOBIUP_TEST_WORKER_STATE=inactive
+: > "$log"; "$script" "$new" >/dev/null
+check "$(cat "$log")" 'restart mobiup-comenzi-distributie.service' 'inactive worker remains inactive'
+unset MOBIUP_TEST_WORKER_LOAD MOBIUP_TEST_WORKER_STATE
 
 # A successful new activation retains exactly the active release and its fallback.
 unset MOBIUP_RELEASE_PRUNE MOBIUP_HEALTH_HOST MOBIUP_HEALTH_PORT

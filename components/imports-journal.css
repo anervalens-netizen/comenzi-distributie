@@ -1,0 +1,8 @@
+.settings-imports { display: grid; gap: 1rem; min-width: 0; }
+.settings-imports > .panel { min-width: 0; padding: 1.25rem; }
+.settings-imports label { display: grid; gap: .35rem; }
+.settings-imports input:not([type=checkbox]), .settings-imports select { max-width: 100%; }
+.settings-imports .imports-table { overflow-x: auto; }
+.settings-imports table { border-collapse: collapse; min-width: 44rem; width: 100%; }
+.settings-imports th, .settings-imports td { text-align: left; vertical-align: top; padding: .55rem; border-bottom: 1px solid #ddd; overflow-wrap: anywhere; }
+@media (max-width: 600px) { .settings-imports > .panel { padding: .85rem; } }

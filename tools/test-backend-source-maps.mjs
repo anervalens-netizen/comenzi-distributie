@@ -9,7 +9,7 @@ import {exportBackendMaps,addBackendDebugIdentity} from './private-backend-sourc
 const root=fs.mkdtempSync(path.join(tmpdir(),'private-backend-maps-')),release='a'.repeat(40);
 try {
  const scripts=['dist/server/index.js','dist/server/ssr/index.js',
-  'sales-parser-worker.mjs','sales-view-worker.mjs','stock-parser-worker.mjs','client-history-import-worker.mjs'];
+  'sales-parser-worker.mjs','sales-view-worker.mjs','stock-parser-worker.mjs','client-history-import-worker.mjs','import-engine-sales.mjs','import-engine-refresh.mjs'];
  const originals=new Map();
  for(const relative of scripts) {
   const target=path.join(root,relative);fs.mkdirSync(path.dirname(target),{recursive:true});
@@ -24,7 +24,7 @@ try {
  assert.equal(new Set(Object.values(result.backend).map(x=>path.basename(x.code_file))).size,2);
  for(const relative of scripts) {
   assert.ok(!fs.existsSync(path.join(root,relative+'.map')));
-  const worker=relative.endsWith('-worker.mjs'),original=originals.get(relative);
+  const worker=scripts.slice(2).includes(relative),original=originals.get(relative);
   const target=path.join(root,'.private-source-maps',worker?'workers':'backend',relative);
   const map=JSON.parse(fs.readFileSync(target+'.map','utf8'));
   if(worker) {
