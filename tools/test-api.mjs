@@ -102,13 +102,13 @@ try {
   ok(JSON.stringify(savedRegionalMail)===JSON.stringify(regionalMail),'Regional manager can save only own document CC addresses');
   ok(JSON.stringify((await call('bootstrap','GET',null,regional)).data.managerMailSettings)===JSON.stringify(regionalMail),'Regional manager mail settings persist in bootstrap');
   const partnerRequestId=randomUUID();
-  const partnerBody={requestId:partnerRequestId,company:'SC PUB4SALES SRL',location:'ZARNESTI',cui:'49088022',storeType:'MAGAZIN',contact:'SOROHAN COSMIN',phone:'0733255616',email:'',address:'STR.1 DECEMBRIE 1918 NR.4',county:'BRASOV'};
+  const partnerBody={requestId:partnerRequestId,company:'SYNTHETIC QA COMPANY SRL',location:'QA LOCATION',cui:'RO00000000',storeType:'Magazin',contact:'QA CONTACT',phone:'0700000000',email:'',address:'STRADA FICTIVA NR. 1',county:'BUCURESTI'};
   await call('partner/mail','POST',partnerBody,regional,403);
   await call('partner/mail','POST',{...partnerBody,email:'bad address'},agent,400);
   const partnerResult=(await call('partner/mail','POST',partnerBody,agent)).data;
   ok(partnerResult.mail.to==='distribution@example.invalid,warehouse@example.invalid','Partner mail uses Distribution and Depot recipients');
   ok(partnerResult.mail.cc.join(',')==='regional.partner@example.com,operations@example.invalid','Partner mail adds assigned regional manager and operational CC');
-  ok(partnerResult.mail.subject==='Creare partener nou SC PUB4SALES SRL'&&partnerResult.mail.body.includes('STR.1 DECEMBRIE 1918 NR.4'),'Partner mail subject and body use submitted partner data');
+  ok(partnerResult.mail.subject==='Creare partener nou SYNTHETIC QA COMPANY SRL'&&partnerResult.mail.body.includes('STRADA FICTIVA NR. 1'),'Partner mail subject and body use submitted partner data');
   ok(partnerResult.eml.includes('X-Unsent: 1')&&partnerResult.eml.includes('multipart/alternative'),'Partner Outlook message is generated as an unsent HTML-capable EML');
   ok(partnerResult.request.id===partnerRequestId&&partnerResult.request.status==='confirmed'&&partnerResult.request.confirmedBy===partnerResult.request.agentId&&!!partnerResult.request.customerId,'Registration immediately activates the client with agent attribution');
   const regionalInbox=(await call('notifications/inbox','GET',null,regional)).data,globalInbox=(await call('notifications/inbox','GET',null,manager)).data;
@@ -136,7 +136,7 @@ try {
   const globalLookup=(await call(`partner/lookup?cui=${encodeURIComponent('RO '+clients[0].cui.replace(/^RO/i,''))}`,'GET',null,agent2)).data;
   ok(globalLookup.locations.some(item=>item.id===clients[0].id),'CUI lookup searches the full customer database outside the agent portfolio');
   const samePointId=randomUUID();
-  const samePointBody={requestId:samePointId,company:clients[0].name,location:clients[0].city,cui:clients[0].cui,storeType:'MAGAZIN',contact:'QA CONTACT',phone:'0700000001',email:'',address:clients[0].address,county:clients[0].county};
+  const samePointBody={requestId:samePointId,company:clients[0].name,location:clients[0].city,cui:clients[0].cui,storeType:'MAGAZIN',contact:'QA CONTACT',phone:'0700000000',email:'',address:clients[0].address,county:clients[0].county};
   const samePointRequest=(await call('partner/mail','POST',samePointBody,agent)).data.request;
   await call(`partner/requests/${samePointId}/confirm`,'POST',{revision:samePointRequest.revision},agent,403);
   const beforeSamePoint=(await call('clients','GET',null,agent)).data.clients.length;

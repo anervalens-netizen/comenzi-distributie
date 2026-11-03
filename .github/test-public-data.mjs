@@ -9,4 +9,13 @@ const verifier=['scrypt','a'.repeat(32),'b'.repeat(64)].join(':');
 assert.ok(inspectPublicFile('src/config.ts',verifier).some(x=>x.kind==='password-verifier'));
 assert.ok(inspectPublicFile('src/config.ts',['','home','personal-user','config'].join('/')).some(x=>x.kind==='personal-home-directory'));
 assert.equal(inspectPublicFile('src/config.ts','/home/operator/config').length,0);
+// Manufactured examples only; diagnostics must never contain the matched value.
+const mobile=['07','483','261','95'].join('');
+const row=`{contact:'Sample Person',phone:'${mobile}',address:'Strada Model nr. 8',cui:'RO98765432'}`;
+assert.ok(inspectPublicFile('tools/test-demo.mjs',row).some(x=>x.kind==='possible-personal-contact'));
+assert.ok(inspectPublicFile('src/demo.ts',row).some(x=>x.kind==='possible-personal-contact'));
+assert.ok(inspectPublicFile('fixtures/data.json',`{"phone":"${['+40','748','326','195'].join(' ')}"}`).some(x=>x.kind==='possible-personal-contact'));
+for(const phone of ['0700000000','+40 700 000 000','0712345678','0722222222'])assert.equal(inspectPublicFile('tools/test-demo.mjs',`{contact:'QA',phone:'${phone}',address:'Fictiva',cui:'RO00000000'}`).length,0);
+assert.equal(inspectPublicFile('src/demo.ts',`const unrelated='${mobile}';`).length,0);
+assert.ok(!JSON.stringify(inspectPublicFile('tools/test-demo.mjs',row)).includes(mobile));
 console.log('PASS: public-data guard positive and negative cases.');
