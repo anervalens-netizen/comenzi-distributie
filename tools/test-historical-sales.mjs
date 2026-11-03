@@ -25,6 +25,7 @@ const views=[july,aug].map(v=>m.withSalesVat({...v,products:v.products.map(p=>({
 const total=m.distributionSales(views,rules,['2025-07','2025-08','2024-10']);assert.equal(total.monthly.length,3);assert.deepEqual(total.missingMonths,['2024-10']);assert.deepEqual(total.historicalMonths,['2025-07','2025-08']);assert.equal(total.monthly[2].imported,false);assert.equal(total.groups.accessories.valueCents,24500);assert(Math.abs(total.groups.accessories.valueExVat-(100+126/1.21))<1e-8);
 assert.equal(total.monthly.reduce((s,p)=>s+p.groups.accessories.valueCents,0),total.groups.accessories.valueCents,'monthly series reconciles with total');
 const before=m.historicalSalesGeneration();add.run(1,'2025-09-05','TR Synthetic','101','CABLE','Synthetic cable','Example','Cabluri','Accesorii',1e6,null,1);assert.notEqual(m.historicalSalesGeneration(),before);assert.equal(get('2025-09').products[0].missingValueRows,1);
+const unknown=m.withSalesVat(get('2025-09'));unknown.products[0].distributionGroup='accessories';assert.equal(m.distributionSales([unknown],rules,['2025-09']).groups.accessories.average,null,'unknown source amounts never become a zero average');
 h.close();
 console.log('PASS: historical fallback, authoritative precedence, complete coverage, zero vs missing, superseded data, exact scope/security, source invalidation, returns, monthly reconciliation and missing amounts.');
 }finally{rmSync(root,{recursive:true,force:true});}
