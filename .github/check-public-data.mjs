@@ -17,6 +17,19 @@ export function inspectPublicFile(path,text=''){
  if((privatePath.test(path)&&!path.endsWith('.env.example'))||privateDirs.test(path))add('private-file-path');
  if(/(?:^|\/)(?:screenshots|design-screenshots)(?:\/|$)/.test(path)||path.startsWith('public/products/'))add('private-or-generated-asset');
  for(const [kind,pattern] of sensitivePatterns){pattern.lastIndex=0;for(const m of text.matchAll(pattern))add(kind,m.index);}
+ // Romanian mobile numbers in test fixtures must use the reserved-looking
+ // 0700000000 example, or obvious repeated/sequential example suffixes.
+ const fixturePath=/(?:^|\/)(?:[^/]*test[^/]*|[^/]*fixture[^/]*)(?:\/|$)/i;
+ const mobile=/(?<!\d)(?:\+?40[ .-]?|0)7(?:[ .-]?\d){8}(?!\d)/g;
+ for(const m of text.matchAll(mobile)){
+  const digits=m[0].replace(/\D/g,'').replace(/^40/,'0');
+  const suffix=digits.slice(2);
+  if(digits==='0700000000'||/^(\d)\1{7}$/.test(suffix)||'01234567890123456789'.includes(suffix))continue;
+  const context=text.slice(Math.max(0,m.index-300),Math.min(text.length,m.index+m[0].length+300));
+  const contact=/\b(?:contact|persoana|person|phone|telefon)\b/i.test(context);
+  const addressOrCui=/\b(?:address|adresa|adresă|strada|str\.|cui|cif)\b/i.test(context);
+  if(fixturePath.test(path)||(contact&&addressOrCui))add('possible-personal-contact',m.index);
+ }
  if(!/(?:^|\/)(?:pnpm-lock\.yaml|package-lock\.json|LICENSE[^/]*|NOTICE[^/]*)$/.test(path)){
   for(const m of text.matchAll(/[A-Z0-9._%+-]+@([A-Z0-9.-]+\.[A-Z]{2,})/gi)){
    const domain=m[1].toLowerCase();
