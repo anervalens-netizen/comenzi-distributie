@@ -185,6 +185,7 @@ if [ -n "$CHROME_BIN" ]; then
   CHROME_BIN="$CHROME_BIN" node tools/test-pwa-waiting-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-pwa-role-preload-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-offline-work-browser.mjs
+  CHROME_BIN="$CHROME_BIN" node tools/test-offline-snapshots-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-offline-upgrade-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-list-pagination-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-order-pagination-browser.mjs
