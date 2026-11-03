@@ -7,6 +7,18 @@ import {build} from 'esbuild';
 import {browserFixture,waitFor} from './offline-browser-fixture.mjs';
 const root=mkdtempSync(join(tmpdir(),'distribution-http-')),origin='http://127.0.0.1:3096';
 const fixture=spawnSync('python3',['tools/distribution-fixture.py',root],{encoding:'utf8'});assert.equal(fixture.status,0,fixture.stderr);
+const digiFixture=spawnSync('python3',['-c',`
+import sys,json
+from pathlib import Path
+sys.path.insert(0,'tools')
+import activations as a
+from activation_report import build_report
+from test_activations import fixture,digi_row
+root=Path(sys.argv[1]);network=root/'digi';network.mkdir()
+c=a.connect(network)
+a.import_files(c,network,[fixture(network/'synthetic.xlsx',[digi_row(Magazin='TR Digi',Data='2026-09-01',DataDigi='2026-10-15')],headers=a.DIGI_HEADERS,header_row=1)],operator='digi',site_aliases={('ExampleCo','TR Digi'):'X'})
+c.close();build_report(network,json.loads((root/'rules.json').read_text()))
+`,root],{encoding:'utf8'});assert.equal(digiFixture.status,0,digiFixture.stderr);
 process.env.MOBIUP_DATA_DIR=root;
 const b=await build({entryPoints:['lib/sales-store.ts'],bundle:true,platform:'node',format:'esm',write:false});const sales=await import('data:text/javascript;base64,'+Buffer.from(b.outputFiles[0].text).toString('base64'));
 let revision=0;for(const month of ['2026-09','2026-10']){const rows=[{rowNumber:1,date:month+'-05',month,siteCode:'N',itemCode:'CREDIT',itemName:'Synthetic credit',quantity:month.endsWith('09')?2:1,valueCents:month.endsWith('09')?2000:4000,priceCents:1000,brand:'Synthetic',location:'TR North',company:'ExampleCo',asm:'',regional:'',orderNumber:'EXAMPLE',category:'Cartele',subCategory:'',agent:'Synthetic North'}];rows.push({...rows[0],rowNumber:2,siteCode:'LEGACY',itemCode:'UNMAPPED',itemName:'Synthetic historical item',location:'TR Historical',quantity:1,valueCents:500});sales.importSalesRows({rows,month,fileHash:month,filename:'synthetic.xlsx',importedBy:'manager',originalPath:'synthetic.xlsx',expectedRevision:revision++,expectedMappingHash:'same',currentMappingHash:'same',historicalAcknowledged:true});}
@@ -93,6 +105,17 @@ try{
  await browser.evaluate('[...document.querySelectorAll(".commerce-tabs button")].find(button=>button.textContent==="Activări").click()');
  await waitFor(()=>browser.evaluate('document.querySelectorAll(".activation-primary strong")[0]?.textContent==="9"'),'activation union');
  assert.equal(await browser.evaluate('document.querySelectorAll(".activation-operator").length'),2);
+ for(const label of ['Activări Vodafone','SIM 0 · Vodafone','SIM cu credit · Vodafone','Comisionabile · Vodafone','Distribuite · Vodafone','Activări Digi']){
+  await browser.evaluate('(()=>{const b=[...document.querySelectorAll("button")].find(b=>b.getAttribute("aria-label")==='+JSON.stringify('Evoluție lunară · '+label)+');b.focus();b.click()})()');
+  await waitFor(()=>browser.evaluate('!!document.querySelector("[role=dialog] .monthly-sales-table")'),'activation monthly dialog '+label);
+  assert.deepEqual(await browser.evaluate('[...document.querySelectorAll("[role=dialog] tbody tr")].map(r=>r.getAttribute("data-month"))'),['2026-09','2026-10']);
+  assert(!(await browser.evaluate('document.querySelector("[role=dialog]").textContent')).includes('RON'),'activation counts never look like money');
+  if(label==='Distribuite · Vodafone')assert(await browser.evaluate('document.querySelector("[role=dialog]").textContent.includes("Luna distribuirii")'));
+  await browser.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape'});await browser.send('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape'});
+  await waitFor(()=>browser.evaluate('!document.querySelector("[role=dialog]")'),'close activation trend');
+  assert.equal(await browser.evaluate('document.activeElement?.getAttribute("aria-label")'),'Evoluție lunară · '+label);
+ }
+
  for(const [width,height] of [[360,800],[390,844]]){
   await browser.send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:true});await browser.evaluate('scrollTo(0,0)');
   const geometry=await browser.evaluate(`(()=>{const total=document.querySelector('.activation-primary strong').getBoundingClientRect(),year=document.querySelector('.report-year').getBoundingClientRect(),months=document.querySelector('.report-month-grid').getBoundingClientRect(),projects=[...document.querySelectorAll('.distribution-projects button[aria-pressed]')].map(button=>{const r=button.getBoundingClientRect();return {left:r.left,right:r.right,hit:button.contains(document.elementFromPoint(r.left+r.width/2,r.top+r.height/2))}});return {totalBottom:total.bottom,yearRight:year.right,monthsLeft:months.left,projects,overflow:document.documentElement.scrollWidth>innerWidth}})()`);
@@ -174,6 +197,7 @@ try{
   await browser.evaluate('[...document.querySelectorAll(".agent-commerce .commerce-tabs button")].find(button=>button.textContent==="Pe clienți").click()');
   await waitFor(()=>browser.evaluate('!!document.querySelector(".agent-commerce .client-sales")'),'agent own customer report '+id);
   assert(!(await browser.evaluate('document.querySelector(".agent-commerce .client-sales").textContent.includes("Reconciliere națională")||!!document.querySelector(".agent-report-scope")')),'agent customer report keeps own monthly context without national manager controls');
+  await waitFor(()=>browser.evaluate('window.agentRequests.some(path=>path.startsWith("/api/sales/clients?"))'),'agent own client request '+id);
   const requests=await browser.evaluate('window.agentRequests.filter(path=>path.startsWith("/api/sales?")||path.startsWith("/api/sales/clients?")||path.startsWith("/api/activations?"))');
   assert(requests.some(path=>path.startsWith('/api/sales?')&&path.includes('months=2026-10')),'agent sales use authenticated multi-month report');
   assert(requests.some(path=>path.startsWith('/api/sales/clients?')),'agent own portfolio endpoint is requested');

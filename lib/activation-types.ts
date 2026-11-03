@@ -3,13 +3,17 @@ export type ActivationPartnerSummary={realPointCount:number;unassignedActivation
 export type ActivationDetail={id:string;date:string;itemType:string;county:string;handset:string;eligible:boolean|null;reasons:string[]};
 export type ActivationCounts = {total:number;sim:number;telsim:number;other:number;unassigned:number;eligible?:number;ineligible?:number;ownRegion?:number;otherRegion?:number;unknownRegion?:number;reasons?:Record<string,number>};
 export type ActivationProvider = 'vodafone'|'digi';
+export type ActivationProductBreakdown={zero:number;credit:number;packages:number;other:number;unknown:number};
+export type ActivationSimZero={distributed:number;activated:number;withoutReportedActivation:number};
+export type ActivationMonth={month:string;reported:boolean;counts:ActivationCounts;productBreakdown?:ActivationProductBreakdown;simZero?:ActivationSimZero};
 export type ActivationReport = {
+  monthly?:ActivationMonth[];
   partners?:ActivationPartnerSummary&{rows:ActivationPartner[];total:number;page:number;hasMore:boolean;asOf:string|null};
   detail?:{rows:ActivationDetail[];total:number;page:number;hasMore:boolean;lastDate:string|null;recent:Record<string,number>;asOf:string|null};
   revision?:string;rulesRevision?:string;builtAt?:string;selectedMonths?:string[];coveredMonths?:string[];sourcePeriods?:{from:string;to:string}[];reconciliation?:number;
-  productBreakdown?:{zero:number;credit:number;packages:number;other:number;unknown:number};
+  productBreakdown?:ActivationProductBreakdown;
   ineligibleSourceTypes?:Record<string,number>;
-  simZero?:{distributed:number;activated:number;withoutReportedActivation:number};
+  simZero?:ActivationSimZero;
   month:string;provider:ActivationProvider;available:boolean;scoped:boolean;importedAt:string;latestDate:string|null;
   months:{month:string;total:number}[];totals:ActivationCounts;
   sites:({site:string;label:string}&ActivationCounts)[];

@@ -26,6 +26,16 @@ try{
  assert.equal(Object.values(manager.productBreakdown).reduce((a,b)=>a+b,0),manager.totals.total,'product breakdown exactly covers visible activations');
  assert.equal(Object.values(manager.ineligibleSourceTypes).reduce((a,b)=>a+b,0),manager.totals.ineligible,'source categories partition all ineligible activations');
  assert.equal(manager.reconciliation,1,'non-distribution observations stay in the separately aggregated reconciliation count');
+ const monthly=read(null,'manager',{months:['2026-08','2026-09','2026-10']});assert.deepEqual(monthly.monthly.map(m=>m.month),['2026-08','2026-09','2026-10']);
+ for(const key of ['total','eligible','ineligible','ownRegion','otherRegion','unknownRegion'])assert.equal(monthly.monthly.reduce((sum,m)=>sum+(m.counts[key]||0),0),monthly.totals[key]||0,'monthly activation counts reconcile: '+key);
+ for(const key of ['zero','credit','packages','other','unknown'])assert.equal(monthly.monthly.reduce((sum,m)=>sum+m.productBreakdown[key],0),monthly.productBreakdown[key],'monthly products reconcile: '+key);
+ for(const key of ['distributed','activated','withoutReportedActivation'])assert.equal(monthly.monthly.reduce((sum,m)=>sum+m.simZero[key],0),monthly.simZero[key],'monthly distribution cohorts reconcile: '+key);
+ assert.equal(monthly.monthly[0].reported,false,'no reported activations is not certified zero');
+ const scopedMonthly=read(['N'],'north',{months:['2026-09','2026-10']});assert.equal(scopedMonthly.monthly.reduce((sum,m)=>sum+m.counts.total,0),scopedMonthly.totals.total);assert(scopedMonthly.monthly.every(m=>m.counts.total<monthly.totals.total),'monthly aggregates retain seller scope');
+ const helperBundle=await build({entryPoints:['lib/activation-monthly.ts'],bundle:true,platform:'node',format:'esm',write:false});const {activationMonthlyPoints}=await import('data:text/javascript;base64,'+Buffer.from(helperBundle.outputFiles[0].text).toString('base64'));
+ const points=activationMonthlyPoints(monthly,['2026-10','2026-08','2026-10'],'total');assert.deepEqual(points.map(p=>p.month),['2026-08','2026-10']);assert.equal(points[0].reported,false);assert.equal(points[1].total,8);
+ assert.equal(activationMonthlyPoints(monthly,['2026-08'],'cohort:distributed')[0].reported,true,'distribution cohort remains distinct from activation month');
+ assert.equal(activationMonthlyPoints({...manager,monthly:undefined},['2026-10'],'total')[0].total,8,'legacy count history remains usable');
  const north=read(['N'],'north');assert.equal(north.totals.total,3);assert.equal(north.totals.eligible,2);assert.equal(north.totals.ineligible,1);assert.equal(north.sites.length,1);
  assert.equal(Object.values(north.productBreakdown).reduce((a,b)=>a+b,0),north.totals.total);
  const south=read(['S'],'south');assert.equal(south.totals.total,1);assert.equal(south.totals.eligible,1);assert.equal(south.totals.ineligible||0,0);

@@ -29,7 +29,7 @@ Tests use isolated temporary data. Never point CI at a production database or im
 
 ## Monthly commercial trends
 
-Accessory category totals and Prepay product totals open a monthly graph and
+Accessory category totals and Prepay product/activation totals open a monthly graph and
 table for exactly the selected reporting months and authorized filters. Missing
 imports remain gaps; covered months with no sales are zero. Accessory values
 retain the ex-VAT/gross labels. Active, fully covered historical sales can supply
@@ -396,3 +396,5 @@ Existing Digi ledgers require `tools/prepare-sim-verification.py --provider digi
 --data-dir <digi-root>` once, under the import lock. It adds only the
 `activation_occurrences_movement` index, verifies unchanged business rows and
 checks the query plan. New imports create the index automatically.
+
+Prepay activation drilldowns include operator totals, internal product groups, eligibility and SIM0 cohorts. Monthly activation counts use activation dates; SIM0 cohort counts use distribution months and the source observation date. Both retain the existing authorized scope. Missing reported activation months remain marked as uncertain coverage. Large chart axes use compact labels while small values retain precision; tables and tooltips retain full values.

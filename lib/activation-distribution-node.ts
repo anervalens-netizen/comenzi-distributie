@@ -3,7 +3,7 @@ import type {DatabaseSync} from 'node:sqlite';
 import {createHash} from 'node:crypto';
 import {parseDistributionRules,vodafoneEligibility,type DistributionRules} from './distribution-rules';
 import {visibleActivation,type ActivationQuery} from './activation-distribution';
-import {emptyActivationCounts,type ActivationReport,type ActivationCounts,type ActivationProvider} from './activation-types';
+import {emptyActivationCounts,type ActivationReport,type ActivationCounts,type ActivationProvider,type ActivationProductBreakdown,type ActivationSimZero} from './activation-types';
 export const canonicalRules=(r:unknown):string=>JSON.stringify(r&&typeof r==='object'&&!Array.isArray(r)?Object.fromEntries(Object.entries(r).sort(([a],[b])=>a.localeCompare(b)).map(([k,v])=>[k,JSON.parse(canonicalRules(v))])):Array.isArray(r)?r.map(v=>JSON.parse(canonicalRules(v))):r);
 type Dimension={month:string;site:string;item_type:string;county:string;handset:string;contradictory:number;count:number;last_date:string};
 function add(t:ActivationCounts,r:Dimension,rules:DistributionRules,provider:ActivationProvider){
@@ -48,15 +48,17 @@ export function distributionReport(report:DatabaseSync,base:ActivationReport,met
    if(!query.months.includes(row.month))continue;
    add(result.totals,row,rules,provider);const a=agents.get(row.site)||newCounts();add(a,row,rules,provider);agents.set(row.site,a);
  }
+ const monthlyProducts=new Map<string,ActivationProductBreakdown>(),monthlyCohorts=new Map<string,ActivationSimZero>();
+ const blankProducts=():ActivationProductBreakdown=>({zero:0,credit:0,packages:0,other:0,unknown:0});
  // Use the same authorized scope and selected activation months; raw product codes
  // already exist in details, so no projection migration or reimport is required.
  if(provider==='vodafone'&&!query.view){
-   const selected=report.prepare(`SELECT item_code,item_type,county,handset,contradictory,site,COUNT(*) count FROM details WHERE ${where} AND ${monthWhere} GROUP BY item_code,item_type,county,handset,contradictory,site`).all(...args,...query.months) as (Dimension & {item_code:string})[];
+   const selected=report.prepare(`SELECT month,item_code,item_type,county,handset,contradictory,site,COUNT(*) count FROM details WHERE ${where} AND ${monthWhere} GROUP BY month,item_code,item_type,county,handset,contradictory,site`).all(...args,...query.months) as (Dimension & {item_code:string})[];
    const products={zero:0,credit:0,packages:0,other:0,unknown:0},sources:Record<string,number>={};
    for(const row of selected){
      const group=rules.products[row.item_code];
      const key=row.item_type==='TELSIM'?'packages':group==='vodafone_0'?'zero':['vodafone_3','vodafone_5','vodafone_credit'].includes(group)?'credit':!row.item_code?'unknown':'other';
-     products[key]+=row.count;
+     products[key]+=row.count;const monthly=monthlyProducts.get(row.month)||blankProducts();monthly[key]+=row.count;monthlyProducts.set(row.month,monthly);
      if(query.policy!=='south'){
        const assignment=rules.assignments.find(a=>a.siteCode.toUpperCase()===row.site.toUpperCase());
        const eligibility=vodafoneEligibility(row.county,row.handset,assignment?.territoryId||null,!!row.contradictory);
@@ -78,9 +80,11 @@ export function distributionReport(report:DatabaseSync,base:ActivationReport,met
  const zeroCodes=Object.entries(rules.products).filter(([,group])=>group==='vodafone_0').map(([code])=>code);
  cohortClauses.push(`item_code IN (${zeroCodes.map(()=>'?').join(',')||'NULL'})`);cohortArgs.push(...zeroCodes);
  if(provider==='vodafone'&&query.policy==='manager'){
-   const row=report.prepare(`SELECT COUNT(*) distributed,COALESCE(SUM(activated),0) activated FROM cohorts WHERE ${cohortClauses.join(' AND ')}`).get(...cohortArgs)!;
-   result.simZero={distributed:Number(row.distributed),activated:Number(row.activated),withoutReportedActivation:Number(row.distributed)-Number(row.activated)};
+   const rows=report.prepare(`SELECT distribution_month month,COUNT(*) distributed,COALESCE(SUM(activated),0) activated FROM cohorts WHERE ${cohortClauses.join(' AND ')} GROUP BY distribution_month`).all(...cohortArgs);
+   result.simZero={distributed:0,activated:0,withoutReportedActivation:0};
+   for(const row of rows){const counts={distributed:Number(row.distributed),activated:Number(row.activated),withoutReportedActivation:Number(row.distributed)-Number(row.activated)};monthlyCohorts.set(String(row.month),counts);for(const key of ['distributed','activated','withoutReportedActivation'] as const)result.simZero[key]+=counts[key];}
  }
+ result.monthly=query.months.map(month=>({month,reported:history.has(month),counts:history.get(month)||newCounts(),...(result.productBreakdown?{productBreakdown:monthlyProducts.get(month)||blankProducts()}:{}),...(result.simZero?{simZero:monthlyCohorts.get(month)||{distributed:0,activated:0,withoutReportedActivation:0}}:{})}));
  // No operator-only serial enters distribution KPI; managers see a separate reconciliation count.
  if(query.policy==='manager'&&sites===null&&query.projects.length===3)result.reconciliation=Number(report.prepare(`SELECT SUM(count) n FROM dimension_monthly WHERE provider=? AND is_tr=0 AND ${monthWhere}`).get(provider,...query.months)?.n||0);
  activationPartnerView(report,result,where,args,query);

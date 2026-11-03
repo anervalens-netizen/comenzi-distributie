@@ -7,3 +7,8 @@ const r=m.distributionSales([a,b2],rules,['2026-09','2026-10']);assert.equal(r.v
 assert.equal(m.distributionSales([view('x',[['THREE',1,10],['FIVE',-1,-20]])],rules,[]).vodafoneCredit.average,null);
 assert.equal(m.distributionSales([view('x',[['THREE',-1,-10]])],rules,[]).vodafoneCredit.average,null);
 console.log('PASS: integer totals, weighted multi-month mean, zero-credit exclusion, returns and disjoint exact product groups.');
+
+const axis=await build({entryPoints:['lib/monthly-axis.ts'],bundle:true,platform:'node',format:'esm',write:false});const {monthlyAxisNumber}=await import('data:text/javascript;base64,'+Buffer.from(axis.outputFiles[0].text).toString('base64'));
+assert.equal(new Set([0,.02,.04].map(monthlyAxisNumber)).size,3,'small nonzero axis ticks remain distinct');
+assert.notEqual(monthlyAxisNumber(-.02),monthlyAxisNumber(.02),'return-driven negative values keep their sign');
+assert(monthlyAxisNumber(352075.339).length<10,'large amounts use short axis labels');
