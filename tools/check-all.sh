@@ -27,6 +27,7 @@ python3 -W error::ResourceWarning tools/test_import_engine_sim.py
 node tools/test-import-engine-api.mjs
 node tools/test-import-engine-stock.mjs
 node tools/test-import-executor-lock.mjs
+node tools/test-sales-vat.mjs
 node tools/test-distribution-sales.mjs
 node tools/test-manager-commerce.mjs
 node tools/test-distribution-store.mjs

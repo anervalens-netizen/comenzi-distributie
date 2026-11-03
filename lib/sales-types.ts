@@ -43,6 +43,8 @@ export type SalesSite = SalesAggregate & {
 export type SalesDaily = SalesAggregate & { date: string };
 
 export type SalesProduct = SalesAggregate & {
+  /** Derived standard-rate reporting amount; round only for display. */
+  valueExVat?: number;
   itemCode: string;
   itemName: string;
   brand: string;
