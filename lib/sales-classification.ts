@@ -180,3 +180,13 @@ export function classifySalesRows(rows: readonly SalesClassificationInput[], cat
   const productList = [...products.values()].sort((a, b) => b.valueCents - a.valueCents || a.itemCode.localeCompare(b.itemCode));
   return { rows: classified, summary: { rows: classified.length, quantity: classified.reduce((sum, row) => sum + row.quantity, 0), valueCents: classified.reduce((sum, row) => sum + row.valueCents, 0), byBucket, products: productList, ambiguousProducts: productList.filter(product => product.ambiguous) } };
 }
+
+
+/** Identical report presentation for monthly imports and historical line items. */
+export function salesProductPresentation(input:SalesClassificationInput,classifier:ReturnType<typeof createSalesProductClassifier>):{segment:'accessories'|'cardsSim'|'phones'|'unclassified';subsegment?:'cards'|'sim'|'vouchers';classification:SalesProductClassification}{
+ const result=classifier(input),descriptor=(input.itemCode+' '+input.itemName).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase();
+ const bucket=result.bucket==='main-card'&&/PACHET/.test(descriptor)&&/(?:TELEFON|SIM|NOKIA|SAMSUNG|MAXCOM|TCL|ALCATEL|XIAOMI|HONOR|MOTOROLA|HUAWEI|OPPO|REALME|ZTE)/.test(descriptor)?'phone':result.bucket;
+ const segment=bucket==='phone'?'phones':bucket==='accessory'?'accessories':bucket==='ambiguous'?'unclassified':'cardsSim';
+ const subsegment=bucket==='value-card-voucher'?'vouchers':bucket==='main-card'?(/\bSIM\b|^SIM/.test(descriptor)?'sim':'cards'):undefined;
+ return {segment,subsegment,classification:result};
+}

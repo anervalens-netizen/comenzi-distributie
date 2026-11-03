@@ -3,7 +3,7 @@ import {resolve} from 'node:path';
 import {existsSync} from 'node:fs';
 import {historyFileGeneration} from './history-source-generation';
 import {salesLocationKey,salesSiteKey,type SalesScope} from './sales-location';
-import {createSalesProductClassifier,type SalesCatalogEntry} from './sales-classification';
+import {salesProductPresentation,createSalesProductClassifier,type SalesCatalogEntry} from './sales-classification';
 import type {SalesView,SalesProduct,SalesAggregate} from './sales-types';
 
 export const historicalSalesPath=()=>resolve(process.env.MOBIUP_DATA_DIR||'./work/server-data','client-history','client-sales-history.sqlite');
@@ -52,9 +52,8 @@ export function historicalSalesView(empty:SalesView,scope:SalesScope|undefined,c
  result.summary.rows++;result.summary.quantity+=quantity;result.summary.value+=value;result.missingValueRows!+=missing;
  }
  for(const p of products.values()){
- p.value=Math.round(p.value*100)/100;const classified=classifier({itemCode:p.itemCode,itemName:p.itemName,quantity:p.quantity,valueCents:Math.round(p.value*100),category:p.category,subCategory:''});
- const bucket=classified.bucket; p.segment=bucket==='phone'?'phones':bucket==='accessory'?'accessories':bucket==='ambiguous'?'unclassified':'cardsSim';
- if(p.segment==='cardsSim')p.subsegment=bucket==='value-card-voucher'?'vouchers':/\bSIM\b|^SIM/.test((p.itemCode+' '+p.itemName).toUpperCase())?'sim':'cards';
+ p.value=Math.round(p.value*100)/100;const presentation=salesProductPresentation({itemCode:p.itemCode,itemName:p.itemName,quantity:p.quantity,valueCents:Math.round(p.value*100),category:p.category,subCategory:''},classifier);
+ p.segment=presentation.segment;if(presentation.subsegment)p.subsegment=presentation.subsegment;
  const g=result.segments[p.segment];g.products.push(p);g.summary.rows+=p.rows;g.summary.quantity+=p.quantity;g.summary.value+=p.value;
  if(p.segment==='cardsSim'){for(const k of p.subsegment==='vouchers'?['vouchers','valueVouchers'] as const:[p.subsegment||'cards'] as const){const s=result.segments.cardsSim.subsegments[k];s.rows+=p.rows;s.quantity+=p.quantity;s.value+=p.value;}}
  }

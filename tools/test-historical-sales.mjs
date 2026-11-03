@@ -26,6 +26,10 @@ const total=m.distributionSales(views,rules,['2025-07','2025-08','2024-10']);ass
 assert.equal(total.monthly.reduce((s,p)=>s+p.groups.accessories.valueCents,0),total.groups.accessories.valueCents,'monthly series reconciles with total');
 const before=m.historicalSalesGeneration();add.run(1,'2025-09-05','TR Synthetic','101','CABLE','Synthetic cable','Example','Cabluri','Accesorii',1e6,null,1);assert.notEqual(m.historicalSalesGeneration(),before);assert.equal(get('2025-09').products[0].missingValueRows,1);
 const unknown=m.withSalesVat(get('2025-09'));unknown.products[0].distributionGroup='accessories';assert.equal(m.distributionSales([unknown],rules,['2025-09']).groups.accessories.average,null,'unknown source amounts never become a zero average');
+add.run(1,'2025-10-05','TR Synthetic','101','BUNDLE','Pachet telefon cu SIM','Example','Cartele','SIM',1e6,12100,1);
+assert.equal(get('2025-10').products[0].segment,'phones','historical phone bundles retain authoritative presentation');
+m.importSalesRows({rows:[{...base,month:'2026-09',date:'2026-09-05',itemCode:'BUNDLE',itemName:'Pachet telefon cu SIM',category:'Cartele'}],month:'2026-09',fileHash:'bundle-synthetic',filename:'synthetic.xlsx',importedBy:'synthetic',originalPath:'synthetic.xlsx',expectedRevision:1,expectedMappingHash:'same',currentMappingHash:'same',historicalAcknowledged:true});
+assert.equal(get('2026-09').products[0].segment,get('2025-10').products[0].segment,'both sources share bundle classification');
 h.close();
 console.log('PASS: historical fallback, authoritative precedence, complete coverage, zero vs missing, superseded data, exact scope/security, source invalidation, returns, monthly reconciliation and missing amounts.');
 }finally{rmSync(root,{recursive:true,force:true});}

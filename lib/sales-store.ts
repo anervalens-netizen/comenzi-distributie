@@ -4,7 +4,7 @@ import { mkdirSync, existsSync, unlinkSync, renameSync, writeFileSync } from 'no
 import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import type { SalesAggregate, SalesCardsSim, SalesDaily, SalesMonthly, SalesProduct, SalesRow, SalesSegment, SalesSegments, SalesSite, SalesView, SalesCoverageChange } from './sales-types';
-import { createSalesProductClassifier, type SalesCatalogEntry } from './sales-classification';
+import { salesProductPresentation, createSalesProductClassifier, type SalesCatalogEntry } from './sales-classification';
 import seed from '../resources/seed.json';
 import { salesLocationKey, salesSiteKey, type SalesScope } from './sales-location';
 
@@ -99,13 +99,7 @@ const seedSalesCatalog = seed.products.map(product => ({ code: product.code, nam
 type SalesProductClassifier = ReturnType<typeof createSalesProductClassifier>;
 function classify(row: Record<string, unknown>, classifySalesProduct: SalesProductClassifier) {
   const itemCode = safeText(row.itemCode ?? row.item_code); const itemName = safeText(row.itemName ?? row.item_name);
-  const result = classifySalesProduct({ itemCode, itemName, quantity: Number(row.quantity || 0), valueCents: Number(row.valueCents ?? row.value_cents ?? 0), category: safeText(row.category), subCategory: safeText(row.subCategory ?? row.sub_category) });
-  const descriptor = `${itemCode} ${itemName}`.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
-  // Some legacy source rows call phone bundles "Cartele"; retain the classifier but apply the explicit bundle rule.
-  const bucket = result.bucket === 'main-card' && /PACHET/.test(descriptor) && /(?:TELEFON|SIM|NOKIA|SAMSUNG|MAXCOM|TCL|ALCATEL|XIAOMI|HONOR|MOTOROLA|HUAWEI|OPPO|REALME|ZTE)/.test(descriptor) ? 'phone' : result.bucket;
-  const segment = bucket === 'phone' ? 'phones' : bucket === 'accessory' ? 'accessories' : bucket === 'ambiguous' ? 'unclassified' : 'cardsSim';
-  const subsegment = bucket === 'value-card-voucher' ? 'vouchers' : bucket === 'main-card' ? (/\bSIM\b|^SIM/.test(descriptor) ? 'sim' : 'cards') : undefined;
-  return { segment, subsegment, classification: result } as { segment: 'accessories' | 'cardsSim' | 'phones' | 'unclassified'; subsegment?: 'cards' | 'sim' | 'vouchers'; classification: ReturnType<SalesProductClassifier> };
+  return salesProductPresentation({ itemCode, itemName, quantity: Number(row.quantity || 0), valueCents: Number(row.valueCents ?? row.value_cents ?? 0), category: safeText(row.category), subCategory: safeText(row.subCategory ?? row.sub_category) },classifySalesProduct);
 }
 function emptySegments(): SalesSegments {
   const empty = (): SalesSegment => ({ summary: { rows: 0, quantity: 0, value: 0 }, products: [] });
