@@ -26,3 +26,12 @@ export function managerCategoryRows(products:SalesProduct[]){
   }
   return [...rows.values()].sort((a,b)=>b.valueCents-a.valueCents||a.name.localeCompare(b.name,'ro'));
 }
+
+
+/** One metric shape for category cards and their single-month dialog fallback. */
+export function managerCategoryMetric(rows:ReturnType<typeof managerCategoryRows>,category:ManagerProductCategory){
+ const subset=rows.filter(row=>row.category===category);
+ return {quantity:subset.reduce((n,r)=>n+r.quantity,0),valueCents:subset.reduce((n,r)=>n+r.valueCents,0),average:null,
+  missingValueRows:subset.reduce((n,r)=>n+r.missingValueRows,0),
+  valueExVat:subset.every(r=>r.valueExVat!==undefined)?subset.reduce((n,r)=>n+r.valueExVat!,0):undefined};
+}

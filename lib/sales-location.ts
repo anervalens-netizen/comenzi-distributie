@@ -11,3 +11,6 @@ export type SalesScope = string | string[] | {
   excludedWarehouseNames: string[];
   siteCode?: string;
 };
+
+/** Keep the same TR token contract for monthly files and historical projection. */
+export const isTrSalesLocation=(value:string)=>/(^|[^A-Z0-9])TR(?=$|[^A-Z0-9])/i.test(value.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/\s+/g,' ').trim());

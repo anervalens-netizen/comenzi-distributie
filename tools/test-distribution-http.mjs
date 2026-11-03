@@ -66,6 +66,8 @@ try{
  await browser.evaluate('[...document.querySelectorAll(".main-nav [role=tab]")].find(button=>button.textContent==="Prepay").click()');
  await waitFor(()=>browser.evaluate('!!document.querySelector(".prepay-sales")'),'prepay sales');
  assert(await browser.evaluate('document.querySelector(".prepay-sales")?.textContent.includes("20,00")'),'weighted credit-only mean rendered');
+ assert(await browser.evaluate(`(()=>{const b=[...document.querySelectorAll('button')].find(b=>b.getAttribute('aria-label')==='Evoluție lunară · SIM cu credit');const ids=b.getAttribute('aria-describedby').split(' ');const text=ids.map(id=>document.getElementById(id)?.textContent).join(' ');return ids.every(id=>!!document.getElementById(id))&&text.includes('60,00')&&text.includes('3')})()`),'accessible Prepay total description retains amount and quantity');
+
  assert(!(await browser.evaluate('document.querySelector(".prepay-sales")?.textContent.includes("Accesorii")')),'prepay excludes accessory cards');
  // Monthly total drill-down keeps the selected months and restores focus.
  await browser.evaluate(`(()=>{const b=[...document.querySelectorAll('button')].find(b=>b.getAttribute('aria-label')==='Evoluție lunară · SIM cu credit');b.focus();b.click();})()`);
@@ -119,6 +121,7 @@ try{
  await waitFor(()=>browser.evaluate('!!document.querySelector("[role=dialog] .monthly-sales-table")'),'accessory monthly dialog');
  assert(await browser.evaluate('document.querySelector("[role=dialog]").textContent.includes("Fără TVA")&&document.querySelector("[role=dialog]").textContent.includes("Cu TVA")'));
  await browser.send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
+ await waitFor(()=>browser.evaluate('document.documentElement.scrollWidth<=innerWidth && document.querySelector("[role=dialog]").getBoundingClientRect().width<=innerWidth'),'settled mobile monthly dialog');
  assert(await browser.evaluate('document.documentElement.scrollWidth<=innerWidth && document.querySelector("[role=dialog]").getBoundingClientRect().width<=innerWidth'),'monthly dialog fits mobile');
  await browser.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape'});await browser.send('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape'});
  await waitFor(()=>browser.evaluate('!document.querySelector("[role=dialog]")'),'close accessory dialog');

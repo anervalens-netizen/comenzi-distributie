@@ -1,9 +1,9 @@
 import {DatabaseSync} from 'node:sqlite';
 import {resolve} from 'node:path';
 import {existsSync} from 'node:fs';
-import {historyFileGeneration} from './history-source-generation';
-import {salesLocationKey,salesSiteKey,type SalesScope} from './sales-location';
-import {salesProductPresentation,createSalesProductClassifier,type SalesCatalogEntry} from './sales-classification';
+import {historyFileGeneration} from './history-source-generation.ts';
+import {isTrSalesLocation,salesLocationKey,salesSiteKey,type SalesScope} from './sales-location.ts';
+import {salesProductPresentation,createSalesProductClassifier,type SalesCatalogEntry} from './sales-classification.ts';
 import type {SalesView,SalesProduct,SalesAggregate} from './sales-types';
 
 export const historicalSalesPath=()=>resolve(process.env.MOBIUP_DATA_DIR||'./work/server-data','client-history','client-sales-history.sqlite');
@@ -41,9 +41,12 @@ export function historicalSalesView(empty:SalesView,scope:SalesScope|undefined,c
  const result:SalesView={...empty,source:'client-history',filename:'Istoric pe clienți',importedAt:imports.map(r=>String(r.imported_at)).sort().at(-1)||null,products:[],sites:[],daily:[],summary:zero(),missingValueRows:0};
  const products=new Map<string,SalesProduct>(),sites=new Map<string,SalesView['sites'][number]>(),days=new Map<string,SalesView['daily'][number]>();
  const classifier=createSalesProductClassifier(catalog);
- for(const row of c.prepare("SELECT r.date,r.tr,r.site_id,r.item_code,r.item_name,r.brand,r.category,r.article_type,r.quantity_micros,r.value_cents FROM history_rows r JOIN history_imports i ON i.id=r.import_id AND i.state='active' WHERE r.date>=? AND r.date<? ORDER BY r.date,r.import_id,r.source_row").iterate(from,next)){
+ // Restrict by the coverage-validated imports so the existing import-id index
+ // can avoid traversing unrelated years. Source databases remain read-only.
+ const importIds=imports.map(row=>Number(row.id)),ids=importIds.map(()=>'?').join(',');
+ for(const row of c.prepare(`SELECT r.date,r.tr,r.site_id,r.item_code,r.item_name,r.brand,r.category,r.article_type,r.quantity_micros,r.value_cents FROM history_rows r WHERE r.import_id IN (${ids}) AND r.date>=? AND r.date<? ORDER BY r.date,r.import_id,r.source_row`).iterate(...importIds,from,next)){
  const location=String(row.tr),set=codes.get(salesLocationKey(location)),code=set?.size===1?[...set][0]:'';
- if(!historicalScopeMatch(scope,location,code))continue;
+ if(!isTrSalesLocation(location)||!historicalScopeMatch(scope,location,code))continue;
  const quantity=Number(row.quantity_micros)/1e6,value=Number(row.value_cents??0)/100,missing=row.value_cents===null?1:0,itemCode=String(row.item_code),itemName=String(row.item_name),brand=String(row.brand),category=String(row.category),date=String(row.date);
  const key=JSON.stringify([itemCode,itemName,brand,category]),p=products.get(key)||{...zero(),itemCode,itemName,brand,category,subCategory:'',missingValueRows:0};
  p.rows++;p.quantity+=quantity;p.value+=value;p.missingValueRows=(p.missingValueRows||0)+missing;products.set(key,p);

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {build} from 'esbuild';
 const bundle=await build({entryPoints:['lib/manager-sales-report.ts'],bundle:true,platform:'node',format:'esm',write:false});
-const {managerCategoryRows,managerProductCategory,managerCategoryLabels}=await import('data:text/javascript;base64,'+Buffer.from(bundle.outputFiles[0].text).toString('base64'));
+const {managerCategoryMetric,managerCategoryRows,managerProductCategory,managerCategoryLabels}=await import('data:text/javascript;base64,'+Buffer.from(bundle.outputFiles[0].text).toString('base64'));
 const product=(itemCode,quantity,value,extra)=>({itemCode,itemName:'Synthetic '+itemCode,brand:'Example',category:'Cabluri',subCategory:'',rows:1,quantity,value,segment:'accessories',...extra});
 const products=[product('CABLE',4,12,{distributionGroup:'accessories'}),product('RETURN',-1,-3,{distributionGroup:'accessories'}),product('BATTERY',2,8,{distributionGroup:'varta'}),product('SCENT',3,9,{distributionGroup:'scent'}),product('ZERO',1000,0,{distributionGroup:'vodafone_0'}),product('CREDIT',2,20,{distributionGroup:'vodafone_3'}),product('DIGI',1,4,{distributionGroup:'digi'}),product('PHONE',1,100,{distributionGroup:'unmapped',segment:'phones'}),product('VOUCHER',3,30,{distributionGroup:'unmapped',segment:'cardsSim',subsegment:'vouchers'}),product('UNKNOWN',1,5,{distributionGroup:'unmapped'})];
 const rows=managerCategoryRows(products),accessories=rows.filter(row=>row.category==='accessories');
@@ -38,3 +38,7 @@ assert.equal(allRows.find(row=>row.category==='accessories').valueCents,202,'con
 assert.equal(allRows.find(row=>row.category==='varta').valueCents,10,'exact mapping wins over the older phone segment');
 assert(!allRows.some(row=>row.products.some(p=>p.itemCode==='MAPPED-ZERO')),'configured Prepay is not duplicated as residual products');
 console.log('PASS: authoritative groups, source category/subcategory residual breakdown, exact net quantities/cents/returns and complete product retention.');
+
+const unknownCategory=managerCategoryRows([product('UNKNOWN-AMOUNT',1,0,{distributionGroup:'accessories',missingValueRows:1,valueExVat:0})]);
+assert.equal(managerCategoryMetric(unknownCategory,'accessories').missingValueRows,1,'single-month dialog metric preserves unknown-amount flags');
+assert.equal(managerCategoryMetric(rows,'accessories').valueCents,900,'single-month dialog metric retains category value and returns');

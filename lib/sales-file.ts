@@ -1,3 +1,4 @@
+import {isTrSalesLocation} from './sales-location.ts';
 import * as XLSX from 'xlsx';
 import { unzipSync } from 'fflate';
 import { createHash } from 'node:crypto';
@@ -110,13 +111,12 @@ export function parseSalesFile(bytes: Uint8Array, filename: string): SalesRow[] 
   const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: '', raw: true, range: { s: { r: 0, c: 0 }, e: { r: Math.min(range.e.r, SALES_SOURCE_ROW_LIMIT), c: maxRequiredColumn } } });
   const result: SalesRow[] = [];
   const months = new Set<string>();
-  const trToken = /(^|[^A-Z0-9])TR(?=$|[^A-Z0-9])/i;
   for (let index = headerIndex + 1; index < rows.length; index++) {
     const row = rows[index];
     if (!row || row.every(cell => cell === '' || cell === null || cell === undefined)) continue;
     const [, , , nameRaw, quantityRaw, brandRaw, priceRaw, valueRaw, locationRaw, companyRaw, asmRaw, regionalRaw, , categoryRaw, subCategoryRaw, agentRaw] = cols.map(col => row[col]);
     const location = text(locationRaw);
-    if (!trToken.test(salesName(location))) continue;
+    if (!isTrSalesLocation(location)) continue;
     const sourceRow = index + 1;
     // sheet_to_json converts date-formatted numbers even with raw:true and
     // ignores date1904 in that conversion. Read the original serial directly.

@@ -30,6 +30,7 @@ add.run(1,'2025-10-05','TR Synthetic','101','BUNDLE','Pachet telefon cu SIM','Ex
 assert.equal(get('2025-10').products[0].segment,'phones','historical phone bundles retain authoritative presentation');
 m.importSalesRows({rows:[{...base,month:'2026-09',date:'2026-09-05',itemCode:'BUNDLE',itemName:'Pachet telefon cu SIM',category:'Cartele'}],month:'2026-09',fileHash:'bundle-synthetic',filename:'synthetic.xlsx',importedBy:'synthetic',originalPath:'synthetic.xlsx',expectedRevision:1,expectedMappingHash:'same',currentMappingHash:'same',historicalAcknowledged:true});
 assert.equal(get('2026-09').products[0].segment,get('2025-10').products[0].segment,'both sources share bundle classification');
+add.run(1,'2025-11-05','Retail Synthetic','999','CABLE','Synthetic cable','Example','Cabluri','Accesorii',1e6,99900,1);assert.equal(get('2025-11').summary.value,0,'historical projection uses the same TR-only contract as monthly imports');
 h.close();
 console.log('PASS: historical fallback, authoritative precedence, complete coverage, zero vs missing, superseded data, exact scope/security, source invalidation, returns, monthly reconciliation and missing amounts.');
 }finally{rmSync(root,{recursive:true,force:true});}

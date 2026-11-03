@@ -1,11 +1,11 @@
 'use client';
-import {useState} from 'react';
+import {useId,useState} from 'react';
 import {MonthlySalesDialog} from './monthly-sales';
 import type {DistributionSales,DistributionSalesMetric} from '@/lib/distribution-sales';
 import {money} from '@/lib/client-api';
 import './distribution.css';
 const number=(n:number)=>n.toLocaleString('ro-RO');
-export function Metric({label,value,onClick}:{label:string;value:DistributionSalesMetric;onClick?:()=>void}){const body=<><span>{label}{onClick&&<small className="commerce-trend-hint"> · Evoluție ↗</small>}</span><strong>{number(value.quantity)} <small>buc.</small></strong><span>{money(value.valueCents/100)}</span></>;return onClick?<button type="button" className="distribution-metric commerce-trend-trigger" aria-label={'Evoluție lunară · '+label} onClick={onClick}>{body}</button>:<div className="distribution-metric">{body}</div>;}
+export function Metric({label,value,onClick}:{label:string;value:DistributionSalesMetric;onClick?:()=>void}){const id=useId();const body=<><span>{label}{onClick&&<small className="commerce-trend-hint"> · Evoluție ↗</small>}</span><strong id={id+'-quantity'}>{number(value.quantity)} <small>buc.</small></strong><span id={id+'-value'}>{money(value.valueCents/100)}</span></>;return onClick?<button type="button" className="distribution-metric commerce-trend-trigger" aria-label={'Evoluție lunară · '+label} aria-describedby={id+'-quantity '+id+'-value'} onClick={onClick}>{body}</button>:<div className="distribution-metric">{body}</div>;}
 export function OperatorLogo({provider}:{provider:'vodafone'|'digi'}){const width=provider==='vodafone'?140:110,height=provider==='vodafone'?94:38;return <div className={'distribution-logo '+provider}><svg aria-label={provider==='vodafone'?'Vodafone':'Digi'} viewBox={`0 0 ${width} ${height}`}><title>{provider==='vodafone'?'Vodafone':'Digi'}</title><image href={'/operators/'+(provider==='vodafone'?'vodafone.png':'digi.svg')} width={width} height={height}/></svg></div>;}
 
 export function DistributionSalesCards({data}:{data:DistributionSales}){

@@ -1,4 +1,4 @@
-import {historicalSalesGeneration} from './historical-sales';
+import {historicalSalesGeneration} from './historical-sales.ts';
 import { existsSync, statSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { resolve, dirname } from 'node:path';
