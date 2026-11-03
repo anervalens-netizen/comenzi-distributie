@@ -7,6 +7,7 @@ import './monthly-sales.css';
 
 export type MonthlySalesPoint={month:string;imported:boolean;source?:'client-history';value:DistributionSalesMetric};
 const number=(v:number)=>v.toLocaleString('ro-RO',{maximumFractionDigits:3});
+const axisNumber=(v:number)=>v.toLocaleString('ro-RO',{notation:'compact',maximumFractionDigits:1});
 export const trendMonth=(month:string)=>new Date(month+'-01T00:00:00Z').toLocaleDateString('ro-RO',{month:'short',year:'numeric',timeZone:'UTC'});
 function TrendPlot({points,quantity,net}:{points:MonthlySalesPoint[];quantity:boolean;net:boolean}){
  const values=points.map(p=>!p.imported||!quantity&&p.value.missingValueRows?null:quantity?p.value.quantity:net?p.value.valueExVat??null:p.value.valueCents/100);
@@ -14,7 +15,7 @@ function TrendPlot({points,quantity,net}:{points:MonthlySalesPoint[];quantity:bo
  const x=(i:number)=>55+(points.length===1?325:i*650/Math.max(1,points.length-1)),y=(v:number)=>175-(v-min)/span*150;
  const path=values.map((v,i)=>v===null?'':(i>0&&values[i-1]!==null?'L':'M')+x(i)+','+y(v)).join(' ');
  return <svg className="monthly-trend-plot" viewBox="0 0 760 225" aria-label={'Evoluție lunară · '+(quantity?'cantitate':net?'valoare fără TVA':'valoare raportată')}>
- {[0,.5,1].map(r=>{const v=min+r*span;return <g key={r}><line x1="55" x2="705" y1={y(v)} y2={y(v)} stroke="#e4e8ed"/><text x="48" y={y(v)+4} textAnchor="end">{number(v)}</text></g>;})}
+ {[0,.5,1].map(r=>{const v=min+r*span;return <g key={r}><line x1="55" x2="705" y1={y(v)} y2={y(v)} stroke="#e4e8ed"/><text x="48" y={y(v)+4} textAnchor="end">{axisNumber(v)}</text></g>;})}
  <path d={path} fill="none" stroke="#df2637" strokeWidth="2.5"/>
  {values.map((v,i)=>v===null?null:<circle key={points[i].month} cx={x(i)} cy={y(v)} r="4" fill="#df2637"><title>{trendMonth(points[i].month)}: {quantity?number(v)+' buc.':money(v)}</title></circle>)}
  {points.map((p,i)=>i%Math.ceil(points.length/8)===0||i===points.length-1?<text key={p.month} x={x(i)} y="202" textAnchor="middle">{trendMonth(p.month)}</text>:null)}
