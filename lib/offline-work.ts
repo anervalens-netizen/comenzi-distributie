@@ -7,7 +7,7 @@ import {currentLocalWorkUserId,readLocalWork,removeLocalWork,writeLocalWork} fro
 /** Account-bound durable work. Transactions never evict pending mutations. */
 export type PendingOperation = { id:string; userId:string; entity:string; path:string; method:string; body:unknown; created:number; attempts:number; next:number; state:'pending'|'blocked'; error?:string; status?:number; orderWork?:{base:Order;local:Order}; transferWork?:TransferWork };
 type Snapshot = {key:string;userId:string;path:string;value:unknown;at:number;bytes:number};
-type SnapshotMetadata = {key:string;userId:string;path:string;at:number;bytes:number;pinned:boolean};
+type SnapshotMetadata = {key:string;userId:string;path:string;at:number;bytes:number;pinned:boolean;fragments?:string[]};
 type SnapshotStats = {key:'snapshot-stats';bytes:number;count:number;pinnedBytes:number};
 type FragmentMarker = {__mobiupFragments:string[];property:string;count:number};
 export type CoverageManifest = {
@@ -112,22 +112,24 @@ async function transaction<T>(stores:string[],mode:IDBTransactionMode,run:(tx:ID
  const done=new Promise<void>((resolve,reject)=>{tx.oncomplete=()=>resolve();tx.onabort=()=>reject(tx.error||new Error('Datele nu au fost salvate local.'));tx.onerror=()=>{};});
  try{const value=await run(tx);await done;return value;}catch(e){try{tx.abort();}catch{}await done.catch(()=>{});throw e;}
 }
-async function rawSnapshot(userId:string,path:string){
- return transaction(['snapshots'],'readonly',tx=>request(tx.objectStore('snapshots').get(userId+'|'+path))) as Promise<Snapshot|undefined>;
-}
 export async function snapshot<T>(userId:string,path:string):Promise<{value:T;at:number}|null>{
  if(!userId)return null;
- const row=await rawSnapshot(userId,path);
+ // Hold the same read view through reconstruction, even if another tab replaces
+ // or evicts this generation while it is being read.
+ return transaction(['snapshots'],'readonly',async tx=>{
+ const store=tx.objectStore('snapshots');
+ const row=await request(store.get(userId+'|'+path)) as Snapshot|undefined;
  if(!row)return null;
  if(!isFragmentMarker(row.value))return {value:row.value as T,at:row.at};
  const values:unknown[]=[];
  for(const fragmentPath of row.value.__mobiupFragments){
-  const fragment=await rawSnapshot(userId,fragmentPath);
+  const fragment=await request(store.get(userId+'|'+fragmentPath)) as Snapshot|undefined;
   if(!fragment||!Array.isArray(fragment.value))return null;
   values.push(...fragment.value);
  }
  if(values.length!==row.value.count)return null;
  return {value:{[row.value.property]:values} as T,at:row.at};
+ });
 }
 async function statsFor(tx:IDBTransaction){
  const meta=tx.objectStore('meta'),stored=await request(meta.get('snapshot-stats')) as SnapshotStats|undefined;
@@ -139,50 +141,105 @@ async function statsFor(tx:IDBTransaction){
  const stats:SnapshotStats={key:'snapshot-stats',bytes:rows.reduce((sum,row)=>sum+row.bytes,0),count:rows.length,pinnedBytes:rows.filter(row=>row.pinned).reduce((sum,row)=>sum+row.bytes,0)};
  await request(meta.put(stats));return stats;
 }
-export async function saveSnapshot(userId:string,path:string,value:unknown):Promise<SnapshotSaveResult|undefined>{
- if(!userId)return;
+function preparedSnapshot(userId:string,path:string,value:unknown):Snapshot{
+ // Capture the structured-clone payload before awaiting storage; retain the
+ // existing JSON size accounting and IndexedDB serialization semantics.
+ value=structuredClone(value);
  let encoded:string;
  try{encoded=JSON.stringify(value);}catch{throw new Error('Datele primite nu pot fi serializate pentru folosire offline.');}
  if(encoded===undefined)throw new Error('Datele primite nu pot fi păstrate offline.');
  const bytes=encoded.length*2;
  if(bytes>MAX_SNAPSHOT_BYTES)throw new OfflineSnapshotCapacityError('SNAPSHOT_TOO_LARGE','Setul de date este prea mare pentru stocarea offline într-o singură bucată.',bytes);
- const pinned=isPinnedPath(path),key=userId+'|'+path,evicted:string[]=[];
+ return {key:userId+'|'+path,userId,path,value,at:Date.now(),bytes};
+}
+async function publishSnapshots(rows:Snapshot[]):Promise<SnapshotSaveResult>{
+ const bytes=rows.reduce((sum,row)=>sum+row.bytes,0),evicted:string[]=[];
+ const capacity=()=>new OfflineSnapshotCapacityError('OFFLINE_CAPACITY','Spațiul offline sigur este ocupat de date esențiale. Setul nou nu a fost salvat.',bytes);
+ if(rows.length>MAX_SNAPSHOTS||bytes>MAX_TOTAL_BYTES)throw capacity();
  const result=await transaction(['snapshots','snapshotIndex','meta'],'readwrite',async tx=>{
   const snapshots=tx.objectStore('snapshots'),index=tx.objectStore('snapshotIndex'),meta=tx.objectStore('meta');
   const stats=await statsFor(tx);
-  const previous=await request(index.get(key)) as SnapshotMetadata|undefined;
-  let projectedBytes=stats.bytes-(previous?.bytes||0)+bytes;
-  let projectedCount=stats.count-(previous?1:0)+1;
-  const projectedPinned=stats.pinnedBytes-(previous?.pinned?previous.bytes:0)+(pinned?bytes:0);
-  if(pinned){
-   const accountRows=await request(index.index('user').getAll(userId)) as SnapshotMetadata[];
-   const accountPinned=accountRows.filter(row=>row.pinned&&row.key!==key).reduce((sum,row)=>sum+row.bytes,0)+bytes;
-   if(accountPinned>MAX_PINNED_ACCOUNT_BYTES||projectedPinned>MAX_PINNED_TOTAL_BYTES)throw new OfflineSnapshotCapacityError('OFFLINE_CAPACITY','Datele minime de pornire depășesc bugetul offline sigur.',bytes);
+  const existing=await request(index.index('at').getAll()) as SnapshotMetadata[];
+  // Lazily enrich v1 metadata, including rows written later by an older tab.
+  // New ordinary rows carry [] so steady writes only scan bounded metadata,
+  // never all payloads. No database upgrade or work-store migration is needed.
+  for(const row of existing)if(!row.fragments){
+   const cached=await request(snapshots.get(row.key)) as Snapshot|undefined;
+   row.fragments=cached&&isFragmentMarker(cached.value)?cached.value.__mobiupFragments:[];
+   await request(index.put(row));
   }
-  const candidates=projectedBytes>MAX_TOTAL_BYTES||projectedCount>MAX_SNAPSHOTS?(await request(index.index('at').getAll()) as SnapshotMetadata[]).filter(row=>!row.pinned&&row.key!==key):[];
-  for(const row of candidates){
+  const byKey=new Map(existing.map(row=>[row.key,row])),incoming=new Map(rows.map(row=>[row.key,row]));
+  const links=new Map<string,Set<string>>();
+  const link=(a:string,b:string)=>{if(!links.has(a))links.set(a,new Set());links.get(a)!.add(b);};
+  for(const row of existing)for(const path of row.fragments??[]){const key=row.userId+'|'+path;link(row.key,key);link(key,row.key);}
+  const group=(key:string)=>{
+   const keys=new Set([key]);for(const next of keys)for(const linked of links.get(next)??[])keys.add(linked);
+   return [...keys].map(key=>byKey.get(key)).filter((row):row is SnapshotMetadata=>!!row);
+  };
+  const removed=new Set<string>(),protectedKeys=new Set(incoming.keys());
+  for(const row of rows)if(isFragmentMarker(row.value))for(const path of row.value.__mobiupFragments)protectedKeys.add(row.userId+'|'+path);
+  let projectedBytes=stats.bytes+bytes,projectedCount=stats.count+rows.length;
+  const remove=(row:SnapshotMetadata)=>{if(!removed.has(row.key)){removed.add(row.key);projectedBytes-=row.bytes;projectedCount--;}};
+  // Replacement retires the previous generation in the publishing transaction.
+  for(const row of rows)for(const old of group(row.key)){
+   if(protectedKeys.has(old.key)&&!incoming.has(old.key))continue;
+   if(old.pinned&&!incoming.has(old.key))throw capacity();
+   remove(old);
+  }
+  for(const row of existing){
    if(projectedBytes<=MAX_TOTAL_BYTES&&projectedCount<=MAX_SNAPSHOTS)break;
-   await request(snapshots.delete(row.key));await request(index.delete(row.key));
-   projectedBytes-=row.bytes;projectedCount--;evicted.push(row.key);
+   if(removed.has(row.key))continue;
+   const members=group(row.key);
+   if(members.some(member=>member.pinned||protectedKeys.has(member.key)))continue;
+   for(const member of members){remove(member);evicted.push(member.key);}
   }
-  if(projectedBytes>MAX_TOTAL_BYTES||projectedCount>MAX_SNAPSHOTS)throw new OfflineSnapshotCapacityError('OFFLINE_CAPACITY','Spațiul offline sigur este ocupat de date esențiale. Setul nou nu a fost salvat.',bytes);
-  const at=Date.now();
-  await request(snapshots.put({key,userId,path,value,at,bytes}));
-  await request(index.put({key,userId,path,at,bytes,pinned}));
+  if(projectedBytes>MAX_TOTAL_BYTES||projectedCount>MAX_SNAPSHOTS)throw capacity();
+  const pinnedRows=[...existing.filter(row=>row.pinned&&!removed.has(row.key)),...rows.filter(row=>isPinnedPath(row.path))];
+  const projectedPinned=pinnedRows.reduce((sum,row)=>sum+row.bytes,0);
+  for(const row of rows)if(isPinnedPath(row.path)&&(
+   projectedPinned>MAX_PINNED_TOTAL_BYTES||pinnedRows.filter(other=>other.userId===row.userId).reduce((sum,other)=>sum+other.bytes,0)>MAX_PINNED_ACCOUNT_BYTES
+  ))throw new OfflineSnapshotCapacityError('OFFLINE_CAPACITY','Datele minime de pornire depășesc bugetul offline sigur.',bytes);
+  // Also validate markers passed through saveSnapshot. A marker can only become
+  // visible alongside its complete, same-account array fragments.
+  for(const row of rows)if(isFragmentMarker(row.value)){
+   let count=0;
+   for(const path of row.value.__mobiupFragments){
+    const key=row.userId+'|'+path;
+    const fragment=incoming.get(key)??(!removed.has(key)?await request(snapshots.get(key)) as Snapshot|undefined:undefined);
+    if(!fragment||!Array.isArray(fragment.value))throw new Error('Snapshotul offline fragmentat este incomplet.');
+    count+=fragment.value.length;
+   }
+   if(count!==row.value.count)throw new Error('Snapshotul offline fragmentat este incomplet.');
+  }
+  // Queue all writes without a per-fragment transaction or round trip. Aborts,
+  // quota errors and interrupted tabs roll back deletions, index and marker too.
+  for(const key of removed){snapshots.delete(key);index.delete(key);}
+  for(const row of rows){
+   const {key,userId,path,at,bytes}=row;
+   snapshots.put(row);index.put({key,userId,path,at,bytes,pinned:isPinnedPath(path),fragments:isFragmentMarker(row.value)?row.value.__mobiupFragments:[]});
+  }
   await request(meta.put({key:'snapshot-stats',bytes:projectedBytes,count:projectedCount,pinnedBytes:projectedPinned}));
   return {saved:true as const,bytes,evicted};
  });
  if(evicted.length)notify();
  return result;
 }
+export async function saveSnapshot(userId:string,path:string,value:unknown):Promise<SnapshotSaveResult|undefined>{
+ if(!userId)return;
+ return publishSnapshots([preparedSnapshot(userId,path,value)]);
+}
 export async function saveFragmentedSnapshot(userId:string,path:string,property:string,values:unknown[],chunkSize=250){
+ if(!userId)throw new Error('Contul pentru stocarea offline lipsește.');
+ if(!Number.isSafeInteger(chunkSize)||chunkSize<1)throw new Error('Dimensiunea fragmentului offline este invalidă.');
  const stamp=crypto.randomUUID(),fragmentPaths:string[]=[];
+ const rows:Snapshot[]=[];
  for(let offset=0;offset<values.length;offset+=chunkSize){
   const fragmentPath=path+'#'+stamp+'-'+fragmentPaths.length;
-  await saveSnapshot(userId,fragmentPath,values.slice(offset,offset+chunkSize));
+  rows.push(preparedSnapshot(userId,fragmentPath,values.slice(offset,offset+chunkSize)));
   fragmentPaths.push(fragmentPath);
  }
- await saveSnapshot(userId,path,{__mobiupFragments:fragmentPaths,property,count:values.length});
+ rows.push(preparedSnapshot(userId,path,{__mobiupFragments:fragmentPaths,property,count:values.length}));
+ await publishSnapshots(rows);
  return {fragments:fragmentPaths,count:values.length};
 }
 export async function saveCoverageManifest(userId:string,manifest:CoverageManifest){
