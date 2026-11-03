@@ -10,11 +10,12 @@ mkdirSync(join(root,'client-history'));const h=new DatabaseSync(join(root,'clien
 h.exec("CREATE TABLE history_imports(id INTEGER PRIMARY KEY,period_start TEXT,period_end TEXT,imported_at TEXT,state TEXT);CREATE TABLE history_rows(import_id INTEGER,date TEXT,tr TEXT,site_id TEXT,item_code TEXT,item_name TEXT,brand TEXT,category TEXT,article_type TEXT,quantity_micros INTEGER,value_cents INTEGER,source_row INTEGER);INSERT INTO history_imports VALUES(1,'2025-01-01','2025-12-31','2026-01-01','active'),(2,'2026-01-01','2026-12-31','2026-11-01','active'),(3,'2024-01-01','2024-12-31','2025-01-01','superseded');");
 const add=h.prepare('INSERT INTO history_rows VALUES(?,?,?,?,?,?,?,?,?,?,?,?)');
 for(const [date,value,quantity] of [['2025-07-05',11900,1],['2025-08-05',24200,2],['2025-08-06',-12100,-1],['2025-08-07',500,1]])add.run(1,date,date.endsWith('07')?'TR Other':'TR Synthetic','101','CABLE','Synthetic cable','Example','Cabluri','Accesorii',quantity*1e6,value,Number(date.slice(-2)));
+add.run(2,'2025-08-05','TR Synthetic','101','CABLE','Synthetic cable','Example','Cabluri','Accesorii',1e6,999999,2);
 add.run(2,'2026-10-05','TR Synthetic','101','CABLE','Synthetic cable','Example','Cabluri','Accesorii',1e6,999999,1);
 add.run(3,'2024-10-05','TR Synthetic','101','CABLE','Synthetic cable','Example','Cabluri','Accesorii',1e6,100,1);
 const get=(month,scope)=>m.getSalesViewSnapshot(month,scope,month,month,catalog);
 assert.equal(get('2026-10').summary.value,242,'authoritative report wins: never combine overlapping datasets');assert.equal(get('2026-10').source,undefined);
-const july=get('2025-07'),aug=get('2025-08');assert.equal(july.source,'client-history');assert.equal(july.summary.value,119);assert.equal(aug.summary.value,126);assert.equal(aug.summary.quantity,2);
+const july=get('2025-07'),aug=get('2025-08');assert.equal(july.source,'client-history');assert.equal(july.summary.value,119);assert.equal(aug.summary.value,126);assert.equal(aug.summary.quantity,2,'rows outside an active import declared coverage cannot leak into the selected month');
 assert.equal(get('2024-10').filename,null,'superseded source is unavailable');
 assert.equal(get('2025-11').summary.value,0);assert(get('2025-11').filename,'covered zero-sale month is available');
 const scope={warehouseNames:['tr synthetic'],warehouseSites:[],siteCodes:[],excludedWarehouseNames:[]};
