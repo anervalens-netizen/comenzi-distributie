@@ -1,5 +1,6 @@
 'use client';
 import {lazy,Suspense,useEffect,useRef,useState} from 'react';
+import {MonthlySalesDialog} from './monthly-sales';
 import {RefreshCw,Package,Smartphone,Users,Search,ArrowRight} from 'lucide-react';
 import {api,errorMessage,invalidateApiReadCache,money} from '@/lib/client-api';
 import {bucharestReportingMonthKey} from '@/lib/bucharest-month';
@@ -27,7 +28,12 @@ function useSalesRefresh(){
 function ReportStatus({data,error}:{data:SalesView|null;error:string}){
   if(error)return <p className="error-banner" role="alert">{error}</p>;
   if(!data)return <output className="commerce-loading">Se încarcă vânzările…</output>;
-  if(data.distribution?.missingMonths.length)return <output className="commerce-source-warning">Fără import în {periodLabel(data.distribution.missingMonths)}. Valorile afișate acoperă doar lunile importate.</output>;
+  const history=data.distribution?.historicalMonths||[],missing=data.distribution?.missingMonths||[],missingValues=data.distribution?.monthly?.reduce((n,m)=>n+m.missingValueRows,0)||0;
+  if(history.length||missing.length||missingValues)return <>
+    {!!missing.length&&<output className="commerce-source-warning">Fără import în {periodLabel(missing)}. Valorile afișate acoperă doar lunile importate.</output>}
+    {!!history.length&&<output className="monthly-history-note">Istoric vânzări disponibil pentru {periodLabel(history)}. Aceste luni sunt incluse o singură dată în totaluri.</output>}
+    {!!missingValues&&<output className="commerce-source-warning">{missingValues} rând fără valoare în sursă. Sumele afectate sunt parțiale; cantitățile sunt păstrate.</output>}
+  </>;
   if(!data.filename)return <p className="commerce-source-warning">Nu există vânzări importate pentru perioada aleasă.</p>;
   return null;
 }
@@ -35,15 +41,16 @@ function SalesCoverage({data}:{data:SalesView}){
   const from=data.daily.map(day=>day.date).sort()[0],to=data.daily.map(day=>day.date).sort().at(-1);
   return <p className="commerce-source">{from&&to?`Vânzări raportate: ${from.split('-').reverse().join('.')} – ${to.split('-').reverse().join('.')}`:'Fără vânzări în selecție'}{data.importedAt&&(!data.distribution||data.distribution.months.length===1)?` · Import ${new Date(data.importedAt).toLocaleDateString('ro-RO',{timeZone:'Europe/Bucharest'})}`:''}. Cantitățile și valorile includ retururile.</p>;
 }
-function VatValue({gross,net}:{gross:number;net:number|undefined}){
-  return <span className="commerce-vat-value"><b>{net===undefined?'—':money(net)} <small>fără TVA</small></b><small>{money(gross)} cu TVA</small></span>;
+function VatValue({gross,net,partial=false}:{gross:number;net:number|undefined;partial?:boolean}){
+  return <span className="commerce-vat-value"><b>{partial||net===undefined?'—':money(net)} <small>fără TVA</small></b><small>{money(gross)} cu TVA{partial?' · valoare parțială':''}</small></span>;
 }
 function ProductDetails({products,label,showVat=false}:{products:SalesProduct[];label:string;showVat?:boolean}){
   const [query,setQuery]=useState(''),[limit,setLimit]=useState(30);
   const filtered=products.filter(product=>`${product.itemName} ${product.itemCode} ${product.brand}`.toLocaleLowerCase('ro').includes(query.toLocaleLowerCase('ro')));
-  return <details className="commerce-details"><summary>{label} <span>{products.length}</span></summary><label className="commerce-search"><Search size={16}/><input aria-label={'Caută · '+label} placeholder="Caută produs sau cod" value={query} onChange={event=>{setQuery(event.target.value);setLimit(30);}}/></label><div className="distribution-table-scroll"><table className="distribution-table commerce-product-table"><thead><tr><th>Produs</th><th>Cantitate</th><th>{showVat?'Valoare fără / cu TVA':'Valoare'}</th></tr></thead><tbody>{filtered.slice(0,limit).map((product,index)=><tr key={JSON.stringify([product.itemCode,product.itemName,index])}><th>{product.itemName}<small>{product.itemCode}{product.brand?' · '+product.brand:''}</small></th><td>{number(product.quantity)}</td><td>{showVat?<VatValue gross={product.value} net={product.valueExVat}/>:money(product.value)}</td></tr>)}</tbody></table></div>{!filtered.length&&<p>Niciun produs pentru această căutare.</p>}{filtered.length>limit&&<button className="secondary" onClick={()=>setLimit(value=>value+30)}>Arată încă {Math.min(30,filtered.length-limit)}</button>}</details>;
+  return <details className="commerce-details"><summary>{label} <span>{products.length}</span></summary><label className="commerce-search"><Search size={16}/><input aria-label={'Caută · '+label} placeholder="Caută produs sau cod" value={query} onChange={event=>{setQuery(event.target.value);setLimit(30);}}/></label><div className="distribution-table-scroll"><table className="distribution-table commerce-product-table"><thead><tr><th>Produs</th><th>Cantitate</th><th>{showVat?'Valoare fără / cu TVA':'Valoare'}</th></tr></thead><tbody>{filtered.slice(0,limit).map((product,index)=><tr key={JSON.stringify([product.itemCode,product.itemName,index])}><th>{product.itemName}<small>{product.itemCode}{product.brand?' · '+product.brand:''}</small></th><td>{number(product.quantity)}</td><td>{showVat?<VatValue partial={!!product.missingValueRows} gross={product.value} net={product.valueExVat}/>:money(product.value)}</td></tr>)}</tbody></table></div>{!filtered.length&&<p>Niciun produs pentru această căutare.</p>}{filtered.length>limit&&<button className="secondary" onClick={()=>setLimit(value=>value+30)}>Arată încă {Math.min(30,filtered.length-limit)}</button>}</details>;
 }
 function CategoryReport({data,other=false}:{data:SalesView;other?:boolean}){
+  const [trend,setTrend]=useState<ManagerProductCategory|null>(null);
   const categories:ManagerProductCategory[]=other?['phones','vouchers','other']:['accessories','varta','scent'];
   const rows=managerCategoryRows(data.products).filter(row=>categories.includes(row.category));
   const detailedRows=other?rows:rows.filter(row=>row.category==='accessories');
@@ -51,9 +58,10 @@ function CategoryReport({data,other=false}:{data:SalesView;other?:boolean}){
     const subset=rows.filter(row=>row.category===category),quantity=subset.reduce((sum,row)=>sum+row.quantity,0),valueCents=subset.reduce((sum,row)=>sum+row.valueCents,0);
     const valueExVat=subset.every(row=>row.valueExVat!==undefined)?subset.reduce((sum,row)=>sum+row.valueExVat!,0):undefined;
     const authoritative=category==='accessories'||category==='varta'||category==='scent'?data.distribution?.groups[category]:null;
-    return <article className="panel commerce-category-card" key={category}><h2>{managerCategoryLabels[category]}</h2><strong>{number(authoritative?.quantity??quantity)} <small>buc.</small></strong>{other?<b>{money((authoritative?.valueCents??valueCents)/100)}</b>:<VatValue gross={(authoritative?.valueCents??valueCents)/100} net={authoritative?.valueExVat??valueExVat}/>}</article>;
+    return <button type="button" className="panel commerce-category-card commerce-trend-trigger" key={category} aria-label={'Evoluție lunară · '+managerCategoryLabels[category]} onClick={()=>setTrend(category)}><span className="commerce-trend-title">{managerCategoryLabels[category]}<span className="commerce-trend-hint">Evoluție lunară ↗</span></span><strong>{number(authoritative?.quantity??quantity)} <small>buc.</small></strong>{other?<b>{money((authoritative?.valueCents??valueCents)/100)}</b>:<VatValue partial={!!(authoritative?.missingValueRows||subset.reduce((n,r)=>n+r.missingValueRows,0))} gross={(authoritative?.valueCents??valueCents)/100} net={authoritative?.valueExVat??valueExVat}/>}</button>;
   })}</div>
-    <section className="panel commerce-categories"><div className="panel-heading"><h2>{other?'Categorii și produse':'Vânzări pe categorii'}</h2><span className="count-pill">{detailedRows.length}</span></div>{detailedRows.length?<div className="distribution-table-scroll"><table className="distribution-table"><thead><tr><th>Categorie</th><th>Cantitate</th><th>{other?'Valoare':'Valoare fără / cu TVA'}</th></tr></thead><tbody>{detailedRows.map(row=><tr key={JSON.stringify([row.category,row.name])}><th>{row.name}</th><td>{number(row.quantity)} buc.</td><td>{other?money(row.valueCents/100):<VatValue gross={row.valueCents/100} net={row.valueExVat}/>}</td></tr>)}</tbody></table></div>:<p className="commerce-empty">Nu există accesorii din aceste categorii în selecție.</p>}
+    {trend&&<MonthlySalesDialog key={trend} title={managerCategoryLabels[trend]} open onOpenChange={open=>{if(!open)setTrend(null);}} vat={!other} points={data.distribution?.monthly?.map(m=>({month:m.month,imported:m.imported,source:m.source,value:m.categories[trend]||{quantity:0,valueCents:0,average:null,valueExVat:0}}))||[{month:data.month,imported:!!data.filename,value:{quantity:rows.filter(r=>r.category===trend).reduce((s,r)=>s+r.quantity,0),valueCents:rows.filter(r=>r.category===trend).reduce((s,r)=>s+r.valueCents,0),average:null,valueExVat:rows.filter(r=>r.category===trend).every(r=>r.valueExVat!==undefined)?rows.filter(r=>r.category===trend).reduce((s,r)=>s+r.valueExVat!,0):undefined}}]}/>}
+    <section className="panel commerce-categories"><div className="panel-heading"><h2>{other?'Categorii și produse':'Vânzări pe categorii'}</h2><span className="count-pill">{detailedRows.length}</span></div>{detailedRows.length?<div className="distribution-table-scroll"><table className="distribution-table"><thead><tr><th>Categorie</th><th>Cantitate</th><th>{other?'Valoare':'Valoare fără / cu TVA'}</th></tr></thead><tbody>{detailedRows.map(row=><tr key={JSON.stringify([row.category,row.name])}><th>{row.name}</th><td>{number(row.quantity)} buc.</td><td>{other?money(row.valueCents/100):<VatValue partial={!!row.missingValueRows} gross={row.valueCents/100} net={row.valueExVat}/>}</td></tr>)}</tbody></table></div>:<p className="commerce-empty">Nu există accesorii din aceste categorii în selecție.</p>}
       <ProductDetails showVat={!other} key={categories.join(',')} products={data.products.filter(product=>categories.includes(managerProductCategory(product)!))} label="Detalii pe produse"/>
     </section>{!other&&<p className="commerce-source">Valorile fără TVA sunt calculate din sumele sursă cu TVA: 19% până în iulie 2025, 21% din august 2025. Rotunjire la afișare; retururile sunt incluse.</p>}<SalesCoverage data={data}/></>;
 }

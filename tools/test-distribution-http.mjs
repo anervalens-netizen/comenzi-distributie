@@ -10,6 +10,14 @@ const fixture=spawnSync('python3',['tools/distribution-fixture.py',root],{encodi
 process.env.MOBIUP_DATA_DIR=root;
 const b=await build({entryPoints:['lib/sales-store.ts'],bundle:true,platform:'node',format:'esm',write:false});const sales=await import('data:text/javascript;base64,'+Buffer.from(b.outputFiles[0].text).toString('base64'));
 let revision=0;for(const month of ['2026-09','2026-10']){const rows=[{rowNumber:1,date:month+'-05',month,siteCode:'N',itemCode:'CREDIT',itemName:'Synthetic credit',quantity:month.endsWith('09')?2:1,valueCents:month.endsWith('09')?2000:4000,priceCents:1000,brand:'Synthetic',location:'TR North',company:'ExampleCo',asm:'',regional:'',orderNumber:'EXAMPLE',category:'Cartele',subCategory:'',agent:'Synthetic North'}];rows.push({...rows[0],rowNumber:2,siteCode:'LEGACY',itemCode:'UNMAPPED',itemName:'Synthetic historical item',location:'TR Historical',quantity:1,valueCents:500});sales.importSalesRows({rows,month,fileHash:month,filename:'synthetic.xlsx',importedBy:'manager',originalPath:'synthetic.xlsx',expectedRevision:revision++,expectedMappingHash:'same',currentMappingHash:'same',historicalAcknowledged:true});}
+// Separate historical source: complete 2025 coverage, exact TR identities.
+mkdirSync(join(root,'client-history'),{recursive:true});
+const history=new DatabaseSync(join(root,'client-history','client-sales-history.sqlite'));
+history.exec("CREATE TABLE history_imports(id INTEGER PRIMARY KEY,period_start TEXT,period_end TEXT,imported_at TEXT,state TEXT);CREATE TABLE history_rows(import_id INTEGER,date TEXT,tr TEXT,site_id TEXT,item_code TEXT,item_name TEXT,brand TEXT,category TEXT,article_type TEXT,quantity_micros INTEGER,value_cents INTEGER,source_row INTEGER);INSERT INTO history_imports VALUES(1,'2025-01-01','2025-12-31','2026-01-01','active');");
+const insertHistory=history.prepare('INSERT INTO history_rows VALUES(?,?,?,?,?,?,?,?,?,?,?,?)');
+insertHistory.run(1,'2025-11-05','TR North','101','CREDIT','Synthetic credit','Example','Cartele','SIM',2000000,2420,1);
+insertHistory.run(1,'2025-11-05','TR south','102','CREDIT','Synthetic credit','Example','Cartele','SIM',3000000,3630,2);
+history.close();
 const child=spawn(process.execPath,['dist/standalone/server.js'],{env:{...process.env,MOBIUP_DATA_DIR:root,MOBIUP_ACTIVATIONS_DIR:root,MOBIUP_ACTIVATIONS_PILOT_MANAGER_ID:'manager',MOBIUP_ACTIVATIONS_PILOT_AGENT_ID:'north',MOBIUP_ACTIVATIONS_PILOT_ADDITIONAL_AGENT_IDS:'south,non',MOBIUP_USAGE_DISABLED:'1',HOST:'127.0.0.1',PORT:'3096'},stdio:'ignore'});
 let browser;const cookies={};
 async function request(path,id='manager'){const r=await fetch(origin+'/api/'+path,{headers:{Cookie:'mobiup_session='+cookies[id]}});return {status:r.status,data:await r.json()};}
@@ -35,6 +43,12 @@ try{
  const multi=await request('sales?month=2026-10&months=2026-09,2026-10,2026-10&projects=vodafone_nord');assert.equal(multi.status,200,JSON.stringify(multi.data));assert.equal(multi.data.distribution.vodafoneCredit.quantity,3);assert.equal(multi.data.distribution.vodafoneCredit.average,20);
  assert.equal((await request('sales?month=2026-10&months=2026-09,2026-10&projects=vodafone_sud','north')).data.summary.quantity,0);
  const allSales=await request('sales?month=2026-10&months=2026-09,2026-10&projects=vodafone_nord,vodafone_sud,non_exclusiv');assert.equal(allSales.data.summary.quantity,5,'all projects preserve authorized historical sellers without current mappings');assert.equal(allSales.data.distribution.groups.unmapped.quantity,2);
+ const historyAll=await request('sales?month=2025-11&months=2025-11&projects=vodafone_nord,vodafone_sud,non_exclusiv');
+ assert.equal(historyAll.status,200);assert.equal(historyAll.data.distribution.vodafoneCredit.quantity,5);assert.deepEqual(historyAll.data.distribution.missingMonths,[]);assert.deepEqual(historyAll.data.distribution.historicalMonths,['2025-11']);
+ const historyOwn=await request('sales?month=2025-11&months=2025-11&projects=vodafone_nord,vodafone_sud,non_exclusiv','north');
+ assert.equal(historyOwn.data.distribution.vodafoneCredit.quantity,2,'history obeys authenticated agent warehouse scope');
+ const historyForged=await request('sales?month=2025-11&months=2025-11&projects=vodafone_nord,vodafone_sud,non_exclusiv&siteCode=S','north');
+ assert.equal(historyForged.data.distribution.vodafoneCredit.quantity,2,'forged historical SiteCode cannot widen agent scope');
  browser=await browserFixture(origin);await browser.send('Emulation.setDeviceMetricsOverride',{width:1280,height:900,deviceScaleFactor:1,mobile:false});await browser.send('Network.setCookie',{name:'mobiup_session',value:cookies.manager,url:origin});await browser.send('Page.navigate',{url:origin});
  await waitFor(()=>browser.evaluate('document.querySelector(".profile strong")?.textContent==="Synthetic manager"'),'manager session');
  await browser.evaluate(`localStorage.setItem('distribution-selection-v1:manager',JSON.stringify({months:['2026-09','2026-10'],projects:['vodafone_sud','vodafone_nord','non_exclusiv']}));location.reload();`);
@@ -53,6 +67,17 @@ try{
  await waitFor(()=>browser.evaluate('!!document.querySelector(".prepay-sales")'),'prepay sales');
  assert(await browser.evaluate('document.querySelector(".prepay-sales")?.textContent.includes("20,00")'),'weighted credit-only mean rendered');
  assert(!(await browser.evaluate('document.querySelector(".prepay-sales")?.textContent.includes("Accesorii")')),'prepay excludes accessory cards');
+ // Monthly total drill-down keeps the selected months and restores focus.
+ await browser.evaluate(`(()=>{const b=[...document.querySelectorAll('button')].find(b=>b.getAttribute('aria-label')==='Evoluție lunară · SIM cu credit');b.focus();b.click();})()`);
+ await waitFor(()=>browser.evaluate('!!document.querySelector("[role=dialog] .monthly-sales-table")'),'Prepay monthly dialog');
+ assert.equal(await browser.evaluate('document.querySelectorAll("[role=dialog] tbody tr").length'),2);
+ assert(await browser.evaluate('document.querySelector("[role=dialog]").textContent.includes("sept. 2026")&&document.querySelector("[role=dialog]").textContent.includes("oct. 2026")'));
+ await browser.evaluate(`[...document.querySelectorAll('[role=dialog] button')].find(b=>b.textContent==='Cantitate').click()`);
+ assert(await browser.evaluate('document.querySelector("[role=dialog] svg").getAttribute("aria-label").includes("cantitate")'));
+ await browser.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape'});await browser.send('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape'});
+ await waitFor(()=>browser.evaluate('!document.querySelector("[role=dialog]")'),'close monthly dialog');
+ assert(await browser.evaluate('document.activeElement?.getAttribute("aria-label")==="Evoluție lunară · SIM cu credit"'),'focus returns to clicked total');
+
  assert.equal(await browser.evaluate('document.querySelectorAll(".distribution-projects button[aria-pressed]").length'),3,'all projects remain directly visible');
  assert.equal(await browser.evaluate('document.querySelectorAll(".report-month-grid button[aria-pressed=true]").length'),2,'restored months are selected directly');
  await browser.evaluate(`document.querySelector('[aria-label="septembrie 2026"]').click()`);
@@ -90,6 +115,15 @@ try{
  for(const [width,height] of [[1280,900],[820,1180],[390,844]]){await browser.send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:width<700});assert(await browser.evaluate('document.documentElement.scrollWidth<=innerWidth'),'no overflow '+width);mkdirSync('work/evidence',{recursive:true});const screenshot=await browser.send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});writeFileSync('work/evidence/distribution-'+width+'.png',Buffer.from(screenshot.data,'base64'));}
  await browser.evaluate('[...document.querySelectorAll(".main-nav [role=tab]")].find(button=>button.textContent==="Accesorii").click()');
  await waitFor(()=>browser.evaluate('document.querySelectorAll(".commerce-category-card").length===3'),'accessory categories');
+ await browser.evaluate(`(()=>{const b=[...document.querySelectorAll('button')].find(b=>b.getAttribute('aria-label')==='Evoluție lunară · Accesorii');b.focus();b.click();})()`);
+ await waitFor(()=>browser.evaluate('!!document.querySelector("[role=dialog] .monthly-sales-table")'),'accessory monthly dialog');
+ assert(await browser.evaluate('document.querySelector("[role=dialog]").textContent.includes("Fără TVA")&&document.querySelector("[role=dialog]").textContent.includes("Cu TVA")'));
+ await browser.send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
+ assert(await browser.evaluate('document.documentElement.scrollWidth<=innerWidth && document.querySelector("[role=dialog]").getBoundingClientRect().width<=innerWidth'),'monthly dialog fits mobile');
+ await browser.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape'});await browser.send('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape'});
+ await waitFor(()=>browser.evaluate('!document.querySelector("[role=dialog]")'),'close accessory dialog');
+ await browser.send('Emulation.setDeviceMetricsOverride',{width:1280,height:900,deviceScaleFactor:1,mobile:false});
+
  assert(!(await browser.evaluate('document.querySelector(".manager-commerce").textContent.includes("Media / SIM")')),'accessories do not duplicate prepay');
  await browser.evaluate('[...document.querySelectorAll(".commerce-tabs button")].find(button=>button.textContent==="Telefoane & Prepay").click()');
  await waitFor(()=>browser.evaluate('document.querySelector(".manager-commerce").textContent.includes("Telefoane")&&document.querySelector(".manager-commerce").textContent.includes("vouchere")'),'other useful reports retained');

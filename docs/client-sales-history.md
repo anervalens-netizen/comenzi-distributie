@@ -6,6 +6,15 @@ sales UI exposes it independently under Vânzări → Pe clienți; see
 [monthly report semantics](partner-sales-activity.md#monthly-client-report-snapshot-version-5).
 Never sum the two datasets: they describe overlapping sales at different grains.
 
+Product reporting may read active historical line items only when its authoritative
+monthly product import is absent and declared history coverage includes the whole
+month. The fallback is read-only, visibly identifies historical months and never
+adds both sources for an overlapping month. Exact, unique location evidence is
+required for SiteCode scope; ERP SiteId is never interpreted as SiteCode. Missing
+source amounts remain flagged. History generation guards invalidate cached views
+and reject a multi-month union if either source changes during calculation.
+
+
 ## Schema and source contract
 
 `tools/client_sales_history.py` uses Python's standard library and a dedicated

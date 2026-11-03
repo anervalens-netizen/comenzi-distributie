@@ -1,3 +1,4 @@
+import {historicalSalesGeneration} from './historical-sales';
 import { existsSync, statSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { resolve, dirname } from 'node:path';
@@ -125,11 +126,12 @@ function runtimeIdentity(): Identity {
   try {
     const hasMeta = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='sales_meta'").get();
     const revision = hasMeta ? Number(db.prepare("SELECT value FROM sales_meta WHERE key='revision'").get()?.value || 0) : 0;
+    const historyStamp=historicalSalesGeneration();
     const fileStamp = stamp();
     // A replaced/restored database can reuse the revision at the same path.
     // A racing replacement/checkpoint bypasses caching rather than failing a
     // valid read. The worker still takes its own coherent SQLite snapshot.
-    return { revision, dataPath: salesDatabasePath, fileStamp: before === fileStamp ? fileStamp : `unstable:${randomUUID()}` };
+    return { revision, dataPath: salesDatabasePath, fileStamp: before === fileStamp ? fileStamp+'|'+historyStamp : `unstable:${randomUUID()}` };
   } finally { db.close(); }
 }
 export const getSalesViewRuntime = createSalesViewRuntime({ identity: runtimeIdentity });

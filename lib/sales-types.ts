@@ -45,6 +45,7 @@ export type SalesDaily = SalesAggregate & { date: string };
 export type SalesProduct = SalesAggregate & {
   /** Derived standard-rate reporting amount; round only for display. */
   valueExVat?: number;
+  missingValueRows?: number;
   itemCode: string;
   itemName: string;
   brand: string;
@@ -77,6 +78,8 @@ export type SalesMonthly = SalesAggregate & {
 };
 
 export type SalesView = {
+  source?: 'client-history';
+  missingValueRows?: number;
   distribution?:import('./distribution-sales').DistributionSales;
   month: string;
   importedAt: string | null;

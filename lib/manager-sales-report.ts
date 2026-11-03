@@ -15,14 +15,14 @@ export function managerProductCategory(product:SalesProduct):ManagerProductCateg
   return 'other';
 }
 export function managerCategoryRows(products:SalesProduct[]){
-  const rows=new Map<string,{category:ManagerProductCategory;name:string;quantity:number;valueCents:number;valueExVat:number|undefined;products:SalesProduct[]}>();
+  const rows=new Map<string,{category:ManagerProductCategory;name:string;quantity:number;valueCents:number;valueExVat:number|undefined;missingValueRows:number;products:SalesProduct[]}>();
   for(const product of products){
     const category=managerProductCategory(product);if(!category)continue;
     const sourceCategory=product.category.trim(),sourceSubCategory=product.subCategory.trim();
     const name=category==='accessories'?(sourceCategory||'Alte accesorii'):category==='other'?[sourceCategory||'Fără categorie în sursă',sourceSubCategory].filter(Boolean).join(' · '):managerCategoryLabels[category];
     // Residual rows retain their source categories; they are not new product mappings.
-    const key=JSON.stringify(category==='other'?[category,sourceCategory,sourceSubCategory]:[category,name]),row=rows.get(key)||{category,name,quantity:0,valueCents:0,valueExVat:0,products:[]};
-    row.valueExVat=row.valueExVat!==undefined&&product.valueExVat!==undefined?row.valueExVat+product.valueExVat:undefined;row.quantity+=product.quantity;row.valueCents+=Math.round(product.value*100);row.products.push(product);rows.set(key,row);
+    const key=JSON.stringify(category==='other'?[category,sourceCategory,sourceSubCategory]:[category,name]),row=rows.get(key)||{category,name,quantity:0,valueCents:0,valueExVat:0,missingValueRows:0,products:[]};
+    row.valueExVat=row.valueExVat!==undefined&&product.valueExVat!==undefined?row.valueExVat+product.valueExVat:undefined;row.missingValueRows+=product.missingValueRows||0;row.quantity+=product.quantity;row.valueCents+=Math.round(product.value*100);row.products.push(product);rows.set(key,row);
   }
   return [...rows.values()].sort((a,b)=>b.valueCents-a.valueCents||a.name.localeCompare(b.name,'ro'));
 }

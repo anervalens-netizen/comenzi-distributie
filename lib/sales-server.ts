@@ -1,3 +1,4 @@
+import {historicalSalesGeneration} from './historical-sales';
 import {withSalesVat} from './sales-vat';
 import {readDistributionRules} from './distribution-config';
 import {withImportAuthorization,withCapturedImportAuthorization,type ImportAuthorization} from './import-write-authorization';
@@ -134,12 +135,13 @@ export async function salesView(req: Request, user: User) {
     if(months.length>36)fail(400,'Selectează maximum 36 de luni.');
     months.forEach(validateMonth);
     const rules=await readDistributionRules();if(!rules)fail(503,'Configurația proiectelor trebuie pregătită.');
+    const historyGeneration=historicalSalesGeneration();
     const generation=salesRevision(),identity=(await mappingSnapshot()).hash,views:SalesView[]=[];
     // Reuse the existing authorized worker for each distinct month; a generation change rejects the union.
     for(const selected of months){const url=new URL(req.url);url.searchParams.delete('months');url.searchParams.set('month',selected);for(const key of ['from','to','fromMonth','toMonth'])url.searchParams.delete(key);const view=await (await salesView(new Request(url),user)).json() as SalesView;views.push(withSalesVat({...view,products:view.products.map(p=>({...p,distributionGroup:productGroup(rules,p.itemCode)}))}));}
     let fallback=views[0];
     if(!fallback){const url=new URL(req.url);url.searchParams.delete('months');url.searchParams.set('projects','');fallback=await (await salesView(new Request(url),user)).json() as SalesView;}
-    if(generation!==salesRevision()||identity!==(await mappingSnapshot()).hash||JSON.stringify(rules)!==JSON.stringify(await readDistributionRules()))fail(409,'Datele s-au modificat. Reîncarcă selecția.');
+    if(historyGeneration!==historicalSalesGeneration()||generation!==salesRevision()||identity!==(await mappingSnapshot()).hash||JSON.stringify(rules)!==JSON.stringify(await readDistributionRules()))fail(409,'Datele s-au modificat. Reîncarcă selecția.');
     const combined=combineSalesViews(views,fallback);
     combined.products=combined.products.map(p=>({...p,distributionGroup:productGroup(rules,p.itemCode)}));
     return response({...combined,distribution:distributionSales(views,rules,months)});

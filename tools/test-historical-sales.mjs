@@ -1,0 +1,30 @@
+import assert from 'node:assert/strict';
+import {mkdtempSync,mkdirSync,rmSync} from 'node:fs';import {tmpdir} from 'node:os';import {join} from 'node:path';import {createRequire} from 'node:module';import {DatabaseSync} from 'node:sqlite';import {build} from 'esbuild';
+const root=mkdtempSync(join(tmpdir(),'historical-sales-'));process.env.MOBIUP_DATA_DIR=root;
+try{
+const file=join(root,'store.cjs');await build({stdin:{contents:"export * from './lib/sales-store';export * from './lib/historical-sales';export * from './lib/distribution-sales';export * from './lib/sales-vat';",resolveDir:process.cwd()},platform:'node',bundle:true,format:'cjs',outfile:file});
+const m=createRequire(import.meta.url)(file),catalog=[{code:'CABLE',name:'Synthetic cable',category:'Cabluri',kind:'accessory'}];
+const base={rowNumber:1,date:'2026-10-05',month:'2026-10',siteCode:'QA',itemCode:'CABLE',itemName:'Synthetic cable',quantity:2,valueCents:24200,priceCents:12100,brand:'Example',location:'TR Synthetic',company:'ExampleCo',asm:'',regional:'',orderNumber:'EXAMPLE',category:'Cabluri',subCategory:'',agent:'Synthetic'};
+m.importSalesRows({rows:[base],month:base.month,fileHash:'synthetic',filename:'synthetic.xlsx',importedBy:'synthetic',originalPath:'synthetic.xlsx',expectedRevision:0,expectedMappingHash:'same',currentMappingHash:'same',historicalAcknowledged:true});
+mkdirSync(join(root,'client-history'));const h=new DatabaseSync(join(root,'client-history','client-sales-history.sqlite'));
+h.exec("CREATE TABLE history_imports(id INTEGER PRIMARY KEY,period_start TEXT,period_end TEXT,imported_at TEXT,state TEXT);CREATE TABLE history_rows(import_id INTEGER,date TEXT,tr TEXT,site_id TEXT,item_code TEXT,item_name TEXT,brand TEXT,category TEXT,article_type TEXT,quantity_micros INTEGER,value_cents INTEGER,source_row INTEGER);INSERT INTO history_imports VALUES(1,'2025-01-01','2025-12-31','2026-01-01','active'),(2,'2026-01-01','2026-12-31','2026-11-01','active'),(3,'2024-01-01','2024-12-31','2025-01-01','superseded');");
+const add=h.prepare('INSERT INTO history_rows VALUES(?,?,?,?,?,?,?,?,?,?,?,?)');
+for(const [date,value,quantity] of [['2025-07-05',11900,1],['2025-08-05',24200,2],['2025-08-06',-12100,-1],['2025-08-07',500,1]])add.run(1,date,date.endsWith('07')?'TR Other':'TR Synthetic','101','CABLE','Synthetic cable','Example','Cabluri','Accesorii',quantity*1e6,value,Number(date.slice(-2)));
+add.run(2,'2026-10-05','TR Synthetic','101','CABLE','Synthetic cable','Example','Cabluri','Accesorii',1e6,999999,1);
+add.run(3,'2024-10-05','TR Synthetic','101','CABLE','Synthetic cable','Example','Cabluri','Accesorii',1e6,100,1);
+const get=(month,scope)=>m.getSalesViewSnapshot(month,scope,month,month,catalog);
+assert.equal(get('2026-10').summary.value,242,'authoritative report wins: never combine overlapping datasets');assert.equal(get('2026-10').source,undefined);
+const july=get('2025-07'),aug=get('2025-08');assert.equal(july.source,'client-history');assert.equal(july.summary.value,119);assert.equal(aug.summary.value,126);assert.equal(aug.summary.quantity,2);
+assert.equal(get('2024-10').filename,null,'superseded source is unavailable');
+assert.equal(get('2025-11').summary.value,0);assert(get('2025-11').filename,'covered zero-sale month is available');
+const scope={warehouseNames:['tr synthetic'],warehouseSites:[],siteCodes:[],excludedWarehouseNames:[]};
+assert.equal(get('2025-08',scope).summary.value,121);assert.equal(get('2025-08',[]).summary.value,0);assert.equal(get('2025-08','QA').summary.value,121);assert.equal(get('2025-08','101').summary.value,0,'ERP SiteId never grants SiteCode access');
+assert.equal(m.historicalScopeMatch({...scope,siteCode:'DENIED'},'TR Synthetic','QA'),false);
+assert.equal(m.historicalScopeMatch({warehouseNames:[],warehouseSites:[{warehouseName:'TR Synthetic',siteCode:'QA'}],siteCodes:[],excludedWarehouseNames:[]},'TR Synthetic',''),false,'ambiguous/no-code warehouse pairs fail closed');
+const views=[july,aug].map(v=>m.withSalesVat({...v,products:v.products.map(p=>({...p,distributionGroup:'accessories'}))}));const rules={revision:'synthetic',products:{CABLE:'accessories'}};
+const total=m.distributionSales(views,rules,['2025-07','2025-08','2024-10']);assert.equal(total.monthly.length,3);assert.deepEqual(total.missingMonths,['2024-10']);assert.deepEqual(total.historicalMonths,['2025-07','2025-08']);assert.equal(total.monthly[2].imported,false);assert.equal(total.groups.accessories.valueCents,24500);assert(Math.abs(total.groups.accessories.valueExVat-(100+126/1.21))<1e-8);
+assert.equal(total.monthly.reduce((s,p)=>s+p.groups.accessories.valueCents,0),total.groups.accessories.valueCents,'monthly series reconciles with total');
+const before=m.historicalSalesGeneration();add.run(1,'2025-09-05','TR Synthetic','101','CABLE','Synthetic cable','Example','Cabluri','Accesorii',1e6,null,1);assert.notEqual(m.historicalSalesGeneration(),before);assert.equal(get('2025-09').products[0].missingValueRows,1);
+h.close();
+console.log('PASS: historical fallback, authoritative precedence, complete coverage, zero vs missing, superseded data, exact scope/security, source invalidation, returns, monthly reconciliation and missing amounts.');
+}finally{rmSync(root,{recursive:true,force:true});}

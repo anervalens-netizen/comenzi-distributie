@@ -1,3 +1,4 @@
+import {historicalSalesView} from './historical-sales';
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync, existsSync, unlinkSync, renameSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
@@ -203,7 +204,7 @@ export function getSalesView(month: string, siteCode?: SalesScope, fromMonth = m
   }
   const monthly = [...monthlyMap.values()].sort((a, b) => a.month.localeCompare(b.month));
   const blankSegments = emptySegments();
-  if (!current) return { month, importedAt: null, filename: null, fileHash: null, revision, summary: { rows: 0, quantity: 0, value: 0 }, sites: [], daily: [], products: [], months, segments: blankSegments, monthly };
+  if (!current) {const empty:SalesView={ month, importedAt: null, filename: null, fileHash: null, revision, summary: { rows: 0, quantity: 0, value: 0 }, sites: [], daily: [], products: [], months, segments: blankSegments, monthly };return historicalSalesView(empty,siteCode,catalog,database())||empty;}
   const db = database();
   const args: (string | number)[] = [Number(current.import_id), ...filter.args];
   const summary = aggregate(db.prepare(`SELECT COUNT(*) rows, COALESCE(SUM(quantity),0) quantity, COALESCE(SUM(value_cents),0) value_cents FROM sales_rows WHERE import_id=?${filter.sql}`).get(...args) as Record<string, unknown>);

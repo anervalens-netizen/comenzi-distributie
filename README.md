@@ -27,6 +27,14 @@ npm run check
 
 Tests use isolated temporary data. Never point CI at a production database or import real account, customer or employee data. Run application-specific regression checks before publishing changes.
 
+## Monthly commercial trends
+
+Accessory category totals and Prepay product totals open a monthly graph and
+table for exactly the selected reporting months and authorized filters. Missing
+imports remain gaps; covered months with no sales are zero. Accessory values
+retain the ex-VAT/gross labels. Active, fully covered historical sales can supply
+a missing product-report month without writing or combining overlapping sources.
+
 ## Deployment
 
 Configure actual hosts, filesystem paths and secrets privately. Files under deploy/ are templates, not an inventory of live machines. Preserve installed application identifiers and existing databases during upgrades. Operator deployment records and rollback procedures belong outside Git.
