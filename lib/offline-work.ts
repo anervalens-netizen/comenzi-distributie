@@ -7,7 +7,7 @@ import {currentLocalWorkUserId,readLocalWork,removeLocalWork,writeLocalWork} fro
 /** Account-bound durable work. Transactions never evict pending mutations. */
 export type PendingOperation = { id:string; userId:string; entity:string; path:string; method:string; body:unknown; created:number; attempts:number; next:number; state:'pending'|'blocked'; error?:string; status?:number; orderWork?:{base:Order;local:Order}; transferWork?:TransferWork };
 type Snapshot = {key:string;userId:string;path:string;value:unknown;at:number;bytes:number};
-type SnapshotMetadata = {key:string;userId:string;path:string;at:number;bytes:number;pinned:boolean;fragments?:string[]};
+type SnapshotMetadata = {key:string;userId:string;path:string;at:number;bytes:number;pinned:boolean;fragments?:string[];arrayValue?:boolean};
 type SnapshotStats = {key:'snapshot-stats';bytes:number;count:number;pinnedBytes:number};
 type FragmentMarker = {__mobiupFragments:string[];property:string;count:number};
 export type CoverageManifest = {
@@ -53,7 +53,8 @@ export function setTransferEditorDirty(id:string,dirty:boolean){
 const notify=()=>{localNotify();workChannel?.postMessage('changed');};
 if(typeof window!=='undefined'){window.addEventListener('pagehide',()=>{for(const id of transferEditors)workChannel?.postMessage({type:'transfer-editor',id,dirty:false});});window.addEventListener('pageshow',()=>{for(const id of transferEditors)workChannel?.postMessage({type:'transfer-editor',id,dirty:true});});}
 const request=<T>(req:IDBRequest<T>)=>new Promise<T>((resolve,reject)=>{req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});
-const isPinnedPath=(path:string)=>path==='bootstrap'||path==='bootstrap?compact=1'||path==='auth/session';
+const PINNED_PATHS=['bootstrap','bootstrap?compact=1','auth/session'];
+const isPinnedPath=(path:string)=>PINNED_PATHS.includes(path);
 const isFragmentMarker=(value:unknown):value is FragmentMarker=>!!value&&typeof value==='object'&&Array.isArray((value as FragmentMarker).__mobiupFragments)&&typeof (value as FragmentMarker).property==='string';
 export class OfflineSnapshotCapacityError extends Error {
  code:'SNAPSHOT_TOO_LARGE'|'OFFLINE_CAPACITY';
@@ -159,10 +160,36 @@ async function publishSnapshots(rows:Snapshot[]):Promise<SnapshotSaveResult>{
  const result=await transaction(['snapshots','snapshotIndex','meta'],'readwrite',async tx=>{
   const snapshots=tx.objectStore('snapshots'),index=tx.objectStore('snapshotIndex'),meta=tx.objectStore('meta');
   const stats=await statsFor(tx);
+  // An array may be a fragment of a generic marker at ANY path, including
+  // paths without '#'. Only replace it through the connected-group path below.
+  // Missing v1/type metadata needs just this payload, never eager enrichment.
+  if(rows.length===1&&!isFragmentMarker(rows[0].value)){
+   const row=rows[0],previous=await request(index.get(row.key)) as SnapshotMetadata|undefined;
+   let grouped=!!previous?.fragments?.length||previous?.arrayValue===true;
+   if(previous&&!grouped&&(previous.fragments===undefined||previous.arrayValue===undefined)){
+    const cached=await request(snapshots.get(row.key)) as Snapshot|undefined;
+    grouped=isFragmentMarker(cached?.value)||Array.isArray(cached?.value);
+   }
+   const projectedBytes=stats.bytes+bytes-(previous?.bytes??0),projectedCount=stats.count+(previous?0:1);
+   if(!grouped&&projectedBytes<=MAX_TOTAL_BYTES&&projectedCount<=MAX_SNAPSHOTS){
+    const pinned=isPinnedPath(row.path),projectedPinned=stats.pinnedBytes+(pinned?bytes:0)-(previous?.pinned?previous.bytes:0);
+    if(pinned){
+     // There are exactly three pinned paths per account. Read their current
+     // rows under this same write lock instead of scanning every account.
+     const account=await Promise.all(PINNED_PATHS.map(path=>request(index.get(row.userId+'|'+path)))) as (SnapshotMetadata|undefined)[];
+     const accountBytes=account.reduce((sum,other)=>sum+(other?.pinned?other.bytes:0),0)+bytes-(previous?.pinned?previous.bytes:0);
+     if(projectedPinned>MAX_PINNED_TOTAL_BYTES||accountBytes>MAX_PINNED_ACCOUNT_BYTES)throw new OfflineSnapshotCapacityError('OFFLINE_CAPACITY','Datele minime de pornire depășesc bugetul offline sigur.',bytes);
+    }
+    const {key,userId,path,at}=row;
+    snapshots.put(row);index.put({key,userId,path,at,bytes,pinned,fragments:[],arrayValue:Array.isArray(row.value)});
+    await request(meta.put({key:'snapshot-stats',bytes:projectedBytes,count:projectedCount,pinnedBytes:projectedPinned}));
+    return {saved:true as const,bytes,evicted};
+   }
+  }
   const existing=await request(index.index('at').getAll()) as SnapshotMetadata[];
-  // Lazily enrich v1 metadata, including rows written later by an older tab.
-  // New ordinary rows carry [] so steady writes only scan bounded metadata,
-  // never all payloads. No database upgrade or work-store migration is needed.
+  // Group membership is needed only for pressure, markers or array replacement.
+  // Enrich v1 rows here, including rows written later by an older tab; keeping
+  // this inside the publishing transaction preserves rollback and group integrity.
   for(const row of existing)if(!row.fragments){
    const cached=await request(snapshots.get(row.key)) as Snapshot|undefined;
    row.fragments=cached&&isFragmentMarker(cached.value)?cached.value.__mobiupFragments:[];
@@ -216,7 +243,7 @@ async function publishSnapshots(rows:Snapshot[]):Promise<SnapshotSaveResult>{
   for(const key of removed){snapshots.delete(key);index.delete(key);}
   for(const row of rows){
    const {key,userId,path,at,bytes}=row;
-   snapshots.put(row);index.put({key,userId,path,at,bytes,pinned:isPinnedPath(path),fragments:isFragmentMarker(row.value)?row.value.__mobiupFragments:[]});
+   snapshots.put(row);index.put({key,userId,path,at,bytes,pinned:isPinnedPath(path),fragments:isFragmentMarker(row.value)?row.value.__mobiupFragments:[],arrayValue:Array.isArray(row.value)});
   }
   await request(meta.put({key:'snapshot-stats',bytes:projectedBytes,count:projectedCount,pinnedBytes:projectedPinned}));
   return {saved:true as const,bytes,evicted};
