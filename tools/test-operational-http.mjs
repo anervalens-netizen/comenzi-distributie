@@ -94,7 +94,12 @@ for directory,expected in [('data',1),('restored',0)]:
     with contextlib.closing(sqlite3.connect(root/directory/'mobiup.sqlite')) as db:
         assert db.execute("SELECT COUNT(*) FROM settings WHERE key='synthetic-after-backup'").fetchone()[0]==expected
 print(json.dumps({'status':result['status'],'backupMs':round((saved-started)*1000),'restoreMs':round((time.monotonic()-saved)*1000),'postSnapshotWritesExcluded':1}))
-`,root,process.cwd()],{encoding:'utf8',timeout:60000});
+`,root,process.cwd()],{encoding:'utf8',timeout:60000,
+ // This synthetic child needs only tiny files. It reserves its own scratch inside
+ // the disposable test root and relaxes the production space safeguards for that
+ // child process alone; deploy/storage_workdir.py keeps the 40 GiB reserve and
+ // the 75% occupancy limit everywhere else.
+ env:{...process.env,MOBIUP_SCRATCH_ROOT:join(root,'scratch'),MOBIUP_SCRATCH_MIN_FREE_BYTES:'0',MOBIUP_SCRATCH_MAX_USED_RATIO:'1'}});
   assert.equal(result.status,0,result.stderr);
   const recovery=JSON.parse(result.stdout);assert.equal(recovery.status,'restored_not_started');
   assert.deepEqual(readFileSync(join(isolated,'client-history/client-sales-originals/example.xlsx')),original);
