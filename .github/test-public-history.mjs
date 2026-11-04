@@ -15,7 +15,7 @@ const expectCheck=(args,kinds,label)=>{
  assert.ifError(result.error);
  assert.equal(result.status,kinds.length?1:0,label);
  const report=JSON.parse(result.stdout);
- assert.deepEqual([...new Set(report.issues.map(issue=>issue.kind))].sort(),[...kinds].sort(),label);
+ assert.deepEqual([...new Set(report.issues.map(issue=>issue.kind))].sort((a,b)=>a.localeCompare(b)),[...kinds].sort((a,b)=>a.localeCompare(b)),label);
  return report;
 };
 // This is the exact CLI argument shape used by .githooks/pre-push: immutable
