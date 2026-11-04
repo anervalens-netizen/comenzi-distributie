@@ -18,3 +18,14 @@ Resolve the official checkout through the installed application registry's `sour
 - On the production storage volume, calculate expected scratch growth before starting and preserve at least 40 GiB of free space **after** that growth. If insufficient, run the test elsewhere or reduce scope, not the reserve.
 - One large isolated restore at a time; no unbounded rollback, release, activation-generation or preflight copies. Every exceptional retained artifact needs an explicit purpose, expiry and destination.
 - Finish each change by removing temporary artifacts, checking disk usage, preserving scheduled backups and confirming an independent recovery copy. Never silently accumulate backups on top of backups.
+
+<!-- portfolio-review:start -->
+## Development review
+
+For application changes, the development agent requests/reuses both Codex Connector and DSH reviews of the current PR head, resolves confirmed findings, and checks required CI before normal merge/deploy. The owner does not coordinate mentions. Reuse requests on retries; record both review URLs, SHAs and dispositions in the active ContextKeep task. Status/read-only/trivial formatting work needs no worker. Incident restoration may precede review with a recorded follow-up. DSH reports must not mention other bots or request their own review. Use the concise shared workflow: https://github.com/anervalens-netizen/astancu-website/blob/master/ops/dsh-integration/DEVELOPMENT-WORKFLOW.md .
+
+## Code Review Rules
+
+- Offline writes must preserve the last valid snapshot on quota, interruption or failure; check atomic publication, concurrent tabs, account isolation and v1 compatibility.
+- Privacy changes must distinguish new publication from existing history without disabling other checks. Review scaling on representative cache sizes; keep normal single writes independent of total cache size where possible.
+<!-- portfolio-review:end -->
