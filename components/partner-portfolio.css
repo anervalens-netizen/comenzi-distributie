@@ -483,3 +483,34 @@
 .partner-attention>footer{padding:.7rem 1rem;color:var(--muted-foreground);font-size:.82rem}
 .partner-follow-up-fields{display:grid;grid-template-columns:2fr 1fr;gap:.75rem}
 @media(max-width:700px){.partner-follow-up-fields{grid-template-columns:1fr}.partner-attention>div{grid-template-columns:1fr}.partner-attention article{flex-direction:column}.partner-attention article button{align-self:flex-start}}
+
+/* Shared controls must also work before any manager component has loaded. */
+.partner-hub > .page-heading {
+  flex-wrap: wrap;
+  gap: 14px;
+}
+.partner-layout-modes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: 100%;
+}
+.partner-layout-modes button {
+  padding: 10px 14px;
+  min-height: 44px;
+  font-size: 13px;
+  background: var(--card, #fff);
+  border: 1px solid var(--manager-line, #e1e6eb);
+  border-radius: 8px;
+  color: #515d68;
+}
+.partner-layout-modes button[aria-pressed='true'] {
+  background: var(--manager-soft, #fff1f2);
+  border-color: #e9b3b8;
+  color: var(--manager-accent, #bf2430);
+  font-weight: 600;
+}
+.partner-hub[data-layout='list'] .partner-layout-map-pane,
+.partner-hub[data-layout='map'] .partner-layout-list-pane {
+  display: none;
+}

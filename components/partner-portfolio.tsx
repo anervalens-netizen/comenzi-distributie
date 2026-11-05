@@ -234,7 +234,7 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='', active=
         >
           Vizite și traseu
         </button></>}
-        {<div className="manager-map-modes" aria-label="Afișarea partenerilor">{([['split','Listă + Hartă'],['list','Listă'],['map','Hartă']] as const).map(([value,label])=><button type="button" key={value} aria-pressed={layout===value} onPointerEnter={value==='list'?undefined:preloadPartnerMap} onFocus={value==='list'?undefined:preloadPartnerMap} onClick={()=>setLayout(value)}>{label}</button>)}</div>}
+        {<div className="partner-layout-modes" aria-label="Afișarea partenerilor">{([['split','Listă + Hartă'],['list','Listă'],['map','Hartă']] as const).map(([value,label])=><button type="button" key={value} aria-pressed={layout===value} onPointerEnter={value==='list'?undefined:preloadPartnerMap} onFocus={value==='list'?undefined:preloadPartnerMap} onClick={()=>setLayout(value)}>{label}</button>)}</div>}
       </div>
       {error && (
         <div className="error-banner" role="alert">
@@ -343,7 +343,7 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='', active=
       </p>
       {current&&<PartnerAttention key={`${userId}:${manager}:${scopeQuery}`} userId={userId} manager={manager} scopeQuery={scopeQuery} partners={filtered} onOpen={openPartner} onPlanning={()=>{if(!manager){setCatalogLoading(true);setCatalogError('');setPlanning(true);}}} onSales={onOpenSales}/>}
       <div className={manager?'manager-partner-grid':undefined}>
-      <div className={manager?'manager-partner-map-pane':undefined}>
+      <div className={'partner-layout-map-pane'+(manager?' manager-partner-map-pane':'')}>
       <Suspense fallback={<div className="partner-map">Se încarcă harta…</div>}>
         {data && browseActive && layout!=='list' && (
           <PartnerMap
@@ -385,7 +385,7 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='', active=
         </p>
       )}
       </div>
-      <div className={manager?'manager-partner-list-pane':undefined}>
+      <div className={'partner-layout-list-pane'+(manager?' manager-partner-list-pane':'')}>
       {current&&!settled&&<output className="muted partner-stale-results">Rezultatele filtrului anterior sunt afișate până la actualizare.</output>}
       <div className="partner-list" aria-busy={loading||!settled}>
         {filtered.map((p) => (
