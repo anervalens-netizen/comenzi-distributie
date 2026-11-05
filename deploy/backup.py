@@ -289,6 +289,13 @@ def add_recovery_files(output: tarfile.TarFile, recovery: dict[str, Path], relea
                 continue
             if not path.is_file():
                 raise RuntimeError('Recovery tree contains a non-regular file')
+            # Python bytecode caches are regenerated and can be created by a
+            # root-owned diagnostic process with mode 0600. Do not let them
+            # block an otherwise complete runnable recovery snapshot.
+            if name == 'runtime' and (
+                path.suffix in {'.pyc', '.pyo'} or '__pycache__' in path.relative_to(root).parts
+            ):
+                continue
             key = 'recovery/' + name + '/' + path.relative_to(root).as_posix()
             before = digest(path)
             # Serialize bytes, not inode aliases: hardlinked source files must

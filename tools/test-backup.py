@@ -70,6 +70,61 @@ class BackupTests(unittest.TestCase):
             check.assert_called_once_with(self.mount)
             return result
 
+    def test_full_recovery_ignores_unreadable_python_caches(self):
+        # Root-operated diagnostics may leave mode-0600 bytecode in a release.
+        # Regenerable caches must not prevent backup or enter the restore kit.
+        runtime = self.root / 'runtime'
+        resources = self.root / 'resources'
+        products = self.root / 'products'
+        for root in (runtime, resources, products):
+            root.mkdir()
+        (runtime / 'server.js').write_text('console.log("synthetic");')
+        (products / 'product.json').write_text('{"synthetic":true}')
+        private_names = ['seed.json', 'initial-users.json', 'accesorii.xlsx',
+                         'standuri.xlsx', 'templates.json', 'template-hashes.json',
+                         'mail-defaults.json']
+        hashes = {}
+        for name in private_names:
+            file = resources / name
+            file.write_bytes(('synthetic:' + name).encode())
+            hashes[name] = backup.digest(file)
+        (resources / 'resource-mode.json').write_text(json.dumps({
+            'schema': 1, 'mode': 'private', 'sha256': hashes}))
+        resource_digest = hashlib.sha256(
+            json.dumps(hashes, separators=(',', ':')).encode()).hexdigest()
+        self.release.write_text(json.dumps({'resourceDigest': resource_digest}))
+        (runtime / 'RELEASE.json').write_bytes(self.release.read_bytes())
+        cache = runtime / '__pycache__'
+        cache.mkdir()
+        for path in (cache / 'activation_projection.cpython-314.pyc',
+                     runtime / 'compiled.pyc'):
+            path.write_bytes(b'synthetic bytecode')
+            path.chmod(0)
+        archive = io.BytesIO()
+        with tarfile.open(fileobj=archive, mode='w') as out:
+            backup.add_recovery_files(
+                out, {'runtime': runtime, 'resources': resources, 'products': products},
+                self.release, self.release.read_bytes())
+        with tarfile.open(fileobj=io.BytesIO(archive.getvalue())) as saved:
+            names = saved.getnames()
+            manifest = json.load(saved.extractfile('recovery/manifest.json'))
+        self.assertIn('recovery/runtime/server.js', names)
+        self.assertIn('recovery/resources/resource-mode.json', names)
+        self.assertIn('recovery/products/product.json', names)
+        self.assertFalse(any('__pycache__' in name or name.endswith(('.pyc', '.pyo'))
+                             for name in names))
+        self.assertEqual(set(manifest['files']), set(names) - {'recovery/manifest.json'})
+        # Excluded files remain subject to the existing symlink security gate.
+        outside = self.root / 'outside.pyc'
+        outside.write_bytes(b'synthetic')
+        link = cache / 'leak.pyc'
+        link.symlink_to(outside)
+        with self.assertRaisesRegex(RuntimeError, 'symlink'):
+            with tarfile.open(fileobj=io.BytesIO(), mode='w') as out:
+                backup.add_recovery_files(
+                    out, {'runtime': runtime, 'resources': resources, 'products': products},
+                    self.release, self.release.read_bytes())
+
     def test_usage_snapshot_includes_committed_wal(self):
         with contextlib.closing(sqlite3.connect(self.data / 'usage.sqlite')) as db:
             db.execute('PRAGMA journal_mode=WAL')
