@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Cumulative monthly uploads. Private inputs stay outside the source repository."""
-import calendar, collections, datetime as dt, fcntl, hashlib, json, os, pathlib, sqlite3, sys, time, uuid, zipfile
+import calendar, collections, datetime as dt, fcntl, hashlib, json, os, pathlib, sqlite3, sys, time, unicodedata, uuid, zipfile
 from zoneinfo import ZoneInfo
 import client_sales_history as h
 
@@ -131,13 +131,38 @@ def preview_pinned(c,rows,summary,month_end):
  args=(summary['from'],month_end)
  # Compare stored values as well as raw payload: manual numeric corrections may
  # legitimately leave row_hash unchanged. Such replacements still need consent.
- old=collections.Counter(h.sha(h.dump(list(r)).encode()) for r in c.execute('SELECT r.raw_json,r.date,r.quantity_micros,r.price_cents,r.value_cents,r.quality_issue'+active,args))
- incoming=collections.Counter(h.sha(h.dump([h.dump(r['raw']),r['date'],r['quantity_micros'],r['price_cents'],r['value_cents'],r['quality_issue']]).encode()) for r in rows)
+ query='SELECT r.raw_json,r.date,r.quantity_micros,r.price_cents,r.value_cents,r.quality_issue'+active
+ def signature(values):return h.sha(h.dump(list(values)).encode())
+ def values(r):return [h.dump(r['raw']),r['date'],r['quantity_micros'],r['price_cents'],r['value_cents'],r['quality_issue']]
+ old=collections.Counter(signature(r) for r in c.execute(query,args))
+ incoming=collections.Counter(signature(values(r)) for r in rows)
  previous=c.execute('SELECT COUNT(*) rows,COALESCE(SUM(r.value_cents),0) valueCents,MAX(r.date) lastDate'+active,args).fetchone()
- removed=sum((old-incoming).values());added=sum((incoming-old).values())
+ removed_rows=old-incoming;added_rows=incoming-old
+ removed=sum(removed_rows.values());added=sum(added_rows.values())
+ name_only=0
+ if removed and added:
+  def name_signature(record):
+   raw=json.loads(record[0]);name=raw.get('Denumire Client')
+   # Display spelling only. Every code, other raw field and stored numeric
+   # value still has to match exactly; incomplete identities get no exemption.
+   if raw.get('Cod Client') and raw.get('SiteId') and isinstance(name,str):
+    raw['Denumire Client']=''.join(x for x in unicodedata.normalize('NFD',name) if not unicodedata.combining(x))
+    return signature([h.dump(raw),*record[1:]])
+   return signature(record)
+  before=collections.Counter()
+  for record in c.execute(query,args):
+   key=signature(record)
+   if removed_rows[key]>0:
+    before[name_signature(record)]+=1;removed_rows[key]-=1
+  after=collections.Counter()
+  for r in rows:
+   record=values(r);key=signature(record)
+   if added_rows[key]>0:
+    after[name_signature(record)]+=1;added_rows[key]-=1
+  name_only=sum((before&after).values())
  end=c.execute("SELECT MAX(MIN(period_end,?)) FROM history_imports WHERE state='active' AND period_start<=? AND period_end>=?",(month_end,month_end,summary['from'])).fetchone()[0]
  shorter=bool(end and summary['through']<end)
- return {**summary,'revision':revision(c,summary['from'],month_end),'previous':dict(previous),'addedOccurrences':added,'removedOccurrences':removed,'coverageShorter':shorter,'requiresAcknowledgement':bool(removed or shorter),'alreadyImported':bool(existing)}
+ return {**summary,'revision':revision(c,summary['from'],month_end),'previous':dict(previous),'addedOccurrences':added,'removedOccurrences':removed,'clientNameOnlyOccurrences':name_only,'coverageShorter':shorter,'requiresAcknowledgement':bool(removed>name_only or shorter),'alreadyImported':bool(existing)}
 
 def archive_projection(c,old,start,end,root):
  count,value,quantity=c.execute('SELECT COUNT(*),COALESCE(SUM(value_cents),0),COALESCE(SUM(quantity_micros),0) FROM history_rows WHERE import_id=? AND date>=? AND date<=?',(old['id'],start,end)).fetchone()

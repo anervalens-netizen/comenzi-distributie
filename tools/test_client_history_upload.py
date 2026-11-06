@@ -78,6 +78,43 @@ class UploadTests(unittest.TestCase):
   with self.assertRaises(u.UploadError):self.commit(data)
   self.assertEqual(self.facts(),before);self.commit(data,True)
   self.assertEqual(sum(x[2] for x in self.facts() if x[0][:7]=='2024-02'),3600)
+ def test_client_name_diacritics_preserve_facts_without_ack(self):
+  first=row(Data='01.02.2024',**{'Denumire Client':'EXEMPLU ÎNTREPRINDERE'})
+  self.commit(self.upload([first,first]),True)
+  before=self.facts()
+  revised={**first,'Denumire Client':'EXEMPLU INTREPRINDERE'}
+  data=self.upload([revised,revised,row(Data='02.02.2024')])
+  self.assertEqual((data[-1]['removedOccurrences'],data[-1]['clientNameOnlyOccurrences']),(2,2))
+  self.assertFalse(data[-1]['requiresAcknowledgement'])
+  self.commit(data)
+  self.assertEqual([x for x in self.facts() if x[0]=='2024-02-01'],[x for x in before if x[0]=='2024-02-01'])
+  names={x[0] for x in self.c.execute("SELECT customer_name FROM history_current WHERE date='2024-02-01'")}
+  self.assertEqual(names,{'EXEMPLU INTREPRINDERE'})
+ def test_name_changes_never_hide_business_changes_or_missing_duplicates(self):
+  first=row(Data='01.02.2024',**{'Denumire Client':'EXEMPLU ÎNTREPRINDERE'})
+  self.commit(self.upload([first,first]),True)
+  revised={**first,'Denumire Client':'EXEMPLU INTREPRINDERE'}
+  for change in [{'Cantitate':'3'},{'Pret':'9'},{'Valoare':'18'},{'Cod Client':'999'},{'SiteId':'999'},
+                 {'Cod_Franciza':'F999'},{'Denumire Client':'ALT CLIENT'}, {'ItemCode':'ALT'}]:
+   with self.subTest(change=change):
+    data=self.upload([revised,{**revised,**change}])
+    self.assertEqual(data[-1]['clientNameOnlyOccurrences'],1)
+    self.assertTrue(data[-1]['requiresAcknowledgement'])
+    with self.assertRaises(u.UploadError):self.commit(data)
+  data=self.upload([revised])
+  self.assertEqual(data[-1]['clientNameOnlyOccurrences'],1)
+  self.assertTrue(data[-1]['requiresAcknowledgement'])
+ def test_name_diacritics_do_not_hide_shorter_period_or_numeric_db_correction(self):
+  first=row(Data='01.02.2024',**{'Denumire Client':'EXEMPLU ÎNTREPRINDERE'})
+  self.commit(self.upload([first,row(Data='03.02.2024')]),True)
+  revised={**first,'Denumire Client':'EXEMPLU INTREPRINDERE'}
+  data=self.upload([revised])
+  self.assertTrue(data[-1]['coverageShorter']);self.assertTrue(data[-1]['requiresAcknowledgement'])
+  self.c.execute("UPDATE history_rows SET value_cents=value_cents+1 WHERE date='2024-02-01'")
+  self.c.commit()
+  data=self.upload([revised,row(Data='03.02.2024')])
+  self.assertEqual(data[-1]['clientNameOnlyOccurrences'],0)
+  self.assertTrue(data[-1]['requiresAcknowledgement'])
  def test_stale_preview_rejected(self):
   first=self.upload([row(Data='01.02.2024')])
   self.commit(self.upload([row(Data='02.02.2024')]),True)
