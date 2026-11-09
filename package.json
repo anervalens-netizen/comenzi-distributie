@@ -50,6 +50,7 @@
     "fflate": "^0.8.3",
     "input-otp": "1.4.2",
     "ipaddr.js": "2.5.0",
+    "jpeg-js": "0.4.4",
     "lucide-react": "1.31.0",
     "maplibre-gl": "6.11.2",
     "react": "19.3.0",

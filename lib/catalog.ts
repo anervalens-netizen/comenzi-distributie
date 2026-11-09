@@ -1,9 +1,10 @@
+import {decode} from 'jpeg-js';
 import seed from '@/resources/seed.json';
 import { db, fail, sha256, textField } from './server';
 import type { Product } from './types';
 import {validEan} from './barcodes';
 import {stockCode} from './stock-types';
-import {isProductPhoto, maxProductPhotoBase64, productPhotoMime} from './product-photo';
+import {isProductPhoto, maxProductPhotoBase64, maxProductPhotoSide, productPhotoMime} from './product-photo';
 
 type CatalogState={overrides:Record<string,Product|null>};
 const photoKey=(encodedId:string)=>'catalog-photo:'+encodedId;
@@ -62,7 +63,14 @@ export async function changeProduct(method:string,id:string|undefined,body:Recor
       if(typeof photo!=='string')fail(400,'Poza produsului este invalidă.');
       if(photo.length>maxProductPhotoBase64)fail(413,'Poza produsului este prea mare.');
       const bytes=Buffer.from(photo,'base64');
-      if(bytes.toString('base64')!==photo||!isProductPhoto(bytes))fail(400,'Poza produsului trebuie să fie o imagine JPEG validă.');
+      const invalidPhoto='Poza produsului trebuie să fie o imagine JPEG validă.';
+      if(bytes.toString('base64')!==photo||!isProductPhoto(bytes))fail(400,invalidPhoto);
+      try {
+        decode(bytes,{useTArray:true,tolerantDecoding:false,formatAsRGBA:false,
+          maxResolutionInMP:maxProductPhotoSide**2/1_000_000,maxMemoryUsageInMB:24});
+      } catch {
+        fail(400,invalidPhoto);
+      }
       const digest=sha256(photo);
       image=`/api/catalog/photo/${encodedId}/${digest}.jpg`;
       photoWrite=db().prepare('INSERT INTO settings (key,value) SELECT ?,? WHERE changes()=1 ON CONFLICT(key) DO UPDATE SET value=excluded.value')
