@@ -23,7 +23,7 @@ const stubs={
   runtime:'export const env={DB:globalThis.__r2Db};export const runtimeKind="standalone";'+unused(['operationalStatus']),
   'usage-store':'export const recordUsageAuth=()=>false;export const recordUsagePulse=()=>false;'+unused(['readUsage']),
   'activation-store':unused(['readActivations','verifySim']),
-  catalog:'export const readCatalog=async()=>({products:[]});'+unused(['changeProduct']),
+  catalog:'export const readCatalog=async()=>({products:[]});'+unused(['changeProduct','readProductPhoto']),
   'stock-server':`export const stockForWarehouse=async()=>({importedAt:'2026-09-01T00:00:00Z',filename:'synthetic.xlsx',rows:[{code:'SYNTHETIC',name:'Synthetic product',quantity:10}]});${unused(['stockImportStatus','stockView','stockUpload'])}`,
   'sales-server':unused(['salesImportStatus','salesView','salesUpload']),
   exports:unused(['templateExport','combinedExport','repairOrderExport','simExport','mailFor','emlFor']),
