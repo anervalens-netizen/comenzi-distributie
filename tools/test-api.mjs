@@ -460,6 +460,8 @@ ok(acc.status==='finalized'&&!!acc.finalizedAt,'Finalization persisted');
   const editedProduct=editedCatalog.find(p=>p.id===custom.id);
   ok(editedProduct.image===custom.image,'Editing product details preserves the existing photo');
   await call(`admin/products/${custom.id}`,'PUT',{...editedProduct,name:'Invalid',photo:'not a photo'},manager,400);
+  // Complete frame and scan headers without the required JPEG tables or image data.
+  await call(`admin/products/${custom.id}`,'PUT',{...editedProduct,photo:'/9j/wAALCAABAAEBAREA/9oACAEBAAA/AAD/2Q=='},manager,400);
   await checkPhoto(editedProduct,firstPhoto);
   const replacedProduct=(await call(`admin/products/${custom.id}`,'PUT',{...editedProduct,photo:secondPhoto},regional)).data.products.find(p=>p.id===custom.id);
   ok(replacedProduct.image!==custom.image&&replacedProduct.version!==editedProduct.version,'Replacing a photo advances the URL and product revision');
