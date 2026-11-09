@@ -3,8 +3,23 @@ import { db, fail, sha256, textField } from './server';
 import type { Product } from './types';
 import {validEan} from './barcodes';
 import {stockCode} from './stock-types';
+import {isProductPhoto, maxProductPhotoBase64, productPhotoMime} from './product-photo';
 
 type CatalogState={overrides:Record<string,Product|null>};
+const photoKey=(encodedId:string)=>'catalog-photo:'+encodedId;
+
+export async function readProductPhoto(encodedId:string,filename:string) {
+  if(!/^[a-f0-9]{64}\.jpg$/.test(filename))fail(404,'Poza produsului nu a fost găsită.');
+  const photo=await db().prepare('SELECT substr(value,66) AS base64 FROM settings WHERE key=? AND substr(value,1,65)=?')
+    .bind(photoKey(encodedId),filename.slice(0,-4)+':').first<{base64:string}>();
+  if(!photo)fail(404,'Poza produsului nu a fost găsită.');
+  return new Response(new Uint8Array(Buffer.from(photo.base64,'base64')), {headers:{
+    'Content-Type':productPhotoMime,
+    'X-Content-Type-Options':'nosniff',
+    'Cache-Control':'no-store',
+  }});
+}
+
 export async function readCatalog() {
   const row=await db().prepare("SELECT value FROM settings WHERE key='catalog'").first<{value:string}>();
   const state:CatalogState=row?JSON.parse(row.value):{overrides:{}};
@@ -26,6 +41,8 @@ export async function changeProduct(method:string,id:string|undefined,body:Recor
   if(method!=='POST'&&!existing)fail(404,'Produsul nu mai este în catalog.');
   if(existing&&body.version!==existing.version)fail(409,'Produsul s-a modificat. Actualizează catalogul și redeschide editarea.');
   const productId=existing?.id||'custom-'+crypto.randomUUID();
+  const encodedId=encodeURIComponent(productId);
+  let photoWrite;
   if(method==='DELETE')current.state.overrides[productId]=null;
   else {
     const code=textField(body.code,80),name=textField(body.name,300),brand=textField(body.brand,100),category=textField(body.category,100);
@@ -39,12 +56,29 @@ export async function changeProduct(method:string,id:string|undefined,body:Recor
     for(const key of ['price','netPrice'] as const)if(body[key]!==null&&(typeof body[key]!=='number'||!Number.isFinite(body[key])||Number(body[key])<0||Number(body[key])>1000000))fail(400,'Prețurile trebuie să fie pozitive sau necompletate.');
     if(kind==='accessories'&&(body.price===null||body.netPrice===null))fail(400,'Completează ambele prețuri pentru accesorii.');
     const storedProduct=current.state.overrides[productId]||(seed.products as Product[]).find(p=>p.id===productId);
-    current.state.overrides[productId]={id:productId,code,name,brand,category,kind:String(kind),price:body.price as number|null,netPrice:body.netPrice as number|null,sourceRow:existing?.sourceRow||0,image:existing?.image||null,...(existing?.description?{description:existing.description}:{}),...(ean===existing?.ean&&storedProduct?.ean===undefined?{}:{ean})};
+    let image=existing?.image||null;
+    if(body.photo!==undefined){
+      const photo=body.photo;
+      if(typeof photo!=='string')fail(400,'Poza produsului este invalidă.');
+      if(photo.length>maxProductPhotoBase64)fail(413,'Poza produsului este prea mare.');
+      const bytes=Buffer.from(photo,'base64');
+      if(bytes.toString('base64')!==photo||!isProductPhoto(bytes))fail(400,'Poza produsului trebuie să fie o imagine JPEG validă.');
+      const digest=sha256(photo);
+      image=`/api/catalog/photo/${encodedId}/${digest}.jpg`;
+      photoWrite=db().prepare('INSERT INTO settings (key,value) SELECT ?,? WHERE changes()=1 ON CONFLICT(key) DO UPDATE SET value=excluded.value')
+        .bind(photoKey(encodedId),digest+':'+photo);
+    }
+    current.state.overrides[productId]={id:productId,code,name,brand,category,kind:String(kind),price:body.price as number|null,netPrice:body.netPrice as number|null,sourceRow:existing?.sourceRow||0,image,...(existing?.description?{description:existing.description}:{}),...(ean===existing?.ean&&storedProduct?.ean===undefined?{}:{ean})};
   }
   const value=JSON.stringify(current.state);
   // Compare the mapping snapshot in the same statement: an import racing a
   // previously unassociated code change must not leave a newly orphaned EAN.
-  const result=current.raw===null?await db().prepare("INSERT OR IGNORE INTO settings (key,value) SELECT 'catalog',? WHERE (SELECT value FROM settings WHERE key='inventory-ean-v1') IS ?").bind(value,current.mappingsRaw).run():await db().prepare("UPDATE settings SET value=? WHERE key='catalog' AND value=? AND (SELECT value FROM settings WHERE key='inventory-ean-v1') IS ?").bind(value,current.raw,current.mappingsRaw).run();
+  const catalogWrite=current.raw===null
+    ?db().prepare("INSERT OR IGNORE INTO settings (key,value) SELECT 'catalog',? WHERE (SELECT value FROM settings WHERE key='inventory-ean-v1') IS ?").bind(value,current.mappingsRaw)
+    :db().prepare("UPDATE settings SET value=? WHERE key='catalog' AND value=? AND (SELECT value FROM settings WHERE key='inventory-ean-v1') IS ?").bind(value,current.raw,current.mappingsRaw);
+  if(method==='DELETE')photoWrite=db().prepare('DELETE FROM settings WHERE key=? AND changes()=1').bind(photoKey(encodedId));
+  // The batch is transactional. A failed catalog compare must also skip the photo write.
+  const result=photoWrite?(await db().batch([catalogWrite,photoWrite]))[0]:await catalogWrite.run();
   if(!result.meta.changes)fail(409,'Catalogul a fost modificat între timp. Actualizează lista și încearcă din nou.');
   return {products:(await readCatalog()).products};
 }

@@ -24,6 +24,7 @@ import {ProductCatalog} from './components/product-catalog';
 import {OrderTable} from './components/order-table';
 import {normalize} from './lib/client-api';
 const products=Array.from({length:524},(_,i)=>({id:'p'+i,code:'SYN'+String(i).padStart(4,'0'),name:'Produs sintetic '+i,ean:String(9000000000000+i),brand:'Marca test',category:'Categorie '+(i%4),kind:i%2?'stands':'accessories',price:i%2?null:12.5,netPrice:i%2?null:10,sourceRow:i,image:null}));
+products[523].image='data:image/svg+xml,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="8" height="8" fill="blue"/></svg>');
 const orders=Array.from({length:252},(_,i)=>({id:'o'+i,number:'DOC'+String(i).padStart(4,'0'),kind:'sim',userId:i%2?'a':'b',agentName:'Agent sintetic',warehouseName:'Gestiune test',status:i%7?'finalized':'draft',createdAt:'2026-09-30T10:00:00Z',finalizedAt:i%7?'2026-09-30T10:00:00Z':null,pieces:1,items:[],serials:[],itemCount:1,total:0,revision:1,client:{name:'Client sintetic '+i,cui:'TEST-'+i,city:'Localitate test'}}));
 window.fixture={products,orders,opened:[],copied:[],deleted:[],writes:0};
 function Fixture(){
@@ -44,6 +45,7 @@ for (const mode of modes) {
   await build({ stdin: { contents: source, resolveDir: root, sourcefile: 'list-fixture.tsx', loader: 'tsx' },
     outfile: join(directory, mode + '.js'), bundle: true, minify: true, platform: 'browser', jsx: 'automatic',
     define: { 'process.env.NODE_ENV': '"production"' }, tsconfig: join(root, 'tsconfig.json'),
+    alias: { 'next/image': resolve('tools/offline-image.tsx') },
     plugins: baseline ? [baseline] : [], logLevel: 'silent' });
 }
 const server = createServer((request, response) => {
@@ -203,12 +205,38 @@ try {
     await click('[data-product-id="p523"] button[aria-label="Editează SYN0523"]');
     await waitFor("!!document.querySelector('[role=dialog]')");
     check(await evaluate("[...document.querySelectorAll('[role=dialog] input')].some(input=>input.value==='SYN0523')"), 'Edit dialog refers to exact searched product');
+    await waitFor("document.querySelector('.catalog-photo-preview').naturalWidth===8");
+    const choosePhoto = valid => evaluate(`(async()=>{
+      const canvas=document.createElement('canvas');
+      canvas.width=1200;canvas.height=600;
+      const context=canvas.getContext('2d');
+      context.fillStyle='red';context.fillRect(0,0,1200,600);
+      const file=${valid}?new File([await new Promise(resolve=>canvas.toBlob(resolve))],'synthetic.png',{type:'image/png'}):new File(['text'],'invalid.txt',{type:'text/plain'});
+      const transfer=new DataTransfer();transfer.items.add(file);
+      const input=document.querySelector('[role=dialog] input[type=file]');
+      input.files=transfer.files;input.dispatchEvent(new Event('change',{bubbles:true}));
+      return true;
+    })()`);
+    await choosePhoto(false);
+    await waitFor("!!document.querySelector('.catalog-photo-error')");
+    check(await evaluate("document.querySelector('.catalog-photo-preview').naturalWidth===8"), 'Rejected file keeps the current product photo');
+    await choosePhoto(true);
+    await waitFor("document.querySelector('.catalog-photo-preview').naturalWidth===800");
+    check(await evaluate("document.querySelector('.catalog-photo-preview').src.startsWith('data:image/jpeg;')"), 'A large PNG is previewed as a resized JPEG before saving');
+    await click('.catalog-photo-reset');
+    await waitFor("document.querySelector('.catalog-photo-preview').naturalWidth===8");
     await fill('[role="dialog"] input[maxlength="300"]', 'Editare sintetică nesalvată');
     await fill('[aria-label="Caută produs după cod, EAN sau denumire"]', '');
     await waitFor("!document.querySelector('[data-product-id=p523]')");
     check(await evaluate("document.querySelector('[role=dialog] input[maxlength=\"300\"]').value==='Editare sintetică nesalvată'"), 'Unsaved editor state survives unmounting its product row');
     await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
     await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+    await waitFor("!document.querySelector('[role=dialog]')");
+    await click('.heading-controls button.primary');
+    await waitFor("!!document.querySelector('.catalog-photo-empty')");
+    await choosePhoto(true);
+    await waitFor("document.querySelector('.catalog-photo-preview').naturalWidth===800");
+    await evaluate("document.querySelector('[role=dialog] .sr-only').closest('button').click();true");
     await waitFor("!document.querySelector('[role=dialog]')");
     await fill('[aria-label="Caută produs după cod, EAN sau denumire"]', String(9000000000523));
     await waitFor("document.querySelector('[data-product-id=p523]')!==null");

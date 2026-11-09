@@ -330,6 +330,15 @@ html { scroll-padding-top:calc(var(--app-header-height) + var(--editor-toolbar-h
 .category-editor { display:grid; gap:8px; }.category-editor select { min-height:44px; }.category-editor input { min-height:44px; }
 .client-edit-dialog { max-width:680px !important; width:min(680px,calc(100vw - 24px)); }
 .client-fields { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; border:0; padding:0; min-width:0; }
+.catalog-photo-editor { display:flex; align-items:center; flex-wrap:wrap; gap:12px; padding:12px; border:1px solid #dadee3; border-radius:8px; }
+.catalog-photo-preview { width:88px; height:78px; border-radius:6px; background:#f5f6f7; object-fit:contain; }
+.catalog-photo-empty { display:grid; place-content:center; justify-items:center; gap:4px; color:#58616d; font-size:11px; }
+.catalog-photo-controls { display:grid; gap:5px; flex:1 1 190px; min-width:0; }
+.catalog-photo-controls input[type=file] { width:100%; min-width:0; padding:6px; font-size:12px; }
+.catalog-photo-controls input::file-selector-button { margin-right:8px; padding:4px 7px; border:0; border-radius:4px; background:#eef0f2; cursor:pointer; }
+.catalog-photo-controls small,.catalog-photo-controls output { color:#58616d; font-size:12px; }
+.catalog-photo-controls .catalog-photo-error { color:#b62030; }
+.catalog-photo-reset { justify-self:start; color:#4c5661; font-size:12px; text-decoration:underline; }
 .client-wide { grid-column:1 / -1; }
 @media(max-width:599px) { .client-fields { grid-template-columns:1fr; } }
 .catalog-admin-table td { white-space:normal; overflow-wrap:anywhere; }

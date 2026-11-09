@@ -1,6 +1,7 @@
 'use client';
 import { useMemo, useState } from 'react';
-import { Plus, Search, Pencil, Trash2, Save, RefreshCw } from 'lucide-react';
+import Image from 'next/image';
+import { Plus, Search, Pencil, Trash2, Save, RefreshCw, ImageIcon } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   Dialog,
@@ -20,6 +21,7 @@ import {
 import { Choice } from './choice';
 import { ListPagination, useListPage } from './list-pagination';
 import { api, errorMessage, normalize, money } from '@/lib/client-api';
+import { maxProductPhotoBase64, maxProductPhotoSide, productPhotoMime, productPhotoPrefix } from '@/lib/product-photo';
 import type { Product } from '@/lib/types';
 const empty: Product = {
   id: '',
@@ -46,7 +48,10 @@ export function ProductCatalog({
     [edit, setEdit] = useState<Product | null>(null),
     [remove, setRemove] = useState<Product | null>(null),
     [busy, setBusy] = useState(false),
-    [error, setError] = useState('');
+    [error, setError] = useState(''),
+    [photoDraft, setPhotoDraft] = useState(''),
+    [photoError, setPhotoError] = useState(''),
+    [preparingPhoto, setPreparingPhoto] = useState(false);
   const categories = useMemo(() => [
     ...new Set(
       products
@@ -98,10 +103,52 @@ export function ProductCatalog({
   }
   async function save(e: React.SyntheticEvent) {
     e.preventDefault();
-    if (!edit || busy) return;
-    await change(edit.id ? 'PUT' : 'POST', edit);
+    if (!edit || busy || preparingPhoto) return;
+    await change(edit.id ? 'PUT' : 'POST', {
+      ...edit,
+      ...(photoDraft && { photo: photoDraft.slice(productPhotoPrefix.length) }),
+    });
   }
-  async function change(method: 'POST' | 'PUT' | 'DELETE', product: Product) {
+  function openEdit(product: Product) {
+    setEdit({ ...product });
+    setError('');
+    setPhotoDraft('');
+    setPhotoError('');
+  }
+  async function selectPhoto(file: File) {
+    setPhotoError('');
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 10 * 1024 * 1024) {
+      setPhotoError('Alege o imagine JPG, PNG sau WebP de maximum 10 MB.');
+      return;
+    }
+    setPreparingPhoto(true);
+    try {
+      const bitmap = await createImageBitmap(file);
+      try {
+        const canvas = document.createElement('canvas');
+        const scale = Math.min(1, maxProductPhotoSide / Math.max(bitmap.width, bitmap.height));
+        canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+        canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+        const context = canvas.getContext('2d', { alpha: false });
+        if (!context) throw new Error();
+        context.fillStyle = '#fff';
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+        let preview = canvas.toDataURL(productPhotoMime, 0.84);
+        const maxLength = productPhotoPrefix.length + maxProductPhotoBase64;
+        if (preview.length > maxLength) preview = canvas.toDataURL(productPhotoMime, 0.60);
+        if (!preview.startsWith(productPhotoPrefix) || preview.length > maxLength) throw new Error();
+        setPhotoDraft(preview);
+      } finally {
+        bitmap.close();
+      }
+    } catch {
+      setPhotoError('Poza nu a putut fi pregătită. Alege o altă imagine.');
+    } finally {
+      setPreparingPhoto(false);
+    }
+  }
+  async function change(method: 'POST' | 'PUT' | 'DELETE', product: Product & { photo?: string }) {
     setBusy(true);
     setError('');
     try {
@@ -150,10 +197,7 @@ export function ProductCatalog({
           </button>
           <button
             className="primary"
-            onClick={() => {
-              setEdit({ ...empty });
-              setError('');
-            }}
+            onClick={() => openEdit(empty)}
           >
             <Plus size={18} /> Produs nou
           </button>
@@ -224,7 +268,7 @@ export function ProductCatalog({
                           {p.ean && <small>EAN: {p.ean}</small>}
                         </TableCell>
                         <TableCell>
-                          <button type="button" className="catalog-product-name" onClick={() => { setEdit({ ...p }); setError(''); }}>
+                          <button type="button" className="catalog-product-name" onClick={() => openEdit(p)}>
                             <strong>{p.name}</strong>
                           </button>
                           <small>{p.brand}</small>
@@ -245,10 +289,7 @@ export function ProductCatalog({
                             <button
                               className="icon-button"
                               aria-label={`Editează ${p.code}`}
-                              onClick={() => {
-                                setEdit({ ...p });
-                                setError('');
-                              }}
+                              onClick={() => openEdit(p)}
                             >
                               <Pencil size={18} />
                             </button>
@@ -280,7 +321,7 @@ export function ProductCatalog({
       <Dialog
         open={!!edit}
         onOpenChange={(open) => {
-          if (!open && !busy) setEdit(null);
+          if (!open && !busy && !preparingPhoto) setEdit(null);
         }}
       >
         <DialogContent className="admin-dialog client-edit-dialog">
@@ -411,13 +452,51 @@ export function ProductCatalog({
                     />
                   </label>
                 ))}
+                <div className="catalog-photo-editor client-wide">
+                  {photoDraft || edit.image ? (
+                    <Image unoptimized width={88} height={78} className="catalog-photo-preview" src={photoDraft || edit.image || ''} alt="Previzualizare poză produs" />
+                  ) : (
+                    <span className="catalog-photo-preview catalog-photo-empty">
+                      <ImageIcon size={22} aria-hidden="true" /> Fără poză
+                    </span>
+                  )}
+                  <div className="catalog-photo-controls">
+                    <label>
+                      {photoDraft || edit.image ? 'Înlocuiește poza produsului' : 'Adaugă poza produsului'}
+                      <input
+                        type="file"
+                        accept="image/jpeg,image/png,image/webp"
+                        disabled={preparingPhoto}
+                        aria-describedby="catalog-photo-hint"
+                        onChange={(e) => {
+                          const file = e.currentTarget.files?.[0];
+                          e.currentTarget.value = '';
+                          if (file) void selectPhoto(file);
+                        }}
+                      />
+                    </label>
+                    <small id="catalog-photo-hint">JPG, PNG sau WebP · maximum 10 MB</small>
+                    {preparingPhoto && <output>Se pregătește poza…</output>}
+                    {photoError && <small className="catalog-photo-error" role="alert">{photoError}</small>}
+                    {photoDraft && (
+                      <button
+                        type="button"
+                        className="catalog-photo-reset"
+                        disabled={preparingPhoto}
+                        onClick={() => { setPhotoDraft(''); setPhotoError(''); }}
+                      >
+                        Renunță la poza selectată
+                      </button>
+                    )}
+                  </div>
+                </div>
               </fieldset>
               {error && (
                 <p className="error-banner" role="alert">
                   {error}
                 </p>
               )}
-              <button className="primary" disabled={busy}>
+              <button className="primary" disabled={busy || preparingPhoto}>
                 <Save size={18} />
                 {busy ? 'Se salvează…' : 'Salvează produsul'}
               </button>

@@ -21,7 +21,7 @@ import templateHashes from '@/resources/template-hashes.json';
 import templates from '@/resources/templates.json';
 import { AppError, db, response, handleError, assertOrigin, jsonBody, readLimited, textField, seedDatabase, userView, requireUser, requireManager, requireGlobalManager, isGlobalManager, requireAgentAccess, requireWarehouseAccess, currentUser, refreshSession, SESSION_TTL_SECONDS, SESSION_TTL_MS, sha256, sessionToken, verifyPassword, hashPassword, catalog, warehouses, getOrder, orderView, settings, managerMailSettings, regionalOperationalSettings, settingsForOrder, weekKey, fail } from '@/lib/server';
 import { templateExport, combinedExport, repairOrderExport, simExport, mailFor, emlFor } from '@/lib/exports';
-import { readCatalog, changeProduct } from '@/lib/catalog';
+import { readCatalog, changeProduct, readProductPhoto } from '@/lib/catalog';
 import { stockImportStatus, stockView, stockUpload } from '@/lib/stock-server';
 import { salesImportStatus, salesView, salesUpload } from '@/lib/sales-server';
 import { inventories } from '@/lib/inventory-server';
@@ -319,6 +319,7 @@ async function dispatch(req: Request) {
     return response({...common,products:(await readCatalog()).products,orders:await listOrders(user)},200,sessionHeaders);
   }
   const user=await requireUser(req,path[0]==='auth'||(path[0]==='admin'&&path[1]==='templates'));
+  if(req.method==='GET'&&path.length===4&&path[0]==='catalog'&&path[1]==='photo')return readProductPhoto(path[2],path[3]);
   const readUser=nationalReadScope(user);
   if(path.join('/')==='usage/pulse'&&req.method==='POST')return response(await usagePulse(req,user));
   if(path.join('/')==='sim/verify'&&req.method==='GET')return response(await simVerificationAccess(user));
