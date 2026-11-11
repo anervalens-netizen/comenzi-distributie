@@ -135,6 +135,81 @@ class VersionTests(f.ActivationsTests):
         value['SerieText']='x'+value['serial']
         with self.assertRaisesRegex(ValueError,'serial text'):self.operator([value])
 
+    def test_provider_wide_vodafone_matches_both_sales_brands_only_by_serial(self):
+        self.revision([f.row(Firma='MobiUp',Activat='',DataActivare='')])
+        self.revision([f.row(Firma='MobiCell',IMEI='0000000000000000020',Activat='',DataActivare='',DocumentDetailId='MC-2')])
+        self.operator([self.official(),self.official(SerieText='000000000000000002',DATE_OF_ACTIVATION='2026-10-16')],company='Vodafone')
+        facts={(r['company'],r['serial']):r for r in self.c.execute('SELECT * FROM activation_facts')}
+        self.assertEqual(facts['MobiUp','000000000000000001']['activation_date'],'2026-10-15')
+        self.assertEqual(facts['MobiCell','000000000000000002']['activation_date'],'2026-10-16')
+        self.assertEqual(facts['MobiUp','000000000000000001']['candidate_site'],'SITE-A')
+        self.assertEqual(facts['MobiCell','000000000000000002']['candidate_site'],'SITE-A')
+        self.assertFalse(any(k[0]=='Vodafone' for k in facts))
+
+    def test_provider_only_observation_attaches_when_sale_arrives_later(self):
+        self.operator([self.official()],company='Vodafone')
+        self.assertIn('operator_without_distribution',self.c.execute("SELECT reasons FROM activation_facts WHERE company='Vodafone'").fetchone()[0])
+        self.revision([f.row(Firma='MobiUp',Activat='',DataActivare='')])
+        fact=self.c.execute("SELECT activation_date,candidate_site FROM activation_facts WHERE company='MobiUp'").fetchone()
+        self.assertEqual(tuple(fact),('2026-10-15','SITE-A'))
+        self.assertEqual(self.c.execute("SELECT COUNT(*) FROM activation_facts WHERE company='Vodafone'").fetchone()[0],0)
+
+    def test_legacy_operator_company_is_provider_wide_for_unambiguous_sales(self):
+        self.revision([f.row(Firma='MobiCell',Activat='',DataActivare='')])
+        self.operator([self.official()],company='Mobiup Distribution SRL')
+        self.assertEqual(self.c.execute("SELECT activation_date FROM activation_facts WHERE company='MobiCell'").fetchone()[0],'2026-10-15')
+        self.assertEqual(self.c.execute("SELECT COUNT(*) FROM activation_facts WHERE company='Vodafone'").fetchone()[0],0)
+
+    def test_provider_only_serial_in_both_companies_is_quarantined(self):
+        self.revision([f.row(Firma='MobiUp',Activat='',DataActivare=''),
+                       f.row(Firma='MobiCell',Activat='',DataActivare='',DocumentDetailId='MC-2')])
+        self.operator([self.official()],company='Vodafone')
+        reasons=self.c.execute("SELECT reasons FROM activation_facts WHERE company='Vodafone'").fetchone()[0]
+        self.assertIn('ambiguous_sales_company',reasons)
+        self.assertEqual(self.c.execute("SELECT COUNT(*) FROM activation_facts WHERE company IN ('MobiUp','MobiCell') AND activation_date IS NOT NULL").fetchone()[0],0)
+
+    def test_incremental_cross_brand_sale_revokes_previously_attached_global_activation(self):
+        self.revision([f.row(Firma='MobiUp',Activat='',DataActivare='')])
+        self.operator([self.official()],company='Vodafone')
+        self.assertEqual(self.c.execute("SELECT activation_date FROM activation_facts WHERE company='MobiUp'").fetchone()[0],'2026-10-15')
+        self.n+=1
+        path=f.fixture(self.root/f'new-brand-{self.n}.xlsx',[f.row(Firma='MobiCell',Activat='',DataActivare='',DocumentDetailId='MC-LATER')])
+        receipt=a.import_files(self.c,self.root/'data',[path],operator='vodafone',source_at='2026-10-23',defer_rebuild=True)
+        self.c.execute('BEGIN IMMEDIATE')
+        try:
+            a.reconcile_imports(self.c,[receipt['files'][0]['import_id']])
+            self.c.commit()
+        except BaseException:
+            self.c.rollback()
+            raise
+        self.assertEqual(self.c.execute("SELECT COUNT(*) FROM activation_facts WHERE company IN ('MobiUp','MobiCell') AND activation_date IS NOT NULL").fetchone()[0],0)
+        orphan=self.c.execute("SELECT reasons FROM activation_facts WHERE company='Vodafone'").fetchone()
+        self.assertIsNotNone(orphan)
+        self.assertIn('ambiguous_sales_company',orphan[0])
+
+    def test_incremental_legacy_source_replaces_canonical_unmatched_fact(self):
+        self.operator([self.official()],company='Mobiup Distribution SRL')
+        self.assertEqual(self.c.execute("SELECT activation_date FROM activation_facts WHERE company='Vodafone'").fetchone()[0],'2026-10-15')
+        self.n+=1
+        path=self.root/f'legacy-update-{self.n}.json.gz'
+        with gzip.open(path,'wt') as out:
+            json.dump([self.official(DATE_OF_ACTIVATION='2026-10-16')],out)
+        receipt=a.import_files(self.c,self.root/'data',[path],operator='vodafone',source_kind='operator',
+                               company='Mobiup Distribution SRL',source_at='2026-10-22',
+                               period_start='2026-10-01',period_end='2026-10-20',defer_rebuild=True)
+        self.c.execute('BEGIN IMMEDIATE')
+        try:
+            a.reconcile_imports(self.c,[receipt['files'][0]['import_id']])
+            self.c.commit()
+        except BaseException:
+            self.c.rollback()
+            raise
+        self.assertEqual(self.c.execute("SELECT activation_date FROM activation_facts WHERE company='Vodafone'").fetchone()[0],'2026-10-16')
+        self.assertEqual(self.c.execute("SELECT COUNT(*) FROM activation_facts").fetchone()[0],1)
+        self.revision([f.row(Firma='MobiCell',Activat='',DataActivare='')])
+        self.assertEqual(self.c.execute("SELECT activation_date FROM activation_facts WHERE company='MobiCell'").fetchone()[0],'2026-10-16')
+        self.assertEqual(self.c.execute("SELECT COUNT(*) FROM activation_facts WHERE company='Vodafone'").fetchone()[0],0)
+
     def test_version2_migration_is_resumable(self):
         self.c.close();path=self.root/'data'/'activations.sqlite'
         c=sqlite3.connect(path)

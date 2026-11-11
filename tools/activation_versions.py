@@ -12,7 +12,7 @@ UNKNOWN = {'', '-', 'NEALOCAT', 'UNALLOCATED', 'N/A', 'UNKNOWN', 'UNASSIGNED', '
 # missing-value marker for identifiers, dates and counties.
 FIELD_UNKNOWN = {'handset': UNKNOWN - {'-'}, 'HandSetType': UNKNOWN - {'-'}}
 # Derived reconciliation semantics are independent of the immutable ledger schema.
-FACTS_VERSION = '2'
+FACTS_VERSION = '3'
 
 
 def migrate(c, version):

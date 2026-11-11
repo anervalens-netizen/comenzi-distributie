@@ -39,6 +39,19 @@ class SimExecutorTests(unittest.TestCase):
     preview=import_engine_sim.run({'job':job,'mode':'execute','action':'preview','action_id':str(uuid.uuid4())});self.assertEqual(preview['preview']['rows'],1)
     job['preview']=preview['preview'];result=import_engine_sim.run({'job':job,'mode':'execute','action':'commit','action_id':action});self.assertEqual(result['state'],'completed');self.assertTrue(result['receipt']['verified']);self.assertEqual((other/'current').resolve(),other_before)
     recovered=import_engine_sim.run({'job':job,'mode':'reconcile','action':'commit','action_id':action});self.assertEqual(recovered['receipt'],result['receipt'])
+ def test_vodafone_operator_company_is_fixed_even_for_old_client_header(self):
+  job=self.source('sim_activations_vodafone')
+  del job['payload']['company']
+  preview=import_engine_sim.run({'job':job,'mode':'execute','action':'preview','action_id':str(uuid.uuid4())})
+  self.assertEqual(preview['preview']['company'],'Vodafone')
+  job['payload']['company']='wrong brand from cached form'
+  job['preview']=preview['preview']
+  done=import_engine_sim.run({'job':job,'mode':'execute','action':'commit','action_id':str(uuid.uuid4())})
+  self.assertEqual(done['state'],'completed')
+  self.assertEqual(done['receipt']['company'],'Vodafone')
+  with contextlib.closing(sqlite3.connect((self.net/'current'/'activations.sqlite').resolve())) as db:
+   self.assertEqual(db.execute("SELECT company FROM activation_imports WHERE source_kind='operator'").fetchone()[0],'Vodafone')
+
  def test_revoked_session_never_publishes(self):
   job=self.source('sim_sales_vodafone');job['preview']=import_engine_sim.run({'job':job,'mode':'execute','action':'preview','action_id':str(uuid.uuid4())})['preview'];old=(self.net/'current').resolve()
   with contextlib.closing(sqlite3.connect(self.settings)) as c:c.execute('DELETE FROM sessions');c.commit()

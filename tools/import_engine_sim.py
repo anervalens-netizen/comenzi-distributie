@@ -139,7 +139,7 @@ def run(request):
  suffix='.json.gz' if source['filename'].lower().endswith('.json.gz') else '.xlsx'
  path=folder/('source'+suffix)
  if path.is_symlink() or not path.is_file() or path.stat().st_size!=source['size'] or digest(path)!=source['sha256']:raise ValueError('Invalid frozen source')
- company=(job.get('payload') or {}).get('company','')
+ company='Vodafone' if job['kind']=='sim_activations_vodafone' else (job.get('payload') or {}).get('company','')
  if not internal and (not isinstance(company,str) or not company.strip() or company!=company.strip()):raise ValueError('Missing company')
  if suffix=='.xlsx':
   period=metadata_period(path,'SIM' if internal else 'activari' if provider=='digi' else 'Detailed SIM')

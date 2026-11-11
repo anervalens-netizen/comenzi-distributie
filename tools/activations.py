@@ -25,6 +25,10 @@ VERSION = 3
 MAX_ROWS = 1_000_000
 CHRONOLOGY_POLICY_VERSION = "positive-documents-nonblocking-v1"
 DIGI_HEADERS = ['Canal', 'Magazin', 'Data', 'Cod', 'Cantitate', 'IMEI', 'Pret', 'Denumire Client', 'Activat', 'DataDigi']
+# Vodafone exports are provider-wide. Older uploads used two source labels;
+# neither is an internal sales company.
+VODAFONE_OPERATOR_COMPANIES = ('Vodafone', 'Mobiup Distribution SRL')
+VODAFONE_SALES_COMPANIES = ('MobiUp', 'MobiCell')
 
 class ImportError(ValueError):
     pass
@@ -452,6 +456,25 @@ def rebuild(c, operator=None, incremental=False):
         c.execute('DELETE FROM activation_effective_movements' + (' WHERE provider=?' if operator else ''), (operator,) if operator else ())
         c.execute("DELETE FROM activation_meta WHERE key LIKE 'conflict:%'")
     official = collections.defaultdict(list)
+    shared_vodafone = collections.defaultdict(list)
+    sales_owner_cache = {}
+    def vodafone_sales_owner(serial):
+        # Never multiply one confirmed activation across two sales brands.
+        if serial not in sales_owner_cache:
+            owners=[]
+            for company in VODAFONE_SALES_COMPANIES:
+                matched=c.execute(
+                    'SELECT 1 FROM activation_movements INDEXED BY activation_movements_serial WHERE company=? AND provider=? AND serial=? LIMIT 1',
+                    (company,'vodafone',serial)).fetchone()
+                if not matched and re.fullmatch(r'[0-9]{18}',serial):
+                    # Commercial rows can carry the 19-digit SIM IMEI before
+                    # the 18-digit activated serial is known.
+                    matched=c.execute(
+                        'SELECT 1 FROM activation_movements INDEXED BY activation_movements_identity WHERE company=? AND provider=? AND imei>=? AND imei<? LIMIT 1',
+                        (company,'vodafone',serial+'0',serial+':')).fetchone()
+                if matched:owners.append(company)
+            sales_owner_cache[serial]=(owners[0] if len(owners)==1 else None,len(owners)>1)
+        return sales_owner_cache[serial]
     if incremental:
         observation_query = "SELECT o.*,i.source_at FROM affected_serial s CROSS JOIN activation_observations o ON o.company=s.company AND o.provider=s.provider AND o.serial=s.serial JOIN activation_imports i ON i.id=o.import_id WHERE i.status='complete'"
         digi_query = "SELECT o.movement_id FROM affected_imei a CROSS JOIN activation_movements m ON m.company=a.company AND m.provider=a.provider AND m.imei=a.imei JOIN activation_occurrences o ON o.movement_id=m.id WHERE m.provider='digi' GROUP BY o.import_id,o.movement_id HAVING COUNT(*)>1"
@@ -461,8 +484,11 @@ def rebuild(c, operator=None, incremental=False):
         digi_query = "SELECT o.movement_id FROM activation_occurrences o JOIN activation_movements m ON m.id=o.movement_id WHERE m.provider='digi' GROUP BY o.import_id,o.movement_id HAVING COUNT(*)>1"
         query = "SELECT m.*,COALESCE(MAX(i.source_at),'') source_at FROM activation_movements m JOIN activation_occurrences o ON o.movement_id=m.id JOIN activation_imports i ON i.id=o.import_id" + (' WHERE m.provider=?' if operator else '') + ' GROUP BY m.id ORDER BY m.company,m.provider,m.imei,m.id'
     for o in c.execute(observation_query):
-        official[(o['company'],o['provider'],o['serial'])].append(dict(serial=o['serial'],activation_date=o['activation_date'],county=o['county'],handset=o['handset'],priority=1,source_at=o['source_at'],ref={'importId':o['import_id'],'row':o['source_row']}))
-    used=set()
+        target=(shared_vodafone[(o['provider'],o['serial'])]
+                if o['provider']=='vodafone' and o['company'] in VODAFONE_OPERATOR_COMPANIES
+                else official[(o['company'],o['provider'],o['serial'])])
+        target.append(dict(serial=o['serial'],activation_date=o['activation_date'],county=o['county'],handset=o['handset'],priority=1,source_at=o['source_at'],ref={'importId':o['import_id'],'row':o['source_row']}))
+    used=set();used_shared=set()
     repeated_digi = {r[0] for r in c.execute(digi_query)}
     cursor=c.execute(query,(operator,) if operator else ())
     for identity,group in itertools.groupby(cursor,key=lambda r:(r['company'],r['provider'],r['imei'])):
@@ -479,6 +505,9 @@ def rebuild(c, operator=None, incremental=False):
         for serial in serial_keys:
             key=(company,provider,serial)
             if key in official:external+=official[key];used.add(key)
+            shared=(provider,serial)
+            if shared in shared_vodafone and vodafone_sales_owner(serial)[0]==company:
+                external+=shared_vodafone[shared];used_shared.add(shared)
         selected,refs,observation_conflicts=versions.apply_observations(rows,external)
         for r in rows:
             if any(i in repeated_digi for i in r['version_ids']):
@@ -499,9 +528,14 @@ def rebuild(c, operator=None, incremental=False):
                 reasons=sorted(set(json.loads(old[1])+json.loads(fact[9])+['conflicting_imei_for_serial']))
                 c.execute("UPDATE activation_facts SET status='unresolved',candidate_site=NULL,activation_date=NULL,month=NULL,item_code=NULL,item_type=NULL,net_quantity=NULL,reasons=?,evidence_json=? WHERE company=? AND provider=? AND serial=?",(dump(reasons),dump(previous),*fact[:3]))
             else:c.execute('INSERT INTO activation_facts VALUES('+','.join('?'*12)+')',fact)
-    for key,observations in official.items():
+    unmatched_shared=((('Vodafone',provider,serial),observations)
+                      for (provider,serial),observations in shared_vodafone.items()
+                      if (provider,serial) not in used_shared)
+    for key,observations in itertools.chain(official.items(),unmatched_shared):
         if key in used or (operator and key[1]!=operator):continue
         selected={};refs={};reasons=['operator_without_distribution']
+        if key[0]=='Vodafone' and vodafone_sales_owner(key[2])[1]:
+            reasons.append('ambiguous_sales_company')
         for field in ('serial','activation_date','county','handset'):
             selected[field],refs[field],conflict=versions.select_field(observations,field)
             if conflict:reasons.append(field+'_conflict')
@@ -538,6 +572,25 @@ def reconcile_imports(c, import_ids):
     for batch in import_ids:
         c.execute('INSERT OR IGNORE INTO affected_imei SELECT DISTINCT m.company,m.provider,m.imei FROM activation_movements m JOIN activation_occurrences o ON o.movement_id=m.id WHERE o.import_id=?', (batch,))
         c.execute("INSERT OR IGNORE INTO affected_serial SELECT DISTINCT company,provider,serial FROM activation_observations WHERE import_id=? AND serial<>''", (batch,))
+        # A provider-wide Vodafone report touches both internal brands when
+        # the exact serial is present. The normal identity closure follows.
+        for company in VODAFONE_SALES_COMPANIES:
+            c.execute('''INSERT OR IGNORE INTO affected_serial
+              SELECT DISTINCT m.company,m.provider,m.serial
+              FROM activation_observations o CROSS JOIN activation_movements m INDEXED BY activation_movements_serial
+              WHERE o.import_id=? AND o.provider='vodafone' AND o.company IN (?,?)
+              AND o.serial<>'' AND m.company=? AND m.provider=o.provider AND m.serial=o.serial''',
+              (batch,*VODAFONE_OPERATOR_COMPANIES,company))
+            # Rows with blank Activat still have an exact Vodafone IMEI
+            # prefix. Reconcile their commercial component as well.
+            c.execute('''INSERT OR IGNORE INTO affected_imei
+              SELECT DISTINCT m.company,m.provider,m.imei
+              FROM activation_observations o CROSS JOIN activation_movements m INDEXED BY activation_movements_identity
+              WHERE o.import_id=? AND o.provider='vodafone'
+              AND o.company IN (?,?) AND length(o.serial)=18
+              AND m.company=? AND m.provider=o.provider
+              AND m.imei>=o.serial||'0' AND m.imei<o.serial||':' ''',
+              (batch,*VODAFONE_OPERATOR_COMPANIES,company))
     imeis=set(); serials=set(); sites=set()
     pending_i=list(map(tuple,c.execute('SELECT * FROM affected_imei')))
     pending_s=list(map(tuple,c.execute('SELECT * FROM affected_serial')))
@@ -558,6 +611,19 @@ def reconcile_imports(c, import_ids):
             key=pending_s.pop()
             if key in serials: continue
             serials.add(key)
+            if key[1]=='vodafone' and key[0] in (*VODAFONE_SALES_COMPANIES,*VODAFONE_OPERATOR_COMPANIES):
+                # Global operator evidence is stored under different source
+                # labels, but unmatched facts have the canonical Vodafone
+                # company. Revisit that fact and both commercial brands in
+                # one connected component. This also prevents stale attribution
+                # when another sales brand claims the same serial later.
+                labels=[label for label in VODAFONE_OPERATOR_COMPANIES if c.execute(
+                    'SELECT 1 FROM activation_observations INDEXED BY observation_identity WHERE company=? AND provider=? AND serial=? LIMIT 1',
+                    (label,key[1],key[2])).fetchone()]
+                if labels:
+                    for company in ('Vodafone',*labels,*VODAFONE_SALES_COMPANIES):
+                        candidate=(company,key[1],key[2])
+                        if candidate not in serials:pending_s.append(candidate)
             for table, index in (('activation_movements','activation_movements_serial'),('activation_effective_movements','effective_serial')):
                 for (imei,) in c.execute(f'SELECT DISTINCT imei FROM {table} INDEXED BY {index} WHERE company=? AND provider=? AND serial=?',key):
                     if (key[0],key[1],imei) not in imeis: pending_i.append((key[0],key[1],imei))

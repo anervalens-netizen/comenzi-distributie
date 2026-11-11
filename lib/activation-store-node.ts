@@ -32,7 +32,11 @@ export function readActivations(month:string,sites:string[]|null,provider:Activa
     source=new DatabaseSync(resolve(directory,'activations.sqlite'),{readOnly:true});
     const schema=String(source.prepare("SELECT value FROM activation_meta WHERE key='schema_version'").get()?.value);
     if(!['2','3'].includes(schema))throw new Error('Unsupported activation ledger');
-    if(schema==='3'&&(meta.factsVersion!==activationFactsVersion||String(source.prepare("SELECT value FROM activation_meta WHERE key='facts_version'").get()?.value||'')!==activationFactsVersion))throw new Error('Activation facts require semantic rebuild');
+    // Activation generation switches are atomic, but an application deploy can
+    // precede the next importer-run semantic rebuild. Keep the previously
+    // certified v2 read model readable until its complete v3 generation exists.
+    const factsVersion=String(source.prepare("SELECT value FROM activation_meta WHERE key='facts_version'").get()?.value||'');
+    if(schema==='3'&&(meta.factsVersion!==factsVersion||!['2',activationFactsVersion].includes(factsVersion)))throw new Error('Activation facts require semantic rebuild');
     const imports=source.prepare("SELECT sha256,operator,row_count,parser_version FROM activation_imports WHERE status='complete' ORDER BY sha256").all().map(r=>[r.sha256,r.operator,r.row_count,r.parser_version]);
     if(JSON.stringify(imports)!==meta.sourceImports)throw new Error('Stale activation report');
     if(meta.sourceGeneration!==undefined&&meta.sourceGeneration!==String(source.prepare("SELECT value FROM activation_meta WHERE key='generation'").get()?.value||''))throw new Error('Stale activation generation');

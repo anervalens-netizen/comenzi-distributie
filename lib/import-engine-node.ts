@@ -53,7 +53,10 @@ export async function importsJobs(req:Request,user:User){
  let filename='';try{filename=decodeURIComponent(sourceHeader(req,'Filename'));}catch{fail(400,'Nume de fișier invalid.');}
  if(!filename||filename.length>250||/[\\/]/.test(filename)||filename.split('').some(c=>c.charCodeAt(0)<32)||!entry.extensions.some(ext=>filename.toLowerCase().endsWith(ext)))fail(400,'Nume sau extensie de fișier invalidă.');
  const extension=entry.extensions.find(ext=>filename.toLowerCase().endsWith(ext))!;
- const hash=sourceHeader(req,'Sha256'),start=sourceHeader(req,'Date-Start'),end=sourceHeader(req,'Date-End'),sourceAt=sourceHeader(req,'Source-At'),company=sourceHeader(req,'Company');
+ const hash=sourceHeader(req,'Sha256'),start=sourceHeader(req,'Date-Start'),end=sourceHeader(req,'Date-End'),sourceAt=sourceHeader(req,'Source-At'),suppliedCompany=sourceHeader(req,'Company');
+ // The Vodafone operator report covers both sales brands. Its provenance
+ // must never depend on a browser-entered company name.
+ const company=kind==='sim_activations_vodafone'?'Vodafone':suppliedCompany;
  if(!/^[0-9a-f]{64}$/.test(hash)||!date(start)||!date(end)||start>end||sourceAt&&!date(sourceAt)||('requires_source_at' in entry&&!sourceAt)||('requires_company' in entry&&!company)||company.length>200)fail(400,'Metadate de import invalide.');
  const channel=sourceHeader(req,'Channel')||'browser';if(channel!=='browser'&&(channel!=='eva'||!process.env.MOBIUP_EVA_USER_ID||user.id!==process.env.MOBIUP_EVA_USER_ID))fail(403,'Canal de import neautorizat.');
  const {root}=config(),folder=join(root,'import-engine-spool');await mkdir(folder,{recursive:true,mode:0o700});

@@ -39,7 +39,7 @@ try{
   {kind:'stock_tr',bytes:excel(['Gestiune','ItemCode','ItemName','Stoc','SiteId','StocDepozit'],[['TR Example','P1','Synthetic product',5,'SITE',10]],'Stoc_TR'),start:'2026-01-31',end:'2026-01-31'},
   {kind:'sim_sales_vodafone',bytes:readFileSync(join(data,'sim.xlsx')),start:'2026-01-31',end:'2026-02-01',sourceAt:'2026-02-02'},
   {kind:'sim_sales_digi',bytes:readFileSync(join(data,'sim-digi.xlsx')),start:'2026-01-01',end:'2026-01-31',sourceAt:'2026-01-31'},
-  {kind:'sim_activations_vodafone',bytes:readFileSync(join(data,'operator-vodafone.xlsx')),start:'2026-01-01',end:'2026-01-31',sourceAt:'2026-01-31',company:'ExampleCo'},
+  {kind:'sim_activations_vodafone',bytes:readFileSync(join(data,'operator-vodafone.xlsx')),start:'2026-01-01',end:'2026-01-31',sourceAt:'2026-01-31'},
   {kind:'sim_activations_digi',bytes:readFileSync(join(data,'operator-digi.xlsx')),start:'2026-01-01',end:'2026-01-31',sourceAt:'2026-01-31',company:'ExampleCo'},
   {kind:'sales_location',bytes:readFileSync(join(data,'history.xlsx')),start:'2024-02-01',end:'2024-02-29'},
  ];
@@ -55,6 +55,7 @@ try{
   assert.equal(done.receipt.verified,true);assert.equal(done.receipt.source_sha256,sha);assert.equal(done.receipt.action_id,done.action_id);assert.equal(done.receipt.actor.id,'m');assert.deepEqual(done.receipt.declared_period,{start:c.start,end:c.end});
   if(c.kind==='sim_sales_vodafone'){assert.equal(done.receipt.source_at,c.sourceAt);assert.equal(done.receipt.provider,'vodafone');}
   if(c.company)assert.equal(done.receipt.company,c.company);
+  if(c.kind==='sim_activations_vodafone')assert.equal(done.receipt.company,'Vodafone');
   await call('imports/jobs/'+id+'/commit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(commit)});
   console.log('PASS:',c.kind,'real application HTTP → engine → executor → receipt, same-ID retry');
  }
