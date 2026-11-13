@@ -1,3 +1,4 @@
+import {lookupAnafCompany} from '@/lib/anaf';
 import {importsCatalog,importsJobs,importsJob} from '@/lib/import-engine-runtime';
 import {simVerification,simVerificationAccess} from '@/lib/sim-verification-api';
 import {operationalWriteGuard} from '@/lib/operational-write-guard';
@@ -358,6 +359,7 @@ async function dispatch(req: Request) {
     if(path[2]&&path[3]==='visits'&&!path[4]&&req.method==='POST')return response(await recordVisit(user,path[2],await jsonBody(req)));
   }
   if(path.join('/')==='partner/mail'&&req.method==='POST')return partnerMail(req,user);
+  if(path.join('/')==='partner/anaf'&&req.method==='GET')return response(await lookupAnafCompany(new URL(req.url).searchParams.get('cui')||''));
   if(path.join('/')==='partner/lookup'&&req.method==='GET') {
     const cui=new URL(req.url).searchParams.get('cui')||'';
     return response({cui,locations:await partnerLocations(cui)});

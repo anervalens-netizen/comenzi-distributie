@@ -1,4 +1,5 @@
 'use client';
+import {PartnerAnaf} from './partner-anaf';
 import { useEffect, useRef, useState } from 'react';
 import { Check, Download, LoaderCircle, Mail, Plus, RefreshCw, Store } from 'lucide-react';
 import { api, ApiError, dateLabel, errorMessage } from '@/lib/client-api';
@@ -94,6 +95,7 @@ export function PartnerNew({userId}:{userId:string}) {
         <label>Județ<input name="county" defaultValue={value('county')} required maxLength={100} placeholder="Brașov" onChange={e=>setCounty(e.target.value)}/></label>
         <label className="partner-wide">Adresa magazin<input name="address" defaultValue={value('address')} required maxLength={500} placeholder="Stradă, număr, localitate" onChange={e=>setAddress(e.target.value)}/></label>
       </div>
+      <PartnerAnaf key={formEpoch} cui={cui} onUseName={company=>{const form=formRef.current;if(!form||busy)return;const input=form.elements.namedItem('company');if(input instanceof HTMLInputElement){input.value=company.name;persistDraft(form);}}}/>
       {cui.trim().length>=3&&<div className={'partner-lookup '+(lookup.length?'existing':'new')} aria-live="polite">{lookupBusy?<span>Se verifică CUI/CIF în baza completă…</span>:lookupError?<span>{lookupError}</span>:lookup.length?<><strong>{samePoint?'Acest punct de lucru există deja.':credible.length?'Atenție: posibil punct duplicat. Verifică locațiile de mai jos.':'Firma există deja. Verifică punctele de lucru.'}</strong><span>{samePoint?'La salvare va fi asociat portofoliului tău, fără duplicare.':`${lookup.length} punct${lookup.length===1?'':'e'} de lucru existente în bază:`}</span>{!samePoint&&<div>{candidates.map(({point:item,reason})=><span key={item.id}>{item.city} · {item.county||'județ lipsă'} · {item.address} · {reason} [{item.id}]</span>)}</div>}</>:<strong>CUI/CIF nou în baza de date.</strong>}</div>}
       {resolutionPoints.length>0&&<label className="partner-location-resolution">Alege punctul de lucru<select key={resolutionKey} name="locationResolution" defaultValue="" required><option value="">Alege explicit…</option>{resolutionPoints.map(item=><option key={item.id} value={item.id}>Acesta este punctul existent [{item.id}] · {item.city} · {item.county||'județ lipsă'} · {item.address}</option>)}{exactPoints.length===0&&<option value="new">Locație diferită / nouă · {county}</option>}</select><small>Datele existente sunt ambigue. Alege punctul corect înainte de adăugare.</small></label>}
       {(error||storageError)&&<p className="error-banner" role="alert">{error||storageError}</p>}

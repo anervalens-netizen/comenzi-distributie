@@ -168,6 +168,7 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual((self.root/'restored').stat().st_mode & 0o777,0o700)
 
     def automation_fixture(self):
+        (self.runtime / 'activation_versions.py').write_text("FACTS_VERSION = '2'\n")
         automation = self.root / 'automation'; automation.mkdir()
         selected = automation / 'tooling/reviewed'; selected.mkdir(parents=True)
         (selected / 'activations.py').write_text("CHRONOLOGY_POLICY_VERSION = 'positive-documents-nonblocking-v1'\n")
