@@ -398,3 +398,13 @@ Existing Digi ledgers require `tools/prepare-sim-verification.py --provider digi
 checks the query plan. New imports create the index automatically.
 
 Prepay activation drilldowns include operator totals, internal product groups, eligibility and SIM0 cohorts. Monthly activation counts use activation dates; SIM0 cohort counts use distribution months and the source observation date. Both retain the existing authorized scope. Missing reported activation months remain marked as uncertain coverage. Large chart axes use compact labels while small values retain precision; tables and tooltips retain full values.
+
+## Partner fiscal lookup
+
+Partners search recognizes a CUI and the new-partner form checks ANAF automatically.
+The authenticated server uses ANAF v9, validates the CUI checksum, limits upstream
+requests to one per second and reuses results for up to one hour on the same
+Bucharest date. The UI shows the original check time, unknown fiscal flags,
+not-found and unavailable states separately. Only an explicit action copies the
+company name; fiscal addresses never replace store addresses. Lookup does not
+write customer data or block manual entry when ANAF is unavailable.

@@ -1,4 +1,5 @@
 'use client';
+import {PartnerAnaf} from './partner-anaf';
 import {visitDateError} from '@/lib/visit-date';
 import {countyLabel} from '@/lib/portfolio-facets';
 import {PartnerBillingPeriod} from './partner-billing-period';
@@ -241,6 +242,7 @@ export function PartnerPortfolio({ userId, manager=false, scopeQuery='', active=
           {error} <button onClick={() => {setLoading(true);setError('');setRefreshIndex(n=>n+1);}}>Reîncearcă</button>
         </div>
       )}
+      {/^(?:RO\s*)?\d{2,10}$/i.test(query.trim())&&<PartnerAnaf key={userId} cui={query}/>}
       <div className="partner-filters">
         <PartnerBillingPeriod value={salesPeriod} onChange={v=>{setSalesPeriod(v);}}/>
         <label>

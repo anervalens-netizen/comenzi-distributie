@@ -13,6 +13,7 @@ node tools/test-partner-matching.mjs
 node tools/test-partner-registration.mjs
 node tools/test-push-notifications.mjs
 node tools/test-partner-form.mjs
+node tools/test-anaf.mjs
 python3 tools/test_crm_location_repair.py
 python3 tools/test_crm_master_reconcile.py
 node tools/test-bind-ready.mjs
@@ -97,6 +98,7 @@ node tools/bench-inventory.mjs
 node tools/test-pwa-preparation.mjs
 node tools/test-runtime-init.mjs
 node tools/test-operational-http.mjs
+node tools/test-anaf-http.mjs
 node tools/test-bucharest-month.mjs
 node tools/test-sales-worker.mjs
 node tools/test-sales-view-worker.mjs
@@ -172,6 +174,7 @@ CHROME_BIN="${CHROME_BIN:-$(command -v google-chrome || command -v chromium || t
 if [ -n "$CHROME_BIN" ]; then
   CHROME_BIN="$CHROME_BIN" node tools/test-manager-navigation-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-partner-layout-browser.mjs
+  CHROME_BIN="$CHROME_BIN" node tools/test-anaf-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-usage-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-offline-cross-tab-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-private-fence-browser.mjs
