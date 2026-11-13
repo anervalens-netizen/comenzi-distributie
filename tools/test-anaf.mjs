@@ -37,3 +37,16 @@ const a=shared(cui),b=shared(cui);
 assert.equal((await shared(other)).status,'unavailable');assert.equal(calls,1);
 release(Response.json(payload()));assert.deepEqual(await a,await b);
 console.log('PASS ANAF: checksum, Bucharest date, strict response identity, unknown flags, cache, throttle, coalescing, outage, timeout and response bound');
+
+let missingCalls=0;
+const missing=createAnafLookup({clock:()=>now,fetcher:async()=>{missingCalls++;return Response.json({found:[],notFound:[Number(cui)]},{status:404});}});
+const notFound=await missing(cui);
+assert.equal(notFound.status,'not_found');assert.ok(notFound.checkedAt);
+assert.equal((await missing(cui)).cached,true);assert.equal(missingCalls,1);
+for(const fetcher of [
+ async()=>new Response('<html>Not Found</html>',{status:404}),
+ async()=>Response.json({found:[],notFound:[Number(other)]},{status:404}),
+ async()=>Response.json(payload(),{status:404}),
+ async()=>Response.json({found:[],notFound:[Number(cui)]},{status:500})
+])assert.equal((await createAnafLookup({fetcher,clock:()=>now})(cui)).status,'unavailable');
+console.log('PASS live-contract regression: 404 JSON not-found cached; HTML/mismatch/found-on-404/500 remain unavailable');

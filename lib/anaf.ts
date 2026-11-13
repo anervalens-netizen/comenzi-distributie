@@ -28,7 +28,7 @@ export function createAnafLookup({fetcher=fetch,clock=Date.now,timeoutMs=8000,in
    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),timeoutMs);
    try{
     const response=await fetcher(endpoint,{method:'POST',headers:{'Content-Type':'application/json',Accept:'application/json'},body:JSON.stringify([{cui:Number(cui),data:queriedFor}]),signal:controller.signal,redirect:'error'});
-    if(!response.ok||!response.body)throw new Error('upstream');
+    if((!response.ok&&response.status!==404)||!response.body)throw new Error('upstream');
     const reader=response.body.getReader();let size=0,body='';const decoder=new TextDecoder();
     try{while(true){const {done,value}=await reader.read();if(done)break;size+=value.byteLength;if(size>131072)throw new Error('oversize');body+=decoder.decode(value,{stream:true});}body+=decoder.decode();}
     finally{await reader.cancel().catch(()=>{});}
@@ -36,7 +36,7 @@ export function createAnafLookup({fetcher=fetch,clock=Date.now,timeoutMs=8000,in
     if(('cod' in payload&&payload.cod!==200)||!Array.isArray(payload.found)||!Array.isArray(payload.notFound))throw new Error('shape');
     const entries=payload.found.map(record).filter(item=>String(record(item.date_generale).cui)===cui);
     let result:AnafResult;
-    if(entries.length===1){
+    if(response.ok&&entries.length===1){
      const entry=entries[0],general=record(entry.date_generale),name=text(general.denumire,200);
      if(!name||general.data!==queriedFor||payload.notFound.some(v=>String(v)===cui))throw new Error('mismatched');
      result={...base,checkedAt:new Date(clock()).toISOString(),status:'found',message:'Firmă identificată în ANAF.',company:{cui,name,fiscalAddress:text(general.adresa),registrationNumber:text(general.nrRegCom,100),registrationState:text(general.stare_inregistrare,200),vatRegistered:boolean(record(entry.inregistrare_scop_Tva).scpTVA),inactive:boolean(record(entry.stare_inactiv).statusInactivi)}};

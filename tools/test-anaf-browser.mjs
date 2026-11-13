@@ -28,6 +28,9 @@ try{
  browser=await browserFixture(origin);
  await waitFor(()=>browser.evaluate("!!document.querySelector('.partner-filters input[placeholder^=\"Nume\"]')"),'search');
  const query='.partner-filters input[placeholder^="Nume"]';
+ await set(browser,query,'24');
+ await new Promise(r=>setTimeout(r,700));
+ assert.equal(await browser.evaluate("!!document.querySelector('.partner-anaf')"),false,'ordinary numeric searches are not mislabeled as invalid CUIs');
  await set(browser,query,'RO900000000');
  await waitFor(()=>browser.evaluate("document.querySelector('.partner-anaf')?.textContent.includes('Synthetic 900000000')"),'search fiscal result');
  assert.ok(await browser.evaluate("document.querySelector('.partner-anaf').textContent.includes('inactiv fiscal')"));
