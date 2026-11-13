@@ -19,6 +19,7 @@ class ToolingTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.base = Path(temporary.name)
         self.runtime = self.base / 'runtime'; self.runtime.mkdir()
+        (self.runtime / 'activation_versions.py').write_text("FACTS_VERSION = '2'\n")
         (self.runtime / 'RELEASE.json').write_text(json.dumps({'sha': 'a' * 40}))
         self.tools = self.base / 'tooling/reviewed'; self.tools.mkdir(parents=True)
         (self.tools / 'activations.py').write_text("CHRONOLOGY_POLICY_VERSION = 'positive-documents-nonblocking-v1'\n")
@@ -37,6 +38,27 @@ class ToolingTests(unittest.TestCase):
     def test_selects_both_reviewed_providers(self):
         for provider in ('vodafone', 'digi'):
             self.assertEqual(Path(self.select(provider)['path']), self.tools)
+
+    def test_facts_version_must_match_the_runtime(self):
+        for selected, runtime, passes in [('3', '3', True), ('2', '3', False), ('3', '2', False), ('4', '4', False)]:
+            with self.subTest(selected=selected, runtime=runtime):
+                (self.runtime / 'activation_versions.py').write_text(f"FACTS_VERSION = '{runtime}'\n")
+                path = self.tools / 'activation_versions.py'
+                path.write_text(f"FACTS_VERSION = '{selected}'\n")
+                self.config['digi']['files']['activation_versions.py'] = tooling.digest(path)
+                self.save()
+                if passes:
+                    result = self.select()
+                    self.assertEqual(result['factsVersion'], selected)
+                    module = types.SimpleNamespace(__file__=str(self.tools / 'activations.py'), CHRONOLOGY_POLICY_VERSION=tooling.CHRONOLOGY_POLICY)
+                    versions = types.SimpleNamespace(__file__=str(path), FACTS_VERSION=selected)
+                    tooling.validate_loaded(result, module, versions)
+                    versions.FACTS_VERSION = '2'
+                    with self.assertRaisesRegex(ValueError, 'Loaded importer'):
+                        tooling.validate_loaded(result, module, versions)
+                else:
+                    with self.assertRaisesRegex(ValueError, 'facts version'):
+                        self.select()
 
     def test_missing_configuration_never_uses_legacy_configuration(self):
         (self.base / 'digi-tooling.json').write_text(json.dumps(self.config['digi']))

@@ -75,9 +75,11 @@ def provider_tooling(base, provider, runtime):
         selected[name] = path
     if constant(selected['activations.py'], 'CHRONOLOGY_POLICY_VERSION') != CHRONOLOGY_POLICY:
         raise ValueError('Importer tooling chronology policy is unsupported')
-    if constant(selected['activation_versions.py'], 'FACTS_VERSION') != '2':
+    facts_version = constant(selected['activation_versions.py'], 'FACTS_VERSION')
+    runtime_version = constant(runtime / 'activation_versions.py', 'FACTS_VERSION')
+    if facts_version not in ('2', '3') or facts_version != runtime_version:
         raise ValueError('Importer tooling facts version is unsupported')
-    return {**tooling, 'path': str(selected['activations.py'].parent), 'contract': CONTRACT}
+    return {**tooling, 'path': str(selected['activations.py'].parent), 'contract': CONTRACT, 'factsVersion': facts_version}
 
 
 def validate_loaded(tooling, activations, versions):
@@ -86,7 +88,7 @@ def validate_loaded(tooling, activations, versions):
         expected = Path(tooling['path']) / name
         if Path(module.__file__).resolve() != expected.resolve() or digest(expected) != tooling['files'][name]:
             raise ValueError('Loaded importer does not match required tooling')
-    if activations.CHRONOLOGY_POLICY_VERSION != CHRONOLOGY_POLICY or versions.FACTS_VERSION != '2':
+    if activations.CHRONOLOGY_POLICY_VERSION != CHRONOLOGY_POLICY or versions.FACTS_VERSION != tooling.get('factsVersion'):
         raise ValueError('Loaded importer does not support required tooling contract')
 
 

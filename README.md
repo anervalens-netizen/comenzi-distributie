@@ -408,3 +408,8 @@ Bucharest date. The UI shows the original check time, unknown fiscal flags,
 not-found and unavailable states separately. Only an explicit action copies the
 company name; fiscal addresses never replace store addresses. Lookup does not
 write customer data or block manual entry when ANAF is unavailable.
+
+Recovery importer selection also requires its facts version to match the target
+runtime (supported versions 2 and 3), in addition to exact reviewed hashes and
+release identity. A release that changes facts semantics requires reviewing and
+updating the private tooling set; merely advancing its runtime pin is insufficient.
