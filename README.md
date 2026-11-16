@@ -137,8 +137,9 @@ artifact outside the checkout and consumes complete bootstrap, HTML and RSC
 responses; this prevents missing dependencies from resolving through the source
 checkout. Application and worker regression tests exercise the resulting build.
 
-`shadcn` is a development dependency because its CSS is consumed during the
-build. Vinext remains a runtime dependency: the standalone server imports its
+The build uses the original MIT-licensed `shadcn@4.22.1` stylesheet in
+`app/vendor/shadcn/`. Updating the stylesheet requires refreshing that copy
+and its upstream license. Vinext remains a runtime dependency: the standalone server imports its
 production server. The stable framework is pinned to 1.1.0. Its Satori dependency
 uses the compatible fflate 0.7.5 security backport through a scoped override,
 avoiding the vulnerable ZIP64 parser without downgrading the framework. Source

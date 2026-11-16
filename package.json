@@ -74,14 +74,13 @@
     "@types/node": "22.19.19",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
-    "@vercel/nft": "1.11.0",
+    "@vercel/nft": "1.11.2",
     "@vitejs/plugin-react": "6.0.2",
     "@vitejs/plugin-rsc": "0.5.34",
     "drizzle-kit": "0.31.10",
     "oxfmt": "0.61.0",
     "oxlint": "1.76.0",
     "oxlint-tsgolint": "7.0.2001",
-    "shadcn": "4.22.1",
     "tailwindcss": "4.2.1",
     "typescript": "7.0.2",
     "vite": "8.3.5",
@@ -100,6 +99,9 @@
     },
     "satori": {
       "fflate": "0.7.5"
+    },
+    "@modelcontextprotocol/sdk": {
+      "hono": "4.13.18"
     }
   }
 }
