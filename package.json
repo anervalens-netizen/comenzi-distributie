@@ -99,9 +99,6 @@
     },
     "satori": {
       "fflate": "0.7.5"
-    },
-    "@modelcontextprotocol/sdk": {
-      "hono": "4.13.18"
     }
   }
 }
