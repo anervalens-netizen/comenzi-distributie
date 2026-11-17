@@ -6,9 +6,9 @@ import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {randomUUID} from 'node:crypto';
 const dir=mkdtempSync(join(tmpdir(),'registration-')),sql=new DatabaseSync(':memory:');
-let pushes=0;
+let pushes=0,beforeBatch;
 globalThis.__registrationPush=()=>pushes++;
-const adapter={prepare(query){return {args:[],bind(...args){this.args=args;return this;},async all(){return {results:sql.prepare(query).all(...this.args)};},async first(){return sql.prepare(query).get(...this.args)||null;},run(){return {meta:sql.prepare(query).run(...this.args)};}};},async batch(statements){sql.exec('BEGIN');try{const results=statements.map(s=>s.run());sql.exec('COMMIT');return results;}catch(e){sql.exec('ROLLBACK');throw e;}}};
+const adapter={prepare(query){return {args:[],bind(...args){this.args=args;return this;},async all(){return {results:sql.prepare(query).all(...this.args)};},async first(){return sql.prepare(query).get(...this.args)||null;},run(){return {meta:sql.prepare(query).run(...this.args)};}};},async batch(statements){if(beforeBatch){const hook=beforeBatch;beforeBatch=undefined;hook();}sql.exec('BEGIN');try{const results=statements.map(s=>s.run());sql.exec('COMMIT');return results;}catch(e){sql.exec('ROLLBACK');throw e;}}};
 globalThis.__registrationDb=adapter;
 try{
  sql.exec(`CREATE TABLE customers(id TEXT PRIMARY KEY,warehouse_id TEXT,data TEXT,active INTEGER);
@@ -39,5 +39,13 @@ try{
  insert('ambiguous');await reject(partner);
  assert.equal((await save(user,randomUUID(),0,partner,'existing')).customerId,'existing');
  await assert.rejects(save({...user,role:'manager'},randomUUID(),0,partner),e=>e.status===403);
+ // A second agent inserts the same point after resolution but before our CAS batch.
+ const concurrent={...partner,cui:'900000018',address:'Concurrent 99'};
+ const raceId=randomUUID(),beforeCount=sql.prepare('SELECT count(*) n FROM partner_requests').get().n;
+ beforeBatch=()=>insert('concurrent-point',{cui:concurrent.cui,address:concurrent.address});
+ await assert.rejects(save(user,raceId,0,concurrent),e=>e.status===409);
+ assert.equal(sql.prepare('SELECT count(*) n FROM partner_requests').get().n,beforeCount,'failed CAS must not publish a request');
+ assert.equal((await save(user,raceId,0,concurrent)).customerId,'concurrent-point','retry reuses the concurrently created point');
+ assert.equal(sql.prepare("SELECT count(*) n FROM customers WHERE id=?").get('partner-'+raceId).n,0);
  console.log('Partner server registration, legacy CUI lookup (35,000 distractors), choice, auth and retry checks passed');
 }finally{sql.close();rmSync(dir,{recursive:true,force:true});}

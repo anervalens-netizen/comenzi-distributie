@@ -1,3 +1,4 @@
+import {searchPartnerCompanies} from '@/lib/partner-search';
 import {consumeOrderLimitApproval,orderLimitApprovalsApi,orderLimitFinalization,orderLimitPolicyApi,orderLimits,requestOrderLimitApproval} from '@/lib/order-limits-server';
 import {leaveApi} from '@/lib/leave-server';
 import {notificationCenter} from '@/lib/notification-center';
@@ -377,6 +378,7 @@ async function dispatch(req: Request) {
     if(path[2]&&path[3]==='visits'&&!path[4]&&req.method==='POST')return response(await recordVisit(user,path[2],await jsonBody(req)));
   }
   if(path.join('/')==='partner/mail'&&req.method==='POST')return partnerMail(req,user);
+  if(path.join('/')==='partner/search'&&req.method==='GET')return response(await searchPartnerCompanies(user.id,new URL(req.url).searchParams.get('q')||''));
   if(path.join('/')==='partner/anaf'&&req.method==='GET')return response(await lookupAnafCompany(new URL(req.url).searchParams.get('cui')||''));
   if(path.join('/')==='partner/lookup'&&req.method==='GET') {
     const cui=new URL(req.url).searchParams.get('cui')||'';

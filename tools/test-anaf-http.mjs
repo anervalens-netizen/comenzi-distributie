@@ -17,6 +17,8 @@ try{
  assert.ok(ready,'isolated server ready');
  const url=origin+'/api/partner/anaf?cui=900000001';
  assert.equal((await fetch(url)).status,401);
+ const searchUrl=origin+'/api/partner/search?q=SyntheticDiscovery';
+ assert.equal((await fetch(searchUrl)).status,401);
  const db=new DatabaseSync(join(data,'mobiup.sqlite')),token=randomUUID();
  db.prepare("INSERT INTO users(id,username,name,role,password_hash,must_change_password,active) VALUES('anaf-agent','anaf-agent','Synthetic Agent','agent','disabled',0,1)").run();
  db.prepare('INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,?,?)').run(createHash('sha256').update(token).digest('hex'),'anaf-agent',Date.now()+3600000);
@@ -24,10 +26,18 @@ try{
  const response=await fetch(url,{headers});
  assert.equal(response.status,200);assert.match(response.headers.get('cache-control'),/no-store/);
  assert.equal((await response.json()).status,'invalid');
+ const insert=db.prepare('INSERT INTO customers(id,warehouse_id,data,active) VALUES(?,?,?,1)');
+ for(const id of ['discovery-one','discovery-two'])insert.run(id,'synthetic-foreign-warehouse',JSON.stringify({id,name:'SyntheticDiscovery SRL',cui:'RO900000000',city:'Synthetic',address:'Shop '+id,contact:'Not public'}));
+ const searchResponse=await fetch(searchUrl,{headers});
+ assert.equal(searchResponse.status,200);assert.match(searchResponse.headers.get('cache-control'),/no-store/);
+ assert.deepEqual(await searchResponse.json(),{companies:[{name:'SyntheticDiscovery SRL',cui:'900000000',pointCount:2}],hasMore:false});
+ assert.equal((await fetch(origin+'/api/partner/search?q='+encodeURIComponent('a'.repeat(101)),{headers})).status,400);
+ assert.equal((await fetch(searchUrl,{headers:{...headers,'X-Operation-User':'other-account'}})).status,409);
  db.prepare("UPDATE users SET active=0 WHERE id='anaf-agent'").run();
  assert.equal((await fetch(url,{headers})).status,401);
+ assert.equal((await fetch(searchUrl,{headers})).status,401);
  db.close();
- console.log('PASS ANAF HTTP: unauthenticated and disabled users denied, agent validation available, no-store.');
+ console.log('PASS ANAF/discovery HTTP: auth, revocation, account fence, global CRM grouping, bounded fields/query and no-store.');
 }finally{
  const exited=new Promise(r=>child.once('exit',r));child.kill();await Promise.race([exited,delay(3000)]);if(child.exitCode===null&&child.signalCode===null){child.kill('SIGKILL');await exited;}
  rmSync(data,{recursive:true,force:true});
