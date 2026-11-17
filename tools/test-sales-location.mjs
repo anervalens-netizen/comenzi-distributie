@@ -38,7 +38,7 @@ const stubs = {
     export const sessionToken=req=>req.headers.get('Cookie')?.match(/(?:^|;\\s*)mobiup_session=([^;]+)/)?.[1]||'';
     const connection=new DatabaseSync(resolve(process.env.MOBIUP_DATA_DIR,'mobiup.sqlite'));
     export const db=()=>({prepare(sql){let args=[];return {bind(...values){args=values;return this},async all(){return {results:connection.prepare(sql).all(...args)}},async first(){return connection.prepare(sql).get(...args)||null}}}});
-    export const catalog=[];export const fail=(code,message)=>{throw new Error(code+': '+message)};
+    export class AppError extends Error { constructor(status,message){ super(message); this.status=status; } }; export const catalog=[];export const fail=(code,message)=>{throw new Error(code+': '+message)};
     export const isGlobalManager=user=>user.role==='manager'&&user.managerScope==='global';
     export const requireManager=user=>{if(user.role!=='manager')fail(403,'manager required')};
     export const readLimited=async req=>new Uint8Array(await req.arrayBuffer());export const response=value=>Response.json(value);`,
