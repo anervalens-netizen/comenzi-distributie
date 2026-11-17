@@ -198,7 +198,12 @@ try {
   await button('Verifică comanda','.cart');
   await wait(finalizedDisabled,'review blocks updated draft');
   assert.equal(await evaluate("fixture.requests.some(req=>req.path.endsWith('/finalize'))"),false,'Neither pending nor edited draft was sent to finalization');
+  // The review can be visible while save/revalidation is still in flight. Chrome
+  // silently ignores .click() on a disabled button, masking the original race.
+  await wait("[...document.querySelectorAll('.review-dialog button')].some(node=>node.textContent.includes('Solicită confirmarea managerului')&&!node.disabled)",'updated draft approval action is ready');
+  const approvalPostsBefore=await evaluate("fixture.requests.filter(req=>req.path.endsWith('/limit-approval')).length");
   await button('Solicită confirmarea managerului','.review-dialog');
+  await wait(`fixture.requests.filter(req=>req.path.endsWith('/limit-approval')).length===${approvalPostsBefore+1}`,'updated draft approval was submitted');
   await wait("document.querySelector('.review-dialog .order-limit-title')?.textContent.includes('În așteptarea managerului')",'updated draft creates a new pending request');
   await evaluate("Object.assign(fixture.approval,{status:'rejected',comment:'Synthetic manager feedback',decidedByName:'Synthetic manager',decidedAt:fixture.order.createdAt})");
   await button('Actualizează starea','.review-dialog');
