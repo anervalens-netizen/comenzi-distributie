@@ -11,7 +11,8 @@ import { bucharestReportingMonthKey } from '@/lib/bucharest-month';
 import type { PartnerCompany, PartnerLocation, PartnerMail, PartnerRequest, PartnerRequestRecord } from '@/lib/types';
 
 type PartnerResult = { partner: PartnerRequest; request: PartnerRequestRecord; mail: PartnerMail; eml: string };
-const discoveryLength=(raw:string)=>/^(?:RO\s*)?\d*$/i.test(raw.trim())?normalizeAnafCui(raw).length:raw.trim().length;
+const digitCui=(raw:string)=>{const compact=raw.trim().toUpperCase().replace(/[^A-Z0-9]/g,'');return /^(?:RO)?\d+$/.test(compact)?compact.replace(/^RO/,''):'';};
+const discoveryLength=(raw:string)=>digitCui(raw)?.length||raw.trim().length;
 const currentMonth=()=>bucharestReportingMonthKey(new Date());
 const formValues=(form:HTMLFormElement)=>Object.fromEntries([...new FormData(form)].map(([key,val])=>[key,typeof val==='string'?val:'']));
 const sameSubmission=(left:Record<string,string>,right:Record<string,string>)=>{const keys=new Set([...Object.keys(left),...Object.keys(right)]);for(const key of keys)if(key!=='revision'&&(left[key]||'')!==(right[key]||''))return false;return true;};
@@ -73,7 +74,7 @@ export function PartnerNew({userId}:{userId:string}) {
   function discover(next:string){
     setQuery(next);setSearch(null);setSelectedCompany(null);setSelectedPoint('');setMode('');setLookup([]);setLookupError('');setError('');setConflictRequest(null);
 
-    const fiscal=/^(?:RO\s*)?\d+$/i.test(next.trim())?normalizeAnafCui(next):'';
+    const fiscal=digitCui(next);
     setFields({cui:fiscal,company:'',location:'',county:'',address:''});
   }
   function chooseCompany(company:PartnerCompany){
@@ -132,6 +133,7 @@ export function PartnerNew({userId}:{userId:string}) {
   const exactPoints=candidates.filter(c=>c.category==='exact').map(c=>c.point);
   const credible=candidates.filter(c=>c.category!=='distinct');
   const samePoint=exactPoints.length===1&&credible.length===1;
+  const selectedExistingPoint=lookup.find(point=>point.id===selectedPoint);
   const resolutionPoints=mode==='existing'||samePoint?[]:credible.map(c=>c.point);
   const resolutionKey=JSON.stringify([cui,location,county,address,resolutionPoints.map(p=>p.id)]);
   const crmMustFinish=validAnafCui(cui)&&(lookupBusy||lookupCui!==cui.trim()||!!lookupError);
@@ -163,15 +165,15 @@ export function PartnerNew({userId}:{userId:string}) {
       {mode==='existing'&&<label>Punctul de lucru existent<select name="locationResolution" required value={selectedPoint} onChange={e=>choosePoint(e.target.value)}><option value="">Alege localitatea și adresa…</option>{lookup.map(point=><option key={point.id} value={point.id}>{point.city} · {point.county||'județ lipsă'} · {point.address}</option>)}</select></label>}
       <div hidden={!mode} className="partner-details"><h2>3. Punctul de lucru și contactul</h2><p>Adresa magazinului se completează separat de sediul fiscal ANAF.</p>
       <div className="partner-grid">
-        <label>Firma<input name="company" defaultValue={value('company')} readOnly={mode==='existing'||mode==='new-point'} required maxLength={200} placeholder="SC EXEMPLU SRL"/></label>
-        <label>Locația<input name="location" defaultValue={value('location')} required maxLength={100} placeholder="Zărnești" readOnly={mode==='existing'} onChange={e=>setLocation(e.target.value)}/></label>
+        <label>Firma<input name="company" defaultValue={value('company')} readOnly={mode==='new-point'||(mode==='existing'&&!!selectedExistingPoint?.name.trim())} required maxLength={200} placeholder="SC EXEMPLU SRL"/></label>
+        <label>Locația<input name="location" defaultValue={value('location')} required maxLength={100} placeholder="Zărnești" readOnly={mode==='existing'&&!!selectedExistingPoint?.city.trim()} onChange={e=>setLocation(e.target.value)}/></label>
         <label>CUI / CIF<input name="cui" defaultValue={value('cui')} required maxLength={40} autoCapitalize="characters" placeholder="RO12345678" readOnly={mode==='existing'||mode==='new-point'} onChange={e=>{setCui(e.target.value);setLookup([]);setLookupError('');setSelectedCompany(null);}}/></label>
         <label>Tip magazin<input name="storeType" required maxLength={80} defaultValue={value('storeType','MAGAZIN')}/></label>
         <label>Persoana de contact<input name="contact" defaultValue={value('contact')} required maxLength={120} placeholder="Nume Prenume"/></label>
         <label>Nr. telefon<input name="phone" defaultValue={value('phone')} required maxLength={40} inputMode="tel" placeholder="07xxxxxxxx"/></label>
         <label>Adresa e-mail <span className="optional">opțional</span><input name="email" defaultValue={value('email')} type="email" maxLength={254} placeholder="contact@example.invalid"/></label>
-        <label>Județ<input name="county" defaultValue={value('county')} required maxLength={100} placeholder="Brașov" readOnly={mode==='existing'} onChange={e=>setCounty(e.target.value)}/></label>
-        <label className="partner-wide">Adresa magazin<input name="address" defaultValue={value('address')} required maxLength={500} placeholder="Stradă, număr, localitate" readOnly={mode==='existing'} onChange={e=>setAddress(e.target.value)}/></label>
+        <label>Județ<input name="county" defaultValue={value('county')} required maxLength={100} placeholder="Brașov" readOnly={mode==='existing'&&!!selectedExistingPoint?.county.trim()} onChange={e=>setCounty(e.target.value)}/></label>
+        <label className="partner-wide">Adresa magazin<input name="address" defaultValue={value('address')} required maxLength={500} placeholder="Stradă, număr, localitate" readOnly={mode==='existing'&&!!selectedExistingPoint?.address.trim()} onChange={e=>setAddress(e.target.value)}/></label>
       </div>
 
       {resolutionPoints.length>0&&<label className="partner-location-resolution">Alege punctul de lucru<select key={resolutionKey} name="locationResolution" defaultValue="" required><option value="">Alege explicit…</option>{resolutionPoints.map(item=><option key={item.id} value={item.id}>Acesta este punctul existent [{item.id}] · {item.city} · {item.county||'județ lipsă'} · {item.address}</option>)}{exactPoints.length===0&&<option value="new">Locație diferită / nouă · {county}</option>}</select><small>Datele existente sunt ambigue. Alege punctul corect înainte de adăugare.</small></label>}

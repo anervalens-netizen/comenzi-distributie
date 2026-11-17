@@ -1,5 +1,6 @@
 import { db, fail } from './server';
 import type { PartnerCompany } from './types';
+import { normalizeCui } from './partner-identity';
 
 // No schema changes or table export: SQLite filters/groups a narrow projection.
 // Fold Romanian letters before SQLite upper(), which folds ASCII only.
@@ -27,7 +28,7 @@ export async function searchPartnerCompanies(userId:string,raw:string){
   if(raw.length>100||Array.from(raw).some(char=>char.charCodeAt(0)<32||char.charCodeAt(0)===127))fail(400,'Căutarea trebuie să aibă maximum 100 de caractere, fără caractere de control.');
   const query=raw.normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim().toUpperCase();
   if(query.length<3)return {companies:[] as PartnerCompany[],hasMore:false};
-  const numeric=/^(?:RO\s*)?\d+$/.test(query),needle=numeric?query.replace(/^RO\s*/,''):query;
+  const canonical=normalizeCui(raw),numeric=/^\d+$/.test(canonical),needle=numeric?canonical:query;
   if(needle.length<3)return {companies:[] as PartnerCompany[],hasMore:false};
   admit(userId);
   // instr uses literal text: %, _ and quotes never become wildcards or SQL.

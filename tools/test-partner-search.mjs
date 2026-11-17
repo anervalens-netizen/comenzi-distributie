@@ -16,7 +16,7 @@ try{
  const {searchPartnerCompanies:search}=await import(join(dir,'search.mjs'));
  assert.deepEqual(await search('agent','ab'),{companies:[],hasMore:false});assert.equal(reads,0);assert.deepEqual(await search('agent','RO1'),{companies:[],hasMore:false});assert.equal(reads,0);
  const start=performance.now();
- for(const query of ['stiinta','ȘTIINȚĂ','900000','RO900000','ro 900000000','Altă den']){
+ for(const query of ['stiinta','ȘTIINȚĂ','900000','RO900000','ro 900000000','R.O. 900-000-000','Altă den']){
   const found=await search('agent',query);assert.equal(found.companies.length,1,query);assert.equal(found.companies[0].pointCount,2);assert.equal(found.companies[0].cui,'900000000');assert.deepEqual(Object.keys(found.companies[0]).sort(),['cui','name','pointCount']);
  }
  for(const query of ["%' OR 1=1 --",'___','900000018'])assert.equal((await search('agent',query)).companies.length,0);
