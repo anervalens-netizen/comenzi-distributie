@@ -1934,7 +1934,6 @@ function AgentStart({
   return (
     <>
       <div className="leave-header-actions">
-        <span>Sold neconfigurat</span>
         <button
           type="button"
           className="primary"

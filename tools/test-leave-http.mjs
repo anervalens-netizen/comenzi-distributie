@@ -527,10 +527,7 @@ try {
     sharedMail.mailto,
     /cc=manager%40example.test%2CManager2%40example.test/,
   );
-  assert.match(
-    sharedMail.body,
-    /Manageri în CC — Synthetic leave-manager \(manager@example\.test\), Synthetic leave-manager-two \(Manager2@example\.test\)/,
-  );
+  assert.doesNotMatch(sharedMail.body, /Manageri în CC|manager@example\.test|Manager2@example\.test/);
   assert.equal(
     new URL(sharedMail.mailto).searchParams.get('body'),
     sharedMail.body,

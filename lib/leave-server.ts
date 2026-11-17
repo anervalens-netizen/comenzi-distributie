@@ -443,12 +443,6 @@ function mail(r: LeaveRecord) {
       approver.email.toLowerCase() !== to.toLowerCase(),
   );
   const cc = uniqueEmails(approvers.map((approver) => approver.email));
-  const recipientsInBody = approvers.length
-    ? '\n\nManageri în CC — ' +
-      approvers
-        .map((approver) => approver.name + ' (' + approver.email + ')')
-        .join(', ')
-    : '';
   const body =
     'Bună ziua,\n\nVă transmit atașat cererea de concediu de odihnă pentru perioada ' +
     date(r.startDate) +
@@ -457,8 +451,7 @@ function mail(r: LeaveRecord) {
     ', însumând ' +
     r.days +
     ' zile lucrătoare.\n\n' +
-    r.snapshot.legalName +
-    recipientsInBody;
+    r.snapshot.legalName;
   const filename =
     'cerere-concediu-' +
     r.snapshot.legalName
