@@ -10,7 +10,7 @@ type Index = {revision:number;companies:IndexedCompany[]};
 let cached:Index|null=null;
 
 const fold=(text:string)=>text.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/\s+/g,' ').trim();
-const revisionSql='SELECT data_revision FROM portfolio_revision WHERE id=1';
+const revisionSql='SELECT revision FROM crm_directory_revision WHERE id=1';
 const windows=new Map<string,{start:number;count:number}>();
 function admit(userId:string){
   const now=Date.now();
@@ -21,15 +21,15 @@ function admit(userId:string){
 }
 
 async function activeCompanies():Promise<IndexedCompany[]>{
-  const version=await db().prepare(revisionSql).first<{data_revision:number}>();
+  const version=await db().prepare(revisionSql).first<{revision:number}>();
   if(!version)fail(503,'Indexul CRM este indisponibil. Reîncearcă.');
-  const revision=Number(version.data_revision);
+  const revision=Number(version.revision);
   if(cached?.revision===revision)return cached.companies;
   // Project only three fields; no address, contact, phone, mail or portfolio scope
   // ever enters the search cache. Recheck the revision before exposing results.
   const rows=(await db().prepare("SELECT id,coalesce(json_extract(data,'$.name'),'') name,coalesce(json_extract(data,'$.cui'),'') cui FROM customers WHERE active=1").all<SearchRow>()).results;
-  const after=await db().prepare(revisionSql).first<{data_revision:number}>();
-  if(Number(after?.data_revision)!==revision)fail(503,'CRM a fost actualizat în timpul căutării. Reîncearcă.');
+  const after=await db().prepare(revisionSql).first<{revision:number}>();
+  if(Number(after?.revision)!==revision)fail(503,'CRM a fost actualizat în timpul căutării. Reîncearcă.');
   const companies=new Map<string,IndexedCompany>();
   for(const row of rows){
     const cui=normalizeCui(String(row.cui??''));

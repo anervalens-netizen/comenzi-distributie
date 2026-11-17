@@ -1,6 +1,19 @@
 -- Derived, rebuildable projection; authoritative customer/profile rows are untouched.
 CREATE TABLE IF NOT EXISTS portfolio_revision (id INTEGER PRIMARY KEY CHECK(id=1), data_revision INTEGER NOT NULL, scope_revision INTEGER NOT NULL);
 INSERT OR IGNORE INTO portfolio_revision VALUES(1,1,1);
+-- Customer-directory-only revision for the in-memory CRM discovery index.
+-- Visits, sales projections and profile changes must not trigger a rebuild.
+CREATE TABLE IF NOT EXISTS crm_directory_revision (id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL);
+INSERT OR IGNORE INTO crm_directory_revision(id,revision) VALUES(1,1);
+CREATE TRIGGER IF NOT EXISTS crm_directory_customers_insert AFTER INSERT ON customers BEGIN
+ UPDATE crm_directory_revision SET revision=revision+1 WHERE id=1;
+END;
+CREATE TRIGGER IF NOT EXISTS crm_directory_customers_update AFTER UPDATE ON customers BEGIN
+ UPDATE crm_directory_revision SET revision=revision+1 WHERE id=1;
+END;
+CREATE TRIGGER IF NOT EXISTS crm_directory_customers_delete AFTER DELETE ON customers BEGIN
+ UPDATE crm_directory_revision SET revision=revision+1 WHERE id=1;
+END;
 CREATE TABLE IF NOT EXISTS portfolio_dirty (id TEXT PRIMARY KEY NOT NULL);
 CREATE TABLE IF NOT EXISTS portfolio_read_rows (id TEXT PRIMARY KEY NOT NULL, summary TEXT NOT NULL, name TEXT, search TEXT NOT NULL, city_search TEXT NOT NULL, county TEXT, city TEXT, route TEXT, latitude REAL, longitude REAL, position_source TEXT, last_visited_at TEXT);
 CREATE INDEX IF NOT EXISTS idx_portfolio_read_name ON portfolio_read_rows(name,id);

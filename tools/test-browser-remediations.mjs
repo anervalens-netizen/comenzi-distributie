@@ -47,8 +47,21 @@ async function clickTab(cdp,label){
   const clicked=await cdp.evaluate(`(()=>{const tab=[...document.querySelectorAll('[role="tab"]')].find(node=>node.textContent?.includes(${encoded}));if(!tab)return false;tab.click();return true;})()`);
   check(clicked,`Tab ${label} exists and can be activated`);await sleep(120);
 }
+function syntheticDraftCui(id){
+  const root=String(1000000+(Number.parseInt(id.replace(/-/g,'').slice(0,8),16)%8000000));
+  const n=root.padStart(9,'0'),sum=Array.from(n,d=>Number(d)).reduce((t,d,i)=>t+d*Number('753217532'[i]),0);
+  return root+(((sum*10%11)%10+1)%10);
+}
 async function fillPartner(cdp,company){
-  await cdp.evaluate(`(()=>{const values={company:${JSON.stringify(company)},location:'Bucuresti',cui:'99170926',storeType:'MAGAZIN',contact:'QA',phone:'0700000000',email:'',address:'Strada QA 1',county:'Bucuresti'};for(const [key,value] of Object.entries(values)){const input=document.querySelector('[name="'+key+'"]');if(input instanceof HTMLInputElement){Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,value);input.dispatchEvent(new Event('input',{bubbles:true}));}}return true;})()`);
+  const id=await cdp.evaluate("document.querySelector('[name=requestId]').value");
+  const cui=syntheticDraftCui(id);
+  const mode=await cdp.evaluate("document.querySelector('[name=onboardingMode]').value");
+  if(mode!=='new-company'){
+    const selected=await cdp.evaluate("(()=>{const b=[...document.querySelectorAll('.partner-paths button')].find(x=>x.textContent.includes('Firmă NOUĂ'));if(!b||b.disabled)return false;b.click();return true;})()");
+    check(selected,'QA path selection available');
+    await waitFor(()=>cdp.evaluate("document.querySelector('[name=onboardingMode]').value==='new-company'"),'QA new-company path selected');
+  }
+  await cdp.evaluate(`(()=>{const values={company:${JSON.stringify(company)},location:'Bucuresti',cui:${JSON.stringify(cui)},storeType:'MAGAZIN',contact:'QA',phone:'0700000000',email:'',address:'Strada QA 1',county:'Bucuresti'};for(const [key,value] of Object.entries(values)){const input=document.querySelector('[name="'+key+'"]');if(input instanceof HTMLInputElement&&input.value!==value){Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,value);input.dispatchEvent(new Event('input',{bubbles:true}));}}return true;})()`);
 }
 async function newPartner(cdp){
   const oldId=await cdp.evaluate("document.querySelector('[name=requestId]').value");
