@@ -19,7 +19,7 @@ const server=createServer(async(req,res)=>{
   if(url.pathname==='/api/partner/search'){
    const query=url.searchParams.get('q');searches.push(query);
    if(searchError){send({error:'Synthetic search outage'},503);return;}
-   const data={companies:query==='Empty'||query==='Stale'?[]:[{name:'CRM Synthetic',cui:'900000000',pointCount:2}],hasMore:false};
+   const data={companies:query==='Empty'||query==='Stale'?[]:query==='No CUI'?[{name:'Legacy Unidentified SRL',cui:'',pointCount:1}]:[{name:'CRM Synthetic',cui:'900000000',pointCount:2}],hasMore:false};
    setTimeout(()=>send(data),query==='Stale'?1000:0);return;
   }
   if(url.pathname==='/api/partner/lookup'){if(lookupError)send({error:'Synthetic lookup outage'},503);else send({locations:url.searchParams.get('cui')==='900000000'?(legacyMode?[{id:'synthetic-legacy',name:'CRM Synthetic',cui:' r.o. 900-000-000 ',city:'Example Legacy',county:'',address:'',warehouseIds:['synthetic-other']}]:points):[]});return;}
@@ -59,19 +59,35 @@ try{
  await click('Adaugă clientul');await waitFor(()=>contains('versiune mai nouă'));
  assert.equal(posts.length,1);assert.equal(posts[0].locationResolution,'synthetic-point-2');assert.equal(posts[0].cui,'900000000');
  await click('Păstrează modificările mele');assert.equal(await value('[name=revision]'),'3');
- await click('punct NOU');assert.equal(await value('[name=company]'),'CRM Synthetic');assert.equal(await value('[name=address]'),'');assert.equal(await value('[name=cui]'),'900000000');
+ await click('punct NOU');assert.equal(await value('[name=company]'),'Official Synthetic 900000000');assert.equal(await browser.evaluate("document.querySelector('[name=company]').readOnly"),false,'legal name must be editable');
+ await click('Preia denumirea');assert.equal(await value('[name=company]'),'Official Synthetic 900000000');
+ await set('[name=company]','Manual Legal Name');
+ assert.equal(await value('[name=address]'),'');assert.equal(await value('[name=cui]'),'900000000');
  await set('[name=location]','Example 3');await set('[name=county]','BV');await set('[name=address]','Other 99');
  await browser.send('Page.reload');await waitFor(()=>browser.evaluate("document.querySelector('[name=address]')?.value==='Other 99'"));
  assert.equal(await browser.evaluate("document.querySelector('.partner-paths button[aria-pressed=true]').textContent.includes('punct NOU')"),true,'mode survives draft reload');
  await fresh();await set('#partner-discovery','Stale');await delay(450);await set('#partner-discovery','Synthetic');await waitFor(()=>contains('2 puncte de lucru'));await delay(1100);assert.equal(await contains('2 puncte de lucru'),true,'stale empty result cannot replace suggestions');
  searchError=true;await set('#partner-discovery','Unavailable');await waitFor(()=>contains('Căutarea CRM este indisponibilă'));assert.equal(await contains('Niciun rezultat'),false);searchError=false;await click('Reîncearcă căutarea');await waitFor(()=>contains('2 puncte de lucru'));
+ await fresh();await set('#partner-discovery','No CUI');await waitFor(()=>contains('CUI lipsă în CRM'));
+ assert.equal(await browser.evaluate("document.querySelector('.partner-suggestions button')===null"),true,'unidentifiable company cannot open a dead-end');
+ assert.equal(await browser.evaluate("[...document.querySelectorAll('.partner-paths button')].find(b=>b.textContent.includes('Firmă NOUĂ')).disabled"),true,'cannot duplicate unresolved CRM identity');
  await fresh();await set('#partner-discovery','R.O. 900-000-000');await waitFor(()=>contains('Shop 2'));assert.equal(await value('[name=cui]'),'900000000','formatted CUI must normalize');
+ await fresh();await set('#partner-discovery','RO900000018');await waitFor(()=>contains('Niciun punct găsit'));await click('Firmă NOUĂ');
+ await set('[name=cui]','900 000 000');assert.equal(await value('[name=cui]'),'900000000','raw CUI field must canonicalize pasted separators');
+ await waitFor(()=>contains('Shop 2'));assert.equal(await browser.evaluate("document.querySelector('.partner-generate').disabled"),true,'formatted known CUI must not bypass CRM');
  await fresh();await set('#partner-discovery','900000001');await delay(800);assert.equal(fiscals.includes('900000001'),false,'invalid checksum');
  await fresh();await set('#partner-discovery','RO900000018');await waitFor(()=>contains('Official Synthetic 900000018'));await waitFor(()=>contains('Niciun punct găsit'));
  await click('Firmă NOUĂ');await waitFor(async()=>await value('[name=company]')==='Official Synthetic 900000018');await set('[name=company]','Manually edited name');await click('Preia denumirea');assert.equal(await value('[name=company]'),'Official Synthetic 900000018');assert.equal(await value('[name=address]'),'');
  await set('[name=company]','Keep my edit');anafStatus='found';await click('Reîncearcă verificarea');await delay(900);assert.equal(await value('[name=company]'),'Keep my edit','async retry never overwrites manual edit');
  for(const state of ['not_found','unavailable']){anafStatus=state;await click('Reîncearcă verificarea');await waitFor(()=>contains(state==='not_found'?'CUI negăsit':'ANAF indisponibil'));assert.equal(await browser.evaluate("document.querySelector('.partner-generate').disabled"),false);}
  anafStatus='found';anafDelay=1000;await set('[name=cui]','900000026');await delay(750);await set('[name=cui]','900000001');await delay(1150);assert.equal(await contains('Official Synthetic 900000026'),false,'stale ANAF ignored');assert.equal(await value('[name=company]'),'Keep my edit');
+ // Changing the CUI after choosing "new company" must not bypass CRM identity discovery.
+ await fresh();await set('#partner-discovery','RO900000018');await waitFor(()=>contains('Niciun punct găsit'));
+ await click('Firmă NOUĂ');await set('[name=cui]','900000000');
+ await waitFor(()=>contains('Shop 2'));
+ assert.equal(await browser.evaluate("document.querySelector('.partner-generate').disabled"),true,'existing CUI must block new-company path');
+ assert.equal(await contains('Acest CUI aparține deja unei firme din CRM'),true);
+ await click('punct NOU');
  await fresh();lookupError=true;await set('#partner-discovery','900000000');await waitFor(()=>contains('Lista punctelor este indisponibilă'));assert.equal(await contains('Niciun punct găsit'),false);lookupError=false;await click('Reîncearcă punctele');await waitFor(()=>contains('Shop 2'));
  await click('punct NOU');
  for(const [width,height] of [[320,800],[390,844],[844,390],[1440,900]]){
