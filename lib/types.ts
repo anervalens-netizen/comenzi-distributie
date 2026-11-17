@@ -36,3 +36,5 @@ export function writePermissions(user: User | null | undefined, users: User[] = 
     (user?.role === 'agent' || users.some(row => row.warehouseId === id && row.role === 'agent' && row.active === 1));
   return { agent, warehouse, createOrder, startInventory };
 }
+
+export type PartnerCompany = {name:string;cui:string;pointCount:number};

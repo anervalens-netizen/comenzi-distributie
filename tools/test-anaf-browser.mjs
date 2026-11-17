@@ -16,7 +16,7 @@ const server=createServer((req,res)=>{
   if(req.method!=='GET')writes++;
   res.setHeader('Content-Type','application/json');
   if(url.pathname==='/api/partner/anaf'){lookups++;const cui=url.searchParams.get('cui');const state={source:'ANAF',cui,status:mode,queriedFor:'2026-01-02',checkedAt:'2026-01-02T10:00:00Z',message:mode==='found'?'Firmă identificată în ANAF.':mode==='not_found'?'CUI negăsit în răspunsul ANAF.':'Verificare ANAF indisponibilă momentan.',...(mode==='found'?{company:company(cui)}:{})};setTimeout(()=>res.end(JSON.stringify(state)),delay);return;}
-  res.end(JSON.stringify(url.pathname==='/api/partner/browse'?{partners:[],total:0,located:0,geocoded:0,nextOffset:null,facets:{counties:[],cities:[],routes:[]},styleUrl:'/style',bounds:null}:url.pathname==='/api/partner/lookup'?{locations:[]}:url.pathname==='/api/partner/requests'?{requests:[]}:{state:'unavailable',message:'Synthetic'}));return;
+  res.end(JSON.stringify(url.pathname==='/api/partner/browse'?{partners:[],total:0,located:0,geocoded:0,nextOffset:null,facets:{counties:[],cities:[],routes:[]},styleUrl:'/style',bounds:null}:url.pathname==='/api/partner/search'?{companies:[],hasMore:false}:url.pathname==='/api/partner/lookup'?{locations:[]}:url.pathname==='/api/partner/requests'?{requests:[]}:{state:'unavailable',message:'Synthetic'}));return;
  }
  res.setHeader('Content-Type','text/html');res.end(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>${css}</style><div id="root"></div><script src="/fixture.js"></script>`);
 });
@@ -38,6 +38,7 @@ try{
  await waitFor(()=>browser.evaluate("!document.querySelector('.partner-anaf')"),'name search clears fiscal result');
  const tab=await browser.newTab(origin+'/?new');
  await waitFor(()=>tab.evaluate("!!document.querySelector('input[name=cui]')"),'new partner');
+ await tab.evaluate("[...document.querySelectorAll('.partner-paths button')].find(b=>b.textContent.includes('Firmă NOUĂ')).click()");
  await set(tab,'input[name=address]','Keep my delivery address');
  await set(tab,'input[name=company]','My entered company');
  await set(tab,'input[name=cui]','900000000');

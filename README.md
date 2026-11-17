@@ -412,6 +412,15 @@ Prepay activation drilldowns include operator totals, internal product groups, e
 
 ## Partner fiscal lookup
 
+The new-partner form starts with a debounced global active-CRM name or partial-CUI
+search. Authenticated `GET /api/partner/search?q=...` accepts 3–100 characters,
+returns at most 20 companies grouped by canonical CUI with point counts and
+`hasMore`, and limits each account to 90 searches per minute per process. Romanian
+diacritics and letter case are folded; query characters are literal. No schema
+migration or production backfill is required. Point selection still uses the
+existing exact/near matching and transactional revision guard; CUI is not unique
+across work locations. CRM failures stay explicit and retryable.
+
 Partners search recognizes a CUI and the new-partner form checks ANAF automatically.
 The authenticated server uses ANAF v9, validates the CUI checksum, limits upstream
 requests to one per second and reuses results for up to one hour on the same

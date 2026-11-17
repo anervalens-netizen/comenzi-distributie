@@ -1,12 +1,14 @@
 'use client';
-import {useEffect,useState} from 'react';
+import {useEffect,useRef,useState} from 'react';
 import {api,errorMessage} from '@/lib/client-api';
 import {normalizeAnafCui,validAnafCui} from '@/lib/anaf-types';
 import type {AnafCompany,AnafResult} from '@/lib/anaf-types';
 import './partner-anaf.css';
 
-export function PartnerAnaf({cui,onUseName}:{cui:string;onUseName?:(company:AnafCompany)=>void}){
+export function PartnerAnaf({cui,onUseName,crmName,onFound}:{cui:string;crmName?:string;onUseName?:(company:AnafCompany)=>void;onFound?:(company:AnafCompany)=>void}){
  const normalized=normalizeAnafCui(cui);
+ const onFoundRef=useRef(onFound);
+ useEffect(()=>{onFoundRef.current=onFound;},[onFound]);
  const [attempt,setAttempt]=useState(0);
  const [state,setState]=useState<{key:string;result?:AnafResult;error?:string}|null>(null);
  const key=normalized+':'+attempt;
@@ -15,7 +17,7 @@ export function PartnerAnaf({cui,onUseName}:{cui:string;onUseName?:(company:Anaf
   const controller=new AbortController();
   const timer=setTimeout(()=>{
    void api<AnafResult>('partner/anaf?cui='+encodeURIComponent(normalized),'GET',undefined,controller.signal)
-    .then(result=>{if(!controller.signal.aborted)setState({key,result});})
+    .then(result=>{if(!controller.signal.aborted){setState({key,result});if(result.status==='found'&&result.company)onFoundRef.current?.(result.company);}})
     .catch(error=>{if(!controller.signal.aborted)setState({key,error:errorMessage(error)});});
   },650);
   return()=>{controller.abort();clearTimeout(timer);};
@@ -28,6 +30,7 @@ export function PartnerAnaf({cui,onUseName}:{cui:string;onUseName?:(company:Anaf
    <p>{current.error||result?.message}</p>
    {result?.status==='found'&&company&&<>
     <strong>{company.name}</strong>
+    {crmName&&crmName.normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim().toUpperCase()!==company.name.normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim().toUpperCase()&&<p role="alert">Atenție: denumirea ANAF diferă de CRM ({crmName}). Identitatea CRM rămâne neschimbată.</p>}
     {company.fiscalAddress&&<p>Adresă fiscală: {company.fiscalAddress}</p>}
     {company.registrationNumber&&<p>Registrul Comerțului: {company.registrationNumber}</p>}
     <p>{company.inactive===true?'Atenție: contribuabil inactiv fiscal.':company.inactive===false?'Nu figurează ca inactiv fiscal.':'Inactivitate fiscală: informație indisponibilă.'} · {company.vatRegistered===true?'Plătitor TVA':company.vatRegistered===false?'Neplătitor TVA':'TVA: informație indisponibilă'}</p>

@@ -16,6 +16,7 @@ node tools/test-notification-center.mjs
 node tools/test-leave-documents.mjs
 node tools/test-order-limits.mjs
 node tools/test-partner-form.mjs
+node tools/test-partner-search.mjs
 node tools/test-anaf.mjs
 python3 tools/test_crm_location_repair.py
 python3 tools/test_crm_master_reconcile.py
@@ -183,6 +184,7 @@ if [ -n "$CHROME_BIN" ]; then
   CHROME_BIN="$CHROME_BIN" node tools/test-manager-navigation-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-partner-layout-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-anaf-browser.mjs
+  CHROME_BIN="$CHROME_BIN" node tools/test-partner-onboarding-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-usage-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-offline-cross-tab-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-private-fence-browser.mjs
