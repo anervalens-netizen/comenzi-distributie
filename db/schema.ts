@@ -1,4 +1,5 @@
-import { sqliteTable, text, integer, real, index, primaryKey } from 'drizzle-orm/sqlite-core';
+import { desc, sql } from 'drizzle-orm';
+import { sqliteTable, text, integer, real, index, uniqueIndex, primaryKey, check } from 'drizzle-orm/sqlite-core';
 
 export const users = sqliteTable('users', {
   id: text('id').primaryKey(), username: text('username').notNull().unique(), name: text('name').notNull(),
@@ -61,3 +62,34 @@ export const partnerDayPlans = sqliteTable('partner_day_plans', {
  revision: integer('revision').notNull().default(1),
  updatedAt: text('updated_at').notNull(),
 }, t => [primaryKey({columns:[t.agentId,t.planDate]})]);
+
+export const employeeProfiles = sqliteTable('employee_profiles', {
+ approvers:text('approvers').notNull().default('[]'),userId:text('user_id').primaryKey().references(()=>users.id),legalName:text('legal_name').notNull(),employer:text('employer').notNull().default(''),
+ email:text('email').notNull().default(''),approverId:text('approver_id').references(()=>users.id),approverEmail:text('approver_email').notNull().default(''),
+ holidayCalendar:text('holiday_calendar').notNull().default('orthodox'),extraHolidays:text('extra_holidays').notNull().default('[]'),verified:integer('verified').notNull().default(0),
+ revision:integer('revision').notNull().default(1),updatedAt:text('updated_at').notNull(),
+},t=>[check('employee_profiles_holiday_calendar_check',sql`${t.holidayCalendar} IN ('orthodox','western')`)]);
+export const leaveRequests = sqliteTable('leave_requests', {
+ id:text('id').primaryKey(),agentId:text('agent_id').notNull().references(()=>users.id),approverId:text('approver_id').notNull().references(()=>users.id),
+ startDate:text('start_date').notNull(),endDate:text('end_date').notNull(),days:integer('days').notNull(),status:text('status').notNull(),snapshot:text('snapshot').notNull(),
+ signature:text('signature'),signedAt:text('signed_at'),submittedAt:text('submitted_at'),decisionNote:text('decision_note').notNull().default(''),
+ createdAt:text('created_at').notNull(),updatedAt:text('updated_at').notNull(),revision:integer('revision').notNull().default(1),
+},t=>[
+ check('leave_requests_days_check',sql`${t.days}>0`),
+ check('leave_requests_status_check',sql`${t.status} IN ('draft','submitted','approved','rejected','cancelled')`),
+ index('leave_agent_dates').on(t.agentId,t.startDate,t.endDate,t.status),
+ index('leave_approver_status').on(t.approverId,t.status,t.createdAt),
+]);
+export const leaveDocuments = sqliteTable('leave_documents', {
+ requestId:text('request_id').notNull().references(()=>leaveRequests.id),version:integer('version').notNull(),kind:text('kind').notNull(),content:text('content').notNull(),
+ mime:text('mime').notNull(),digest:text('digest').notNull(),createdAt:text('created_at').notNull(),
+},t=>[primaryKey({columns:[t.requestId,t.version,t.kind]})]);
+export const leaveEvents = sqliteTable('leave_events', {
+ id:text('id').primaryKey(),requestId:text('request_id').notNull().references(()=>leaveRequests.id),actorId:text('actor_id').notNull().references(()=>users.id),
+ action:text('action').notNull(),note:text('note').notNull().default(''),createdAt:text('created_at').notNull(),
+},t=>[index('leave_events_request').on(t.requestId,t.createdAt)]);
+export const notifications = sqliteTable('notifications', {
+ id:text('id').primaryKey(),recipientId:text('recipient_id').notNull().references(()=>users.id),eventKey:text('event_key').notNull(),
+ category:text('category').notNull(),title:text('title').notNull(),body:text('body').notNull(),targetType:text('target_type').notNull(),targetId:text('target_id').notNull(),
+ createdAt:text('created_at').notNull(),readAt:text('read_at'),
+},t=>[uniqueIndex('notifications_recipient_event').on(t.recipientId,t.eventKey),index('notifications_recipient_date').on(t.recipientId,desc(t.createdAt),desc(t.id)),index('notifications_unread').on(t.recipientId,t.readAt)]);

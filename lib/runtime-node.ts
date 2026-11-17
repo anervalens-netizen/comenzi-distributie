@@ -1,3 +1,4 @@
+import leaveNotificationsSchema from '@/drizzle/0012_leave_notifications.sql?raw';
 import portfolioReadModelSchema from '@/drizzle/0009_portfolio_read_model.sql?raw';
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
@@ -48,6 +49,8 @@ function sqlite() {
     candidate.exec("CREATE UNIQUE INDEX IF NOT EXISTS users_active_site_code_unique ON users(UPPER(TRIM(site_code))) WHERE role='agent' AND active=1 AND TRIM(site_code)<>''");
     candidate.exec("CREATE TABLE IF NOT EXISTS partner_requests (id TEXT PRIMARY KEY NOT NULL,agent_id TEXT NOT NULL REFERENCES users(id),warehouse_id TEXT NOT NULL,cui_key TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'requested',payload TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,confirmed_at TEXT,confirmed_by TEXT REFERENCES users(id),customer_id TEXT,revision INTEGER NOT NULL DEFAULT 1); CREATE INDEX IF NOT EXISTS idx_partner_requests_agent_created ON partner_requests(agent_id,created_at); CREATE INDEX IF NOT EXISTS idx_partner_requests_status_created ON partner_requests(status,created_at); CREATE INDEX IF NOT EXISTS idx_partner_requests_cui ON partner_requests(cui_key);");
     candidate.exec("CREATE TABLE IF NOT EXISTS push_subscriptions (endpoint TEXT PRIMARY KEY NOT NULL,user_id TEXT NOT NULL REFERENCES users(id),p256dh TEXT NOT NULL,auth TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL); CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user ON push_subscriptions(user_id);");
+    candidate.exec('BEGIN IMMEDIATE;');
+    try { candidate.exec(leaveNotificationsSchema); candidate.exec('COMMIT;'); } catch(error) { candidate.exec('ROLLBACK;'); throw error; }
     candidate.exec(partnerPortfolioSchema);
     candidate.exec(partnerDayPlansSchema);
     const visitColumns=candidate.prepare('PRAGMA table_info(partner_visits)').all().map(row=>row.name);

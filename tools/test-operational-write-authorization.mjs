@@ -34,7 +34,7 @@ try{
  const customer={id:'synthetic-customer',warehouseId:actors.agent.warehouse,warehouseIds:[actors.agent.warehouse],name:'Synthetic company',cui:'EXAMPLE',city:'Synthetic town',county:'Synthetic county',address:'Synthetic street 1',route:''};
  function reset(){
   rmSync(join(process.env.MOBIUP_DATA_DIR,'files','exports'),{recursive:true,force:true});
-  sql.exec('DELETE FROM serials;DELETE FROM orders;DELETE FROM sessions;DELETE FROM manager_agents;DELETE FROM users;DELETE FROM customers;');
+  sql.exec('DELETE FROM serials;DELETE FROM orders;DELETE FROM sessions;DELETE FROM manager_agents;DELETE FROM employee_profiles;DELETE FROM users;DELETE FROM customers;');
   sql.prepare("DELETE FROM settings WHERE key LIKE 'transfer-v1:%' OR key LIKE 'order-write-proof-v1:%'").run();
   for(const [id,actor]of Object.entries(actors)){
    sql.prepare('INSERT INTO users(id,username,name,role,manager_scope,warehouse_id,warehouse_name,password_hash,must_change_password,active,profile_revision) VALUES(?,?,?,?,?,?,?, ?,0,1,1)').run(id,id,'Synthetic '+id,actor.role,actor.scope,actor.warehouse,actor.warehouse?'Synthetic '+id+' warehouse':null,'not-a-credential');

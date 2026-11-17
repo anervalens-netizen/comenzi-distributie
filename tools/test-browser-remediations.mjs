@@ -446,7 +446,7 @@ try {
   const managerLogin=await cdp.evaluate(`fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:'stock-manager',password:${JSON.stringify(password)}})}).then(r=>r.ok)`);
   check(managerLogin,'Manager browser login');await cdp.send('Page.reload',{ignoreCache:true});
   await waitFor(()=>cdp.evaluate("document.querySelector('.manager-overview h1')?.textContent==='Sinteză'"),'manager default activity dashboard');
-  check(await cdp.evaluate("(()=>{const tabs=[...document.querySelectorAll('.main-nav [role=tab]')];return tabs.length===6&&['Sinteză','Parteneri','Accesorii','Prepay','Echipă','Operațiuni'].every((label,index)=>tabs[index]?.textContent?.includes(label))&&tabs[0]?.getAttribute('aria-selected')==='true';})()"),'Manager defaults to Sinteză with all six approved destinations');
+  check(await cdp.evaluate("(()=>{const tabs=[...document.querySelectorAll('.main-nav [role=tab]')];return tabs.length===8&&['Sinteză','Parteneri','Accesorii','Prepay','Echipă','Operațiuni','Concedii','Notificări'].every((label,index)=>tabs[index]?.textContent?.includes(label))&&tabs[0]?.getAttribute('aria-selected')==='true';})()"),'Manager defaults to Sinteză with operational, leave and notification destinations');
   check(await cdp.evaluate("document.querySelectorAll('.manager-summary-grid .manager-metric').length===4&&!document.querySelector('.activity-partners-card')"),'Manager overview has four operational metrics without an approval queue');
 
   await cdp.send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
@@ -481,12 +481,14 @@ try {
 
   const unreadBefore=await cdp.evaluate("fetch('/api/notifications/inbox').then(r=>r.json()).then(r=>r.count)");
   await cdp.evaluate("document.querySelector('.request-bell').click();true");
-  await waitFor(()=>cdp.evaluate("!!document.querySelector('.request-inbox-item')"),'Informational client notification');
-  check(await cdp.evaluate("document.querySelector('.request-inbox-dialog').textContent.includes('notificări necitite')&&!document.querySelector('.request-inbox-dialog').textContent.includes('așteaptă confirmarea')"),'Inbox describes informational unread notifications, not approvals');
-  await cdp.evaluate("[...document.querySelectorAll('.request-inbox-item button')].find(b=>b.textContent==='Marchează citită').click();true");
-  await waitFor(()=>cdp.evaluate("fetch('/api/notifications/inbox').then(r=>r.json()).then(r=>r.count)") .then(count=>count===unreadBefore-1),'Read state saved without approval');
+  await waitFor(()=>cdp.evaluate("!!document.querySelector('.notification-dialog .notification-row-unread')"),'Informational client notification');
+  check(await cdp.evaluate("document.querySelector('.notification-dialog').textContent.includes('notificări necitite')&&!document.querySelector('.notification-dialog').textContent.includes('așteaptă confirmarea')"),'Inbox describes informational unread notifications, not approvals');
+  const notificationTitle=await cdp.evaluate("document.querySelector('.notification-dialog .notification-row-unread strong').textContent");
+  await cdp.evaluate(`[...document.querySelectorAll('.notification-dialog .notification-row-unread button')].find(b=>b.getAttribute('aria-label')===${JSON.stringify('Marchează ca citită: '+notificationTitle)}).click();true`);
+  await waitFor(()=>cdp.evaluate("fetch('/api/notifications/inbox').then(r=>r.json()).then(r=>r.count)").then(count=>count===unreadBefore-1),'Read state saved without approval');
   checks++;
-  await cdp.evaluate("[...document.querySelectorAll('.request-inbox-item button')].find(b=>b.textContent==='Deschide').click();true");
+  await waitFor(()=>cdp.evaluate(`[...document.querySelectorAll('.notification-dialog .notification-row:not(.notification-row-unread) strong')].some(node=>node.textContent===${JSON.stringify(notificationTitle)})`),'Read partner notification stays in recent history');
+  await cdp.evaluate(`[...document.querySelectorAll('.notification-dialog .notification-row')].find(row=>row.querySelector('strong').textContent===${JSON.stringify(notificationTitle)}).querySelector('button').click();true`);
   await waitFor(()=>cdp.evaluate("document.querySelector('.partner-activity-detail h1')?.textContent==='Clienți noi'"),'partner activity drill-down');
   check(await cdp.evaluate("!document.querySelector('.partner-detail-panel .status-filter')&&!document.querySelector('.partner-activity-detail').textContent.includes('așteptare')&&![...document.querySelectorAll('.partner-activity-detail button')].some(button=>button.textContent.includes('Confirmă'))"),'New clients have no approval filters, counters or actions');
   check(await cdp.evaluate("document.querySelector('.activity-detail-summary').textContent.includes('TOTAL ADĂUGAȚI')&&!document.querySelector('.partner-agent-filter')"),'Added-client count remains available without a duplicate local agent filter');
@@ -535,7 +537,7 @@ try {
     await sleep(120);
     const geometry=await cdp.evaluate("(()=>{const nav=document.querySelector('.manager-shell .main-nav'),rect=nav.getBoundingClientRect();return {width:innerWidth,scroll:document.documentElement.scrollWidth,count:nav.querySelectorAll('[role=tab]').length,left:rect.left,right:rect.right,bottom:rect.bottom};})()");
     check(geometry.scroll<=geometry.width+1,`Manager summary has no document overflow at ${width}px`);
-    check(geometry.count===6&&geometry.left>=0&&geometry.right<=width+1,`All six manager destinations fit at ${width}px: ${JSON.stringify(geometry)}`);
+    check(geometry.count===8&&geometry.left>=0&&geometry.right<=width+1,`All eight manager destinations fit at ${width}px: ${JSON.stringify(geometry)}`);
     if(width<1024)check(geometry.bottom<=900&&geometry.bottom>=830,`Manager navigation stays at viewport bottom at ${width}px`);
     const metrics=await cdp.evaluate("(()=>{const grid=document.querySelector('.manager-summary-grid');return {columns:getComputedStyle(grid).gridTemplateColumns.split(' ').length,count:grid.children.length,valuesFit:[...grid.querySelectorAll('strong')].every(value=>value.scrollWidth<=value.clientWidth+1)};})()");
     check(metrics.count===4&&metrics.columns===(width>900?4:2),`Four operational cards use responsive columns at ${width}px`);

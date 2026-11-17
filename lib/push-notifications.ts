@@ -2,6 +2,7 @@ import mailDefaults from '@/resources/mail-defaults.json';
 import { generateVapidKeys } from '@mmmike/web-push/vapid';
 import { topicFromString, WebPushError, type PushSubscriptionData, type VapidConfig } from '@mmmike/web-push/send';
 import { isAllowedPushEndpoint, PUSH_ENDPOINT_MAX, sendBrowserPushBatch } from './push-delivery';
+import { notificationRecipientScope } from './notification-center';
 import { operationalWriteGuard } from './operational-write-guard';
 import { db, fail, isGlobalManager, requireManager, textField } from './server';
 import type { ManagerRequestInbox, ManagerRequestInboxItem, PartnerRequest, User } from './types';
@@ -13,7 +14,8 @@ const subscriptionLimit=10;
 const b64url=/^[A-Za-z0-9_-]+$/;
 
 type StoredVapid={publicKey:string;privateKey:string};
-type PushRow={endpoint:string;p256dh:string;auth:string};
+type PushRow={endpoint:string;p256dh:string;auth:string;user_id:string;updated_at:string};
+type PushPayload={title:string;body:string;url:string;tag:string};
 type InboxRow={id:string;agent_id:string;agent_name:string;created_at:string;payload:string};
 
 function validVapid(value:unknown):value is StoredVapid{
@@ -69,12 +71,30 @@ export async function readPartnerNotifications(user:User,input:unknown){
   await db().batch([...new Set(ids as string[])].map(id=>db().prepare("INSERT OR IGNORE INTO settings(key,value) SELECT 'partner-read:'||?||':'||pr.id,? FROM partner_requests pr WHERE pr.id=? AND pr.status='confirmed' AND pr.confirmed_by=pr.agent_id AND (?=1 OR EXISTS (SELECT 1 FROM manager_agents ma WHERE ma.manager_id=? AND ma.agent_id=pr.agent_id))").bind(user.id,now,id,isGlobalManager(user)?1:0,user.id)));
   return managerRequestInbox(user);
 }
+function requirePushAccount(user:User){
+  if(user.active===0||(user.role!=='agent'&&user.role!=='manager'))fail(403,'Accesul la notificări este indisponibil.');
+}
 export async function pushPublicConfig(user:User){
-  requireManager(user);const cfg=await vapid();return {publicKey:cfg.publicKey};
+  requirePushAccount(user);const cfg=await vapid();return {publicKey:cfg.publicKey};
 }
 export async function upsertPushSubscription(user:User,input:unknown,req:Request){
-  requireManager(user);const subscription=parseSubscription(input),now=new Date().toISOString();
+  requirePushAccount(user);const subscription=parseSubscription(input),now=new Date().toISOString();
   const guard=operationalWriteGuard(req,user);
+  if((input as {existingOnly?:unknown}).existingOnly===true){
+    const {endpoint,keys:{p256dh,auth}}=subscription;
+    // A browser can already have a subscription owned by another signed-in account.
+    const refreshed=await db().prepare(`
+      UPDATE push_subscriptions SET p256dh=?,auth=?,updated_at=?
+      WHERE user_id=? AND endpoint=? AND (p256dh<>? OR auth<>?) AND ${guard.sql}
+    `).bind(p256dh,auth,now,user.id,endpoint,p256dh,auth,...guard.args).run();
+    if(refreshed.meta.changes)return {ok:true,enabled:true};
+    const existing=await db().prepare(`
+      SELECT EXISTS (SELECT 1 FROM push_subscriptions WHERE user_id=? AND endpoint=? AND p256dh=? AND auth=?) enabled
+      WHERE ${guard.sql}
+    `).bind(user.id,endpoint,p256dh,auth,...guard.args).first<{enabled:number}>();
+    if(!existing)fail(409,'Sesiunea sau accesul s-a schimbat. Reîncarcă aplicația înainte de a continua.');
+    return {ok:true,enabled:!!existing.enabled};
+  }
   const result=await db().prepare("INSERT INTO push_subscriptions(endpoint,user_id,p256dh,auth,created_at,updated_at) SELECT ?,?,?,?,?,? WHERE ((SELECT COUNT(*) FROM push_subscriptions WHERE user_id=?)<? OR EXISTS (SELECT 1 FROM push_subscriptions WHERE endpoint=? AND user_id=?)) AND "+guard.sql+" ON CONFLICT(endpoint) DO UPDATE SET user_id=excluded.user_id,p256dh=excluded.p256dh,auth=excluded.auth,updated_at=excluded.updated_at").bind(subscription.endpoint,user.id,subscription.keys.p256dh,subscription.keys.auth,now,now,user.id,subscriptionLimit,subscription.endpoint,user.id,...guard.args).run();
   if(!result.meta.changes){
     if(!await db().prepare('SELECT 1 ok WHERE '+guard.sql).bind(...guard.args).first())fail(409,'Sesiunea sau accesul s-a schimbat. Reîncarcă aplicația înainte de a continua.');
@@ -83,27 +103,55 @@ export async function upsertPushSubscription(user:User,input:unknown,req:Request
   return {ok:true};
 }
 export async function removePushSubscription(user:User,input:unknown){
-  requireManager(user);const endpoint=textField((input as {endpoint?:unknown})?.endpoint,endpointMax);
+  requirePushAccount(user);const endpoint=textField((input as {endpoint?:unknown})?.endpoint,endpointMax);
   if(!endpoint)fail(400,'Endpointul push lipsește.');
   await db().prepare('DELETE FROM push_subscriptions WHERE endpoint=? AND user_id=?').bind(endpoint,user.id).run();
   return {ok:true};
 }
+async function sendPush(rows:PushRow[],payload:PushPayload,eventKey:string){
+  const allowed=rows.filter(row=>isAllowedPushEndpoint(row.endpoint));
+  if(allowed.length!==rows.length)console.warn('Push subscriptions skipped',{kind:'endpoint-policy',count:rows.length-allowed.length});
+  if(!allowed.length)return;
+  const cfg=await vapid(),subscriptions=allowed.map(row=>({endpoint:row.endpoint,keys:{p256dh:row.p256dh,auth:row.auth}}));
+  const result=await sendBrowserPushBatch(subscriptions,payload,cfg,await topicFromString(eventKey));
+  if(result.gone.length){
+    const gone=new Set(result.gone);
+    await db().batch(allowed.filter(row=>gone.has(row.endpoint)).map(row=>db()
+      .prepare('DELETE FROM push_subscriptions WHERE endpoint=? AND user_id=? AND updated_at=? AND p256dh=? AND auth=?')
+      .bind(row.endpoint,row.user_id,row.updated_at,row.p256dh,row.auth)));
+  }
+  for(const failure of result.failed){
+    const err=failure.error;
+    if(err instanceof WebPushError)console.warn('Push delivery failed',{statusCode:err.statusCode,retryAfterMs:err.retryAfterMs});
+    else console.warn('Push delivery failed',{kind:err instanceof TypeError?'network':'invalid'});
+  }
+}
+
 export async function sendPartnerRequestPush(agent:User,requestId:string,partner:PartnerRequest){
   try{
-    const rows=await db().prepare("SELECT ps.endpoint,ps.p256dh,ps.auth FROM push_subscriptions ps JOIN users m ON m.id=ps.user_id WHERE m.role='manager' AND m.active=1 AND (m.manager_scope='global' OR EXISTS (SELECT 1 FROM manager_agents ma WHERE ma.manager_id=m.id AND ma.agent_id=?))").bind(agent.id).all<PushRow>();
+    const rows=await db().prepare("SELECT ps.endpoint,ps.p256dh,ps.auth,ps.user_id,ps.updated_at FROM push_subscriptions ps JOIN users m ON m.id=ps.user_id WHERE m.role='manager' AND m.active=1 AND (m.manager_scope='global' OR EXISTS (SELECT 1 FROM manager_agents ma WHERE ma.manager_id=m.id AND ma.agent_id=?))").bind(agent.id).all<PushRow>();
+    await sendPush(rows.results,{title:`Partener nou · ${partner.company}`,body:`Client adăugat în portofoliu de ${agent.name}`,url:`/?request=${requestId}`,tag:`partner-request-${requestId}`},'partner-request:'+requestId);
+  }catch{
+    console.warn('Push dispatch skipped',{kind:'unavailable'});
+  }
+}
+
+/** Send a generic device alert for a committed, still-visible inbox event. */
+export async function sendNotificationPush(recipientId:string,eventKey:string){
+  try{
+    const rows=await db().prepare(`
+      SELECT ps.endpoint,ps.p256dh,ps.auth,ps.user_id,ps.updated_at,n.id notification_id
+      FROM notifications n JOIN users recipient ON recipient.id=n.recipient_id
+      JOIN push_subscriptions ps ON ps.user_id=recipient.id
+      WHERE n.recipient_id=? AND n.event_key=? AND n.read_at IS NULL AND recipient.active=1
+        AND (recipient.role='agent' OR (recipient.role='manager' AND recipient.must_change_password=0))
+        AND ${notificationRecipientScope}
+    `).bind(recipientId,eventKey).all<PushRow&{notification_id:string}>();
     if(!rows.results.length)return;
-    const allowed=rows.results.filter(row=>isAllowedPushEndpoint(row.endpoint));
-    if(allowed.length!==rows.results.length)console.warn('Push subscriptions skipped',{kind:'endpoint-policy',count:rows.results.length-allowed.length});
-    if(!allowed.length)return;
-    const cfg=await vapid(),subscriptions=allowed.map(row=>({endpoint:row.endpoint,keys:{p256dh:row.p256dh,auth:row.auth}}));
-    const topic=await topicFromString('partner-request:'+requestId);
-    const result=await sendBrowserPushBatch(subscriptions,{title:`Partener nou · ${partner.company}`,body:`Client adăugat în portofoliu de ${agent.name}`,url:`/?request=${requestId}`,tag:`partner-request-${requestId}`},cfg,topic);
-    if(result.gone.length)await db().batch(result.gone.map(endpoint=>db().prepare('DELETE FROM push_subscriptions WHERE endpoint=?').bind(endpoint)));
-    for(const failure of result.failed){
-      const err=failure.error;
-      if(err instanceof WebPushError)console.warn('Push delivery failed',{statusCode:err.statusCode,retryAfterMs:err.retryAfterMs});
-      else console.warn('Push delivery failed',{kind:err instanceof TypeError?'network':'invalid'});
-    }
+    await sendPush(rows.results,{
+      title:'Comenzi Distribuție',body:'Ai o notificare nouă în aplicație.',
+      url:'/?notifications=1',tag:'notification-'+rows.results[0].notification_id,
+    },'notification:'+rows.results[0].notification_id);
   }catch{
     console.warn('Push dispatch skipped',{kind:'unavailable'});
   }

@@ -35,6 +35,10 @@ imports remain gaps; covered months with no sales are zero. Accessory values
 retain the ex-VAT/gross labels. Active, fully covered historical sales can supply
 a missing product-report month without writing or combining overlapping sources.
 
+## Leave and notification workflows
+
+Agents can select leave dates, sign on a tablet or upload a photograph of a signed paper form, download the PDF and open a prepared email. Managers have a scoped request list, calendar and audited decisions. Both roles have a notification bell and history. See [workflow details](docs/LEAVE-NOTIFICATIONS.md).
+
 ## Deployment
 
 Configure actual hosts, filesystem paths and secrets privately. Files under deploy/ are templates, not an inventory of live machines. Preserve installed application identifiers and existing databases during upgrades. Operator deployment records and rollback procedures belong outside Git.

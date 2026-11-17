@@ -1,3 +1,5 @@
+import {leaveApi} from '@/lib/leave-server';
+import {notificationCenter} from '@/lib/notification-center';
 import {lookupAnafCompany} from '@/lib/anaf';
 import {importsCatalog,importsJobs,importsJob} from '@/lib/import-engine-runtime';
 import {simVerification,simVerificationAccess} from '@/lib/sim-verification-api';
@@ -322,6 +324,8 @@ async function dispatch(req: Request) {
   const user=await requireUser(req,path[0]==='auth'||(path[0]==='admin'&&path[1]==='templates'));
   if(req.method==='GET'&&path.length===4&&path[0]==='catalog'&&path[1]==='photo')return readProductPhoto(path[2],path[3]);
   const readUser=nationalReadScope(user);
+  if(path[0]==='leave'&&path.length<=3)return leaveApi(req,user,path);
+  if(path[0]==='notifications'&&['feed','read'].includes(path[1])){const result=await notificationCenter(req,user,path);if(result)return result;}
   if(path.join('/')==='usage/pulse'&&req.method==='POST')return response(await usagePulse(req,user));
   if(path.join('/')==='sim/verify'&&req.method==='GET')return response(await simVerificationAccess(user));
   if(path.join('/')==='sim/verify'&&req.method==='POST')return response(await simVerification(user,await jsonBody(req)));

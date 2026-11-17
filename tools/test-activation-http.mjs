@@ -35,6 +35,9 @@ try{
  assert.equal((await request('activations?month=2024-01',tokens['pilot-manager'])).body.totals.total,7);
  db.prepare("INSERT INTO users(id,username,name,role,password_hash,active,site_code) VALUES('old-a','old-a','Old account','agent','invalid-preview-only',0,'a')").run();
  assert.equal((await request('activations',tokens['pilot-agent'])).body.totals.total,0,'ambiguous historical site fails closed');
+ assert.equal(db.prepare("SELECT legal_name FROM employee_profiles WHERE user_id='old-a'").get().legal_name,'Old account');
+ // Remove the automatically seeded profile when removing this synthetic account.
+ db.prepare("DELETE FROM employee_profiles WHERE user_id='old-a'").run();
  db.prepare("DELETE FROM users WHERE id='old-a'").run();db.close();
  browser=await browserFixture(origin);
  async function account(id){await browser.close();browser=await browserFixture(origin);await browser.send('Network.setCookie',{name:'mobiup_session',value:tokens[id],url:origin});await browser.send('Page.navigate',{url:origin});await waitFor(()=>browser.evaluate('document.querySelector(".profile strong")?.textContent==='+JSON.stringify(id)),'account navigation');}

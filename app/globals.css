@@ -1,3 +1,5 @@
+@import "./leave.css";
+@import "./notifications.css";
 @import 'tailwindcss';
 @import 'tw-animate-css';
 @import './vendor/shadcn/tailwind.css';

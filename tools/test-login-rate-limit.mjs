@@ -30,7 +30,7 @@ try{
   function addUser(id,hash='synthetic-unusable-hash'){
     sql.prepare("INSERT INTO users(id,username,name,role,password_hash,must_change_password,active) VALUES(?,?,?,'agent',?,0,1)").run(id,id,'Synthetic account',hash);
   }
-  function reset(){sql.exec('DELETE FROM sessions;DELETE FROM users;DELETE FROM login_attempts;');addUser(valid,validHash);}
+  function reset(){sql.exec('DELETE FROM sessions;DELETE FROM employee_profiles;DELETE FROM users;DELETE FROM login_attempts;');addUser(valid,validHash);}
   function attempt(key,attempts,resetAt=Date.now()+3600000){sql.prepare('INSERT INTO login_attempts VALUES(?,?,?)').run(key,attempts,resetAt);}
   const row=key=>sql.prepare('SELECT * FROM login_attempts WHERE key=?').get(key);
   const count=()=>sql.prepare('SELECT COUNT(*) n FROM login_attempts').get().n;
