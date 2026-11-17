@@ -35,6 +35,10 @@ imports remain gaps; covered months with no sales are zero. Accessory values
 retain the ex-VAT/gross labels. Active, fully covered historical sales can supply
 a missing product-report month without writing or combining overlapping sources.
 
+## Per-product replenishment limits
+
+Configured product categories use an agent's net sales in the three complete months and a category minimum. Quantities above the allowance require a currently assigned manager's approval of the saved draft; finalization consumes that approval atomically. Managers review requests and global managers configure category minimums under Orders → Confirmations. See [policy and billing metric definitions](docs/ORDER-LIMITS.md).
+
 ## Leave and notification workflows
 
 Agents can select leave dates, sign on a tablet or upload a photograph of a signed paper form, download the PDF and open a prepared email. Managers have a scoped request list, calendar and audited decisions. Both roles have a notification bell and history. See [workflow details](docs/LEAVE-NOTIFICATIONS.md).

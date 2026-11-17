@@ -1,3 +1,4 @@
+import {consumeOrderLimitApproval,orderLimitApprovalsApi,orderLimitFinalization,orderLimitPolicyApi,orderLimits,requestOrderLimitApproval} from '@/lib/order-limits-server';
 import {leaveApi} from '@/lib/leave-server';
 import {notificationCenter} from '@/lib/notification-center';
 import {lookupAnafCompany} from '@/lib/anaf';
@@ -199,7 +200,13 @@ async function saveOrder(req: Request,id: string,user: User) {
   const body=await jsonBody(req);
   if(body.revision!==order.revision) fail(409,'Comanda a fost modificată pe alt dispozitiv. Redeschide comanda înainte să o salvezi.');
   const next=await payloadFor(body,order);
+  const unchanged=JSON.stringify(next)===JSON.stringify(order);
   const guard=operationalWriteGuard(req,user,{agentId:order.userId});
+  if(unchanged) {
+    const stillCurrent=await db().prepare("SELECT 1 WHERE EXISTS (SELECT 1 FROM orders WHERE id=? AND status='draft' AND revision=?) AND "+guard.sql).bind(id,order.revision,...guard.args).first();
+    if(!stillCurrent) fail(409,'Comanda a fost modificată. Redeschide-o.');
+    return response({order});
+  }
   const result=await db().prepare(`UPDATE orders SET payload=?,revision=revision+1 WHERE id=? AND status='draft' AND revision=? AND ${guard.sql}`).bind(JSON.stringify(next),id,order.revision,...guard.args).run();
   if(!result.meta.changes) fail(409,'Comanda a fost modificată. Redeschide-o.');
   return response({order:await getOrder(id,user)});
@@ -228,6 +235,7 @@ async function finalize(id: string,user: User,req: Request) {
     if((['name','cui','city','county','address','route'] as const).some(key=>client[key]!==order.client![key])) fail(409,'Datele clientului s-au schimbat. Selectează din nou clientul și salvează ciorna.');
     clientData=current.data;
   }
+  const limits=await orderLimitFinalization(req,order,currentCatalog,user);
   const cfg=await settings();
   const finalOrder={...order,status:'finalized' as const,finalizedAt:new Date().toISOString()};
   let exportKey:string|undefined;
@@ -250,7 +258,8 @@ async function finalize(id: string,user: User,req: Request) {
   const payload={...finalOrder,exportKey};
   const guard=operationalWriteGuard(req,user,{agentId:order.userId}),proofKey="order-write-proof-v1:"+crypto.randomUUID();
   try {
-    const statements=[db().prepare(`UPDATE orders SET status='finalized',finalized_at=?,week_key=?,payload=?,revision=revision+1 WHERE id=? AND status='draft' AND revision=? AND (? IS (SELECT value FROM settings WHERE key='catalog')) AND (kind NOT IN ('sim','combined','stand_client') OR (kind!='stand_client' AND json_array_length(json_extract(payload,'$.serials'))=0) OR EXISTS (SELECT 1 FROM customers c WHERE c.id=? AND EXISTS (SELECT 1 FROM json_each(COALESCE(json_extract(c.data,'$.warehouseIds'),json_array(c.warehouse_id))) WHERE value=orders.warehouse_id) AND c.active=1 AND c.data=?)) AND (kind NOT IN ('accessories','combined') OR (kind='combined' AND json_array_length(json_extract(payload,'$.items'))=0) OR (SELECT COUNT(*) FROM orders o WHERE o.user_id=orders.user_id AND (o.kind='accessories' OR (o.kind='combined' AND json_array_length(json_extract(o.payload,'$.items'))>0)) AND o.status='finalized' AND o.week_key=?) < ?) AND ${guard.sql}`).bind(finalOrder.finalizedAt,weekKey(),JSON.stringify(payload),id,order.revision,currentCatalog.raw,order.client?.id||'',clientData,weekKey(),cfg.weeklyLimit,...guard.args),db().prepare("INSERT INTO settings(key,value) SELECT ?,'1' WHERE changes()=1").bind(proofKey)];
+    const statements=[db().prepare(`UPDATE orders SET status='finalized',finalized_at=?,week_key=?,payload=?,revision=revision+1 WHERE id=? AND status='draft' AND revision=? AND (? IS (SELECT value FROM settings WHERE key='catalog')) AND (kind NOT IN ('sim','combined','stand_client') OR (kind!='stand_client' AND json_array_length(json_extract(payload,'$.serials'))=0) OR EXISTS (SELECT 1 FROM customers c WHERE c.id=? AND EXISTS (SELECT 1 FROM json_each(COALESCE(json_extract(c.data,'$.warehouseIds'),json_array(c.warehouse_id))) WHERE value=orders.warehouse_id) AND c.active=1 AND c.data=?)) AND (kind NOT IN ('accessories','combined') OR (kind='combined' AND json_array_length(json_extract(payload,'$.items'))=0) OR (SELECT COUNT(*) FROM orders o WHERE o.user_id=orders.user_id AND (o.kind='accessories' OR (o.kind='combined' AND json_array_length(json_extract(o.payload,'$.items'))>0)) AND o.status='finalized' AND o.week_key=?) < ?) AND ${guard.sql} AND (${limits.sql})`).bind(finalOrder.finalizedAt,weekKey(),JSON.stringify(payload),id,order.revision,currentCatalog.raw,order.client?.id||'',clientData,weekKey(),cfg.weeklyLimit,...guard.args,...limits.args),db().prepare("INSERT INTO settings(key,value) SELECT ?,'1' WHERE changes()=1").bind(proofKey)];
+    if(limits.approvalId)statements.push(consumeOrderLimitApproval(limits.approvalId,proofKey,finalOrder.finalizedAt));
     for(const serial of order.serials) statements.push(db().prepare("INSERT INTO serials (serial,order_id) SELECT ?,? WHERE EXISTS (SELECT 1 FROM settings WHERE key=?)").bind(serial,id,proofKey));
     statements.push(db().prepare("DELETE FROM settings WHERE key=?").bind(proofKey));
     const results=await db().batch(statements);
@@ -258,6 +267,7 @@ async function finalize(id: string,user: User,req: Request) {
       if(!await db().prepare(`SELECT 1 WHERE ${guard.sql}`).bind(...guard.args).first())fail(409,'Drepturile sau sesiunea s-au modificat. Autentifică-te din nou.');
       const latest=await getOrder(id,user);
       if(latest.status==='finalized') { if(exportKey) await env.FILES.delete(exportKey); return response({order:latest,mail:mailFor(latest,await settingsForOrder(latest))}); }
+      if(limits.sql!=='1'&&!await db().prepare('SELECT 1 WHERE '+limits.sql).bind(...limits.args).first())fail(409,'Limitele sau aprobarea comenzii s-au schimbat. Reîncarcă și verifică solicitarea.');
       if(order.kind==='sim') fail(409,'Datele clientului sau ciorna s-au modificat între timp. Redeschide ciorna și selectează din nou clientul.');
       fail(409,`Limita este de ${cfg.weeklyLimit} comenzi de accesorii pe săptămână. Comanda rămâne ciornă. Dacă datele comenzii sau clientului s-au modificat, redeschide ciorna și verifică selecția.`);
     }
@@ -325,6 +335,8 @@ async function dispatch(req: Request) {
   if(req.method==='GET'&&path.length===4&&path[0]==='catalog'&&path[1]==='photo')return readProductPhoto(path[2],path[3]);
   const readUser=nationalReadScope(user);
   if(path[0]==='leave'&&path.length<=3)return leaveApi(req,user,path);
+  if(path[0]==='order-limit-policy'&&path.length===1)return orderLimitPolicyApi(req,user);
+  if(path[0]==='order-limit-approvals'&&path.length<=3)return orderLimitApprovalsApi(req,user,path[1],path[2]);
   if(path[0]==='notifications'&&['feed','read'].includes(path[1])){const result=await notificationCenter(req,user,path);if(result)return result;}
   if(path.join('/')==='usage/pulse'&&req.method==='POST')return response(await usagePulse(req,user));
   if(path.join('/')==='sim/verify'&&req.method==='GET')return response(await simVerificationAccess(user));
@@ -478,6 +490,8 @@ async function dispatch(req: Request) {
       return response({ok:true,deletedId:id,revision:order.revision+1});
     }
     if(id && !path[2] && req.method==='PUT') return saveOrder(req,id,user);
+    if(path.length===3&&path[2]==='limits'&&req.method==='GET')return orderLimits(req,id,user);
+    if(path.length===3&&path[2]==='limit-approval'&&req.method==='POST')return requestOrderLimitApproval(req,id,user);
     if(path[2]==='finalize' && req.method==='POST') return finalize(id,user,req);
     if(path[2]==='mail' && req.method==='GET') { const order=await getOrder(id,readUser); if(order.status!=='finalized') fail(400,'Finalizează comanda întâi.'); return response({mail:mailFor(order,await settingsForOrder(order))}); }
     if((path[2]==='excel'||path[2]==='eml') && req.method==='GET') {

@@ -16,6 +16,7 @@ IDBObjectStore.prototype.put=function(row){if(failCleanup&&failure==='idb'&&this
 Storage.prototype.removeItem=function(key){if(failCleanup&&failure==='local'&&key.includes('mobiup-work-v1:order:'))throw new DOMException('Synthetic mirror failure','SecurityError');return remove.apply(this,arguments);};
 window.fetch=async(input,init={})=>{const path=String(input).replace('/api/',''),method=init.method||'GET';calls.push({path,method});let result;
  if(path==='auth/session')result={user:{id:'agent'}};
+ else if(path.endsWith('/limits'))result={orderId:serverOrder.id,revision:serverOrder.revision,period:{from:'2026-07',to:'2026-09'},products:[],violations:[],request:null};
  else if(path.endsWith('/finalize')){serverOrder={...serverOrder,status:'finalized',revision:serverOrder.revision+1,finalizedAt:'2026-10-01T12:00:00Z'};failCleanup=true;result={order:serverOrder};}
  else if(path.endsWith('/mail'))result={mail:{filename:'synthetic.xlsx',subject:'Synthetic',body:'Synthetic',to:'synthetic@example.invalid',cc:[],mailto:'mailto:synthetic@example.invalid'}};
  else if(path.startsWith('orders/')){if(method==='PUT')serverOrder={...serverOrder,...JSON.parse(init.body),revision:serverOrder.revision+1};result={order:serverOrder};}

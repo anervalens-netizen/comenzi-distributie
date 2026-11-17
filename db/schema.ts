@@ -93,3 +93,33 @@ export const notifications = sqliteTable('notifications', {
  category:text('category').notNull(),title:text('title').notNull(),body:text('body').notNull(),targetType:text('target_type').notNull(),targetId:text('target_id').notNull(),
  createdAt:text('created_at').notNull(),readAt:text('read_at'),
 },t=>[uniqueIndex('notifications_recipient_event').on(t.recipientId,t.eventKey),index('notifications_recipient_date').on(t.recipientId,desc(t.createdAt),desc(t.id)),index('notifications_unread').on(t.recipientId,t.readAt)]);
+
+
+export const orderLimitApprovals = sqliteTable('order_limit_approvals', {
+  id: text('id').primaryKey(),
+  orderId: text('order_id').notNull().references(() => orders.id),
+  orderRevision: integer('order_revision').notNull(),
+  agentId: text('agent_id').notNull().references(() => users.id),
+  agentRevision: integer('agent_revision').notNull(),
+  warehouseId: text('warehouse_id').notNull(),
+  managerIds: text('manager_ids').notNull(),
+  inputKey: text('input_key').notNull(),
+  salesVersion: text('sales_version').notNull(),
+  mappingVersion: text('mapping_version').notNull(),
+  policyVersion: text('policy_version').notNull(),
+  catalogVersion: text('catalog_version').notNull(),
+  violations: text('violations').notNull(),
+  status: text('status').notNull(),
+  reason: text('reason').notNull().default(''),
+  comment: text('comment').notNull().default(''),
+  decidedBy: text('decided_by').references(() => users.id),
+  decidedAt: text('decided_at'),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+  revision: integer('revision').notNull().default(1),
+}, t => [
+  check('order_limit_approvals_status_check', sql`${t.status} IN ('pending','approved','rejected','consumed')`),
+  uniqueIndex('order_limit_approvals_order_input').on(t.orderId, t.orderRevision, t.inputKey),
+  index('order_limit_approvals_scope').on(t.agentId, desc(t.createdAt), desc(t.id)),
+  index('order_limit_approvals_date').on(desc(t.createdAt), desc(t.id)),
+]);

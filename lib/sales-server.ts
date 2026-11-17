@@ -4,7 +4,7 @@ import {readDistributionRules} from './distribution-config';
 import {withImportAuthorization,withCapturedImportAuthorization,type ImportAuthorization} from './import-write-authorization';
 import {projectIds,productGroup} from './distribution-rules';
 import {distributionSales,combineSalesViews} from './distribution-sales';
-import { catalog, db, fail, isGlobalManager, readLimited, requireManager, response } from './server';
+import { AppError, catalog, db, fail, isGlobalManager, readLimited, requireManager, response } from './server';
 import type { User } from './types';
 import { readCatalog } from './catalog';
 import { salesHash, SALES_FILE_LIMIT } from './sales-file';
@@ -18,12 +18,15 @@ import { salesLocationKey, salesSiteKey as mappingKey, salesPairKey, type SalesS
 
 type SalesActor = { id: string; name: string; siteCode: string; warehouseName: string };
 
+const salesActorsQuery = "SELECT id,name,role,site_code,warehouse_name FROM users WHERE active=1 AND (role='agent' OR (role='manager' AND TRIM(site_code)<>'')) ORDER BY name,id";
+const salesAliasesKey = 'sales-agent-aliases-v1';
+
 async function mappingSnapshot() {
-  const result = await db().prepare("SELECT id,name,role,site_code,warehouse_name FROM users WHERE active=1 AND (role='agent' OR (role='manager' AND TRIM(site_code)<>'')) ORDER BY name,id").all<{ id: string; name: string; role: string; site_code: string | null; warehouse_name: string | null }>();
+  const result = await db().prepare(salesActorsQuery).all<{ id: string; name: string; role: string; site_code: string | null; warehouse_name: string | null }>();
   const actors: SalesActor[] = result.results.map(row => ({ id: String(row.id), name: String(row.name), siteCode: row.site_code?.trim() || '', warehouseName: row.role === 'agent' ? row.warehouse_name?.trim() || '' : '' }));
   // Owner-maintained aliases preserve explicit historical identity across renames.
   // Raw imports remain unchanged; aliases never resurrect inactive accounts.
-  const aliasRow = await db().prepare("SELECT value FROM settings WHERE key='sales-agent-aliases-v1'").first<{value:string}>();
+  const aliasRow = await db().prepare("SELECT value FROM settings WHERE key=?").bind(salesAliasesKey).first<{value:string}>();
   if (aliasRow) {
     let aliases: unknown;
     try { aliases = JSON.parse(aliasRow.value); } catch { fail(503, 'Asocierile istorice de vânzări sunt invalide.'); }
@@ -49,7 +52,7 @@ async function mappingSnapshot() {
     }
   }
   const canonical = actors.map(actor => [actor.id, actor.name, mappingKey(actor.siteCode), salesLocationKey(actor.warehouseName)]);
-  return { actors, grouped, locations, hash: salesHash(JSON.stringify(canonical)), sourceStamp: JSON.stringify([result.results,aliasRow?.value??null]) };
+  return { actors, grouped, locations, hash: salesHash(JSON.stringify(canonical)), sourceStamp: JSON.stringify([result.results,aliasRow?.value??null]), actorRows: result.results, aliasRaw: aliasRow?.value??null };
 }
 
 function validateMonth(value: string | null) {
@@ -112,6 +115,32 @@ function actorScope(actorIds: string[], snapshot: Awaited<ReturnType<typeof mapp
     }
   }
   return { warehouseNames, warehouseSites, siteCodes, excludedWarehouseNames: [...snapshot.locations].filter(([, matches]) => matches.length === 1).map(([key]) => key), siteCode };
+}
+
+/** Share report attribution rules, together with a snapshot guard for order writers. */
+export async function orderLimitSalesScope(agentId?: string) {
+  const snapshot = await mappingSnapshot();
+  let scope: SalesScope | null = null;
+  if (agentId) {
+    try {
+      const resolved = actorScope([agentId], snapshot) as Exclude<SalesScope, string | string[]>;
+      if (resolved.warehouseNames.length || resolved.warehouseSites?.length || resolved.siteCodes.length) scope = resolved;
+    } catch (error) {
+      // Ambiguous attribution cannot raise the order above its supported floor.
+      if (!(error instanceof AppError) || error.status !== 409) throw error;
+    }
+  }
+  return {
+    scope, version: salesHash(snapshot.sourceStamp),
+    guard: {
+      sql: "(SELECT json_group_array(json_array(id,name,role,site_code,warehouse_name)) FROM (" + salesActorsQuery + "))=? " +
+        "AND (SELECT value FROM settings WHERE key=?) IS ?",
+      args: [
+        JSON.stringify(snapshot.actorRows.map(row => [row.id,row.name,row.role,row.site_code,row.warehouse_name])),
+        salesAliasesKey, snapshot.aliasRaw,
+      ],
+    },
+  };
 }
 
 async function salesCatalog() {

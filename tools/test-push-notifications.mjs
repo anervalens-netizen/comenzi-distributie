@@ -246,13 +246,14 @@ try{
     const logs=JSON.stringify(warnings);for(const secret of [keys.p256dh,keys.auth,'https://','private provider','Synthetic partner','network-error'])assert.ok(!logs.includes(secret),'Logs must not contain capability URLs, keys or raw service errors');
   }finally{console.warn=warn;}
   sql.exec(`
-    CREATE TABLE notifications(id TEXT PRIMARY KEY,recipient_id TEXT,event_key TEXT,category TEXT,target_id TEXT,read_at TEXT);
+    CREATE TABLE notifications(id TEXT PRIMARY KEY,recipient_id TEXT,event_key TEXT,category TEXT,target_type TEXT,target_id TEXT,read_at TEXT);
     CREATE TABLE leave_requests(id TEXT PRIMARY KEY,agent_id TEXT);
+    CREATE TABLE order_limit_approvals(id TEXT PRIMARY KEY,agent_id TEXT,manager_ids TEXT);
     INSERT INTO leave_requests VALUES('synthetic-leave','agent');
     INSERT INTO notifications VALUES
-      ('synthetic-inbox-agent','agent','leave-event','leave','synthetic-leave',NULL),
-      ('synthetic-inbox-other','other-region','leave-event','leave','synthetic-leave',NULL),
-      ('synthetic-inbox-inactive','inactive','leave-event','leave','synthetic-leave',NULL);
+      ('synthetic-inbox-agent','agent','leave-event','leave','leave','synthetic-leave',NULL),
+      ('synthetic-inbox-other','other-region','leave-event','leave','leave','synthetic-leave',NULL),
+      ('synthetic-inbox-inactive','inactive','leave-event','leave','leave','synthetic-leave',NULL);
   `);
   const inboxEndpoint='https://fcm.googleapis.com/fcm/send/inbox-agent';
   insert(inboxEndpoint,'agent');
@@ -273,6 +274,20 @@ try{
   sql.exec("UPDATE notifications SET read_at='synthetic' WHERE recipient_id='agent'");
   await dispatchInbox('agent','leave-event');
   assert.equal(inboxPayloads.length,1,'Read events dispatch nothing');
+  sql.exec(`
+    INSERT INTO order_limit_approvals VALUES ('synthetic-approval','agent','["manager"]');
+    INSERT INTO manager_agents VALUES ('other-region','agent');
+    INSERT INTO notifications VALUES
+      ('synthetic-inbox-order','other-region','order-event','order','order-approval','synthetic-approval',NULL);
+  `);
+  await dispatchInbox('other-region','order-event');
+  assert.equal(inboxPayloads.length,1,'An assigned manager outside the frozen order approval recipients receives no push');
+  sql.exec(`UPDATE order_limit_approvals SET manager_ids='["manager","other-region"]';`);
+  await dispatchInbox('other-region','order-event');
+  assert.equal(inboxPayloads.length,2,'A current member of the frozen recipients receives generic push');
+  sql.exec("DELETE FROM manager_agents WHERE manager_id='other-region'");
+  await dispatchInbox('other-region','order-event');
+  assert.equal(inboxPayloads.length,2,'A manager removed from the team receives no push');
   assert.equal(globalThis.fetch,originalFetch,'Push delivery never replaces global fetch');
   console.log('PASS: push endpoint registration/storage policy, atomic cap, RFC8291 vector, independent decryption/VAPID verification, sender limits, Node TLS/workerd redirect refusal, audience selection and sanitized best-effort failure handling.');
 }finally{
