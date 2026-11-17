@@ -223,7 +223,7 @@ try {
   importMonth(monthAt(2), -6);
   importMonth(monthAt(3), 850); // Current partial month must not contribute.
 
-  function order(lines, owner = 'agent') {
+  function order(lines, owner = 'agent', kind = 'combined') {
     const id = randomUUID();
     const warehouseId =
       owner === 'agent' ? 'test-warehouse' : 'test-other-warehouse';
@@ -243,10 +243,10 @@ try {
       agentName: 'Synthetic ' + owner,
       warehouseId,
       warehouseName,
-      kind: 'combined',
+      kind,
       status: 'draft',
       items,
-      standItems,
+      standItems: kind === 'combined' ? standItems : undefined,
       serials: [],
       client: null,
       notes: '',
@@ -569,6 +569,21 @@ try {
     1,
     'unchanged validated save preserves the approved revision',
   );
+
+  // An unmodified single-kind order must not lose manager approval upon review.
+  const approvedSingleOrder = order([['cap-charger', 31]], 'agent', 'accessories');
+  const singleApproval = (await ask(approvedSingleOrder, 1)).request;
+  await decide(singleApproval.id, 'manager-one');
+  const singleResave = await call('PUT', 'orders/' + approvedSingleOrder, 'agent', {
+    revision: 1,
+    items: [{ id: 'cap-charger', quantity: 31 }],
+    serials: [],
+    notes: '',
+  });
+  assert.equal(singleResave.order.revision, 1, 'unchanged single-kind draft must retain its approved revision');
+  assert.equal((await limits(approvedSingleOrder)).request.status, 'approved');
+  assert.equal((await finalize(approvedSingleOrder, 1)).order.status, 'finalized');
+  assert.equal((await call('GET', 'order-limit-approvals/' + singleApproval.id, 'agent')).request.status, 'consumed');
 
   // A closed-month import replaced after validation but during the real export
   // must be rejected by the atomic SQLite guard, not just an earlier API read.

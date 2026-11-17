@@ -25,7 +25,7 @@ const stubs={
   'activation-store':unused(['readActivations','verifySim']),
   catalog:'export const readCatalog=async()=>({products:[]});'+unused(['changeProduct','readProductPhoto']),
   'stock-server':`export const stockForWarehouse=async()=>({importedAt:'2026-09-01T00:00:00Z',filename:'synthetic.xlsx',rows:[{code:'SYNTHETIC',name:'Synthetic product',quantity:10}]});${unused(['stockImportStatus','stockView','stockUpload'])}`,
-  'sales-server':unused(['salesImportStatus','salesView','salesUpload']),
+  'sales-server':unused(['salesImportStatus','salesView','salesUpload','orderLimitSalesScope']),
   exports:unused(['templateExport','combinedExport','repairOrderExport','simExport','mailFor','emlFor']),
   'push-notifications':unused(['managerRequestInbox','readPartnerNotifications','pushPublicConfig','removePushSubscription','upsertPushSubscription','sendPartnerRequestPush','sendNotificationPush']),
   'partner-mail':unused(['partnerMail']),

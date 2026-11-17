@@ -16,7 +16,7 @@ try {
   }
   // Exercise the real preview handler with only unrelated HTTP/auth/parser infrastructure stubbed.
   const previewStubs = {
-    './server': `export const catalog=[]; export const db=()=>({prepare:()=>({all:async()=>({results:[]}),first:async()=>null})}); export const fail=(code,message)=>{throw new Error(code+': '+message)}; export const requireManager=()=>{}; export const isGlobalManager=()=>true; export const readLimited=async req=>new Uint8Array(await req.arrayBuffer()); export const response=value=>Response.json(value);`,
+    './server': `export class AppError extends Error { constructor(status,message){ super(message); this.status=status; } }; export const catalog=[]; export const db=()=>({prepare:()=>({bind(){return this},all:async()=>({results:[]}),first:async()=>null})}); export const fail=(code,message)=>{throw new Error(code+': '+message)}; export const requireManager=()=>{}; export const isGlobalManager=()=>true; export const readLimited=async req=>new Uint8Array(await req.arrayBuffer()); export const response=value=>Response.json(value);`,
     './import-write-authorization': 'export const withImportAuthorization=()=>{throw new Error("unexpected import write in preview test")}; export const withCapturedImportAuthorization=withImportAuthorization;',
     './distribution-config': 'export const readDistributionRules=async()=>null;',
     './catalog': 'export const readCatalog=async()=>({products:[]});',
