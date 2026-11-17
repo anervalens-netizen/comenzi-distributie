@@ -26,6 +26,26 @@ type RowProps = TargetProps & {
   onRead: (id: string) => void;
 };
 
+function isNotificationItem(value: unknown): value is NotificationItem {
+  if (!value || typeof value !== 'object') return false;
+  const { id, category, title, body, targetType, targetId, createdAt, readAt } = value as Partial<NotificationItem>;
+  return typeof id === 'string' && typeof category === 'string' && typeof title === 'string' &&
+    typeof body === 'string' && typeof targetType === 'string' && typeof targetId === 'string' &&
+    typeof createdAt === 'string' && (readAt === null || typeof readAt === 'string');
+}
+
+async function requestFeed(path: string, method: 'GET' | 'POST', body: unknown, signal: AbortSignal): Promise<NotificationFeed> {
+  const value = await networkApi<Partial<NotificationFeed> | null>(path, method, body, signal);
+  if (!value || !Array.isArray(value.items) || !value.items.every(isNotificationItem) ||
+    typeof value.unread !== 'number' || !Number.isSafeInteger(value.unread) || value.unread < 0 ||
+    typeof value.total !== 'number' || !Number.isSafeInteger(value.total) || value.total < 0 ||
+    typeof value.hasMore !== 'boolean') {
+    throw new Error('Serverul a trimis notificări într-un format invalid.');
+  }
+  const { items, unread, total, hasMore } = value;
+  return { items, unread, total, hasMore };
+}
+
 const dateFormat = new Intl.DateTimeFormat('ro-RO', {
   dateStyle: 'medium', timeStyle: 'short', timeZone: 'Europe/Bucharest',
 });
@@ -70,7 +90,7 @@ export function NotificationBell({ onOpenCenter, onOpenTarget, canOpenTarget = t
     const controller = new AbortController();
     pendingRead.current = controller;
     try {
-      const next = await networkApi<NotificationFeed>('notifications/feed?limit=5', 'GET', undefined, controller.signal);
+      const next = await requestFeed('notifications/feed?limit=5', 'GET', undefined, controller.signal);
       if (!controller.signal.aborted) {
         setFeed(next);
         setLoadError('');
@@ -106,7 +126,7 @@ export function NotificationBell({ onOpenCenter, onOpenTarget, canOpenTarget = t
     setActionError('');
     try {
       if (!item.readAt) {
-        const next = await networkApi<NotificationFeed>('notifications/read', 'POST', { ids: [item.id] }, controller.signal);
+        const next = await requestFeed('notifications/read', 'POST', { ids: [item.id] }, controller.signal);
         if (controller.signal.aborted) return;
         pendingRead.current?.abort();
         setFeed({ ...next, items: next.items.slice(0, 5) });
@@ -139,7 +159,9 @@ export function NotificationBell({ onOpenCenter, onOpenTarget, canOpenTarget = t
         <DialogTitle>Notificări recente</DialogTitle>
         <DialogDescription>{unread ? unread+' notificări necitite' : 'Ultimele notificări din contul tău'}</DialogDescription>
       </DialogHeader>
-      {(loadError || actionError) && <p className="error-banner" role="alert">{actionError || loadError}</p>}
+      {(loadError || actionError) && <div className="error-banner" role="alert">{actionError || loadError}
+        {loadError && !actionError && <button type="button" className="quiet" onClick={() => void refresh()}>Reîncarcă</button>}
+      </div>}
       {feed?.items.length
         ? <ul className="notification-list">
           {feed.items.map(item => <NotificationRow key={item.id} item={item} busy={busy} canOpenTarget={canOpenTarget}
@@ -171,7 +193,7 @@ export function NotificationCenter({ onOpenTarget, canOpenTarget = true }: Targe
   useEffect(() => {
     const controller = new AbortController();
     pendingRead.current = controller;
-    void networkApi<NotificationFeed>(path, 'GET', undefined, controller.signal)
+    void requestFeed(path, 'GET', undefined, controller.signal)
       .then(value => {
         if (!controller.signal.aborted) setFeed({ path, value });
       }).catch(error => {
@@ -189,7 +211,7 @@ export function NotificationCenter({ onOpenTarget, canOpenTarget = true }: Targe
     setBusy(true);
     setError('');
     try {
-      const value = await networkApi<NotificationFeed>('notifications/read', 'POST', { ...selection, category, unread }, controller.signal);
+      const value = await requestFeed('notifications/read', 'POST', { ...selection, category, unread }, controller.signal);
       if (controller.signal.aborted) return;
       pendingRead.current?.abort();
       if (offset) {

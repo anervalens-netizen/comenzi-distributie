@@ -399,8 +399,107 @@ try {
     'Motivul deciziei',
   );
 
+  await login(browser, agent, 800, 1200);
+  const openRejectedNotice = async () => {
+    await browser.evaluate("document.querySelector('.request-bell').click()");
+    await content(
+      browser,
+      '.notification-dialog .notification-row',
+      'Respinsă',
+    );
+    await click(
+      browser,
+      '.notification-dialog .notification-row button',
+      'Deschide',
+    );
+    await content(browser, '.leave-detail .leave-status', 'Respinsă');
+    await content(
+      browser,
+      '.leave-detail .leave-notice',
+      'Synthetic scheduling conflict',
+    );
+  };
+  await openRejectedNotice();
+  await click(browser, '.leave-detail button', 'Înapoi la concedii');
+  await content(browser, '.leave-history h2', 'Cererile mele');
+  await openRejectedNotice();
+  await click(browser, '.leave-detail button', 'Înapoi la concedii');
+
+  // The actual server commits the creation before the transport hides its response.
+  await click(browser, '.leave-header button', 'Cerere nouă');
+  await fill(
+    browser,
+    '.leave-date-fields label:first-child input',
+    '2026-12-09',
+  );
+  await fill(
+    browser,
+    '.leave-date-fields label:last-child input',
+    '2026-12-10',
+  );
+  await content(browser, '.leave-period-summary', '2 zile lucrătoare');
+  await browser.evaluate(`(() => {
+    const realFetch = window.fetch;
+    window.fetch = async (input, init) => {
+      const response = await realFetch(input, init);
+      if (init?.method === 'POST' && new URL(String(input), location.origin).pathname === '/api/leave') {
+        window.fetch = realFetch;
+        if (response.status !== 201) throw new Error('Expected the real server to create the draft');
+        window.syntheticCommittedDraft = (await response.json()).request.id;
+        throw new TypeError('Synthetic response lost after commit');
+      }
+      return response;
+    };
+    return true;
+  })()`);
+  await click(browser, '.leave-editor button', 'Salvează ciorna');
+  await content(
+    browser,
+    '.leave-editor [role=alert]',
+    'Synthetic response lost after commit',
+  );
+  const recoveredId = await browser.evaluate('window.syntheticCommittedDraft');
+  assert.ok(recoveredId, 'The real server returned a committed draft ID');
+  const row = db.prepare(
+    'SELECT end_date,revision FROM leave_requests WHERE id=?',
+  );
+  const original = row.get(recoveredId);
+  assert.equal(original.end_date, '2026-12-10');
+  assert.equal(original.revision, 1);
+
+  await fill(
+    browser,
+    '.leave-date-fields label:last-child input',
+    '2026-12-11',
+  );
+  await content(browser, '.leave-period-summary', '3 zile lucrătoare');
+  await click(browser, '.leave-editor button', 'Salvează ciorna');
+  await content(browser, '.leave-detail .leave-status', 'Ciornă');
+  await content(
+    browser,
+    '.leave-detail .leave-period-summary',
+    '3 zile lucrătoare',
+  );
+  const recovered = row.get(recoveredId);
+  assert.equal(recovered.end_date, '2026-12-11');
+  assert.equal(recovered.revision, 2);
+  assert.equal(
+    db
+      .prepare(
+        "SELECT count(*) AS n FROM leave_requests WHERE agent_id=? AND start_date='2026-12-09'",
+      )
+      .get(agent).n,
+    1,
+    'Recovery updates the committed draft without creating another',
+  );
+  assert.equal(
+    await browser.evaluate(`(${submit}).disabled`),
+    true,
+    'Recovered draft still requires a signature',
+  );
+
   console.log(
-    'PASS tablet leave profiles, calendar day calculation, touch signing, date revision, photo upload and failure, PDFs, mailto and second-manager decision.',
+    'PASS tablet leave profiles, calendar day calculation, touch signing, date revision, photo upload and failure, PDFs, mailto, second-manager decision, repeat notification and lost-response recovery.',
   );
 } finally {
   if (browser) await browser.close();

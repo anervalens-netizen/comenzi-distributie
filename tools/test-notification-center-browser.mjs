@@ -33,6 +33,7 @@ const items = {
 };
 const fixture = window.fixture = {
   user:location.search.includes('manager')?manager:agent, requests:[], hold:false, pending:[],
+  badBell:location.search.includes('manager')?null:{}, badCenter:null, badRead:null,
   switchToManager() {
     this.user=manager;
     setLocalWorkUserId(manager.id);
@@ -65,6 +66,8 @@ window.fetch = async (input,init={}) => {
     case 'orders': return json({user:fixture.user,orders:[],weekKey:'2026-11-16'});
     case 'stock': return json({warehouseId:'w',rows:[],depot:{},warehouses:[]});
     case 'notifications/feed': {
+      const bad = url.searchParams.get('limit')==='5' ? fixture.badBell : fixture.badCenter;
+      if (bad) return json(bad);
       if (fixture.hold&&owner===agent.id) {
         return new Promise(resolve=>fixture.pending.push(()=>resolve(json({items:[item('old-sensitive','Synthetic stale account notification','leave',firstLeave)],unread:7,total:1,hasMore:false}))));
       }
@@ -72,6 +75,7 @@ window.fetch = async (input,init={}) => {
         Number(url.searchParams.get('limit')||30),Number(url.searchParams.get('offset')||0)));
     }
     case 'notifications/read':
+      if (fixture.badRead) return json(fixture.badRead);
       for (const row of items[owner]||[]) {
         if (!row.readAt&&(body.ids?.includes(row.id)||(body.all&&(body.category==='all'||body.category===row.category)))) {
           row.readAt='2026-11-12T11:00:00.000Z';
@@ -118,13 +122,32 @@ const wait = (tab,expr,label) => waitFor(()=>tab.evaluate(expr),label);
 try {
   const origin='http://127.0.0.1:'+server.address().port;
   browser=await browserFixture(origin);
-  await wait(browser,"document.querySelector('.request-bell')?.getAttribute('aria-label')==='Notificări necitite 2'",'agent bell count');
+  await wait(browser,"!!document.querySelector('.request-bell')",'agent shell renders despite a malformed initial bell response');
   await click(browser,'.request-bell');
+  await wait(browser,"document.querySelector('.notification-dialog [role=alert]')?.textContent.includes('format invalid')",'malformed bell feed displays a recoverable error');
+  await browser.evaluate("fixture.badBell=null");
+  await button(browser,'Reîncarcă','.notification-dialog');
+  await wait(browser,"document.querySelector('.request-bell')?.getAttribute('aria-label')==='Notificări necitite 2'",'agent bell count recovers after a valid reply');
   await wait(browser,"document.querySelector('.notification-dialog')?.textContent.includes('Synthetic approved leave')",'recent leave in agent bell');
+  await browser.evaluate("fixture.badBell={items:[null],unread:99,total:1,hasMore:false};window.dispatchEvent(new Event('focus'))");
+  await wait(browser,"document.querySelector('.notification-dialog [role=alert]')?.textContent.includes('format invalid')",'invalid item is rejected');
+  assert.equal(await browser.evaluate("document.querySelector('.request-count')?.textContent"),'2','Bad refresh keeps the last valid badge');
+  assert.equal(await browser.evaluate("document.querySelector('.notification-dialog .notification-row strong')?.textContent"),'Synthetic approved leave','Bad refresh keeps the last valid recent items');
+  await browser.evaluate("fixture.badBell=null;fixture.badRead={items:'invalid',unread:0,total:1,hasMore:false}");
+  await button(browser,'Reîncarcă','.notification-dialog');
+  await wait(browser,"!document.querySelector('.notification-dialog [role=alert]')",'valid recent reply clears the error');
+  await click(browser,'button[aria-label="Marchează ca citită: Synthetic approved leave"]');
+  await wait(browser,"document.querySelector('.notification-dialog [role=alert]')?.textContent.includes('format invalid')",'bad mark-read response is handled in the bell');
+  assert.equal(await browser.evaluate("document.querySelector('.request-count')?.textContent"),'2','Bad mark-read reply keeps the previous count');
+  await browser.evaluate("fixture.badRead=null");
   await click(browser,'button[aria-label="Marchează ca citită: Synthetic approved leave"]');
   await wait(browser,"document.querySelector('.request-count')?.textContent==='1'",'mark read in recent list updates agent badge');
+  await browser.evaluate("fixture.badCenter={items:[{title:{invalid:true}}],unread:1,total:1,hasMore:false}");
   await button(browser,'Vezi toate notificările','.notification-dialog');
-  await wait(browser,"document.querySelector('.notification-center .notification-list')?.children.length===30",'all notifications button opens a paginated history');
+  await wait(browser,"document.querySelector('.notification-center [role=alert]')?.textContent.includes('format invalid')",'all notifications handles a malformed page');
+  await browser.evaluate("fixture.badCenter=null");
+  await button(browser,'Reîncarcă','.notification-center .notification-panel');
+  await wait(browser,"document.querySelector('.notification-center .notification-list')?.children.length===30",'all notifications recovers its paginated history');
   assert.equal(await browser.evaluate("document.querySelector('.notification-center .notification-list .notification-row-unread strong')?.textContent"),'Synthetic pending leave');
   await button(browser,'Înainte','.notification-pagination');
   await wait(browser,"document.querySelector('.notification-pagination span')?.textContent==='2 / 2'",'history pagination');
@@ -148,6 +171,11 @@ try {
   await wait(browser,"document.querySelectorAll('.notification-list .notification-row').length===30",'leave category with read history');
   await click(browser,'.notification-filter input');
   await wait(browser,"document.querySelector('.notification-list')?.children.length===1",'unread-only filter hides read history');
+  await browser.evaluate("fixture.badRead={}");
+  await button(browser,'Marchează toate ca citite','.notification-filter-actions');
+  await wait(browser,"document.querySelector('.notification-center [role=alert]')?.textContent.includes('format invalid')",'bad mark-read reply is handled in the center');
+  assert.equal(await browser.evaluate("document.querySelector('.notification-list strong')?.textContent"),'Synthetic pending leave','Center preserves last valid rows on invalid mutation reply');
+  await browser.evaluate("fixture.badRead=null");
   await button(browser,'Marchează toate ca citite','.notification-filter-actions');
   await wait(browser,"document.querySelector('.notification-empty')?.textContent.includes('necitite')&&!document.querySelector('.request-count')",'mark all clears unread list and bell');
   await click(browser,'.notification-filter input');
@@ -171,7 +199,7 @@ try {
 
   const deepLinkTab=await browser.newTab(origin+'/?notifications=1&manager=1');
   await wait(deepLinkTab,"document.querySelector('.notification-center .notification-list')?.textContent.includes('Synthetic legacy partner')",'device link opens authenticated notification center');
-  console.log('PASS: agent and manager notification navigation, badge, read history, category, pagination, device link, tablet layout and late-response isolation');
+  console.log('PASS: agent and manager notification navigation, badge, read history, category, pagination, device link, tablet layout, malformed-response recovery and late-response isolation');
 } finally {
   await browser?.close();
   server.closeAllConnections();

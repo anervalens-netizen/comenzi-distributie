@@ -608,7 +608,7 @@ function DateEditor({
 }: {
   owner: string;
   request?: LeaveRecord;
-  onBack: () => void;
+  onBack: (refreshHistory: boolean) => void;
   onSaved: (request: LeaveRecord) => void;
 }) {
   const [start, setStart] = useState(request?.startDate ?? '');
@@ -622,7 +622,11 @@ function DateEditor({
   }>();
   const [previewRun, setPreviewRun] = useState(0);
   const operation = useLeaveAction();
-  const draftId = useRef('');
+  const pendingCreate = useRef<{
+    id: string;
+    startDate: string;
+    endDate: string;
+  }>(null);
   const key = start + '|' + end + '|' + previewRun;
   useEffect(() => {
     if (!valid) return;
@@ -658,19 +662,71 @@ function DateEditor({
     event.preventDefault();
     if (!count) return;
     const period = { startDate: start, endDate: end };
-    if (!request && !draftId.current) draftId.current = crypto.randomUUID();
     void operation.run(
-      (signal) =>
-        networkApi<LeaveResult>(
-          request ? requestPath(request.id) : 'leave',
-          request ? 'PUT' : 'POST',
-          request
-            ? { ...period, revision: request.revision }
-            : { ...period, id: draftId.current },
+      async (signal) => {
+        const update = (draft: LeaveRecord) =>
+          networkApi<LeaveResult>(
+            requestPath(draft.id),
+            'PUT',
+            { ...period, revision: draft.revision },
+            signal,
+            undefined,
+            owner,
+          );
+        if (request) return update(request);
+
+        const previous = pendingCreate.current;
+        const payload = previous ?? { id: crypto.randomUUID(), ...period };
+        pendingCreate.current = payload;
+        if (!previous) {
+          try {
+            return await networkApi<LeaveResult>(
+              'leave',
+              'POST',
+              payload,
+              signal,
+              undefined,
+              owner,
+            );
+          } catch (error) {
+            // A validation response confirms that nothing was written.
+            if (error instanceof ApiError && error.status === 400)
+              pendingCreate.current = null;
+            throw error;
+          }
+        }
+
+        // Resolve the original attempt before changing its dates. If it has not
+        // appeared yet, retry exactly the original payload with the same ID.
+        const recovered = await networkApi<LeaveDetail>(
+          requestPath(payload.id),
+          'GET',
+          undefined,
           signal,
           undefined,
           owner,
-        ),
+        ).catch((error) => {
+          if (error instanceof ApiError && error.status === 404) return null;
+          throw error;
+        });
+        const saved =
+          recovered ??
+          (await networkApi<LeaveResult>(
+            'leave',
+            'POST',
+            payload,
+            signal,
+            undefined,
+            owner,
+          ));
+        const draft = saved.request;
+        if (
+          draft.status !== 'draft' ||
+          (draft.startDate === start && draft.endDate === end)
+        )
+          return { request: draft };
+        return update(draft);
+      },
       ({ request: saved }) => onSaved(saved),
     );
   }
@@ -681,7 +737,7 @@ function DateEditor({
         type="button"
         className="quiet leave-back"
         disabled={operation.busy}
-        onClick={onBack}
+        onClick={() => onBack(!!pendingCreate.current)}
       >
         <ArrowLeft size={18} aria-hidden /> Înapoi
       </button>
@@ -1723,7 +1779,10 @@ function Workspace({ user, scopeQuery = '', focusId }: WorkspaceProps) {
       {create && (
         <DateEditor
           owner={user.id}
-          onBack={jumpToHistory}
+          onBack={(refreshHistory) => {
+            jumpToHistory();
+            if (refreshHistory) setUpdated((n) => n + 1);
+          }}
           onSaved={(request) => {
             jumpToRequest(request.id);
             setUpdated((n) => n + 1);
