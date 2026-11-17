@@ -416,18 +416,24 @@ The new-partner form starts with a debounced global active-CRM name or partial-C
 search. Authenticated `GET /api/partner/search?q=...` accepts 3–100 characters,
 returns at most 20 companies grouped by canonical CUI with point counts and
 `hasMore`, and limits each account to 90 searches per minute per process. Romanian
-diacritics and letter case are folded; query characters are literal. No schema
-migration or production backfill is required. Point selection still uses the
-existing exact/near matching and transactional revision guard; CUI is not unique
-across work locations. CRM failures stay explicit and retryable.
+diacritics and letter case are folded; query characters are literal. On Node
+startup, an additive, idempotent schema update installs the derived
+`crm_directory_revision` table and three customer-only triggers; no customer
+data backfill is required. A process-local, name/CUI-only search index is
+loaded on first use and rebuilt after customer writes, not visits or profile
+updates. Point selection retains exact/near matching and the transactional
+revision guard; CUI is not unique across work locations. CRM failures remain
+explicit and retryable.
 
 Partners search recognizes a CUI and the new-partner form checks ANAF automatically.
 The authenticated server uses ANAF v9, validates the CUI checksum, limits upstream
 requests to one per second and reuses results for up to one hour on the same
 Bucharest date. The UI shows the original check time, unknown fiscal flags,
-not-found and unavailable states separately. Only an explicit action copies the
-company name; fiscal addresses never replace store addresses. Lookup does not
-write customer data or block manual entry when ANAF is unavailable.
+not-found and unavailable states separately. A successful ANAF lookup may
+pre-fill an empty legal-name field for a new firm; existing or edited names are
+not overwritten, and agents can explicitly adopt the official name. Fiscal
+addresses never replace store addresses. Lookup does not write customer data
+or block manual entry when ANAF is unavailable.
 
 Recovery importer selection also requires its facts version to match the target
 runtime (supported versions 2 and 3), in addition to exact reviewed hashes and
