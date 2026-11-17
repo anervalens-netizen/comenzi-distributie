@@ -35,6 +35,16 @@ export const notificationRecipientScope = `
         SELECT 1 FROM manager_agents ma WHERE ma.manager_id=recipient.id AND ma.agent_id=lr.agent_id
       )))
     )
+  )) AND
+  (n.target_type != 'order-approval' OR EXISTS (
+    SELECT 1 FROM order_limit_approvals a WHERE a.id=n.target_id AND (
+      (recipient.role='agent' AND a.agent_id=recipient.id) OR
+      (recipient.role='manager' AND EXISTS (
+        SELECT 1 FROM json_each(a.manager_ids) frozen WHERE frozen.value=recipient.id
+      ) AND (recipient.manager_scope='global' OR EXISTS (
+        SELECT 1 FROM manager_agents ma WHERE ma.manager_id=recipient.id AND ma.agent_id=a.agent_id
+      )))
+    )
   ))`;
 const partnerScope = `
   recipient.role='manager' AND pr.status='confirmed' AND pr.confirmed_by=pr.agent_id
@@ -67,7 +77,7 @@ async function feed(user: User, guard: Guard, filters: Filters): Promise<Notific
   // Counts and sorting touch only inbox metadata. Expand text for the selected page.
   const result = await db().prepare(`
     WITH ${recipientCte(guard)},
-    selection(category,unread_only) AS (VALUES (?,?)),
+    selection(selectedCategory,unread_only) AS (VALUES (?,?)),
     inbox AS (
       SELECT n.id rawId,n.id,n.category,n.created_at createdAt,n.read_at readAt,NULL partnerAgentId
       FROM recipient CROSS JOIN notifications n ON n.recipient_id=recipient.id
@@ -78,16 +88,16 @@ async function feed(user: User, guard: Guard, filters: Filters): Promise<Notific
       LEFT JOIN settings s ON s.key='partner-read:'||recipient.id||':'||pr.id
       WHERE ${partnerScope} AND json_valid(pr.payload)
     ), categorized AS (
-      SELECT inbox.*,selection.category='all' OR inbox.category=selection.category categoryMatch
+      SELECT inbox.*,selection.unread_only,selection.selectedCategory='all' OR inbox.category=selection.selectedCategory categoryMatch
       FROM inbox CROSS JOIN selection
     ), page AS (
-      SELECT * FROM categorized CROSS JOIN selection WHERE categoryMatch AND (NOT unread_only OR readAt IS NULL)
+      SELECT * FROM categorized WHERE categoryMatch AND (NOT unread_only OR readAt IS NULL)
       ORDER BY createdAt DESC,id DESC LIMIT ? OFFSET ?
     ), totals AS (
       SELECT COUNT(*) FILTER (WHERE readAt IS NULL) unread,
         COUNT(*) FILTER (WHERE categoryMatch AND readAt IS NULL) categoryUnread,
         COUNT(*) FILTER (WHERE categoryMatch AND (NOT unread_only OR readAt IS NULL)) total
-      FROM categorized CROSS JOIN selection
+      FROM categorized
     )
     SELECT page.id,page.category,page.createdAt,page.readAt,totals.*,
       CASE WHEN page.partnerAgentId IS NULL THEN n.title

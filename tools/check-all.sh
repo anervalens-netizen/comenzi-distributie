@@ -14,6 +14,7 @@ node tools/test-partner-registration.mjs
 node tools/test-push-notifications.mjs
 node tools/test-notification-center.mjs
 node tools/test-leave-documents.mjs
+node tools/test-order-limits.mjs
 node tools/test-partner-form.mjs
 node tools/test-anaf.mjs
 python3 tools/test_crm_location_repair.py
@@ -176,6 +177,8 @@ node tools/test-inventory.mjs
 CHROME_BIN="${CHROME_BIN:-$(command -v google-chrome || command -v chromium || true)}"
 if [ -n "$CHROME_BIN" ]; then
   CHROME_BIN="$CHROME_BIN" node tools/test-notification-center-browser.mjs
+  CHROME_BIN="$CHROME_BIN" node tools/test-order-approval-browser.mjs
+  CHROME_BIN="$CHROME_BIN" node tools/test-order-limit-policy-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-leave-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-manager-navigation-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-partner-layout-browser.mjs

@@ -67,6 +67,7 @@ const ids = {
 try {
   sql.exec(`
     CREATE TABLE users(id TEXT PRIMARY KEY,name TEXT,role TEXT,active INTEGER,manager_scope TEXT,profile_revision INTEGER,must_change_password INTEGER);
+    CREATE TABLE orders(id TEXT PRIMARY KEY);
     CREATE TABLE sessions(token_hash TEXT PRIMARY KEY,user_id TEXT,expires_at INTEGER);
     CREATE TABLE manager_agents(manager_id TEXT,agent_id TEXT);
     CREATE TABLE settings(key TEXT PRIMARY KEY,value TEXT);
@@ -78,6 +79,7 @@ try {
   }
   sql.exec("INSERT INTO manager_agents VALUES ('manager','agent'), ('other','peer')");
   sql.exec(readFileSync('drizzle/0012_leave_notifications.sql','utf8'));
+  sql.exec(readFileSync('drizzle/0013_order_limit_approvals.sql','utf8'));
   sql.exec(`
     INSERT INTO leave_requests(id,agent_id,approver_id,start_date,end_date,days,status,snapshot,created_at,updated_at)
     VALUES('synthetic-leave','agent','manager','2026-12-01','2026-12-02',2,'submitted','{}','2026-11-02','2026-11-02');
@@ -183,6 +185,24 @@ try {
   await assert.rejects(get(agent,'?limit=200'),error=>error.status===400);
   await assert.rejects(read(agent,{ids:['wrong']}),error=>error.status===400);
   await assert.rejects(read(agent,{all:true,ids:[agentLeave.id]}),error=>error.status===400);
+  sql.exec(`
+    INSERT INTO orders VALUES ('synthetic-order');
+    INSERT INTO order_limit_approvals(id,order_id,order_revision,agent_id,agent_revision,warehouse_id,manager_ids,input_key,sales_version,mapping_version,policy_version,catalog_version,violations,status,created_at,updated_at)
+    VALUES ('synthetic-order-approval','synthetic-order',1,'agent',1,'synthetic','["manager"]','synthetic','synthetic','synthetic','synthetic','synthetic','[]','pending','2026-11-02','2026-11-02');
+    INSERT INTO manager_agents VALUES ('other','agent');
+  `);
+  const approval = {...event,eventKey:'order-approval',category:'order',targetType:'order-approval',targetId:'synthetic-order-approval'};
+  await globalThis.__notificationDb.batch([agent,peer,manager,other].map(recipient =>
+    notificationInsert({...approval,recipientId:recipient.id})));
+  const managerApproval = (await get(manager,'?category=order')).items[0];
+  assert.equal(managerApproval.targetId,approval.targetId,'Frozen and currently assigned manager sees the order approval notification');
+  assert.equal((await get(other,'?category=order')).total,0,'A current but non-frozen manager cannot see a request notification');
+  assert.equal((await get(agent,'?category=order')).total,1,'Agent sees an order approval notification only for their own order');
+  assert.equal((await get(peer,'?category=order')).total,0);
+  sql.exec("DELETE FROM manager_agents WHERE manager_id='manager' AND agent_id='agent'");
+  assert.equal((await read(manager,{ids:[managerApproval.id],category:'order'})).total,0,'Unassigned managers lose feed and mark-read access');
+  assert.equal(sql.prepare('SELECT read_at FROM notifications WHERE id=?').get(managerApproval.id).read_at,null);
+
   console.log('PASS: notification event deduplication, scoped union, pagination, private read state, and session/scope revocation');
 } finally {
   sql.close();

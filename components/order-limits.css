@@ -1,0 +1,162 @@
+.order-limit-quantity {
+  display: block;
+  margin: 8px 0 0;
+  color: #45566c;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.order-limit-quantity-exceeded {
+  color: #9e392a;
+  font-weight: 600;
+}
+
+.order-limit-controls {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  margin: 0 0 8px;
+  background: #f8fafc;
+  border: 1px solid #e4eaf2;
+  border-radius: 9px;
+  color: #243347;
+  font-size: 13px;
+  min-width: 0;
+}
+
+.order-limit-controls p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.order-limit-title,
+.order-limit-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.order-limit-actions {
+  flex-wrap: wrap;
+}
+
+.order-limit-actions button {
+  max-width: 100%;
+  white-space: normal;
+}
+
+.order-limit-violations {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  overflow-wrap: anywhere;
+  list-style: none;
+}
+
+.order-limit-violations li {
+  display: grid;
+  gap: 3px;
+}
+
+.order-limit-violations span {
+  color: #536176;
+  font-size: 12px;
+}
+
+.order-limit-controls .order-limit-reason {
+  display: grid;
+  gap: 4px;
+  color: #334154;
+}
+
+.order-limit-reason span {
+  font-size: 11px;
+}
+
+.order-limit-reason textarea {
+  min-height: 50px;
+  resize: vertical;
+}
+
+.order-approvals {
+  display: grid;
+  gap: 14px;
+  padding: clamp(14px, 3vw, 24px);
+}
+
+.order-approvals h1,
+.order-approvals h2,
+.order-approvals p {
+  margin: 0;
+}
+
+.order-approvals .order-approvals-filters,
+.order-approvals .order-approval-actions {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.order-approvals-filters label,
+.order-approval-comment {
+  display: grid;
+  gap: 5px;
+  font-size: 13px;
+}
+
+.order-approvals-list {
+  display: grid;
+  gap: 7px;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.order-approvals-list > li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid #e4eaf2;
+  border-radius: 9px;
+}
+
+.order-approvals-list p {
+  color: #536176;
+  font-size: 12px;
+}
+
+.order-approval-meta {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.order-approval-state {
+  color: #3c536f;
+  font-size: 13px;
+}
+
+.order-limit-subnav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.order-limit-subnav [aria-pressed="true"] {
+  border-color: #e4969d;
+  background: #fff3f4;
+  color: #ab3441;
+}
+
+@media (max-width: 640px) {
+  .order-limit-actions button,
+  .order-approval-actions button {
+    min-height: 44px;
+  }
+}

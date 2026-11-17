@@ -114,6 +114,33 @@ export function salesMonths(siteCode?: SalesScope) {
   return database().prepare(`SELECT month, imported_at AS importedAt, filename, file_hash AS fileHash, revision, (SELECT COUNT(*) FROM sales_rows r WHERE r.import_id=m.import_id${filter.sql.replaceAll('site_code', 'r.site_code')}) AS rowCount FROM sales_months m ORDER BY month DESC`).all(...filter.args) as Record<string, unknown>[];
 }
 
+/** Only closed-month inputs can invalidate an order approval; the current import does not. */
+export function orderLimitSalesVersion(from: string, to: string) {
+  const versions = database().prepare(
+    'SELECT month, import_id FROM sales_months WHERE month BETWEEN ? AND ? ORDER BY month'
+  ).all(from, to);
+  return JSON.stringify([from, to, versions.map(row => [row.month, row.import_id])]);
+}
+
+/** Net sold units from the selected, active import for each completed month. */
+export function orderLimitSalesTotals(scope: SalesScope, from: string, to: string, itemCodes: readonly string[]) {
+  const totals = new Map<string, number>();
+  if (!itemCodes.length) return { totals, coveredMonths: 0 };
+  const filter = sqlFilter(scope);
+  const source = " FROM sales_rows r JOIN sales_months active ON active.import_id=r.import_id AND active.month=r.month " +
+    "WHERE r.month BETWEEN ? AND ?" + filter.sql.replaceAll('site_code', 'r.site_code');
+  const rows = database().prepare("SELECT UPPER(TRIM(r.item_code)) code, SUM(r.quantity) quantity" + source +
+    " AND UPPER(TRIM(r.item_code)) IN (SELECT value FROM json_each(?)) GROUP BY UPPER(TRIM(r.item_code))"
+  ).all(from, to, ...filter.args, JSON.stringify(itemCodes));
+  for (const row of rows) {
+    const quantity = Number(row.quantity);
+    if (Number.isFinite(quantity)) totals.set(String(row.code), quantity);
+  }
+  const coveredMonths = Number(database().prepare('SELECT COUNT(*) count FROM sales_months WHERE month BETWEEN ? AND ?')
+    .get(from, to)?.count ?? 0);
+  return { totals, coveredMonths };
+}
+
 export function currentSalesImport(month: string) {
   return database().prepare('SELECT m.*,i.imported_by AS imported_by FROM sales_months m JOIN sales_imports i ON i.id=m.import_id WHERE m.month=?').get(month) as Record<string, unknown> | undefined;
 }

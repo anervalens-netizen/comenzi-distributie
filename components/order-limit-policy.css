@@ -1,0 +1,71 @@
+.order-policy-card {
+  display: grid;
+  gap: 16px;
+  padding: clamp(16px, 3vw, 24px);
+}
+
+.order-policy-head,
+.order-policy-submit {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.order-policy-head h2,
+.order-policy-card p,
+.order-policy-card dl,
+.order-policy-card dd {
+  margin: 0;
+}
+
+.order-policy-head h2 {
+  font-size: 1.2rem;
+  font-weight: 700;
+}
+
+.order-policy-card
+  :is(.order-policy-head p, .order-policy-submit p, .order-policy-version) {
+  color: #526177;
+  font-size: 0.86rem;
+  margin-top: 4px;
+}
+
+.order-policy-form {
+  display: grid;
+  gap: 16px;
+}
+
+.order-policy-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 175px), 1fr));
+  gap: 12px;
+}
+
+.order-policy-fields label,
+.order-policy-fields input {
+  min-width: 0;
+}
+
+.order-policy-fields input {
+  min-height: 46px;
+}
+
+.order-policy-readonly > div,
+.order-policy-notice {
+  padding: 11px 13px;
+  border-radius: 8px;
+  background: #f3f6fa;
+}
+
+.order-policy-readonly dt {
+  color: #526177;
+  font-size: 0.86rem;
+}
+
+.order-policy-readonly dd {
+  font-size: 1rem;
+  font-weight: 680;
+  margin-top: 4px;
+}

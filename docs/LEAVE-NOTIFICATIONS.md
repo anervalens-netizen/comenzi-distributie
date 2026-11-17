@@ -24,7 +24,7 @@ After submission, the agent downloads the named signed PDF and opens a mailto li
 
 The bell offers a compact inbox and the full page offers categories, unread filtering, pagination and read controls. Persistent notifications are recipient-owned and deduplicated by recipient/event key. Domain events and notification rows are committed in the same transaction. Leave push alerts contain generic lock-screen text; push is optional per device and the inbox works without push permission. Existing partner notifications and their per-manager read state remain available.
 
-Activation and order categories are reserved for future event producers. This release does not evaluate activation ratios, emit historical activation alerts, or enable order business rules. New producers should define a stable event key, recipient authorization, grouping and a transition-based rule before publishing events. Re-importing the same source must not create repeated notifications.
+The order category now carries per-product limit approval requests and decisions; see [order limits](ORDER-LIMITS.md). Activation events remain reserved for future producers. This release does not evaluate activation ratios or emit historical activation alerts. New producers should define a stable event key, recipient authorization, grouping and a transition-based rule before publishing events. Re-importing the same source must not create repeated notifications.
 
 ## Validation
 
