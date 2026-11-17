@@ -154,6 +154,7 @@ try {
   for(const id of ['mui-only-a','mui-only-b','mui-shared','mui-missing']){db.prepare('DELETE FROM partner_profiles WHERE customer_id=?').run(id);db.prepare('DELETE FROM customers WHERE id=?').run(id);}
   for(const id of ['mui-inventory-jan','mui-inventory-feb'])db.prepare('DELETE FROM settings WHERE key=?').run(`inventory-v1:${id}`);
   for(const id of ids){db.prepare('DELETE FROM sessions WHERE user_id=?').run(id);db.prepare('DELETE FROM manager_agents WHERE manager_id=? OR agent_id=?').run(id,id);}
+  for(const id of ids)db.prepare('DELETE FROM employee_profiles WHERE user_id=?').run(id);
   for(const id of ids)db.prepare('DELETE FROM users WHERE id=?').run(id);
   db.close();
 }

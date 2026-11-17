@@ -12,6 +12,9 @@ stop_last(){ local i=$((${#pids[@]}-1)); kill "${pids[$i]}" 2>/dev/null || true;
 node tools/test-partner-matching.mjs
 node tools/test-partner-registration.mjs
 node tools/test-push-notifications.mjs
+node tools/test-notification-center.mjs
+node tools/test-notification-center-browser.mjs
+node tools/test-leave-documents.mjs
 node tools/test-partner-form.mjs
 node tools/test-anaf.mjs
 python3 tools/test_crm_location_repair.py
@@ -99,6 +102,8 @@ node tools/test-pwa-preparation.mjs
 node tools/test-runtime-init.mjs
 node tools/test-operational-http.mjs
 node tools/test-anaf-http.mjs
+node tools/test-leave-http.mjs
+node tools/test-leave-browser.mjs
 node tools/test-bucharest-month.mjs
 node tools/test-sales-worker.mjs
 node tools/test-sales-view-worker.mjs

@@ -27,7 +27,7 @@ const stubs={
   'stock-server':`export const stockForWarehouse=async()=>({importedAt:'2026-09-01T00:00:00Z',filename:'synthetic.xlsx',rows:[{code:'SYNTHETIC',name:'Synthetic product',quantity:10}]});${unused(['stockImportStatus','stockView','stockUpload'])}`,
   'sales-server':unused(['salesImportStatus','salesView','salesUpload']),
   exports:unused(['templateExport','combinedExport','repairOrderExport','simExport','mailFor','emlFor']),
-  'push-notifications':unused(['managerRequestInbox','readPartnerNotifications','pushPublicConfig','removePushSubscription','upsertPushSubscription','sendPartnerRequestPush']),
+  'push-notifications':unused(['managerRequestInbox','readPartnerNotifications','pushPublicConfig','removePushSubscription','upsertPushSubscription','sendPartnerRequestPush','sendNotificationPush']),
   'partner-mail':unused(['partnerMail']),
   'partner-planning':unused(['visitWeek','saveDayPlan']),
   'partner-map-api':unused(['browsePartners','mapPartners']),
@@ -279,7 +279,7 @@ try {
     });
     b.onLoad({filter:/.*/,namespace:'app-fixture'},args=>{
       let contents;
-      if(args.path==='ui/dialog')contents="export const Dialog=({open,children})=>open?children:null;"+['DialogContent','DialogHeader','DialogTitle','DialogDescription'].map(name=>`export const ${name}=({children})=>children;`).join('');
+      if(args.path==='ui/dialog')contents="export const Dialog=({open,children})=>open?children:null;"+['DialogContent','DialogHeader','DialogTitle','DialogDescription','DialogTrigger'].map(name=>`export const ${name}=({children})=>children;`).join('');
       else if(args.path==='choice')contents="import {createElement as h} from 'react';export const Choice=({options,value,label,id})=>h('select',{id,'aria-label':label,value,onChange:()=>{}},options.map(option=>h('option',{key:option.value,value:option.value},option.label)));";
       else contents=appStubs[args.path].map(name=>`export const ${name}=()=>null;`).join('')+(args.path==='manager-workspace'?"export const managerCurrentMonth=()=> '2026-09';":'');
       return {loader:'js',contents};

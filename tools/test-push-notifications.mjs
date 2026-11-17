@@ -22,9 +22,9 @@ globalThis.__pushDb={prepare(query){return {args:[],bind(...args){this.args=args
 const fixtures={name:'push-fixtures',setup(b){
   b.onResolve({filter:/^\.\/server$/},()=>({path:'server',namespace:'push-fixture'}));
   b.onResolve({filter:/^@\/resources\/mail-defaults.json$/},()=>({path:'mail',namespace:'push-fixture'}));
-  b.onLoad({filter:/.*/,namespace:'push-fixture'},a=>({loader:'js',contents:a.path==='mail'?`export default {publicOrigin:'https://example.invalid'};`:`import {createHash} from 'node:crypto';export const sha256=value=>createHash('sha256').update(value).digest('hex');export const sessionToken=req=>req.headers.get('Cookie')?.match(/mobiup_session=([^;]+)/)?.[1]||'';export const db=()=>globalThis.__pushDb;export const fail=(status,message)=>{throw Object.assign(new Error(message),{status});};export const textField=(x,n=500)=>typeof x==='string'?x.trim().slice(0,n):'';export const isGlobalManager=u=>u.managerScope==='global';export const requireManager=u=>{if(u.role!=='manager')fail(403,'Forbidden');};`}));
+  b.onLoad({filter:/.*/,namespace:'push-fixture'},a=>({loader:'js',contents:a.path==='mail'?`export default {publicOrigin:'https://example.invalid'};`:`import {createHash} from 'node:crypto';export const sha256=value=>createHash('sha256').update(value).digest('hex');export const sessionToken=req=>req.headers.get('Cookie')?.match(/mobiup_session=([^;]+)/)?.[1]||'';export const db=()=>globalThis.__pushDb;export const jsonBody=req=>req.json();export const response=data=>Response.json(data);export const fail=(status,message)=>{throw Object.assign(new Error(message),{status});};export const textField=(x,n=500)=>typeof x==='string'?x.trim().slice(0,n):'';export const isGlobalManager=u=>u.managerScope==='global';export const requireManager=u=>{if(u.role!=='manager')fail(403,'Forbidden');};`}));
 }};
-const manager={id:'manager',role:'manager',managerScope:'global',profileVersion:'1'},agent={id:'agent',role:'agent',name:'Synthetic agent'};
+const manager={id:'manager',role:'manager',managerScope:'global',profileVersion:'1'},agent={id:'agent',role:'agent',name:'Synthetic agent',profileVersion:'1'};
 const receiver=createECDH('prime256v1');receiver.generateKeys();
 const keys={p256dh:receiver.getPublicKey().toString('base64url'),auth:randomBytes(16).toString('base64url')};
 const endpoints=[
@@ -73,7 +73,7 @@ function verifyVapid(endpoint,authorization,vapid){
 let sink,tls,dispatcher,worker;
 try{
   await build({stdin:{contents:`export * from './lib/push-notifications';export * from './lib/push-delivery';export {generateVapidKeys} from '@mmmike/web-push/vapid';`,resolveDir:resolve('.'),loader:'ts'},outfile:join(dir,'push.mjs'),bundle:true,format:'esm',platform:'node',plugins:[fixtures],banner:{js:'const fetch=(...args)=>globalThis.__pushTransport(...args);'}});
-  const {isAllowedPushEndpoint,upsertPushSubscription:rawUpsert,removePushSubscription:remove,sendPartnerRequestPush:dispatch,encryptPushRecord,sendBrowserPushBatch:send,generateVapidKeys}=await import(join(dir,'push.mjs'));
+  const {isAllowedPushEndpoint,upsertPushSubscription:rawUpsert,removePushSubscription:remove,sendPartnerRequestPush:dispatch,sendNotificationPush:dispatchInbox,encryptPushRecord,sendBrowserPushBatch:send,generateVapidKeys}=await import(join(dir,'push.mjs'));
   const managerRequest=new Request('https://example.invalid/api/notifications/push',{headers:{Cookie:'mobiup_session=synthetic-push-session'}});
   const upsert=(user,input,req=managerRequest)=>rawUpsert(user,input,req);
   sql.exec(`CREATE TABLE settings(key TEXT PRIMARY KEY,value TEXT);CREATE TABLE users(id TEXT PRIMARY KEY,role TEXT,active INTEGER,manager_scope TEXT,profile_revision INTEGER DEFAULT 1,must_change_password INTEGER DEFAULT 0);CREATE TABLE sessions(token_hash TEXT PRIMARY KEY,user_id TEXT,expires_at INTEGER);
@@ -85,8 +85,19 @@ try{
   for(const endpoint of blocked){assert.equal(isAllowedPushEndpoint(endpoint),false,endpoint);await assert.rejects(upsert(manager,{endpoint,keys}),e=>e.status===400);}
   for(const invalidKeys of [{...keys,p256dh:keys.p256dh+'a'.repeat(512)},{...keys,auth:keys.auth+'a'.repeat(512)},{...keys,p256dh:' '+keys.p256dh}])await assert.rejects(upsert(manager,{endpoint:endpoints[0],keys:invalidKeys}),e=>e.status===400);
   assert.equal(sql.prepare('SELECT COUNT(*) n FROM push_subscriptions').get().n,endpoints.length);
-  await assert.rejects(upsert(agent,{endpoint:endpoints[0],keys}),e=>e.status===403);
-  await assert.rejects(remove(agent,{endpoint:endpoints[0]}),e=>e.status===403);
+  await assert.rejects(upsert(agent,{endpoint:endpoints[0],keys}),e=>e.status===409,'A different account session cannot register');
+  await remove(agent,{endpoint:endpoints[0]});
+  assert.equal(sql.prepare('SELECT user_id FROM push_subscriptions WHERE endpoint=?').get(endpoints[0]).user_id,manager.id);
+  const agentToken='synthetic-push-agent-session';
+  const agentRequest=new Request('https://example.invalid/api/notifications/push',{headers:{Cookie:'mobiup_session='+agentToken}});
+  sql.prepare('INSERT INTO sessions VALUES(?,?,?)').run(createHash('sha256').update(agentToken).digest('hex'),agent.id,Date.now()+3600000);
+  assert.deepEqual(await upsert(agent,{endpoint:endpoints[0],keys,existingOnly:true},agentRequest),{ok:true,enabled:false});
+  assert.equal(sql.prepare('SELECT user_id FROM push_subscriptions WHERE endpoint=?').get(endpoints[0]).user_id,manager.id,'Checking the local browser subscription never reassigns an endpoint');
+  const agentEndpoint='https://fcm.googleapis.com/fcm/send/synthetic-agent';
+  await upsert(agent,{endpoint:agentEndpoint,keys},agentRequest);
+  assert.deepEqual(await upsert(agent,{endpoint:agentEndpoint,keys,existingOnly:true},agentRequest),{ok:true,enabled:true});
+  await remove(agent,{endpoint:agentEndpoint});
+  assert.equal(sql.prepare('SELECT user_id FROM push_subscriptions WHERE endpoint=?').get(agentEndpoint),undefined);
   await remove(manager,{endpoint:endpoints[0]});
   await upsert(manager,{endpoint:endpoints[0],keys});
   for(let i=endpoints.length;i<9;i++)await upsert(manager,{endpoint:`https://fcm.googleapis.com/fcm/send/limit-${i}`,keys});
@@ -219,6 +230,34 @@ try{
     assert.ok(warnings.some(x=>x[1]?.statusCode===429&&x[1]?.retryAfterMs===2000));
     const logs=JSON.stringify(warnings);for(const secret of [keys.p256dh,keys.auth,'https://','private provider','Synthetic partner','network-error'])assert.ok(!logs.includes(secret),'Logs must not contain capability URLs, keys or raw service errors');
   }finally{console.warn=warn;}
+  sql.exec(`
+    CREATE TABLE notifications(id TEXT PRIMARY KEY,recipient_id TEXT,event_key TEXT,category TEXT,target_id TEXT,read_at TEXT);
+    CREATE TABLE leave_requests(id TEXT PRIMARY KEY,agent_id TEXT);
+    INSERT INTO leave_requests VALUES('synthetic-leave','agent');
+    INSERT INTO notifications VALUES
+      ('synthetic-inbox-agent','agent','leave-event','leave','synthetic-leave',NULL),
+      ('synthetic-inbox-other','other-region','leave-event','leave','synthetic-leave',NULL),
+      ('synthetic-inbox-inactive','inactive','leave-event','leave','synthetic-leave',NULL);
+  `);
+  const inboxEndpoint='https://fcm.googleapis.com/fcm/send/inbox-agent';
+  insert(inboxEndpoint,'agent');
+  const inboxPayloads=[];
+  globalThis.__pushTransport=async(endpoint,options)=>{
+    inboxPayloads.push({endpoint,payload:decryptRecord(options.body)});
+    return new Response(null,{status:201});
+  };
+  await dispatchInbox('agent','missing-event');
+  await dispatchInbox('other-region','leave-event');
+  await dispatchInbox('inactive','leave-event');
+  assert.deepEqual(inboxPayloads,[],'Disabled, out-of-scope and missing events dispatch nothing');
+  await dispatchInbox('agent','leave-event');
+  assert.deepEqual(inboxPayloads,[{endpoint:inboxEndpoint,payload:{
+    title:'Comenzi Distribuție',body:'Ai o notificare nouă în aplicație.',
+    url:'/?notifications=1',tag:'notification-synthetic-inbox-agent',
+  }}]);
+  sql.exec("UPDATE notifications SET read_at='synthetic' WHERE recipient_id='agent'");
+  await dispatchInbox('agent','leave-event');
+  assert.equal(inboxPayloads.length,1,'Read events dispatch nothing');
   assert.equal(globalThis.fetch,originalFetch,'Push delivery never replaces global fetch');
   console.log('PASS: push endpoint registration/storage policy, atomic cap, RFC8291 vector, independent decryption/VAPID verification, sender limits, Node TLS/workerd redirect refusal, audience selection and sanitized best-effort failure handling.');
 }finally{

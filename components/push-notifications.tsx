@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import { BellRing, BellOff, LoaderCircle } from 'lucide-react';
 import { getCurrentSubscription, getNotificationPermission, isPushSupported, serializeSubscription, subscribe, unsubscribe } from '@mmmike/web-push/client';
-import { api, errorMessage } from '@/lib/client-api';
+import { networkApi as api, errorMessage } from '@/lib/client-api';
 
 type PushConfig={publicKey:string};
 type PushState='checking'|'unsupported'|'default'|'denied'|'enabled'|'disabled';
@@ -19,8 +19,11 @@ export function PushNotifications(){
         if(permission==='denied'){setState('denied');return;}
         if(permission!=='granted'){setState('default');return;}
         const current=await getCurrentSubscription();
-        if(current){await api('notifications/push','POST',serializeSubscription(current));if(!cancelled)setState('enabled');}
-        else if(!cancelled)setState('disabled');
+        if(cancelled)return;
+        if(current){
+          const status=await api<{enabled:boolean}>('notifications/push','POST',{...serializeSubscription(current),existingOnly:true});
+          if(!cancelled)setState(status.enabled?'enabled':'disabled');
+        }else setState('disabled');
       }catch(err){if(!cancelled){setError(errorMessage(err));setState('disabled');}}
     })();
     return()=>{cancelled=true;};
@@ -43,13 +46,13 @@ export function PushNotifications(){
   }
   const enabled=state==='enabled';
   return <section className="panel push-settings">
-    <div className="section-heading">{enabled?<BellRing size={22}/>:<BellOff size={22}/>}<div><h2>Notificări push</h2><p>Primești alerte native când un agent adaugă un client nou, inclusiv când PWA este închisă.</p></div></div>
+    <div className="section-heading">{enabled?<BellRing size={22}/>:<BellOff size={22}/>}<div><h2>Notificări push</h2><p>Primești alerte de pe acest cont și când aplicația este închisă.</p></div></div>
     <div className="push-settings-status"><span className={'badge '+(enabled?'finalized':'draft')}>{state==='checking'?'Se verifică…':state==='unsupported'?'Indisponibil':state==='denied'?'Blocat în browser':enabled?'Active':'Inactive'}</span>
       {state==='unsupported'&&<small>Browserul sau modul curent nu oferă Web Push. Pe iPhone este necesară instalarea PWA pe ecranul principal.</small>}
       {state==='denied'&&<small>Permisiunea a fost refuzată. Reactiveaz-o din setările browserului/PWA, apoi revino aici.</small>}
       {state==='default'&&<small>Activarea va cere permisiunea sistemului o singură dată.</small>}
       {state==='disabled'&&<small>Poți activa notificările pe acest dispozitiv.</small>}
-      {enabled&&<small>Acest dispozitiv este abonat la notificările din aria ta.</small>}
+      {enabled&&<small>Acest dispozitiv este abonat pentru contul tău.</small>}
     </div>
     {error&&<p className="error-banner" role="alert">{error}</p>}
     {!['checking','unsupported','denied'].includes(state)&&<button type="button" className={enabled?'secondary':'primary'} disabled={busy} onClick={()=>void (enabled?disable():enable())}>{busy?<LoaderCircle className="spin" size={18}/>:enabled?<BellOff size={18}/>:<BellRing size={18}/>} {busy?'Se actualizează…':enabled?'Dezactivează pe acest dispozitiv':'Activează notificările'}</button>}
