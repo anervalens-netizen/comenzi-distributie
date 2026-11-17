@@ -52,6 +52,14 @@ const server=createServer(async(request,response)=>{
    await delay(url.searchParams.get('q')==='slow'?700:50);response.end(JSON.stringify(report(url.searchParams)));return;
   }
   if(/^\/api\/partner\/portfolio\/p[0-9]+$/.test(url.pathname)){const id=url.pathname.split('/').at(-1);response.end(JSON.stringify({partner:{id,name:'Client sintetic detaliu',cui:'TEST',city:'Oraș test',county:'Județ test',address:'',phone:'',email:'',contact:'',warehouseIds:[],canEdit:false,revision:0,latitude:null,longitude:null,positionSource:'',positionQuality:'',route:''},visits:[],visitCount:0,nextCursor:null}));return;}
+  if(url.pathname==='/api/partner/portfolio/p7/sales'){
+   const from=url.searchParams.get('from')||'2025-10-12',to=url.searchParams.get('to')||'2026-09-28';
+   const filtered=from>='2026-09-01';
+   response.end(JSON.stringify({state:'ready',through:'2026-09-28',from,to,scope:'company',pointHistoryAvailable:false,companyHistoryAvailable:true,coverageComplete:true,
+    billingLifetime:{firstBilling:'2025-10-12',documentCount:15,calendarMonths:12,monthlyAverage:1.25},
+    documents:{count:filtered?1:15,lastBilling:'2026-09-12'},totals:{rows:filtered?1:15,lastMovement:'2026-09-12',valueCents:filtered?10000:250000,quantityMicros:1000000,missingValues:0,returnsCents:0},
+    latestDocuments:[],monthly:[],products:[],sellers:[],transactions:[],page:0,hasMore:false}));return;
+  }
   if(url.pathname.endsWith('/sales')){response.end(JSON.stringify({state:'unavailable',message:'Fișă sintetică: vânzător sursă disponibil în documente.'}));return;}
   response.statusCode=500;response.end(JSON.stringify({error:'Unexpected API: '+url.pathname}));return;
  }
@@ -159,8 +167,15 @@ try {
   await fill('[aria-label="Caută client în raport"]','a 07');await waitFor("document.querySelector('.client-sales-table')?.textContent.includes('a 07')");
   check(await evaluate("document.querySelector('.client-sales-pagination').textContent.includes('Pagina 1')"),'Search resets pagination');
   await click('.client-sales-table tbody th button');await waitFor("document.querySelector('dialog[open]')!==null");
-  await waitFor("document.querySelector('dialog').textContent.includes('Fișă sintetică')");
+  await waitFor("document.querySelector('.partner-billing-dates')?.textContent.includes('12.10.2025')");
   check(requests.some(p=>p.includes('/partner/portfolio/p7/sales?')&&p.includes('from=2026-09-01')&&p.includes('to=2026-09-28')),'Real partner sales drilldown uses selected cutoff');
+  check(await evaluate("document.querySelector('.partner-billing-dates').textContent.includes('12.09.2026')"),'First and filtered latest billing share one card');
+  check(await evaluate("document.querySelector('.partner-sales-kpis > div:nth-child(3) strong').textContent==='1'&&document.querySelector('.partner-sales-kpis > div:nth-child(4) strong').textContent==='1,25'"),'Filtered invoice count sits next to the lifetime average');
+  check(await evaluate("document.querySelector('dialog').scrollWidth<=document.querySelector('dialog').clientWidth+1"),'Four invoice and sales cards fit the mobile sheet');
+  await click('.partner-sales-period summary');
+  await click('.partner-sales-filters button');
+  await waitFor("document.querySelector('.partner-sales-kpis > div:nth-child(3) strong')?.textContent==='15'");
+  check(await evaluate("document.querySelector('.partner-billing-dates').textContent.includes('12.10.2025')&&document.querySelector('.partner-sales-kpis > div:nth-child(4) strong').textContent==='1,25'"),'History period changes only the filtered metrics');
   await click('[aria-label="Închide fișa"]');
   await fill('[aria-label="Caută client în raport"]','slow');await waitFor("document.querySelector('.client-sales output')!==null");
   await fill('[aria-label="Caută client în raport"]','a 09');await waitFor("document.querySelector('.client-sales-table')?.textContent.includes('a 09')");await delay(800);

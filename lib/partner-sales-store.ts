@@ -7,7 +7,7 @@ import {historyCompanyLinks,openCompanyLinkSource} from './partner-company-links
 import {readDetailLinks} from './partner-detail-snapshot';
 import {cooperativeStamp,fileGeneration} from './history-source-stamp';
 import {historyFileGeneration} from './history-source-generation';
-import {activityVersion} from './partner-activity-snapshot';
+import {activityVersion,bucharestToday} from './partner-activity-snapshot';
 export class PartnerSalesInputError extends Error {}
 export type PartnerSalesResult = ReturnType<typeof readPartnerSales>;
 function isoDate(value: string) {
@@ -16,15 +16,16 @@ function isoDate(value: string) {
   if(!Number.isFinite(time)||new Date(time).toISOString().slice(0,10)!==value)throw new PartnerSalesInputError('Perioada este invalidă.');
   return value;
 }
+const monthIndex=(date:string)=>Number(date.slice(0,4))*12+Number(date.slice(5,7));
 const unavailable=()=>({state:'unavailable' as const,message:'Istoricul lipsește sau a fost actualizat; centralizarea trebuie recalculată.'});
 /** Synchronous batch/test API. HTTP must use readPartnerSalesAsync. */
-export function readPartnerSales(partnerId: string, cui: string, params: URLSearchParams, directory=process.env.MOBIUP_DATA_DIR||'./work/server-data') {
+export function readPartnerSales(partnerId: string, cui: string, params: URLSearchParams, directory=process.env.MOBIUP_DATA_DIR||'./work/server-data', now=new Date()) {
   const path=resolve(directory,'client-history','client-sales-history.sqlite');
   if(!existsSync(path))return unavailable();
   const c=openCompanyLinkSource(path);
-  try{return readDetail(c,partnerId,cui,params);}finally{c.close();}
+  try{return readDetail(c,partnerId,cui,params,undefined,bucharestToday(now));}finally{c.close();}
 }
-function readDetail(c:DatabaseSync,partnerId:string,cui:string,params:URLSearchParams,prepared?:ReturnType<typeof readDetailLinks>){
+function readDetail(c:DatabaseSync,partnerId:string,cui:string,params:URLSearchParams,prepared?:ReturnType<typeof readDetailLinks>,today=bucharestToday()){
   c.function('history_cui_key',{deterministic:true},value=>cuiKey(String(value||'')));
   const reference=c.prepare("SELECT value FROM history_meta WHERE key='current_reference'").get()?.value;
   const periods=c.prepare("SELECT period_start,period_end FROM history_imports WHERE state='active' ORDER BY period_start").all() as {period_start:string;period_end:string}[];
@@ -60,9 +61,10 @@ function readDetail(c:DatabaseSync,partnerId:string,cui:string,params:URLSearchP
   const totals=c.prepare("SELECT COUNT(*) rows,MAX(r.date) lastMovement,SUM(r.value_cents) valueCents,SUM(r.quantity_micros) quantityMicros,SUM(r.value_cents IS NULL) missingValues,SUM(CASE WHEN r.value_cents<0 THEN r.value_cents ELSE 0 END) returnsCents"+range).get(...args) as {rows:number;lastMovement:string|null;valueCents:number|null;quantityMicros:number|null;missingValues:number|null;returnsCents:number|null};
   // A billing document is scoped to this partner, date, site and number.
   // Count positive net documents, excluding cancellations, returns-only and unnamed movements.
-  const documentGroups="SELECT r.date date,r.site_id site,r.document_number document,SUM(r.value_cents) valueCents"+range+" AND TRIM(r.document_number)<>'' GROUP BY r.date,r.site_id,r.document_number HAVING SUM(r.value_cents)>0 AND SUM(CASE WHEN r.quantity_micros>0 AND r.value_cents>0 THEN 1 ELSE 0 END)>0 AND SUM(r.value_cents IS NULL)=0";
-  const documents=c.prepare("SELECT COUNT(*) count,MAX(date) lastBilling FROM ("+documentGroups+")").get(...args) as {count:number;lastBilling:string|null};
-  const latestDocuments=(c.prepare(documentGroups+" ORDER BY date DESC,site,document DESC LIMIT 5").all(...args) as {date:string;site:string;document:string;valueCents:number}[]).map(document=>{
+  const documentGroups=(source:string)=>"SELECT r.date date,r.site_id site,r.document_number document,SUM(r.value_cents) valueCents"+source+" AND TRIM(r.document_number)<>'' GROUP BY r.date,r.site_id,r.document_number HAVING SUM(r.value_cents)>0 AND SUM(CASE WHEN r.quantity_micros>0 AND r.value_cents>0 THEN 1 ELSE 0 END)>0 AND SUM(r.value_cents IS NULL)=0";
+  const rangedDocuments=documentGroups(range);
+  const documents=c.prepare("SELECT COUNT(*) count,MAX(date) lastBilling FROM ("+rangedDocuments+")").get(...args) as {count:number;lastBilling:string|null};
+  const latestDocuments=(c.prepare(rangedDocuments+" ORDER BY date DESC,site,document DESC LIMIT 5").all(...args) as {date:string;site:string;document:string;valueCents:number}[]).map(document=>{
     const documentRange=range+" AND r.date=? AND r.site_id=? AND r.document_number=?";
     const documentArgs=[...args,document.date,document.site,document.document];
     const items=c.prepare("SELECT r.item_code code,MAX(r.item_name) name,SUM(r.quantity_micros) quantityMicros,SUM(r.value_cents) valueCents"+documentRange+" GROUP BY r.item_code ORDER BY valueCents DESC,code LIMIT 21").all(...documentArgs) as {code:string;name:string;quantityMicros:number;valueCents:number|null}[];
@@ -73,14 +75,18 @@ function readDetail(c:DatabaseSync,partnerId:string,cui:string,params:URLSearchP
   const products=c.prepare("SELECT item_code code,MAX(item_name) name,SUM(r.quantity_micros) quantityMicros,SUM(r.value_cents) valueCents"+range+" GROUP BY item_code ORDER BY valueCents DESC LIMIT 20").all(...args) as {code:string;name:string;quantityMicros:number;valueCents:number|null}[];
   const sellers=c.prepare("SELECT tr seller,SUM(r.value_cents) valueCents,COUNT(*) rows"+range+" GROUP BY tr ORDER BY valueCents DESC").all(...args) as {seller:string;valueCents:number|null;rows:number}[];
   const missingHistory=c.prepare("SELECT COUNT(*) n"+base+" AND r.value_cents IS NULL").get(identities) as {n:number};
-  // Document grouping removes exact net cancellations; dates aggregate billing frequency.
-  // Raw repeated product lines remain facts; Nr is never presented as a verified order count.
-  const billing=c.prepare("SELECT date,SUM(valueCents) valueCents FROM (SELECT date,site_id,document_number,SUM(r.value_cents) valueCents,SUM(r.value_cents IS NULL) missing"+base+" AND TRIM(document_number)<>'' GROUP BY date,site_id,document_number HAVING SUM(r.value_cents)>0 AND SUM(CASE WHEN r.quantity_micros>0 AND r.value_cents>0 THEN 1 ELSE 0 END)>0 AND SUM(r.value_cents IS NULL)=0) GROUP BY date ORDER BY date").all(identities) as {date:string;valueCents:number}[];
-  const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Bucharest',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+  // Reuse the cadence scan for lifetime metrics. Count documents before rolling
+  // up by date, as multiple eligible invoices can be recorded on one day.
+  const billing=c.prepare("SELECT date,COUNT(*) documentCount,SUM(valueCents) valueCents FROM ("+documentGroups(base)+") GROUP BY date ORDER BY date").all(identities) as {date:string;documentCount:number;valueCents:number}[];
+  const billedToDate=billing.filter(row=>row.date<=today);
+  const firstBilling=billedToDate[0]?.date??null;
+  const documentCount=billedToDate.reduce((count,row)=>count+row.documentCount,0);
+  const calendarMonths=firstBilling?monthIndex(today)-monthIndex(firstBilling)+1:0;
+  const billingLifetime={firstBilling,documentCount,calendarMonths,monthlyAverage:calendarMonths?documentCount/calendarMonths:null};
   const activity=partnerActivity(billing,through,today,coverageComplete&&companyIdentityComplete&&(scope==='company'||!unresolved.n)&&!missingHistory.n);
   const transactions=c.prepare("SELECT date,document_number document,site_id site,item_code itemCode,item_name itemName,r.quantity_micros quantityMicros,r.value_cents valueCents,tr seller"+range+" ORDER BY date DESC,import_id DESC,source_row DESC LIMIT 51 OFFSET ?").all(...args,page*50) as {date:string;document:string;site:string;itemCode:string;itemName:string;quantityMicros:number;valueCents:number|null;seller:string}[];
   return {state:'ready' as const,through,from,to,scope,pointHistoryAvailable:identityRows.length>0,companyHistoryAvailable:companyRows.length>0,activity,coverageComplete:coverageComplete&&companyIdentityComplete&&(scope==='company'||!unresolved.n)&&!missingHistory.n,
-    unresolvedCompanyIdentities:unresolved.n,totals,documents,latestDocuments,monthly,products,sellers,transactions:transactions.slice(0,50),page,hasMore:transactions.length>50};
+    unresolvedCompanyIdentities:unresolved.n,totals,documents,billingLifetime,latestDocuments,monthly,products,sellers,transactions:transactions.slice(0,50),page,hasMore:transactions.length>50};
 }
 
 /** No authorization is cached: the adapter supplies the current authorized card.

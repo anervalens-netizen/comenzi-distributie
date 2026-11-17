@@ -62,8 +62,14 @@ try{
  const docs=new DatabaseSync(path);
  docs.exec("UPDATE history_imports SET period_start='2023-01-01'; INSERT INTO history_rows VALUES(1,1,20,'2023-02-01','old-site','5',7000,1000000,'old-item','Old product','Old seller'),(1,1,21,'2026-07-06','site','5',2000,2000000,'item','Example product','Original seller'),(1,1,22,'2026-07-06','other-site','5',3000,1000000,'different','Other product','Other seller'),(1,1,23,'2026-09-28','site','return',-1000,-1000000,'item','Example product','Original seller');");
  docs.close();
- const grouped=readPartnerSales('p1','123',new URLSearchParams(),root);
+ // 22:05 UTC on Oct 31 is already November 1 in Bucharest.
+ const reportingNow=new Date('2026-10-31T22:05:00Z');
+ const grouped=readPartnerSales('p1','123',new URLSearchParams(),root,reportingNow);
  assert.equal(grouped.from,'2023-01-01');assert.equal(grouped.totals.valueCents,71000);
+ assert.deepEqual(grouped.billingLifetime,{firstBilling:'2023-02-01',documentCount:8,calendarMonths:46,monthlyAverage:8/46});
+ const noInvoicesInPeriod=readPartnerSales('p1','123',new URLSearchParams({from:'2025-01-01',to:'2025-12-31',page:'2'}),root,reportingNow);
+ assert.equal(noInvoicesInPeriod.documents.count,0);
+ assert.deepEqual(noInvoicesInPeriod.billingLifetime,grouped.billingLifetime,'lifetime metrics ignore report dates and pagination');
  assert.equal(grouped.documents.count,8,'old bill and identical document number at another site remain separate');
  const sameNumber=grouped.latestDocuments.filter(d=>d.date==='2026-07-06'&&d.document==='5');
  assert.equal(sameNumber.length,2);const combined=sameNumber.find(d=>d.site==='site');
@@ -95,6 +101,8 @@ try{
  assert.deepEqual(allClient.transactions.map(t=>t.document).filter(d=>d==='no-point'||d==='second-store').sort(),['no-point','second-store']);
  assert.equal(readPartnerSales('p1','123',new URLSearchParams({scope:'point'}),root).totals.valueCents,71000,'explicit point filter retains exact store sales');
  assert.equal(readPartnerSales('p-other-store','123',new URLSearchParams(),root).totals.valueCents,78000,'same client total from either store');
+ const otherPoint=readPartnerSales('p-other-store','123',new URLSearchParams({scope:'point'}),root,reportingNow);
+ assert.deepEqual(otherPoint.billingLifetime,{firstBilling:'2026-09-29',documentCount:1,calendarMonths:3,monthlyAverage:1/3},'the first invoice and average follow the selected work point');
  assert.equal(readPartnerSales('p1','unmatched',new URLSearchParams(),root).scope,'point','known point still works without a company key');
  const companyData=new DatabaseSync(path);
  companyData.exec("INSERT INTO history_identities VALUES(4,'company-alias'),(5,'shared-alias'),(6,'CLIENTGEN'); INSERT INTO history_allocations VALUES(4,'ref','reconcile','[]','[]'),(5,'ref','reconcile','[]','[]'),(6,'ref','consumer','[]','[]'); INSERT INTO history_rows VALUES(1,4,30,'2026-09-30','site','company-bill',8000,1000000,'company-item','Company product','Former seller'),(1,5,31,'2026-09-29','site','ambiguous',900000,1000000,'foreign','Ambiguous product','Other seller'),(1,6,32,'2026-09-29','site','consumer',500,1000000,'generic','Consumer product','Other seller');");
@@ -106,5 +114,23 @@ try{
  assert.equal(firm.latestDocuments[0].document,'company-bill');
  assert.equal(readPartnerSales('consumer','CLIENTGEN',new URLSearchParams(),root).state,'unlinked');
  assert.equal(readPartnerSales('ambiguous','shared-alias',new URLSearchParams(),root).state,'unlinked');
- console.log('PASS: read-only store, exact partner scope, shared facts, cancellation, zero values, date filters and unresolved-history alerts.');
+ const historyVersions=new DatabaseSync(path);
+ historyVersions.exec(`
+   INSERT INTO history_imports VALUES(2,'superseded','2023-01-01','2023-02-28',123,1000000,1),(3,'active','2026-10-01','2026-11-30',123,1000000,1);
+   INSERT INTO history_identities VALUES(8,'888');
+   INSERT INTO history_allocations VALUES(8,'ref','direct_code','["no-billing"]','[]');
+   INSERT INTO history_rows VALUES
+     (2,1,1,'2023-01-03','site','superseded',123,1000000,'item','Old version','Seller'),
+     (3,1,1,'2026-11-02','site','future',123,1000000,'item','Future transaction','Seller'),
+     (1,8,33,'2023-01-03','site','return',-100,-1000000,'item','Returns only','Seller'),
+     (1,8,34,'2023-01-04','site','missing',NULL,1000000,'item','Missing value','Seller'),
+     (1,8,35,'2023-01-05','site','',100,1000000,'item','Unnamed movement','Seller');
+ `);
+ historyVersions.close();
+ const verifiedPoint=readPartnerSales('p1','123',new URLSearchParams({scope:'point'}),root,reportingNow);
+ assert.deepEqual(verifiedPoint.billingLifetime,grouped.billingLifetime,'future documents and superseded imports are excluded');
+ const noBilling=readPartnerSales('no-billing','888',new URLSearchParams({scope:'point'}),root,reportingNow);
+ assert.equal(noBilling.state,'ready');
+ assert.deepEqual(noBilling.billingLifetime,{firstBilling:null,documentCount:0,calendarMonths:0,monthlyAverage:null});
+ console.log('PASS: read-only store, exact partner scope, date filters, document deduplication and lifetime first/average in Bucharest.');
 }finally{rmSync(root,{recursive:true,force:true});}

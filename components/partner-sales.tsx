@@ -6,6 +6,7 @@ import './partner-sales.css';
 const amount=(cents:number|null)=>cents===null?'Valoare lipsă':money(cents/100);
 const date=(value:string|null)=>value?value.split('-').reverse().join('.'):'—';
 const quantity=(value:number)=> (value/1e6).toLocaleString('ro-RO');
+const monthlyInvoices=(value:number|null|undefined)=>value==null?'Indisponibilă':value.toLocaleString('ro-RO',{minimumFractionDigits:2,maximumFractionDigits:2});
 const labels={no_billing:'Fără facturare comercială în datele asociate',insufficient_history:'Istoric insuficient',occasional:'Ocazional',regular:'Constant',overdue:'Peste ritmul obișnuit',inactive:'Inactiv față de ritmul anterior'};
 type Product={code:string;name:string;quantityMicros:number;valueCents:number|null};
 function Products({items}:{items:Product[]}){
@@ -44,9 +45,15 @@ export function PartnerSales({id,initialRange}:{id:string;initialRange?:{from:st
         {ready.pointHistoryAvailable&&ready.companyHistoryAvailable&&<label className="partner-sales-scope">Istoric afișat<select value={ready.scope} onChange={e=>{setScope(e.target.value);setPage(0);}}><option value="company">Clientul · toate vânzările</option><option value="point">Doar acest punct de lucru</option></select></label>}
         {ready.scope==='company'&&<p className="partner-sales-company"><strong>Istoricul firmei</strong><br/>{'Include toate punctele de lucru și vânzările fără punct completat, indiferent de agentul care a facturat.'}</p>}
         <div className="partner-sales-kpis">
-          <div><small>Ultima facturare</small><strong>{date(ready.documents.lastBilling)}</strong></div>
+          <div className="partner-billing-dates">
+            <div><small>Prima facturare</small><strong>{date(ready.billingLifetime?.firstBilling??null)}</strong></div>
+            <div><small>Ultima facturare în perioadă</small><strong>{date(ready.documents.lastBilling)}</strong></div>
+          </div>
           <div><small>{ready.coverageComplete?(ready.scope==='company'?'Vânzări firmă cu TVA':'Vânzări punct cu TVA'):'Vânzări asociate · parțial'}</small><strong>{ready.totals.rows?amount(ready.totals.valueCents):money(0)}</strong></div>
           <div><small>Facturi în perioadă*</small><strong>{ready.documents.count.toLocaleString('ro-RO')}</strong></div>
+          <div><small>Medie lunară facturi*</small><strong>{monthlyInvoices(ready.billingLifetime?.monthlyAverage)}</strong>
+            <small className="partner-billing-period">De la prima facturare până în luna curentă, inclusiv lunile fără facturi.</small>
+          </div>
         </div>
         <p className="partner-sales-source">{date(ready.from)} – {date(ready.to)} · Import până la {date(ready.through)}. Retururile sunt incluse în vânzări.</p>
         {!ready.coverageComplete&&<p className="partner-sales-caution">Istoric parțial: sunt incluse doar vânzările asociate sigur acestei fișe.</p>}
