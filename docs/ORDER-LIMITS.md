@@ -1,6 +1,6 @@
 # Per-product order limits and manager exceptions
 
-Replenishment orders are checked per agent and product code, per order. Current stock and quantities in other orders are not subtracted or accumulated. This is a replenishment guardrail, not a stock reservation or a rolling purchasing quota. Serial-number delivery notes are outside this rule.
+Replenishment orders for the privately configured manager’s currently assigned agents are checked per agent and product code, per order. Without a configured manager, the new quantity limits are disabled. Current stock and quantities in other orders are not subtracted or accumulated. This is a replenishment guardrail, not a stock reservation or a rolling purchasing quota. Serial-number delivery notes are outside this rule.
 
 The initial configured categories use these minimum allowances:
 

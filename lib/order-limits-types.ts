@@ -47,6 +47,7 @@ export type OrderLimitApproval = {
 };
 
 export type OrderLimitsView = {
+  enabled: boolean;
   orderId: string;
   revision: number;
   period: OrderLimitPeriod;

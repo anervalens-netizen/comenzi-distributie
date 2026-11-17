@@ -49,7 +49,7 @@ export function isOrderApproval(value: unknown): value is OrderApproval {
 function isOrderLimits(value: unknown, orderId: string): value is Limits {
   if (!value || typeof value !== 'object') return false;
   const d = value as Limits;
-  return d.orderId === orderId && isQuantity(d.revision) && isPeriod(d.period) &&
+  return typeof d.enabled === 'boolean' && d.orderId === orderId && isQuantity(d.revision) && isPeriod(d.period) &&
     Array.isArray(d.products) && d.products.every(isLimit) &&
     Array.isArray(d.violations) && d.violations.every(isViolation) &&
     (d.request === null || isOrderApproval(d.request) && d.request.orderId === orderId);
@@ -116,9 +116,10 @@ export function useOrderLimits(order: Order, saved: boolean) {
   }
   const violations = orderLimitViolations(order, products);
   const approved = currentApproval?.status === 'approved';
-  const ready = !enabled || (state.data?.revision === order.revision && !state.error);
-  const blocked = !ready || state.refreshing || (violations.length > 0 && !approved);
-  const canRequest = ready && violations.length > 0 && !approved && !pending
+  const active = enabled && state.data?.enabled !== false;
+  const ready = !active || (state.data?.revision === order.revision && !state.error);
+  const blocked = active && (!ready || state.refreshing || (violations.length > 0 && !approved));
+  const canRequest = active && ready && violations.length > 0 && !approved && !pending
     && currentApproval?.status !== 'rejected' && owner === order.userId;
   function quantityLimit(product: Pick<Product, 'id' | 'code'>, lineQuantity: number) {
     const code = orderLimitCode(product.code);
@@ -157,7 +158,7 @@ export function useOrderLimits(order: Order, saved: boolean) {
   }
 
   return {
-    enabled, ready, quantityLimit, violations, currentApproval, blocked, pending, approved, canRequest,
+    enabled: active, ready, quantityLimit, violations, currentApproval, blocked, pending, approved, canRequest,
     error: state.error, refreshing: state.refreshing, requestState,
     refresh, requestApproval,
   };

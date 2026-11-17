@@ -38,7 +38,7 @@ const metrics=[
 ];
 function limits(order) {
   const violations=orderLimitViolations(order,metrics);
-  return {orderId:order.id,revision:order.revision,period,products:metrics,violations,request:order===fixture.order?approv(fixture.user.id):null};
+  return {enabled:true,orderId:order.id,revision:order.revision,period,products:metrics,violations,request:order===fixture.order?approv(fixture.user.id):null};
 }
 function approv(owner){
   const a=fixture.approval;

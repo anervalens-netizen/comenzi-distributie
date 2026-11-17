@@ -10,10 +10,11 @@ import { build } from 'esbuild';
 mkdirSync('work', { recursive: true });
 const scratch = mkdtempSync(resolve('work/order-limit-approvals-'));
 const previous = Object.fromEntries(
-  ['MOBIUP_DATA_DIR', 'MOBIUP_USAGE_DISABLED'].map((key) => [
-    key,
-    process.env[key],
-  ]),
+  [
+    'MOBIUP_DATA_DIR',
+    'MOBIUP_USAGE_DISABLED',
+    'MOBIUP_ORDER_LIMIT_MANAGER_ID',
+  ].map((key) => [key, process.env[key]]),
 );
 const data = join(scratch, 'data');
 process.env.MOBIUP_DATA_DIR = data;
@@ -319,8 +320,68 @@ try {
       expected,
     );
 
+  delete process.env.MOBIUP_ORDER_LIMIT_MANAGER_ID;
+  const disabled = order([['cap-case', 40]]);
+  assert.equal(
+    (await limits(disabled)).enabled,
+    false,
+    'quantity limits are disabled without private configuration',
+  );
+  assert.equal((await finalize(disabled, 1)).order.status, 'finalized');
+
+  process.env.MOBIUP_ORDER_LIMIT_MANAGER_ID = 'manager-one';
+  const nonteam = order([['cap-case', 40]], 'other');
+  const outside = await call('GET', 'orders/' + nonteam + '/limits', 'other');
+  assert.equal(outside.enabled, false);
+  assert.deepEqual(outside.products, []);
+  await call(
+    'POST',
+    'orders/' + nonteam + '/limit-approval',
+    'other',
+    { revision: 1 },
+    403,
+  );
+  const putOutside = route.env.FILES.put;
+  route.env.FILES.put = async (...args) => {
+    const result = await putOutside.apply(route.env.FILES, args);
+    assign('manager-one', 'other');
+    return result;
+  };
+  try {
+    await call(
+      'POST',
+      'orders/' + nonteam + '/finalize',
+      'other',
+      { revision: 1 },
+      409,
+    );
+  } finally {
+    route.env.FILES.put = putOutside;
+  }
+  assert.equal(
+    (await call('GET', 'orders/' + nonteam + '/limits', 'other')).enabled,
+    true,
+  );
+  await call(
+    'POST',
+    'orders/' + nonteam + '/finalize',
+    'other',
+    { revision: 1 },
+    409,
+  );
+  remove('manager-one', 'other');
+  assert.equal(
+    (
+      await call('POST', 'orders/' + nonteam + '/finalize', 'other', {
+        revision: 1,
+      })
+    ).order.status,
+    'finalized',
+  );
+
   const own = order([['cap-charger', 30]]);
   let view = await limits(own);
+  assert.equal(view.enabled, true);
   const allowance = (id) => view.products.find((p) => p.productId === id);
   assert.equal(
     allowance('cap-charger').limit,
