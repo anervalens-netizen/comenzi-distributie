@@ -6,7 +6,7 @@ The authenticated application exposes Concedii and Notificări for agents and ma
 
 Managers confirm the legal name, employer, all currently assigned approvers and their email addresses in Concedii → Profiluri angajați. The global manager configures the HR destination separately. Missing or changed assignments require confirmation rather than silently choosing a recipient. Company data and addresses belong in private configuration, never in source fixtures.
 
-Periods use date-only inclusive bounds and Monday–Friday working days. Romanian fixed holidays, Orthodox or Western Easter/Good Friday/Pentecost, and additional employee holidays are excluded. The server calculates the authoritative total and stores the selected dates and excluded dates with the request. The calendar rules are versioned in source and need maintenance when legislation changes. Annual balances are not inferred from the new request history; the UI states that the balance is unconfigured.
+Periods use date-only inclusive bounds and Monday–Friday working days. Romanian fixed holidays, Orthodox or Western Easter/Good Friday/Pentecost, and additional employee holidays are excluded. The server calculates the authoritative total and stores the selected dates and excluded dates with the request. The calendar rules are versioned in source and need maintenance when legislation changes. Annual balances are not inferred from the new request history and are not displayed until an authoritative balance is configured.
 
 ## Request lifecycle
 

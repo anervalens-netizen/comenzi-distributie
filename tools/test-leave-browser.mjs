@@ -387,12 +387,7 @@ try {
   assert.equal(
     mail.searchParams.get('body'),
     'Bună ziua,\n\nVă transmit atașat cererea de concediu de odihnă pentru perioada 27.11.2026–03.12.2026, însumând 3 zile lucrătoare.\n\n' +
-      legalName +
-      '\n\nManageri în CC — Test Manager A (' +
-      cc +
-      '), Test Manager B (' +
-      secondCc +
-      ')',
+      legalName,
   );
   await content(browser, '.leave-mail dl', filename);
   await click(browser, '.leave-mail button', 'Descarcă PDF-ul');
