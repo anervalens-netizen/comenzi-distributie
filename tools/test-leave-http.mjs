@@ -128,6 +128,22 @@ try {
     extraHolidays: [],
     verified: true,
   };
+  const badName = await call(
+    manager,
+    'leave/profiles/' + agent,
+    'PUT',
+    { ...profileBody, legalName: 'Synthetic 漢字' },
+    400,
+  );
+  assert.match(badName.error, /PDF nu le poate afișa/);
+  const badEmployer = await call(
+    manager,
+    'leave/profiles/' + agent,
+    'PUT',
+    { ...profileBody, employer: 'Synthetic 漢字 SRL' },
+    400,
+  );
+  assert.match(badEmployer.error, /PDF nu le poate afișa/);
   await call(manager, 'leave/profiles/' + agent, 'PUT', profileBody);
   await call(manager, 'leave/profiles/' + agent, 'PUT', profileBody, 409);
   await call(
@@ -218,9 +234,38 @@ try {
       .n,
     1,
   );
-  const signedDigest = db
-    .prepare('SELECT digest FROM leave_documents WHERE request_id=?')
-    .get(id).digest;
+  const signedDocument = db
+    .prepare('SELECT content,digest FROM leave_documents WHERE request_id=?')
+    .get(id);
+  const signedDigest = signedDocument.digest;
+  const signedResponse = await fetch(origin + '/api/leave/' + id + '/pdf', {
+    headers: { Cookie: 'mobiup_session=' + tokens[agent] },
+  });
+  assert.equal(signedResponse.status, 200);
+  assert.equal(
+    createHash('sha256')
+      .update(Buffer.from(await signedResponse.arrayBuffer()))
+      .digest('hex'),
+    signedDigest,
+  );
+  const changedBytes = Buffer.from(signedDocument.content, 'base64');
+  changedBytes[changedBytes.length - 1] ^= 1;
+  db.prepare('UPDATE leave_documents SET content=? WHERE request_id=?').run(
+    changedBytes.toString('base64'),
+    id,
+  );
+  const corrupt = await call(
+    agent,
+    'leave/' + id + '/pdf',
+    'GET',
+    undefined,
+    500,
+  );
+  assert.match(corrupt.error, /Integritatea PDF-ului semnat/);
+  db.prepare('UPDATE leave_documents SET content=? WHERE request_id=?').run(
+    signedDocument.content,
+    id,
+  );
   await call(
     agent,
     'leave/' + id + '/submit',
@@ -482,6 +527,14 @@ try {
     sharedMail.mailto,
     /cc=manager%40example.test%2CManager2%40example.test/,
   );
+  assert.match(
+    sharedMail.body,
+    /Manageri în CC — Synthetic leave-manager \(manager@example\.test\), Synthetic leave-manager-two \(Manager2@example\.test\)/,
+  );
+  assert.equal(
+    new URL(sharedMail.mailto).searchParams.get('body'),
+    sharedMail.body,
+  );
   await call(agent, 'leave/' + sharedDraft + '/submit', 'POST', {
     revision: 2,
     signature,
@@ -627,9 +680,62 @@ try {
       .map((x) => x.recipient_id),
     [manager, second],
   );
+  const reassignedId = randomUUID();
+  await call(
+    agent,
+    'leave',
+    'POST',
+    { id: reassignedId, startDate: '2026-12-28', endDate: '2026-12-29' },
+    201,
+  );
+  await call(agent, 'leave/' + reassignedId + '/submit', 'POST', {
+    revision: 1,
+    signature,
+  });
+  const frozen = await call(agent, 'leave/' + reassignedId);
+  assert.equal(
+    (await call(second, 'leave/' + reassignedId)).request.canDecide,
+    true,
+  );
   db.prepare(
     'DELETE FROM manager_agents WHERE manager_id=? AND agent_id=?',
   ).run(second, agent);
+  db.prepare('INSERT INTO manager_agents VALUES(?,?)').run(foreign, agent);
+  await call(
+    second,
+    'leave/' + reassignedId + '/decision',
+    'POST',
+    { revision: 2, status: 'approved' },
+    404,
+  );
+  const added = await call(foreign, 'leave/' + reassignedId);
+  assert.equal(
+    added.request.canDecide,
+    false,
+    'an assignment added after submission cannot decide',
+  );
+  await call(
+    foreign,
+    'leave/' + reassignedId + '/decision',
+    'POST',
+    { revision: 2, status: 'approved' },
+    403,
+  );
+  const afterAssignmentChange = await call(agent, 'leave/' + reassignedId);
+  assert.deepEqual(
+    afterAssignmentChange.request.snapshot,
+    frozen.request.snapshot,
+  );
+  assert.deepEqual(afterAssignmentChange.mail, frozen.mail);
+  const remaining = await call(
+    manager,
+    'leave/' + reassignedId + '/decision',
+    'POST',
+    { revision: 2, status: 'approved' },
+  );
+  assert.equal(remaining.request.status, 'approved');
+  assert.deepEqual(remaining.request.snapshot, frozen.request.snapshot);
+
   assert.equal(
     (await call(manager, 'leave/profiles?agentId=' + agent)).profiles[0]
       .verified,
@@ -640,7 +746,7 @@ try {
   db.prepare('UPDATE users SET active=0 WHERE id=?').run(agent);
   await call(agent, 'leave', 'GET', undefined, 401);
   console.log(
-    'PASS leave HTTP lifecycle, calendar, authorization, immutable PDF, concurrent idempotency, multi-manager decision CAS, HR changes, notification scope and overlap.',
+    'PASS leave HTTP lifecycle, calendar, authorization, immutable/tampered PDF, concurrent idempotency, multi-manager decision CAS, HR changes, notification scope and overlap.',
   );
 } finally {
   if (db) db.close();

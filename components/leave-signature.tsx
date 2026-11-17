@@ -6,8 +6,8 @@ import type { Stroke } from '@/lib/leave-types';
 
 const padWidth = 600;
 const padHeight = 220;
-const pointLimit = 500;
-const strokeLimit = 32;
+export const signaturePointLimit = 5000;
+const strokeLimit = 100;
 const clamp = (value: number) => Math.max(0, Math.min(1, value));
 
 function point(event: PointerEvent<SVGSVGElement>) {
@@ -30,14 +30,13 @@ export function LeaveSignature({
   const pointerId = useRef<number | null>(null);
   const active = useRef<Stroke>([]);
   const [preview, setPreview] = useState<Stroke>([]);
+  const remaining =
+    signaturePointLimit - value.reduce((sum, stroke) => sum + stroke.length, 0);
+  const atLimit =
+    remaining < 2 || value.length >= strokeLimit || preview.length >= remaining;
 
   function start(event: PointerEvent<SVGSVGElement>) {
-    if (
-      disabled ||
-      event.button !== 0 ||
-      pointerId.current !== null ||
-      value.length >= strokeLimit
-    )
+    if (disabled || event.button !== 0 || pointerId.current !== null || atLimit)
       return;
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -49,7 +48,7 @@ export function LeaveSignature({
   function move(event: PointerEvent<SVGSVGElement>) {
     if (
       event.pointerId !== pointerId.current ||
-      active.current.length >= pointLimit
+      active.current.length >= remaining
     )
       return;
     const next = point(event);
@@ -70,6 +69,10 @@ export function LeaveSignature({
 
   return (
     <div className="leave-signature">
+      <p className="sr-only">
+        Semnează cu degetul sau cu stylusul. Pentru depunere cu tastatura, alege
+        Pe hârtie.
+      </p>
       <div className="leave-signature-heading">
         <strong>Semnătura olografă</strong>
         <button
@@ -113,6 +116,11 @@ export function LeaveSignature({
           <span>Semnează cu degetul sau cu stylusul</span>
         )}
       </div>
+      {atLimit && (
+        <output className="leave-help">
+          Ai ajuns la limita semnăturii. Pentru a semna din nou, apasă Șterge.
+        </output>
+      )}
     </div>
   );
 }

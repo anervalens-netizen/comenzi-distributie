@@ -81,7 +81,17 @@ export async function upsertPushSubscription(user:User,input:unknown,req:Request
   requirePushAccount(user);const subscription=parseSubscription(input),now=new Date().toISOString();
   const guard=operationalWriteGuard(req,user);
   if((input as {existingOnly?:unknown}).existingOnly===true){
-    const existing=await db().prepare("SELECT EXISTS (SELECT 1 FROM push_subscriptions WHERE user_id=? AND endpoint=? AND p256dh=? AND auth=?) enabled WHERE "+guard.sql).bind(user.id,subscription.endpoint,subscription.keys.p256dh,subscription.keys.auth,...guard.args).first<{enabled:number}>();
+    const {endpoint,keys:{p256dh,auth}}=subscription;
+    // A browser can already have a subscription owned by another signed-in account.
+    const refreshed=await db().prepare(`
+      UPDATE push_subscriptions SET p256dh=?,auth=?,updated_at=?
+      WHERE user_id=? AND endpoint=? AND (p256dh<>? OR auth<>?) AND ${guard.sql}
+    `).bind(p256dh,auth,now,user.id,endpoint,p256dh,auth,...guard.args).run();
+    if(refreshed.meta.changes)return {ok:true,enabled:true};
+    const existing=await db().prepare(`
+      SELECT EXISTS (SELECT 1 FROM push_subscriptions WHERE user_id=? AND endpoint=? AND p256dh=? AND auth=?) enabled
+      WHERE ${guard.sql}
+    `).bind(user.id,endpoint,p256dh,auth,...guard.args).first<{enabled:number}>();
     if(!existing)fail(409,'Sesiunea sau accesul s-a schimbat. Reîncarcă aplicația înainte de a continua.');
     return {ok:true,enabled:!!existing.enabled};
   }

@@ -46,7 +46,7 @@ const recipientCte = (guard: Guard) => `
     SELECT id,role,manager_scope FROM users WHERE id=? AND ${guard.sql}
   )`;
 
-type DbRow = NotificationItem & { unread: number; total: number };
+type DbRow = NotificationItem & Pick<NotificationFeed, 'unread' | 'categoryUnread' | 'total'>;
 function category(value: unknown): Category {
   if (value === null || value === undefined) return 'all';
   if (categories.includes(value as Category)) return value as Category;
@@ -64,40 +64,54 @@ function readFilters(req: Request): Filters {
 }
 
 async function feed(user: User, guard: Guard, filters: Filters): Promise<NotificationFeed> {
+  // Counts and sorting touch only inbox metadata. Expand text for the selected page.
   const result = await db().prepare(`
     WITH ${recipientCte(guard)},
+    selection(category,unread_only) AS (VALUES (?,?)),
     inbox AS (
-      SELECT n.id,n.category,n.title,n.body,n.target_type targetType,n.target_id targetId,
-        n.created_at createdAt,n.read_at readAt
-      FROM notifications n JOIN recipient ON n.recipient_id=recipient.id
+      SELECT n.id rawId,n.id,n.category,n.created_at createdAt,n.read_at readAt,NULL partnerAgentId
+      FROM recipient CROSS JOIN notifications n ON n.recipient_id=recipient.id
       WHERE ${notificationRecipientScope}
       UNION ALL
-      SELECT 'partner:'||pr.id,'partner',
-        COALESCE(NULLIF(json_extract(pr.payload,'$.company'),''),'Partener nou'),
-        u.name||COALESCE(' · '||NULLIF(json_extract(pr.payload,'$.location'),''),'')
-          ||COALESCE(' · '||NULLIF(json_extract(pr.payload,'$.county'),''),''),
-        'partner',pr.id,pr.created_at,s.value
-      FROM partner_requests pr JOIN users u ON u.id=pr.agent_id CROSS JOIN recipient
+      SELECT pr.id,'partner:'||pr.id,'partner',pr.created_at,s.value,pr.agent_id
+      FROM recipient CROSS JOIN partner_requests pr
       LEFT JOIN settings s ON s.key='partner-read:'||recipient.id||':'||pr.id
       WHERE ${partnerScope} AND json_valid(pr.payload)
-    ), filtered AS (
-      SELECT * FROM inbox WHERE (?='all' OR category=?) AND (?=0 OR readAt IS NULL)
+    ), categorized AS (
+      SELECT inbox.*,selection.category='all' OR inbox.category=selection.category categoryMatch
+      FROM inbox CROSS JOIN selection
     ), page AS (
-      SELECT * FROM filtered ORDER BY createdAt DESC,id DESC LIMIT ? OFFSET ?
+      SELECT * FROM categorized CROSS JOIN selection WHERE categoryMatch AND (NOT unread_only OR readAt IS NULL)
+      ORDER BY createdAt DESC,id DESC LIMIT ? OFFSET ?
     ), totals AS (
-      SELECT (SELECT COUNT(*) FROM inbox WHERE readAt IS NULL) unread,(SELECT COUNT(*) FROM filtered) total
-      FROM recipient
+      SELECT COUNT(*) FILTER (WHERE readAt IS NULL) unread,
+        COUNT(*) FILTER (WHERE categoryMatch AND readAt IS NULL) categoryUnread,
+        COUNT(*) FILTER (WHERE categoryMatch AND (NOT unread_only OR readAt IS NULL)) total
+      FROM categorized CROSS JOIN selection
     )
-    SELECT page.*,totals.* FROM totals LEFT JOIN page ON 1=1 ORDER BY page.createdAt DESC,page.id DESC
-  `).bind(user.id, ...guard.args, filters.category, filters.category, Number(filters.unreadOnly),
-    filters.limit, filters.offset).all<DbRow>();
+    SELECT page.id,page.category,page.createdAt,page.readAt,totals.*,
+      CASE WHEN page.partnerAgentId IS NULL THEN n.title
+        ELSE COALESCE(NULLIF(json_extract(pr.payload,'$.company'),''),'Partener nou') END title,
+      CASE WHEN page.partnerAgentId IS NULL THEN n.body
+        ELSE u.name||COALESCE(' · '||NULLIF(json_extract(pr.payload,'$.location'),''),'')
+          ||COALESCE(' · '||NULLIF(json_extract(pr.payload,'$.county'),''),'') END body,
+      COALESCE(n.target_type,'partner') targetType,COALESCE(n.target_id,pr.id) targetId
+    FROM recipient CROSS JOIN totals LEFT JOIN page ON 1=1
+    LEFT JOIN notifications n ON page.partnerAgentId IS NULL AND n.id=page.rawId
+    LEFT JOIN partner_requests pr ON page.partnerAgentId IS NOT NULL AND pr.id=page.rawId
+    LEFT JOIN users u ON u.id=page.partnerAgentId
+    ORDER BY page.createdAt DESC,page.id DESC
+  `).bind(user.id, ...guard.args, filters.category, Number(filters.unreadOnly), filters.limit, filters.offset).all<DbRow>();
   const first = result.results[0];
   if (!first) fail(409, 'Sesiunea sau accesul s-a schimbat. Reîncarcă aplicația.');
   const items = result.results
     .filter(row => row.id !== null)
     .map(({ id, category, title, body, targetType, targetId, createdAt, readAt }) =>
       ({ id, category, title: String(title), body, targetType, targetId, createdAt, readAt }));
-  return { items, unread: first.unread, total: first.total, hasMore: filters.offset + items.length < first.total };
+  return {
+    items, unread: first.unread, categoryUnread: first.categoryUnread, total: first.total,
+    hasMore: filters.offset + items.length < first.total,
+  };
 }
 
 async function markRead(req: Request, user: User, guard: Guard) {
@@ -137,7 +151,7 @@ async function markRead(req: Request, user: User, guard: Guard) {
       WITH ${recipientCte(guard)}
       INSERT INTO settings(key,value)
       SELECT 'partner-read:'||recipient.id||':'||pr.id,?
-      FROM partner_requests pr CROSS JOIN recipient WHERE ${partnerScope} AND json_valid(pr.payload) AND ${selection}
+      FROM recipient CROSS JOIN partner_requests pr WHERE ${partnerScope} AND json_valid(pr.payload) AND ${selection}
       ON CONFLICT(key) DO NOTHING
     `).bind(user.id, ...guard.args, now, ...partnerIds));
   }

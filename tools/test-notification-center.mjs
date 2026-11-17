@@ -77,7 +77,7 @@ try {
     sql.prepare('INSERT INTO sessions VALUES (?,?,?)').run(sessionHash(account.id), account.id, Date.now()+600_000);
   }
   sql.exec("INSERT INTO manager_agents VALUES ('manager','agent'), ('other','peer')");
-  sql.exec(readFileSync('drizzle/0011_leave_notifications.sql','utf8'));
+  sql.exec(readFileSync('drizzle/0012_leave_notifications.sql','utf8'));
   sql.exec(`
     INSERT INTO leave_requests(id,agent_id,approver_id,start_date,end_date,days,status,snapshot,created_at,updated_at)
     VALUES('synthetic-leave','agent','manager','2026-12-01','2026-12-02',2,'submitted','{}','2026-11-02','2026-11-02');
@@ -88,6 +88,7 @@ try {
   partner.run(ids.legacyUnread,agent.id,agent.id,'confirmed',payload,'2026-11-01T11:00:00.000Z');
   partner.run(ids.legacyOutOfScope,peer.id,peer.id,'confirmed',payload,'2026-11-01T12:00:00.000Z');
   partner.run(ids.legacyConfirmedByManager,agent.id,manager.id,'confirmed',payload,'2026-11-01T13:00:00.000Z');
+  partner.run('10000000-0000-0000-0000-000000000005',agent.id,agent.id,'confirmed','{invalid','2026-11-03T11:00:00.000Z');
   sql.prepare('INSERT INTO settings VALUES (?,?)').run('partner-read:'+manager.id+':'+ids.legacyRead,'2026-11-01T11:15:00.000Z');
 
   const entry = resolve('.');
@@ -133,7 +134,12 @@ try {
   assert.equal((await get(global)).total,4);
   assert.deepEqual((await get(peer)).items,[],'Agents only receive their own leave records');
   assert.deepEqual((await get(other)).items.map(row=>row.targetId),[ids.legacyOutOfScope]);
-  assert.equal((await get(manager,'?category=activation')).total,0);
+  const emptyCategory = await get(manager,'?category=activation');
+  assert.equal(emptyCategory.total,0);
+  assert.equal(emptyCategory.categoryUnread,0);
+  assert.equal(emptyCategory.unread,2,'Category filter preserves the global bell unread count');
+  assert.equal((await get(manager,'?category=leave')).categoryUnread,1);
+  assert.equal((await get(manager,'?category=partner&unread=1')).categoryUnread,1);
   assert.equal((await get(manager,'?category=order')).total,0);
   const page = await get(manager,'?category=partner&limit=1');
   assert.equal(page.hasMore,true);

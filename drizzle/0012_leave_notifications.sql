@@ -1,15 +1,15 @@
 CREATE TABLE IF NOT EXISTS employee_profiles (
  user_id TEXT PRIMARY KEY REFERENCES users(id), legal_name TEXT NOT NULL, employer TEXT NOT NULL DEFAULT '',
  approvers TEXT NOT NULL DEFAULT '[]', email TEXT NOT NULL DEFAULT '', approver_id TEXT REFERENCES users(id), approver_email TEXT NOT NULL DEFAULT '',
- holiday_calendar TEXT NOT NULL DEFAULT 'orthodox' CHECK(holiday_calendar IN ('orthodox','western')),
+ holiday_calendar TEXT NOT NULL DEFAULT 'orthodox' CONSTRAINT employee_profiles_holiday_calendar_check CHECK(holiday_calendar IN ('orthodox','western')),
  extra_holidays TEXT NOT NULL DEFAULT '[]', verified INTEGER NOT NULL DEFAULT 0,
  revision INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL
 );
 INSERT OR IGNORE INTO employee_profiles(user_id,legal_name,updated_at) SELECT id,name,strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM users WHERE role='agent';
 CREATE TABLE IF NOT EXISTS leave_requests (
  id TEXT PRIMARY KEY, agent_id TEXT NOT NULL REFERENCES users(id), approver_id TEXT NOT NULL REFERENCES users(id),
- start_date TEXT NOT NULL, end_date TEXT NOT NULL, days INTEGER NOT NULL CHECK(days>0),
- status TEXT NOT NULL CHECK(status IN ('draft','submitted','approved','rejected','cancelled')),
+ start_date TEXT NOT NULL, end_date TEXT NOT NULL, days INTEGER NOT NULL CONSTRAINT leave_requests_days_check CHECK(days>0),
+ status TEXT NOT NULL CONSTRAINT leave_requests_status_check CHECK(status IN ('draft','submitted','approved','rejected','cancelled')),
  snapshot TEXT NOT NULL, signature TEXT, signed_at TEXT, submitted_at TEXT, decision_note TEXT NOT NULL DEFAULT '',
  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 1
 );
@@ -28,9 +28,10 @@ CREATE INDEX IF NOT EXISTS leave_events_request ON leave_events(request_id,creat
 CREATE TABLE IF NOT EXISTS notifications (
  id TEXT PRIMARY KEY, recipient_id TEXT NOT NULL REFERENCES users(id), event_key TEXT NOT NULL,
  category TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL, target_type TEXT NOT NULL, target_id TEXT NOT NULL,
- created_at TEXT NOT NULL, read_at TEXT, UNIQUE(recipient_id,event_key)
+ created_at TEXT NOT NULL, read_at TEXT
 );
-CREATE INDEX IF NOT EXISTS notifications_recipient_date ON notifications(recipient_id,created_at DESC,id);
+CREATE UNIQUE INDEX IF NOT EXISTS notifications_recipient_event ON notifications(recipient_id,event_key);
+CREATE INDEX IF NOT EXISTS notifications_recipient_date ON notifications(recipient_id,created_at DESC,id DESC);
 CREATE INDEX IF NOT EXISTS notifications_unread ON notifications(recipient_id,read_at);
 
 CREATE TRIGGER IF NOT EXISTS employee_profile_on_user_insert AFTER INSERT ON users WHEN NEW.role='agent'

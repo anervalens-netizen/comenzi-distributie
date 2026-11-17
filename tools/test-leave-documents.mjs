@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { crc32, deflateSync } from 'node:zlib';
 import { encode } from 'jpeg-js';
-import { decodePDFRawStream, PDFDocument, PDFName, PDFRawStream, PageSizes } from 'pdf-lib';
+import { decodePDFRawStream, PDFArray, PDFDict, PDFDocument, PDFHexString, PDFName, PDFRawStream, PageSizes } from 'pdf-lib';
 import { holidays, leaveDays, parseDay } from '../lib/leave-calendar.ts';
-import { generateLeavePdf, scanToPdf } from '../lib/leave-pdf.ts';
+import { generateLeavePdf, leavePdfSupportsText, scanToPdf } from '../lib/leave-pdf.ts';
 
 function assertExcluded(year, calendar, dates) {
   const excluded = holidays(year, calendar);
@@ -54,7 +54,7 @@ const record = {
   status: 'draft',
   snapshot: {
     legalName: 'Agent Încercare Șță',
-    employer: 'Compania Exemplu SRL',
+    employer: 'Compania Exemplu Știință SRL',
     approverName: 'Manager de test',
     approverEmail: 'manager@example.test',
     to: 'concediu@example.test',
@@ -75,11 +75,26 @@ const signature = [[
   { x: 0.15, y: 0.73 }, { x: 0.28, y: 0.22 }, { x: 0.36, y: 0.75 },
   { x: 0.46, y: 0.31 }, { x: 0.54, y: 0.75 }, { x: 0.83, y: 0.49 },
 ]];
+assert.equal(leavePdfSupportsText('Șerban Zugraviu, Zoë S\u0326 și Űr'), true);
+assert.equal(leavePdfSupportsText('漢字'), false);
+await assert.rejects(
+  () => generateLeavePdf({ ...record, snapshot: { ...record.snapshot, employer: 'Societatea 漢字' } }, null),
+  /PDF nu le poate afișa/,
+);
+
 const submitted = { ...record, status: 'submitted', signedAt: '2026-04-08T07:00:00.000Z', revision: 2 };
 const signed = await generateLeavePdf(submitted, signature);
 const unsigned = await generateLeavePdf(record, null);
 assert.notDeepEqual(signed, unsigned);
 assert.deepEqual(signed, await generateLeavePdf({ ...submitted, status: 'approved', revision: 3 }, signature));
+const decomposedProfile = {
+  ...submitted.snapshot,
+  legalName: submitted.snapshot.legalName.normalize('NFD'),
+  employer: submitted.snapshot.employer.normalize('NFD'),
+};
+assert.notEqual(decomposedProfile.legalName, submitted.snapshot.legalName);
+assert.notEqual(decomposedProfile.employer, submitted.snapshot.employer);
+assert.deepEqual(signed, await generateLeavePdf({ ...submitted, snapshot: decomposedProfile }, signature));
 
 async function pageOperators(bytes) {
   const pdf = await PDFDocument.load(bytes);
@@ -90,6 +105,18 @@ async function pageOperators(bytes) {
 const countLines = operators => operators.split('\n').filter(line => line.endsWith(' l')).length;
 assert.equal(countLines(await pageOperators(unsigned)), 3);
 assert.equal(countLines(await pageOperators(signed)), 3 + signature[0].length - 1);
+
+const fontLicense = readFileSync(new URL('../lib/LICENSE-dejavu.txt', import.meta.url), 'utf8');
+for (const bytes of [signed, unsigned]) {
+  const pdf = await PDFDocument.load(bytes);
+  const names = pdf.catalog.lookup(PDFName.of('Names'), PDFDict);
+  const embeddedFiles = names.lookup(PDFName.of('EmbeddedFiles'), PDFDict);
+  const entries = embeddedFiles.lookup(PDFName.of('Names'), PDFArray);
+  assert.equal(entries.lookup(0, PDFHexString).decodeText(), 'LICENSE-dejavu.txt');
+  const fileEntry = entries.lookup(1, PDFDict).lookup(PDFName.of('EF'), PDFDict);
+  const file = fileEntry.lookup(PDFName.of('F'), PDFRawStream);
+  assert.equal(Buffer.from(decodePDFRawStream(file).decode()).toString('utf8'), fontLicense);
+}
 
 function pngChunk(type, payload) {
   const chunk = Buffer.alloc(payload.length + 12);
@@ -173,7 +200,16 @@ await assert.rejects(() => scanToPdf(jpeg, 'image/png'), invalidScan);
 await assert.rejects(() => scanToPdf(unsigned, 'application/pdf'), invalidScan);
 await assert.rejects(() => scanToPdf(Buffer.alloc(4_000_001), 'image/jpeg'), invalidScan);
 await assert.rejects(() => scanToPdf(Buffer.from([0xff, 0xd8, 0xff, 0xd9]), 'image/jpeg'), invalidScan);
-await assert.rejects(() => scanToPdf(pngFixture(8000, 8000), 'image/png'), invalidScan);
+const oversizedJpeg = Buffer.from(jpeg);
+const jpegFrame = oversizedJpeg.indexOf(Buffer.from([0xff, 0xc0]));
+assert(jpegFrame > 0);
+oversizedJpeg.writeUInt16BE(3000, jpegFrame + 5);
+oversizedJpeg.writeUInt16BE(3000, jpegFrame + 7);
+await assert.rejects(() => scanToPdf(oversizedJpeg, 'image/jpeg'), /8 megapixeli/);
+await assert.rejects(() => scanToPdf(pngFixture(3000, 3000), 'image/png'), /8 megapixeli/);
+const browserSize = { width: 2400, height: 1800 };
+const browserJpeg = encode({ ...browserSize, data: Buffer.alloc(browserSize.width * browserSize.height * 4, 255) }, 82).data;
+assert.equal((await PDFDocument.load(await scanToPdf(browserJpeg, 'image/jpeg'))).getPageCount(), 1);
 await assert.rejects(() => scanToPdf(pngFixture(1, 1), 'image/png'), invalidScan);
 await assert.rejects(() => scanToPdf(pngFixture(2, 1, [pngChunk('acTL', Buffer.alloc(8))]), 'image/png'), invalidScan);
 await assert.rejects(() => scanToPdf(malformedPng, 'image/png'), invalidScan);

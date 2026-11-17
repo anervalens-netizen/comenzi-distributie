@@ -68,6 +68,7 @@ export type NotificationItem = {
 export type NotificationFeed = {
   items: NotificationItem[];
   unread: number;
+  categoryUnread: number;
   total: number;
   hasMore: boolean;
 };

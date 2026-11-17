@@ -13,7 +13,13 @@ import {
 } from './server';
 import { operationalWriteGuard } from './operational-write-guard';
 import { leaveDays, parseDay } from './leave-calendar';
-import { generateLeavePdf, scanToPdf } from './leave-pdf';
+import {
+  generateLeavePdf,
+  invalidLeavePdfText,
+  invalidLeaveScan,
+  leavePdfSupportsText,
+  scanToPdf,
+} from './leave-pdf';
 import { notificationInsert } from './notification-center';
 import { sendNotificationPush } from './push-notifications';
 import type { User } from './types';
@@ -316,6 +322,10 @@ async function get(id: string, user: User) {
   if (!row) fail(404, 'Cererea nu a fost găsită.');
   return row;
 }
+function requirePdfProfileText(legalName: string, employer: string) {
+  if (!leavePdfSupportsText(legalName) || !leavePdfSupportsText(employer))
+    fail(400, invalidLeavePdfText);
+}
 async function prepare(agentId: string, start: string, end: string) {
   const [p, to, eligible] = await Promise.all([
     profile(agentId),
@@ -341,6 +351,7 @@ async function prepare(agentId: string, start: string, end: string) {
       'Managerul trebuie să confirme numele, angajatorul și adresele tuturor aprobatorilor din Profiluri angajați.',
     );
   }
+  requirePdfProfileText(p.legal_name, p.employer);
   const addresses = new Map(
     saved.map((approver) => [approver.id, approver.email]),
   );
@@ -425,6 +436,19 @@ function mail(r: LeaveRecord) {
     date(r.startDate) +
     '–' +
     date(r.endDate);
+  const to = r.snapshot.to;
+  const approvers = snapshotApprovers(r.approverId, r.snapshot).filter(
+    (approver) =>
+      validEmail(approver.email) &&
+      approver.email.toLowerCase() !== to.toLowerCase(),
+  );
+  const cc = uniqueEmails(approvers.map((approver) => approver.email));
+  const recipientsInBody = approvers.length
+    ? '\n\nManageri în CC — ' +
+      approvers
+        .map((approver) => approver.name + ' (' + approver.email + ')')
+        .join(', ')
+    : '';
   const body =
     'Bună ziua,\n\nVă transmit atașat cererea de concediu de odihnă pentru perioada ' +
     date(r.startDate) +
@@ -433,13 +457,8 @@ function mail(r: LeaveRecord) {
     ', însumând ' +
     r.days +
     ' zile lucrătoare.\n\n' +
-    r.snapshot.legalName;
-  const to = r.snapshot.to,
-    cc = uniqueEmails(
-      snapshotApprovers(r.approverId, r.snapshot).map(
-        (approver) => approver.email,
-      ),
-    ).filter((email) => email.toLowerCase() !== to.toLowerCase());
+    r.snapshot.legalName +
+    recipientsInBody;
   const filename =
     'cerere-concediu-' +
     r.snapshot.legalName
@@ -574,6 +593,7 @@ async function submit(
       },
       user,
     );
+  requirePdfProfileText(snapshot.legalName, snapshot.employer);
   const bytes = scan || (await generateLeavePdf(record, signature));
   const guard = operationalWriteGuard(req, user, { agentId: user.id }),
     pg = profileGuard(user.id, row.approver_id, snapshot);
@@ -687,6 +707,7 @@ export async function leaveApi(req: Request, user: User, path: string[]) {
       !['orthodox', 'western'].includes(String(calendar))
     )
       fail(400, 'Completează numele, firma și calendarul angajatului.');
+    requirePdfProfileText(legalName, employer);
     const supplied =
       body.approvers === undefined
         ? [{ id: body.approverId, email: body.approverEmail }]
@@ -929,13 +950,29 @@ export async function leaveApi(req: Request, user: User, path: string[]) {
   if (req.method === 'GET' && action === 'pdf') {
     const document = await db()
       .prepare(
-        "SELECT content FROM leave_documents WHERE request_id=? AND kind='signed' ORDER BY version DESC LIMIT 1",
+        "SELECT content,digest FROM leave_documents WHERE request_id=? AND kind='signed' ORDER BY version DESC LIMIT 1",
       )
       .bind(id)
-      .first<{ content: string }>();
-    const bytes = document
-      ? Buffer.from(document.content, 'base64')
-      : await generateLeavePdf(record, null);
+      .first<{ content: string; digest: string }>();
+    let bytes: Uint8Array;
+    if (document) {
+      const stored = Buffer.from(document.content, 'base64');
+      if (
+        stored.toString('base64') !== document.content ||
+        createHash('sha256').update(stored).digest('hex') !== document.digest
+      ) {
+        fail(500, 'Integritatea PDF-ului semnat nu a putut fi confirmată.');
+      }
+      bytes = stored;
+    } else {
+      if (record.signedAt || record.submittedAt)
+        fail(500, 'Documentul PDF semnat lipsește.');
+      requirePdfProfileText(
+        record.snapshot.legalName,
+        record.snapshot.employer,
+      );
+      bytes = await generateLeavePdf(record, null);
+    }
     // Recheck current authorization after asynchronous document generation.
     await get(id, user);
     return new Response(bytes as BodyInit, {
@@ -1018,7 +1055,7 @@ export async function leaveApi(req: Request, user: User, path: string[]) {
     try {
       pdf = await scanToPdf(bytes, mime);
     } catch {
-      fail(400, 'Încarcă o fotografie JPEG sau PNG clară, de maximum 4 MB.');
+      fail(400, invalidLeaveScan);
     }
     return submit(req, user, row, version, null, pdf);
   }

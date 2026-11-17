@@ -227,6 +227,45 @@ try {
     () => browser.evaluate(`!(${submit}).disabled`),
     'Touch signature is complete',
   );
+  // Synthetic pointer events fill the shared budget without thousands of CDP calls.
+  const capturedPoints = await browser.evaluate(`(async () => {
+    const pad = document.querySelector('.leave-signature-surface svg');
+    const realCapture = pad.setPointerCapture;
+    const rect = pad.getBoundingClientRect();
+    const draw = (event, x, y) => pad.dispatchEvent(new PointerEvent(event, {
+      bubbles: true, button: 0, pointerId: 17, pointerType: 'pen',
+      clientX: rect.left + rect.width * x, clientY: rect.top + rect.height * y,
+    }));
+    pad.setPointerCapture = () => {};
+    try {
+      for (let stroke = 0; stroke < 12; stroke++) {
+        draw('pointerdown', 0.12, 0.32);
+        for (let point = 0; point < 520; point++) draw('pointermove', point % 2 ? 0.12 : 0.82, 0.52);
+        draw('pointerup', 0.82, 0.52);
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      }
+      return Array.from(pad.querySelectorAll('polyline')).reduce((count, stroke) => (
+        count + stroke.getAttribute('points').split(' ').length
+      ), 0);
+    } finally {
+      pad.setPointerCapture = realCapture;
+    }
+  })()`);
+  assert.equal(
+    capturedPoints,
+    5000,
+    'Pointer strokes stop at the server point budget',
+  );
+  await content(
+    browser,
+    '.leave-signature output',
+    'Ai ajuns la limita semnăturii',
+  );
+  assert.equal(
+    await browser.evaluate(`!(${submit}).disabled`),
+    true,
+    'A complete signature at the limit remains submittable',
+  );
   await click(browser, '.leave-detail button', 'Modifică perioada');
   await fill(browser, '.leave-date-fields label:last-child input', end);
   await content(browser, '.leave-period-summary', '3 zile lucrătoare');
@@ -275,6 +314,46 @@ try {
     'Fotografia nu a putut fi deschisă.',
   );
   await content(browser, '.leave-detail .leave-status', 'Ciornă');
+  // Both containers report dimensions 8000 x 4000 with a tiny encoded header.
+  // The browser must reject them before calling its image decoder.
+  await browser.evaluate(
+    'window.syntheticImageDecodeCalls = 0; window.syntheticRealBitmap = window.createImageBitmap; window.createImageBitmap = (...args) => { window.syntheticImageDecodeCalls++; return window.syntheticRealBitmap(...args); };',
+  );
+  for (const type of ['image/png', 'image/jpeg']) {
+    await browser.evaluate(`(() => {
+      const type = ${JSON.stringify(type)};
+      const png = new Uint8Array(33);
+      const header = new DataView(png.buffer);
+      header.setUint32(0, 0x89504e47);
+      header.setUint32(4, 0x0d0a1a0a);
+      header.setUint32(8, 13);
+      header.setUint32(12, 0x49484452);
+      header.setUint32(16, 8000);
+      header.setUint32(20, 4000);
+      const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xc0, 0, 11, 8, 0x0f, 0xa0, 0x1f, 0x40, 1, 1, 0x11, 0, 0xff, 0xda, 0, 2]);
+      const input = document.querySelector('.leave-detail input[type=file]');
+      const files = new DataTransfer();
+      files.items.add(new File([type === 'image/png' ? png : jpeg], 'oversized-synthetic', { type }));
+      input.files = files.files;
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      return true;
+    })()`);
+    await click(browser, '.leave-detail button', 'Încarcă și depune');
+    await content(
+      browser,
+      '.leave-detail [role=alert]',
+      'maximum 24 megapixeli',
+    );
+  }
+  assert.equal(
+    await browser.evaluate('window.syntheticImageDecodeCalls'),
+    0,
+    'Oversized images never reach createImageBitmap',
+  );
+  await browser.evaluate(
+    'window.createImageBitmap = window.syntheticRealBitmap;',
+  );
+
   await browser.evaluate(`(() => {
     const input = document.querySelector('.leave-detail input[type=file]');
     input.value = '';
@@ -308,13 +387,18 @@ try {
   assert.equal(
     mail.searchParams.get('body'),
     'Bună ziua,\n\nVă transmit atașat cererea de concediu de odihnă pentru perioada 27.11.2026–03.12.2026, însumând 3 zile lucrătoare.\n\n' +
-      legalName,
+      legalName +
+      '\n\nManageri în CC — Test Manager A (' +
+      cc +
+      '), Test Manager B (' +
+      secondCc +
+      ')',
   );
   await content(browser, '.leave-mail dl', filename);
   await click(browser, '.leave-mail button', 'Descarcă PDF-ul');
   await downloadedPdf(filename);
 
-  // Submit a valid photographed page on a second, non-overlapping request.
+  // Submit a 12-megapixel synthetic photo on a second, non-overlapping request.
   await click(browser, '.leave-detail button', 'Înapoi la concedii');
   await click(browser, '.leave-header button', 'Cerere nouă');
   await fill(
@@ -331,9 +415,10 @@ try {
   await click(browser, '.leave-switch button', 'Pe hârtie');
   await browser.evaluate(`(async () => {
     const canvas = document.createElement('canvas');
-    canvas.width = 420;
-    canvas.height = 594;
+    canvas.width = 3000;
+    canvas.height = 4000;
     const ctx = canvas.getContext('2d');
+    ctx.scale(canvas.width / 420, canvas.height / 594);
     ctx.fillStyle = '#fff';
     ctx.fillRect(0,0,420,594);
     ctx.fillStyle = '#181818';
@@ -345,9 +430,9 @@ try {
     ctx.lineTo(115, 220);
     ctx.lineTo(155, 186);
     ctx.stroke();
-    const image = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+    const image = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.86));
     const files = new DataTransfer();
-    files.items.add(new File([image], 'synthetic.png', { type: 'image/png' }));
+    files.items.add(new File([image], 'synthetic.jpg', { type: 'image/jpeg' }));
     const input = document.querySelector('.leave-detail input[type=file]');
     input.files = files.files;
     input.dispatchEvent(new Event('change', { bubbles: true }));
@@ -358,9 +443,48 @@ try {
   await click(browser, '.leave-mail button', 'Descarcă PDF-ul');
   await downloadedPdf('cerere-concediu-Synthetic-Stefan-Test-2026-12-07.pdf');
 
-  await login(browser, secondManager, 1280, 800);
+  await login(browser, secondManager, 800, 1200);
+  await browser.evaluate("document.querySelector('.request-bell').click()");
+  await content(
+    browser,
+    '.notification-dialog .notification-row',
+    'Cerere de concediu nouă',
+  );
+  await click(
+    browser,
+    '.notification-dialog .notification-row:first-child button',
+    'Deschide',
+  );
+  await content(browser, '.leave-detail .leave-status', 'În așteptare');
+  assert.ok(
+    await browser.evaluate(`(() => {
+    const nav = document.querySelector('.manager-shell .nav-wrap');
+    const selected = nav.querySelector('[aria-selected=true]').getBoundingClientRect();
+    return getComputedStyle(nav).position === 'fixed' && selected.left >= 0 && selected.right <= innerWidth;
+  })()`),
+    'Manager tablet navigation shows the selected leave tab',
+  );
+  await browser.evaluate(
+    'document.querySelector(\'summary[aria-label="Agent / TR"]\').click()',
+  );
+  await click(browser, '.manager-scope-options button', 'Test Agent');
+  await waitFor(
+    () =>
+      browser.evaluate(
+        "!document.querySelector('.leave-detail') && !!document.querySelector('.leave-history h2')",
+      ),
+    'Changing manager scope consumes the notification focus',
+  );
+  await browser.send('Emulation.setDeviceMetricsOverride', {
+    width: 1280,
+    height: 800,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
   await click(browser, '.leave-main-nav button', 'Calendar');
-  await fill(browser, '.leave-month input', '2026-12');
+  await fill(browser, 'select[aria-label="Anul calendarului"]', '2025');
+  await fill(browser, 'select[aria-label="Luna calendarului"]', '12');
+  await fill(browser, 'select[aria-label="Anul calendarului"]', '2026');
   const day = ".leave-calendar-day[aria-label^='2 dec. 2026']";
   await waitFor(
     () =>
@@ -423,7 +547,16 @@ try {
   await click(browser, '.leave-detail button', 'Înapoi la concedii');
   await content(browser, '.leave-history h2', 'Cererile mele');
   await openRejectedNotice();
-  await click(browser, '.leave-detail button', 'Înapoi la concedii');
+  await click(browser, '.main-nav [role=tab]', 'Avize');
+  await content(browser, '.main-nav [aria-selected=true]', 'Avize');
+  await click(browser, '.main-nav [role=tab]', 'Concedii');
+  await waitFor(
+    () =>
+      browser.evaluate(
+        "!document.querySelector('.leave-detail') && !!document.querySelector('.leave-history h2')",
+      ),
+    'Ordinary agent navigation opens leave history after consuming the notification',
+  );
 
   // The actual server commits the creation before the transport hides its response.
   await click(browser, '.leave-header button', 'Cerere nouă');
@@ -499,7 +632,7 @@ try {
   );
 
   console.log(
-    'PASS tablet leave profiles, calendar day calculation, touch signing, date revision, photo upload and failure, PDFs, mailto, second-manager decision, repeat notification and lost-response recovery.',
+    'PASS tablet leave profiles, calendar day calculation, touch signing and budget, date revision, predecode photo limits and upload, PDFs, mailto, second-manager decision, repeat notification and lost-response recovery.',
   );
 } finally {
   if (browser) await browser.close();

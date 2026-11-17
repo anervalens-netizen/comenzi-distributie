@@ -38,12 +38,14 @@ async function requestFeed(path: string, method: 'GET' | 'POST', body: unknown, 
   const value = await networkApi<Partial<NotificationFeed> | null>(path, method, body, signal);
   if (!value || !Array.isArray(value.items) || !value.items.every(isNotificationItem) ||
     typeof value.unread !== 'number' || !Number.isSafeInteger(value.unread) || value.unread < 0 ||
+    typeof value.categoryUnread !== 'number' || !Number.isSafeInteger(value.categoryUnread) ||
+    value.categoryUnread < 0 || value.categoryUnread > value.unread ||
     typeof value.total !== 'number' || !Number.isSafeInteger(value.total) || value.total < 0 ||
     typeof value.hasMore !== 'boolean') {
     throw new Error('Serverul a trimis notificări într-un format invalid.');
   }
-  const { items, unread, total, hasMore } = value;
-  return { items, unread, total, hasMore };
+  const { items, unread, categoryUnread, total, hasMore } = value;
+  return { items, unread, categoryUnread, total, hasMore };
 }
 
 const dateFormat = new Intl.DateTimeFormat('ro-RO', {
@@ -242,7 +244,9 @@ export function NotificationCenter({ onOpenTarget, canOpenTarget = true }: Targe
     <section className="panel notification-panel">
       <div className="section-heading">
         <Bell size={22}/>
-        <div><h1>Notificări</h1><p>{current ? (current.unread ? current.unread+' necitite' : 'Nicio notificare necitită') : 'Mesajele din contul tău'}</p></div>
+        <div><h1>Notificări</h1><p>{current
+          ? current.categoryUnread+' necitite'+(category==='all' ? '' : ' în această categorie')
+          : 'Mesajele din contul tău'}</p></div>
       </div>
       <div className="notification-controls">
         <fieldset className="notification-categories"><legend className="sr-only">Categorii de notificări</legend>
@@ -253,8 +257,7 @@ export function NotificationCenter({ onOpenTarget, canOpenTarget = true }: Targe
         <div className="notification-filter-actions">
           <label className="notification-filter"><input type="checkbox" checked={unread} disabled={busy}
             onChange={event => { setUnread(event.target.checked); move(0); }}/> Doar necitite</label>
-          <button type="button" className="secondary" disabled={busy || !current?.unread ||
-            (category !== 'all' && (!current.total || (offset === 0 && !current.hasMore && current.items.every(item => item.readAt))))}
+          <button type="button" className="secondary" disabled={busy || !current?.categoryUnread}
             onClick={() => void act({ all: true })}><CheckCheck size={17}/> Marchează toate ca citite</button>
         </div>
       </div>

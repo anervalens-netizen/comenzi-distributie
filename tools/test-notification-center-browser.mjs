@@ -51,8 +51,10 @@ const leave = {
 const json = value => Response.json(value,{headers:{'Cache-Control':'no-store'}});
 function feed(owner, category, unreadOnly, limit, offset) {
   const rows=items[owner]||[];
-  const matches=rows.filter(row=>(category==='all'||row.category===category)&&(!unreadOnly||!row.readAt));
-  return {items:matches.slice(offset,offset+limit),unread:rows.filter(row=>!row.readAt).length,total:matches.length,hasMore:offset+limit<matches.length};
+  const inCategory=rows.filter(row=>category==='all'||row.category===category);
+  const matches=unreadOnly?inCategory.filter(row=>!row.readAt):inCategory;
+  return {items:matches.slice(offset,offset+limit),unread:rows.filter(row=>!row.readAt).length,
+    categoryUnread:inCategory.filter(row=>!row.readAt).length,total:matches.length,hasMore:offset+limit<matches.length};
 }
 window.fetch = async (input,init={}) => {
   const url=new URL(String(input),location.origin);
@@ -69,7 +71,7 @@ window.fetch = async (input,init={}) => {
       const bad = url.searchParams.get('limit')==='5' ? fixture.badBell : fixture.badCenter;
       if (bad) return json(bad);
       if (fixture.hold&&owner===agent.id) {
-        return new Promise(resolve=>fixture.pending.push(()=>resolve(json({items:[item('old-sensitive','Synthetic stale account notification','leave',firstLeave)],unread:7,total:1,hasMore:false}))));
+        return new Promise(resolve=>fixture.pending.push(()=>resolve(json({items:[item('old-sensitive','Synthetic stale account notification','leave',firstLeave)],unread:7,categoryUnread:7,total:1,hasMore:false}))));
       }
       return json(feed(owner,url.searchParams.get('category')||'all',url.searchParams.get('unread')==='1',
         Number(url.searchParams.get('limit')||30),Number(url.searchParams.get('offset')||0)));
@@ -129,11 +131,11 @@ try {
   await button(browser,'Reîncarcă','.notification-dialog');
   await wait(browser,"document.querySelector('.request-bell')?.getAttribute('aria-label')==='Notificări necitite 2'",'agent bell count recovers after a valid reply');
   await wait(browser,"document.querySelector('.notification-dialog')?.textContent.includes('Synthetic approved leave')",'recent leave in agent bell');
-  await browser.evaluate("fixture.badBell={items:[null],unread:99,total:1,hasMore:false};window.dispatchEvent(new Event('focus'))");
+  await browser.evaluate("fixture.badBell={items:[null],unread:99,categoryUnread:99,total:1,hasMore:false};window.dispatchEvent(new Event('focus'))");
   await wait(browser,"document.querySelector('.notification-dialog [role=alert]')?.textContent.includes('format invalid')",'invalid item is rejected');
   assert.equal(await browser.evaluate("document.querySelector('.request-count')?.textContent"),'2','Bad refresh keeps the last valid badge');
   assert.equal(await browser.evaluate("document.querySelector('.notification-dialog .notification-row strong')?.textContent"),'Synthetic approved leave','Bad refresh keeps the last valid recent items');
-  await browser.evaluate("fixture.badBell=null;fixture.badRead={items:'invalid',unread:0,total:1,hasMore:false}");
+  await browser.evaluate("fixture.badBell=null;fixture.badRead={items:'invalid',unread:0,categoryUnread:0,total:1,hasMore:false}");
   await button(browser,'Reîncarcă','.notification-dialog');
   await wait(browser,"!document.querySelector('.notification-dialog [role=alert]')",'valid recent reply clears the error');
   await click(browser,'button[aria-label="Marchează ca citită: Synthetic approved leave"]');
@@ -142,7 +144,7 @@ try {
   await browser.evaluate("fixture.badRead=null");
   await click(browser,'button[aria-label="Marchează ca citită: Synthetic approved leave"]');
   await wait(browser,"document.querySelector('.request-count')?.textContent==='1'",'mark read in recent list updates agent badge');
-  await browser.evaluate("fixture.badCenter={items:[{title:{invalid:true}}],unread:1,total:1,hasMore:false}");
+  await browser.evaluate("fixture.badCenter={items:[{title:{invalid:true}}],unread:1,categoryUnread:1,total:1,hasMore:false}");
   await button(browser,'Vezi toate notificările','.notification-dialog');
   await wait(browser,"document.querySelector('.notification-center [role=alert]')?.textContent.includes('format invalid')",'all notifications handles a malformed page');
   await browser.evaluate("fixture.badCenter=null");
@@ -167,6 +169,9 @@ try {
 
   await button(browser,'Activări','.notification-categories');
   await wait(browser,"document.querySelector('.notification-empty')?.textContent==='Nu există notificări în această categorie.'",'inactive category shows correct empty state');
+  assert.equal(await browser.evaluate("document.querySelector('.notification-panel .section-heading p')?.textContent"),'0 necitite în această categorie');
+  assert.equal(await browser.evaluate("document.querySelector('.notification-filter-actions button')?.disabled"),true,'Cannot mark all in a category with no unread rows');
+  assert.equal(await browser.evaluate("document.querySelector('.request-count')?.textContent"),'1','Bell still counts unread rows from other categories');
   await button(browser,'Concedii','.notification-categories');
   await wait(browser,"document.querySelectorAll('.notification-list .notification-row').length===30",'leave category with read history');
   await click(browser,'.notification-filter input');

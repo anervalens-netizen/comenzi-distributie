@@ -5,7 +5,7 @@ import {
   concatTransformationMatrix, LineCapStyle, PageSizes, PDFDocument, popGraphicsState, pushGraphicsState, rgb,
 } from 'pdf-lib';
 import type { PDFFont, PDFPage } from 'pdf-lib';
-import { leaveFontBase64 } from './leave-font.ts';
+import { leaveFontBase64, leaveFontLicenseBase64 } from './leave-font.ts';
 import type { LeaveRecord, Stroke } from './leave-types.ts';
 
 const ink = rgb(0.12, 0.15, 0.20);
@@ -14,8 +14,18 @@ const rule = rgb(0.72, 0.74, 0.77);
 const pen = rgb(0.07, 0.20, 0.44);
 const dateFormat = new Intl.DateTimeFormat('ro-RO', { timeZone: 'Europe/Bucharest', dateStyle: 'short' });
 const maxScanBytes = 4_000_000;
-const maxScanPixels = 20_000_000;
-const invalidScan = 'Alege o imagine JPEG sau PNG validă, de cel mult 4 MB și 20 megapixeli.';
+const maxScanPixels = 8_000_000;
+const maxPngScanlineBytes = 33_000_000;
+export const invalidLeaveScan = 'Alege o imagine JPEG sau PNG validă, de cel mult 4 MB și 8 megapixeli.';
+export const invalidLeavePdfText = 'Numele legal sau angajatorul conține caractere pe care formularul PDF nu le poate afișa. Verifică datele din profilul angajatului.';
+const leaveFontBytes = Buffer.from(leaveFontBase64, 'base64');
+const leaveFontCharacters = new Set(fontkit.create(leaveFontBytes).characterSet);
+
+export function leavePdfSupportsText(value: string) {
+  return Array.from(value.normalize('NFC')).every(
+    char => /\s/u.test(char) || leaveFontCharacters.has(char.codePointAt(0)!),
+  );
+}
 
 function displayDate(value: string) {
   const [year, month, day] = value.split('-');
@@ -63,10 +73,16 @@ function drawEmployeeSignature(page: PDFPage, strokes: Stroke[], x: number, y: n
 }
 
 export async function generateLeavePdf(record: LeaveRecord, signature: Stroke[] | null): Promise<Uint8Array> {
+  const { legalName, employer } = record.snapshot;
+  if (!leavePdfSupportsText(legalName) || !leavePdfSupportsText(employer)) throw new Error(invalidLeavePdfText);
   const doc = await PDFDocument.create({ updateMetadata: false });
   doc.setTitle('Cerere de concediu de odihnă');
+  await doc.attach(Buffer.from(leaveFontLicenseBase64, 'base64'), 'LICENSE-dejavu.txt', {
+    mimeType: 'text/plain',
+    description: 'License for the DejaVu Sans font embedded in this PDF',
+  });
   doc.registerFontkit(fontkit);
-  const font = await doc.embedFont(Buffer.from(leaveFontBase64, 'base64'), { subset: true });
+  const font = await doc.embedFont(leaveFontBytes, { subset: true });
   const page = doc.addPage(PageSizes.A4);
   const { width, height } = page.getSize();
   const margin = 70;
@@ -81,7 +97,6 @@ export async function generateLeavePdf(record: LeaveRecord, signature: Stroke[] 
     color: ink,
   });
 
-  const { legalName, employer } = record.snapshot;
   const days = record.days === 1 ? '1 zi' : String(record.days) + (record.days >= 20 ? ' de zile' : ' zile');
   const paragraph = (
     'Subsemnatul ' + legalName + ', angajat al ' + employer + ', solicit efectuarea unui număr de ' +
@@ -123,7 +138,7 @@ const adam7 = [
 
 function checkPixelBounds(width: number, height: number) {
   if (!width || !height || width > 8192 || height > 8192 || width * height > maxScanPixels) {
-    throw new Error(invalidScan);
+    throw new Error(invalidLeaveScan);
   }
 }
 
@@ -131,7 +146,7 @@ function validatedPng(bytes: Uint8Array) {
   const raw = Buffer.from(bytes);
   if (raw.length < 45 || !pngSignature.every((byte, i) => raw[i] === byte) ||
       raw.readUInt32BE(8) !== 13 || raw.toString('latin1', 12, 16) !== 'IHDR') {
-    throw new Error(invalidScan);
+    throw new Error(invalidLeaveScan);
   }
 
   const width = raw.readUInt32BE(16);
@@ -139,7 +154,7 @@ function validatedPng(bytes: Uint8Array) {
   const [depth, color, compression, filter, interlace] = raw.subarray(24, 29);
   checkPixelBounds(width, height);
   if (!pngDepths[color]?.includes(depth) || compression !== 0 || filter !== 0 || interlace > 1) {
-    throw new Error(invalidScan);
+    throw new Error(invalidLeaveScan);
   }
 
   // Only image data reaches the PDF library. Bound the inflater against the exact
@@ -149,46 +164,46 @@ function validatedPng(bytes: Uint8Array) {
   let paletteSize = 0;
   let transparency = false;
   let ended = false;
-  if (crc32(raw.subarray(12, 29)) !== raw.readUInt32BE(29)) throw new Error(invalidScan);
+  if (crc32(raw.subarray(12, 29)) !== raw.readUInt32BE(29)) throw new Error(invalidLeaveScan);
   for (let offset = 33; offset + 12 <= raw.length;) {
     const length = raw.readUInt32BE(offset);
     const type = raw.toString('latin1', offset + 4, offset + 8);
     const end = offset + length + 12;
-    if (end > raw.length || !/^[A-Za-z]{4}$/.test(type)) throw new Error(invalidScan);
+    if (end > raw.length || !/^[A-Za-z]{4}$/.test(type)) throw new Error(invalidLeaveScan);
     const payload = raw.subarray(offset + 8, end - 4);
     switch (type) {
       case 'PLTE':
         if (paletteSize || data.length || color === 0 || color === 4 ||
             !length || length % 3 !== 0 || length > (color === 3 ? 2 ** depth : 256) * 3) {
-          throw new Error(invalidScan);
+          throw new Error(invalidLeaveScan);
         }
         paletteSize = length / 3;
         break;
       case 'tRNS':
         if (transparency || data.length || !(color === 0 && length === 2 || color === 2 && length === 6 ||
-            color === 3 && length > 0 && length <= paletteSize)) throw new Error(invalidScan);
+            color === 3 && length > 0 && length <= paletteSize)) throw new Error(invalidLeaveScan);
         transparency = true;
         break;
       case 'IDAT':
-        if (color === 3 && !paletteSize) throw new Error(invalidScan);
+        if (color === 3 && !paletteSize) throw new Error(invalidLeaveScan);
         data.push(payload);
         break;
       case 'IEND':
-        if (length || end !== raw.length || !data.length) throw new Error(invalidScan);
+        if (length || end !== raw.length || !data.length) throw new Error(invalidLeaveScan);
         ended = true;
         break;
       default:
         if (type === 'acTL' || type === 'fcTL' || type === 'fdAT' || /^[A-Z]/.test(type)) {
-          throw new Error(invalidScan);
+          throw new Error(invalidLeaveScan);
         }
         offset = end;
         continue;
     }
-    if (crc32(raw.subarray(offset + 4, end - 4)) !== raw.readUInt32BE(end - 4)) throw new Error(invalidScan);
+    if (crc32(raw.subarray(offset + 4, end - 4)) !== raw.readUInt32BE(end - 4)) throw new Error(invalidLeaveScan);
     chunks.push(raw.subarray(offset, end));
     offset = end;
   }
-  if (!ended) throw new Error(invalidScan);
+  if (!ended) throw new Error(invalidLeaveScan);
 
   const scanlines = (interlace ? adam7 : [[0, 0, 1, 1]]).map(([x, y, dx, dy]) => {
     const columns = Math.max(0, Math.ceil((width - x) / dx));
@@ -196,12 +211,13 @@ function validatedPng(bytes: Uint8Array) {
     return { rows, stride: Math.ceil(columns * depth * pngChannels[color] / 8) + 1 };
   });
   const size = scanlines.reduce((sum, { rows, stride }) => sum + rows * stride, 0);
+  if (size > maxPngScanlineBytes) throw new Error(invalidLeaveScan);
   const inflated = inflateSync(Buffer.concat(data), { maxOutputLength: size });
-  if (inflated.length !== size) throw new Error(invalidScan);
+  if (inflated.length !== size) throw new Error(invalidLeaveScan);
   let offset = 0;
   for (const { rows, stride } of scanlines) {
     for (let row = 0; row < rows; row++, offset += stride) {
-      if (inflated[offset] > 4) throw new Error(invalidScan);
+      if (inflated[offset] > 4) throw new Error(invalidLeaveScan);
     }
   }
   return Buffer.concat(chunks);
@@ -235,7 +251,7 @@ const jpegTransforms = [
 ];
 
 export async function scanToPdf(bytes: Uint8Array, mime: string): Promise<Uint8Array> {
-  if (!bytes.length || bytes.length > maxScanBytes) throw new Error(invalidScan);
+  if (!bytes.length || bytes.length > maxScanBytes) throw new Error(invalidLeaveScan);
   const doc = await PDFDocument.create({ updateMetadata: false });
   doc.setTitle('Cerere de concediu de odihnă scanată');
   let photo;
@@ -243,26 +259,28 @@ export async function scanToPdf(bytes: Uint8Array, mime: string): Promise<Uint8A
   try {
     if (mime === 'image/jpeg') {
       if (bytes[0] !== 0xff || bytes[1] !== 0xd8 ||
-          bytes[bytes.length - 2] !== 0xff || bytes[bytes.length - 1] !== 0xd9) throw new Error(invalidScan);
+          bytes[bytes.length - 2] !== 0xff || bytes[bytes.length - 1] !== 0xd9) throw new Error(invalidLeaveScan);
+      // Read the frame dimensions before doing a full, bounded JPEG decode.
+      photo = await doc.embedJpg(new Uint8Array(bytes));
+      checkPixelBounds(photo.width, photo.height);
       const decoded = decode(bytes, {
         useTArray: true,
         tolerantDecoding: false,
         formatAsRGBA: false,
         maxResolutionInMP: maxScanPixels / 1_000_000,
-        maxMemoryUsageInMB: 128,
+        maxMemoryUsageInMB: 96,
       });
       const { width, height, exifBuffer } = decoded as typeof decoded & { exifBuffer?: Uint8Array };
       checkPixelBounds(width, height);
       orientation = jpegOrientation(exifBuffer);
-      photo = await doc.embedJpg(new Uint8Array(bytes));
-      if (photo.width !== width || photo.height !== height) throw new Error(invalidScan);
+      if (photo.width !== width || photo.height !== height) throw new Error(invalidLeaveScan);
     } else if (mime === 'image/png') {
       photo = await doc.embedPng(validatedPng(bytes));
     } else {
-      throw new Error(invalidScan);
+      throw new Error(invalidLeaveScan);
     }
   } catch {
-    throw new Error(invalidScan);
+    throw new Error(invalidLeaveScan);
   }
 
   const page = doc.addPage(PageSizes.A4);

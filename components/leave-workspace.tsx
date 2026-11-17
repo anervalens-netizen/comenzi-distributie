@@ -30,7 +30,7 @@ import {
   type Stroke,
 } from '@/lib/leave-types';
 import type { User } from '@/lib/types';
-import { LeaveSignature } from './leave-signature';
+import { LeaveSignature, signaturePointLimit } from './leave-signature';
 
 type Manager = { id: string; name: string; email?: string; agentIds: string[] };
 type Profiles = {
@@ -76,6 +76,20 @@ const todayFormatter = new Intl.DateTimeFormat('en-GB', {
   year: 'numeric',
   month: '2-digit',
 });
+const monthFormatter = new Intl.DateTimeFormat('ro-RO', {
+  month: 'long',
+  timeZone: 'UTC',
+});
+const calendarMonths = Array.from({ length: 12 }, (_, index) => {
+  const value = String(index + 1).padStart(2, '0');
+  return {
+    value,
+    label: monthFormatter.format(new Date('2025-' + value + '-01T00:00:00Z')),
+  };
+});
+const calendarYears = Array.from({ length: 76 }, (_, index) =>
+  String(2025 + index),
+);
 const currentMonth = () => {
   const parts = todayFormatter.formatToParts(new Date());
   return (
@@ -488,17 +502,34 @@ function LeaveHistory({
           >
             <ChevronLeft size={20} aria-hidden />
           </button>
-          <input
-            type="month"
-            aria-label="Luna calendarului"
-            value={month}
-            min="2025-01"
-            max="2100-12"
-            onChange={(event) => {
-              const value = event.target.value;
-              if (value >= '2025-01' && value <= '2100-12') setMonth(value);
-            }}
-          />
+          <div className="leave-month-fields">
+            <select
+              aria-label="Luna calendarului"
+              value={month.slice(5)}
+              onChange={(event) =>
+                setMonth(month.slice(0, 5) + event.target.value)
+              }
+            >
+              {calendarMonths.map(({ value, label }) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+            <select
+              aria-label="Anul calendarului"
+              value={month.slice(0, 4)}
+              onChange={(event) =>
+                setMonth(event.target.value + month.slice(4))
+              }
+            >
+              {calendarYears.map((value) => (
+                <option key={value} value={value}>
+                  {value}
+                </option>
+              ))}
+            </select>
+          </div>
           <button
             type="button"
             className="secondary leave-icon-action"
@@ -1202,17 +1233,74 @@ function MailPreview({
 }
 
 const scanLimit = 4_000_000;
+const unreadableScan =
+  'Fotografia nu a putut fi deschisă. Alege o imagine JPEG sau PNG lizibilă.';
+
+function scanDimensions(bytes: DataView, mime: string) {
+  const size = bytes.byteLength;
+  if (mime === 'image/png') {
+    if (
+      size < 33 ||
+      bytes.getUint32(0) !== 0x89504e47 ||
+      bytes.getUint32(4) !== 0x0d0a1a0a ||
+      bytes.getUint32(8) !== 13 ||
+      bytes.getUint32(12) !== 0x49484452
+    )
+      return;
+    return { width: bytes.getUint32(16), height: bytes.getUint32(20) };
+  }
+  if (size < 4 || bytes.getUint16(0) !== 0xffd8) return;
+
+  // JPEG metadata before Start of Scan is a series of length-prefixed segments.
+  // Only Start of Frame carries the image size.
+  let dimensions: { width: number; height: number } | undefined;
+  for (let offset = 2; offset + 1 < size;) {
+    if (bytes.getUint8(offset++) !== 0xff) return;
+    while (offset < size && bytes.getUint8(offset) === 0xff) offset++;
+    if (offset >= size) return;
+    const marker = bytes.getUint8(offset++);
+    if (marker === 0xda) return dimensions;
+    if (marker === 0xd9 || marker === 0x00) return;
+    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue;
+    if (offset + 2 > size) return;
+    const length = bytes.getUint16(offset);
+    if (length < 2 || offset + length > size) return;
+    if (
+      marker >= 0xc0 &&
+      marker <= 0xcf &&
+      marker !== 0xc4 &&
+      marker !== 0xc8 &&
+      marker !== 0xcc
+    ) {
+      if (length < 8 || dimensions) return;
+      dimensions = {
+        width: bytes.getUint16(offset + 5),
+        height: bytes.getUint16(offset + 3),
+      };
+    }
+    offset += length;
+  }
+}
+
 async function prepareScan(file: File) {
-  if (file.size > 32_000_000)
+  if (file.size > 12_000_000)
+    throw new Error('Alege o fotografie JPEG sau PNG de maximum 12 MB.');
+  const dimensions = scanDimensions(
+    new DataView(await file.arrayBuffer()),
+    file.type,
+  );
+  if (!dimensions?.width || !dimensions.height) throw new Error(unreadableScan);
+  const { width, height } = dimensions;
+  if (width * height > 24_000_000 || Math.max(width, height) > 9000) {
     throw new Error(
-      'Fotografia este foarte mare. Alege o imagine de maximum 32 MB.',
+      'Alege o fotografie de maximum 24 megapixeli și 9.000 px pe latura cea mai lungă.',
     );
+  }
+
   const image = await createImageBitmap(file, {
     imageOrientation: 'from-image',
   }).catch(() => {
-    throw new Error(
-      'Fotografia nu a putut fi deschisă. Alege o imagine JPEG sau PNG lizibilă.',
-    );
+    throw new Error(unreadableScan);
   });
   try {
     const scale = Math.min(1, 2400 / Math.max(image.width, image.height));
@@ -1288,7 +1376,7 @@ function LeaveRequestDetail({
     0,
   );
   const readySignature =
-    points >= 5 && points <= 5000 && signatureLength >= 0.1;
+    points >= 5 && points <= signaturePointLimit && signatureLength >= 0.1;
 
   function refreshDetail(message = '') {
     setStrokes([]);
@@ -1498,9 +1586,7 @@ function LeaveRequestDetail({
                   />
                   {points > 0 && !readySignature && (
                     <p className="leave-help">
-                      {points > 5000
-                        ? 'Semnătura este prea detaliată. Șterge-o și încearcă din nou.'
-                        : 'Completează semnătura înainte de depunere.'}
+                      Completează semnătura înainte de depunere.
                     </p>
                   )}
                   <button
@@ -1696,12 +1782,25 @@ function LeaveRequestDetail({
   );
 }
 
-type WorkspaceProps = { user: User; scopeQuery?: string; focusId?: string };
+type WorkspaceProps = {
+  user: User;
+  scopeQuery?: string;
+  focusId?: string;
+  onFocusConsumed?: () => void;
+};
 
-function Workspace({ user, scopeQuery = '', focusId }: WorkspaceProps) {
+function Workspace({
+  user,
+  scopeQuery = '',
+  focusId,
+  onFocusConsumed,
+}: WorkspaceProps) {
   const manager = user.role === 'manager';
   const [view, setView] = useState<View>('history');
   const [selected, setSelected] = useState(focusId ?? '');
+  useEffect(() => {
+    if (focusId) onFocusConsumed?.();
+  }, [focusId, onFocusConsumed]);
   const [create, setCreate] = useState(false);
   const [profileRefresh, setProfileRefresh] = useState(0);
   const [updated, setUpdated] = useState(0);
@@ -1878,9 +1977,6 @@ function AgentStart({
 
 export function LeaveWorkspace(props: WorkspaceProps) {
   return (
-    <Workspace
-      key={[props.user.id, props.scopeQuery, props.focusId].join('|')}
-      {...props}
-    />
+    <Workspace key={[props.user.id, props.scopeQuery].join('|')} {...props} />
   );
 }

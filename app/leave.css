@@ -440,12 +440,23 @@
   text-align: right;
 }
 .leave-month {
-  display: flex;
+  display: grid;
+  grid-template-columns: 46px minmax(0, 245px) 46px;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
 }
-.leave-month > input {
-  width: min(100%, 220px);
+.leave-month-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 85px;
+  gap: 7px;
+}
+.leave-month-fields select {
+  padding-inline: 9px;
+}
+@media (max-width: 380px) {
+  .leave-month-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 .leave-calendar-grid {
   display: grid;

@@ -1,4 +1,4 @@
-import leaveNotificationsSchema from '@/drizzle/0011_leave_notifications.sql?raw';
+import leaveNotificationsSchema from '@/drizzle/0012_leave_notifications.sql?raw';
 import portfolioReadModelSchema from '@/drizzle/0009_portfolio_read_model.sql?raw';
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
