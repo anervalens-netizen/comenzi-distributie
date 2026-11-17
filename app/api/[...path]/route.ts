@@ -200,7 +200,9 @@ async function saveOrder(req: Request,id: string,user: User) {
   const body=await jsonBody(req);
   if(body.revision!==order.revision) fail(409,'Comanda a fost modificată pe alt dispozitiv. Redeschide comanda înainte să o salvezi.');
   const next=await payloadFor(body,order);
-  const unchanged=JSON.stringify(next)===JSON.stringify(order);
+  // Loaded non-combined orders expose standItems: [], while editable payloads omit it.
+  // Normalize only for equality so a no-op save cannot invalidate a manager approval.
+  const unchanged=JSON.stringify({...next,standItems:next.standItems??[]})===JSON.stringify(order);
   const guard=operationalWriteGuard(req,user,{agentId:order.userId});
   if(unchanged) {
     const stillCurrent=await db().prepare("SELECT 1 WHERE EXISTS (SELECT 1 FROM orders WHERE id=? AND status='draft' AND revision=?) AND "+guard.sql).bind(id,order.revision,...guard.args).first();
