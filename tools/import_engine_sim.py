@@ -180,6 +180,8 @@ def run(request):
                          'matchingTR':matched,'otherInternalChannel':outside,
                          'withoutExactInternalMatch':len(digi_serials)-matched-outside}
   provenance=('internal' if internal else 'operator',source_at,start,end,'' if internal else company)
+  if prior and provider=='digi' and not internal and prior[4].casefold()==company.casefold():
+   provenance=(*provenance[:4],prior[4])
   if prior and tuple(prior)!=provenance:raise ValueError('Source provenance conflict')
   return {'state':'ready','preview':{'provider':provider,'sourceKind':provenance[0],'sourceAt':source_at,**({'company':company} if not internal else {}),**digi_reconciliation,'rows':count,'rowsWithIssues':issues,'observedStart':earliest,'observedEnd':latest,'alreadyImported':bool(prior),'generation':current.name,'rulesSha256':hashlib.sha256(raw_rules.encode()).hexdigest()}}
  if action!='commit':raise ValueError('Invalid action')
@@ -187,6 +189,8 @@ def run(request):
  if preview.get('provider')!=provider or preview.get('generation')!=current.name or preview.get('rulesSha256')!=hashlib.sha256(raw_rules.encode()).hexdigest():raise ValueError('Preview expired')
  if provider=='digi' and not internal:
   with ro(current/'activations.sqlite') as c:
+   existing=c.execute("SELECT company FROM activation_imports WHERE sha256=? AND status='complete'",(source['sha256'],)).fetchone()
+   if existing and existing[0].casefold()==company.casefold():company=existing[0]
    resolved=activations.versions.canonical_digi_company(
     company,[r[0] for r in c.execute("SELECT DISTINCT company FROM activation_movements WHERE provider='digi'")])
   if preview.get('resolvedCompany')!=resolved or not isinstance(preview.get('distinctSIMs'),int) or preview['distinctSIMs']<1:raise ValueError('Digi company reconciliation preview missing or expired')
@@ -208,12 +212,12 @@ def run(request):
    if provider=='digi' and not internal:
     distinct=c.execute('SELECT COUNT(DISTINCT o.serial) FROM activation_observations o JOIN activation_imports i ON o.import_id=i.id WHERE i.sha256=?',(source['sha256'],)).fetchone()[0]
     if distinct!=preview['distinctSIMs']:raise ValueError('Digi imported distinct SIM count differs from certified preview')
-    mismatched=c.execute("SELECT COUNT(*) FROM activation_observations o JOIN activation_imports i ON o.import_id=i.id WHERE i.sha256=? AND o.company<>?",(source['sha256'],preview['resolvedCompany'])).fetchone()[0]
+    mismatched=c.execute("SELECT COUNT(*) FROM activation_observations o JOIN activation_imports i ON o.import_id=i.id WHERE i.sha256=? AND o.company NOT IN (?,?)",(source['sha256'],preview['resolvedCompany'],company if existing else preview['resolvedCompany'])).fetchone()[0]
     if mismatched:raise ValueError('Digi canonical sales company mismatch in staged ledger')
     reconciled=c.execute('''SELECT COUNT(DISTINCT o.serial) FROM activation_observations o
       JOIN activation_imports i ON i.id=o.import_id
-      JOIN activation_facts f ON f.company=o.company AND f.provider=o.provider AND f.serial=o.serial
-      WHERE i.sha256=? AND f.activation_date=o.activation_date''',(source['sha256'],)).fetchone()[0]
+      JOIN activation_facts f ON f.company=? AND f.provider=o.provider AND f.serial=o.serial
+      WHERE i.sha256=? AND f.activation_date=o.activation_date''',(preview['resolvedCompany'],source['sha256'])).fetchone()[0]
     if reconciled!=preview['distinctSIMs']:
      raise ValueError('Digi activated SIM count is incomplete after reconciliation; publication refused')
    generation=c.execute("SELECT value FROM activation_meta WHERE key='generation'").fetchone()[0]

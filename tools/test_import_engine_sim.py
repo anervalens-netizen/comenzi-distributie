@@ -19,13 +19,13 @@ class SimExecutorTests(unittest.TestCase):
   self.env=patch.dict(os.environ,{'MOBIUP_DATA_DIR':str(self.data),'MOBIUP_ACTIVATIONS_DIR':str(self.net)});self.env.start()
   self.space=patch.object(import_engine_sim.shutil,'disk_usage',return_value=SimpleNamespace(free=100*1024**3));self.space.start()
  def tearDown(self):self.space.stop();self.env.stop();self.tmp.cleanup()
- def source(self,kind):
+ def source(self,kind,*,activation_day='2026-01-10',iccid='0000000000000000020'):
   path=self.base/'input.xlsx'
   if kind=='sim_sales_vodafone':fixture(path,[row(DataVDF='20260110',IMEI='0000000000000000020',Activat='000000000000000002',DocumentDetailId='NEW')])
   elif kind=='sim_sales_digi':fixture(path,[digi_row(Data='2026-01-10',IMEI='0000000000000000020',Activat='0000000000000000020')],headers=activations.DIGI_HEADERS,header_row=1)
   else:
    headers=['SerieText','DATE_OF_ACTIVATION','COUNTY_OF_ACTIVATION','Paid SIM Category'] if kind.endswith('vodafone') else ['Distribuitor','Seria SIM (iccid)','Data activare']
-   item={'SerieText':'000000000000000002','DATE_OF_ACTIVATION':'2026-01-10','COUNTY_OF_ACTIVATION':'TEST','Paid SIM Category':'-'} if kind.endswith('vodafone') else {'Distribuitor':'ExampleCo','Seria SIM (iccid)':'0000000000000000020','Data activare':'2026-01-10'}
+   item={'SerieText':'000000000000000002','DATE_OF_ACTIVATION':'2026-01-10','COUNTY_OF_ACTIVATION':'TEST','Paid SIM Category':'-'} if kind.endswith('vodafone') else {'Distribuitor':'ExampleCo','Seria SIM (iccid)':iccid,'Data activare':activation_day}
    fixture(path,[item],headers=headers,header_row=1)
    with zipfile.ZipFile(path) as z:parts={n:(z.read(n).replace(b'name="SIM"',b'name="Detailed SIM"' if kind.endswith('vodafone') else b'name="activari"') if n=='xl/workbook.xml' else z.read(n)) for n in z.namelist()}
    with zipfile.ZipFile(path,'w') as z:
