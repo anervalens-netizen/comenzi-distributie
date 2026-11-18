@@ -99,6 +99,26 @@ const pilotManagerIdsJson = () => {
     .filter(Boolean);
   return ids.length ? JSON.stringify([...new Set(ids)].sort()) : '';
 };
+// Reject invalid or deactivated manager entries before evaluating a limit.
+// An incorrect private allowlist must not silently exempt any team.
+async function verifiedPilotManagerIdsJson() {
+  const json = pilotManagerIdsJson();
+  if (!json) return '';
+  const ids = JSON.parse(json) as string[];
+  const row = await db()
+    .prepare(
+      "SELECT COUNT(*) total FROM users WHERE active=1 AND role='manager' " +
+        'AND id IN (SELECT value FROM json_each(?))',
+    )
+    .bind(json)
+    .first<{ total: number }>();
+  if (row?.total !== ids.length)
+    fail(
+      503,
+      'Configurarea limitelor este invalidă. Contactează administratorul.',
+    );
+  return json;
+}
 function pilotMembership(agentExpr: string) {
   return (
     'EXISTS (SELECT 1 FROM manager_agents pilot_link ' +
@@ -522,9 +542,9 @@ async function currentRequest(
 export async function orderLimits(req: Request, orderId: string, user: User) {
   const order = await getOrder(orderId, user);
   if (
-    !(await pilotApplies(order.userId, pilotManagerIdsJson())) ||
     order.kind === 'sim' ||
-    order.kind === 'stand_client'
+    order.kind === 'stand_client' ||
+    !(await pilotApplies(order.userId, await verifiedPilotManagerIdsJson()))
   ) {
     return response({
       enabled: false,
@@ -600,7 +620,7 @@ export async function requestOrderLimitApproval(
 ) {
   if (user.role !== 'agent')
     fail(403, 'Doar agentul poate solicita aprobarea comenzii sale.');
-  const managerIdsJson = pilotManagerIdsJson();
+  const managerIdsJson = await verifiedPilotManagerIdsJson();
   if (!(await pilotApplies(user.id, managerIdsJson)))
     fail(
       403,
@@ -719,7 +739,7 @@ async function listOrderLimitApprovals(
   params: URLSearchParams,
 ) {
   requireManager(user);
-  if (!pilotManagerIdsJson()) return response({ items: [], hasMore: false });
+  if (!(await verifiedPilotManagerIdsJson())) return response({ items: [], hasMore: false });
   const scope = approvalScope(req, user);
   const offset = Number(params.get('offset') ?? 0),
     limit = Number(params.get('limit') ?? 30);
@@ -762,7 +782,7 @@ async function listOrderLimitApprovals(
 
 async function decideApproval(req: Request, user: User, id: string) {
   requireManager(user);
-  const managerIdsJson = pilotManagerIdsJson();
+  const managerIdsJson = await verifiedPilotManagerIdsJson();
   if (!managerIdsJson) fail(404, 'Aprobarea nu a fost găsită.');
   const [body, versions] = await Promise.all([
     jsonBody(req),
@@ -862,7 +882,7 @@ export async function orderLimitApprovalsApi(
   if (req.method === 'GET' && !id)
     return listOrderLimitApprovals(req, user, new URL(req.url).searchParams);
   if (req.method === 'GET' && id && !action) {
-    if (!pilotManagerIdsJson()) fail(404, 'Aprobarea nu a fost găsită.');
+    if (!(await verifiedPilotManagerIdsJson())) fail(404, 'Aprobarea nu a fost găsită.');
     const versions = await readSourceVersions();
     return response({
       request: approvalView(await approvalById(req, id, user, versions), user),
@@ -879,9 +899,10 @@ export async function orderLimitFinalization(
   catalog: Catalog,
   user: User,
 ) {
-  const managerIdsJson = pilotManagerIdsJson();
-  if (!managerIdsJson || !containsLimitedProduct(order, catalog))
+  if (!containsLimitedProduct(order, catalog))
     return { sql: '1', args: [], approvalId: null };
+  const managerIdsJson = await verifiedPilotManagerIdsJson();
+  if (!managerIdsJson) return { sql: '1', args: [], approvalId: null };
   if (!(await pilotApplies(order.userId, managerIdsJson))) {
     // Recheck in the order writer; a newly assigned agent must be evaluated on retry.
     return {

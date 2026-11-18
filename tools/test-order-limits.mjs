@@ -828,6 +828,21 @@ try {
   assert.equal((await limits(order([['cap-cable', 20]]))).enabled, false,
     'without any matching assigned configured manager the gate stays off');
 
+  // Fail closed if a configured manager is unknown or inactive, including
+  // when other configured managers are valid (no silent partial rollout).
+  process.env.MOBIUP_ORDER_LIMIT_ADDITIONAL_MANAGER_IDS = 'manager-two,typo';
+  const invalidOrder = order([['cap-cable', 30]]);
+  await call('GET', 'orders/' + invalidOrder + '/limits', 'agent', undefined, 503);
+  await finalize(invalidOrder, 1, 503);
+  await finalize(order([['nocap-audio', 999]]), 1); // Only capped products fail closed.
+  await call('GET', 'order-limit-approvals', 'manager-one', undefined, 503);
+  process.env.MOBIUP_ORDER_LIMIT_ADDITIONAL_MANAGER_IDS = 'manager-two';
+  sql.prepare("UPDATE users SET active=0 WHERE id='manager-two'").run();
+  await call('GET', 'orders/' + invalidOrder + '/limits', 'agent', undefined, 503);
+  sql.prepare("UPDATE users SET active=1 WHERE id='manager-two'").run();
+  assert.equal((await limits(invalidOrder)).enabled, false,
+    'with only the other manager configured, existing outside teams stay exempt');
+
   console.log(
     'PASS order floors, returns and month coverage, HTTP guards, exact approvals, catalog/role scope, CAS, and sales/window races.',
   );
