@@ -15,6 +15,23 @@ FIELD_UNKNOWN = {'handset': UNKNOWN - {'-'}, 'HandSetType': UNKNOWN - {'-'}}
 FACTS_VERSION = '3'
 
 
+def canonical_digi_company(company, sales_companies):
+    """Map exact case-only company variants to one existing Digi sales company.
+
+    An operator's displayed distributor label is evidence, not a new
+    legal-entity identity. Never guess a match from shared spelling fragments,
+    punctuations, or other providers. Conflicting internal canonical labels
+    fail closed rather than assign a SIM to an arbitrary company.
+    """
+    if not isinstance(company, str) or not company.strip():
+        raise ValueError('Invalid Digi source company')
+    matches = sorted({str(name) for name in sales_companies
+                      if isinstance(name, str) and name.casefold() == company.casefold()})
+    if len(matches) > 1:
+        raise ValueError('Ambiguous case-insensitive Digi sales company identity')
+    return matches[0] if matches else company
+
+
 def migrate(c, version):
     if version == '2':
         c.execute('BEGIN IMMEDIATE')

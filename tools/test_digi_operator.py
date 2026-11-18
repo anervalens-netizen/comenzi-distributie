@@ -82,6 +82,55 @@ class DigiOperatorTests(unittest.TestCase):
         self.c.execute('BEGIN IMMEDIATE');a.rebuild(self.c);self.c.commit()
         self.assertEqual(before,[tuple(r) for r in self.c.execute('SELECT * FROM activation_facts ORDER BY company,provider,serial')])
 
+    def test_case_only_distributor_variants_resolve_to_exact_sales_identity(self):
+        self.internal([f.digi_row(Activat='',DataDigi='')])
+        result,path,options=self.operator([self.official(company='exampleco')],company='exampleco')
+        self.assertEqual(result['files'][0]['rows'],1)
+        self.assertEqual(self.fact()['company'],'ExampleCo')
+        self.assertEqual(self.fact()['candidate_site'],'SITE-A')
+        self.assertEqual(self.c.execute("SELECT company FROM activation_imports WHERE source_kind='operator'").fetchone()[0],'exampleco',
+                         'original supplied case remains in import provenance')
+        self.assertEqual(self.c.execute('SELECT company FROM activation_observations').fetchone()[0],'ExampleCo',
+                         'derived matching identity uses the exact known sales spelling')
+        self.assertEqual(a.import_files(self.c,self.root/'data',[path],**options)['files'][0]['status'],'already_imported',
+                         'case-safe imports remain idempotent on the original file hash')
+
+    def test_legacy_case_mismatch_is_reconciled_without_reimport_or_original_changes(self):
+        self.internal([f.digi_row(Activat='',DataDigi='')])
+        result,_,_=self.operator([self.official(company='exampleco')],company='exampleco',defer_rebuild=True)
+        batch=result['files'][0]['import_id']
+        self.c.execute("UPDATE activation_observations SET company='exampleco' WHERE import_id=?",(batch,))
+        self.c.commit()
+        before=self.c.execute('SELECT sha256,company,row_count FROM activation_imports WHERE id=?',(batch,)).fetchone()
+        self.c.execute('BEGIN IMMEDIATE'); delta=a.reconcile_imports(self.c,[batch]);self.c.commit()
+        self.assertIn(('ExampleCo','digi','0000000000000000010'),delta['imeis'])
+        self.assertEqual(self.fact()['candidate_site'],'SITE-A')
+        self.assertEqual(self.c.execute("SELECT COUNT(*) FROM activation_facts WHERE company='exampleco'").fetchone()[0],0)
+        self.assertEqual(self.c.execute('SELECT sha256,company,row_count FROM activation_imports WHERE id=?',(batch,)).fetchone(),before)
+        self.c.execute('BEGIN IMMEDIATE'); a.rebuild(self.c); self.c.commit()
+        self.assertEqual(self.fact()['candidate_site'],'SITE-A')
+
+    def test_operator_before_sales_with_different_case_reconciles_when_sales_arrive(self):
+        self.operator([self.official(company='exampleco')],company='exampleco')
+        self.assertEqual(self.c.execute("SELECT COUNT(*) FROM activation_facts WHERE company='exampleco'").fetchone()[0],1)
+        self.internal([f.digi_row(Activat='',DataDigi='')])
+        fact=self.fact()
+        self.assertEqual(fact['company'],'ExampleCo')
+        self.assertEqual(fact['candidate_site'],'SITE-A')
+        self.assertEqual(self.c.execute("SELECT COUNT(*) FROM activation_facts WHERE company='exampleco'").fetchone()[0],0)
+        rows=[tuple(r) for r in self.c.execute('SELECT * FROM activation_facts ORDER BY company,provider,serial')]
+        self.c.execute('BEGIN IMMEDIATE');a.rebuild(self.c);self.c.commit()
+        self.assertEqual(rows,[tuple(r) for r in self.c.execute('SELECT * FROM activation_facts ORDER BY company,provider,serial')],
+                         'incremental closure must exactly match a full reconciliation')
+
+    def test_case_alias_collision_rejected_without_guessing(self):
+        self.internal([f.digi_row(Activat='',DataDigi='')])
+        self.internal([f.digi_row(Canal='exampleco',Magazin='TR Other',IMEI='0000000000000000020',Activat='',DataDigi='')])
+        with self.assertRaisesRegex(ValueError,'Ambiguous case-insensitive'):
+            self.operator([self.official(company='EXAMPLECO')],company='EXAMPLECO')
+        self.assertEqual(self.c.execute("SELECT COUNT(*) FROM activation_imports WHERE source_kind='operator'").fetchone()[0],0,
+                         'ambiguous company spelling must not be published')
+
     def test_returns_and_retail_remain_unassigned(self):
         self.internal([f.digi_row(Activat='',DataDigi=''),f.digi_row(Activat='',DataDigi='',Data='2026-10-20',Cantitate='-1')])
         self.operator([self.official()])

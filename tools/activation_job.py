@@ -37,7 +37,8 @@ def authorized_publication(settings_db, authorization, required_scope='global'):
         db.rollback();db.close()
 
 
-def run_job(directory,batches,rules=None,before_publish=None,publication_guard=None,before_stage=None):
+def run_job(directory,batches,rules=None,before_publish=None,publication_guard=None,before_stage=None,force_reconcile=False):
+    if force_reconcile and batches:raise ValueError('Full reconciliation cannot mix in new imports')
     root=Path(directory).resolve();root.mkdir(mode=0o700,parents=True,exist_ok=True)
     with (root/'.activation-job.lock').open('a') as lock:
         fcntl.flock(lock,fcntl.LOCK_EX)
@@ -74,7 +75,13 @@ def run_job(directory,batches,rules=None,before_publish=None,publication_guard=N
                 # single reconciliation after every source has been imported.
                 c.execute('BEGIN IMMEDIATE')
                 try:
-                    delta=activations.reconcile_imports(c,import_ids)
+                    if force_reconcile:
+                        # Repair previously mis-keyed derived facts without
+                        # changing immutable imports, original files or receipts.
+                        activations.rebuild(c)
+                        delta={'full':True,'serials':set(),'imeis':set(),'sites':set()}
+                    else:
+                        delta=activations.reconcile_imports(c,import_ids)
                     c.commit()
                 except BaseException:
                     c.rollback()
@@ -118,6 +125,6 @@ def run_job(directory,batches,rules=None,before_publish=None,publication_guard=N
             raise
 
 if __name__=='__main__':
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--data-dir',type=Path,required=True);p.add_argument('--manifest',type=Path,required=True);p.add_argument('--rules',type=Path)
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--data-dir',type=Path,required=True);p.add_argument('--manifest',type=Path,required=True);p.add_argument('--rules',type=Path);p.add_argument('--force-reconcile',action='store_true')
     a=p.parse_args();os.umask(0o077)
-    print(json.dumps(run_job(a.data_dir,json.loads(a.manifest.read_text()),json.loads(a.rules.read_text()) if a.rules else None)))
+    print(json.dumps(run_job(a.data_dir,json.loads(a.manifest.read_text()),json.loads(a.rules.read_text()) if a.rules else None,force_reconcile=a.force_reconcile)))

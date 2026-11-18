@@ -37,6 +37,7 @@ node tools/test-sales-vat.mjs
 node tools/test-distribution-sales.mjs
 node tools/test-manager-commerce.mjs
 node tools/test-distribution-store.mjs
+node tools/test-digi-operator-source.mjs
 node tools/test-activation-partners.mjs
 node tools/test-activation-current-window.mjs
 node tools/test-activation-portfolio.mjs

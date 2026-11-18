@@ -39,6 +39,63 @@ class SimExecutorTests(unittest.TestCase):
     preview=import_engine_sim.run({'job':job,'mode':'execute','action':'preview','action_id':str(uuid.uuid4())});self.assertEqual(preview['preview']['rows'],1)
     job['preview']=preview['preview'];result=import_engine_sim.run({'job':job,'mode':'execute','action':'commit','action_id':action});self.assertEqual(result['state'],'completed');self.assertTrue(result['receipt']['verified']);self.assertEqual((other/'current').resolve(),other_before)
     recovered=import_engine_sim.run({'job':job,'mode':'reconcile','action':'commit','action_id':action});self.assertEqual(recovered['receipt'],result['receipt'])
+ def test_digi_company_case_resolves_before_publish_and_preserves_raw_source(self):
+  job=self.source('sim_activations_digi')
+  job['payload']['company']='exampleco'
+  # Only the input user-company spelling differs; the source XLSX and
+  # commercial identity ExampleCo are left unchanged.
+  preview=import_engine_sim.run({'job':job,'mode':'execute','action':'preview','action_id':str(uuid.uuid4())})
+  self.assertEqual(preview['state'],'ready')
+  self.assertEqual(preview['preview']['sourceCompany'],'exampleco')
+  self.assertEqual(preview['preview']['resolvedCompany'],'ExampleCo')
+  self.assertTrue(preview['preview']['companyCaseNormalized'])
+  self.assertEqual(preview['preview']['distinctSIMs'],1)
+  self.assertEqual(preview['preview']['duplicateSourceRows'],0)
+  self.assertEqual(preview['preview']['matchingTR'],0)
+  job['preview']=preview['preview']
+  completed=import_engine_sim.run({'job':job,'mode':'execute','action':'commit','action_id':str(uuid.uuid4())})
+  self.assertEqual(completed['state'],'completed')
+  with contextlib.closing(sqlite3.connect((self.digi/'current'/'activations.sqlite').resolve())) as db:
+   self.assertEqual(db.execute("SELECT company FROM activation_imports WHERE source_kind='operator'").fetchone()[0],'exampleco')
+   self.assertEqual(db.execute("SELECT company FROM activation_observations").fetchone()[0],'ExampleCo')
+  with contextlib.closing(sqlite3.connect((self.digi/'current'/'activation-report.sqlite').resolve())) as db:
+   self.assertEqual(db.execute("PRAGMA quick_check").fetchone()[0],'ok')
+
+ def test_digi_preview_case_resolution_is_fenced_before_commit(self):
+  job=self.source('sim_activations_digi');job['payload']['company']='exampleco'
+  preview=import_engine_sim.run({'job':job,'mode':'execute','action':'preview','action_id':str(uuid.uuid4())})['preview']
+  self.assertEqual(preview['resolvedCompany'],'ExampleCo')
+  previous=(self.digi/'current').resolve()
+  job['preview']={**preview,'resolvedCompany':'other'}
+  with self.assertRaisesRegex(ValueError,'Digi company reconciliation preview'):
+   import_engine_sim.run({'job':job,'mode':'execute','action':'commit','action_id':str(uuid.uuid4())})
+  self.assertEqual((self.digi/'current').resolve(),previous)
+  with contextlib.closing(sqlite3.connect((self.digi/'current'/'activations.sqlite').resolve())) as db:
+   self.assertEqual(db.execute("SELECT COUNT(*) FROM activation_imports WHERE source_kind='operator'").fetchone()[0],0)
+
+ def test_digi_incomplete_reconciliation_fails_before_atomic_publication(self):
+  job=self.source('sim_activations_digi')
+  job['payload']['company']='exampleco'
+  preview=import_engine_sim.run({'job':job,'mode':'execute','action':'preview','action_id':str(uuid.uuid4())})['preview']
+  job['preview']=preview;old=(self.digi/'current').resolve()
+  original=activation_job.run_job
+  def break_staged_reconciliation(*args,**kwargs):
+   verify=kwargs['before_publish']
+   def sabotage(stage):
+    with contextlib.closing(sqlite3.connect(stage/'activations.sqlite')) as c:
+     c.execute("UPDATE activation_facts SET activation_date=NULL,month=NULL WHERE company='ExampleCo' AND provider='digi'")
+     c.commit()
+    verify(stage)
+   kwargs['before_publish']=sabotage
+   return original(*args,**kwargs)
+  with patch.object(activation_job,'run_job',side_effect=break_staged_reconciliation):
+   with self.assertRaisesRegex(ValueError,'incomplete after reconciliation'):
+    import_engine_sim.run({'job':job,'mode':'execute','action':'commit','action_id':str(uuid.uuid4())})
+  self.assertEqual((self.digi/'current').resolve(),old,
+                   'incomplete staged import is never published')
+  with contextlib.closing(sqlite3.connect(old/'activations.sqlite')) as c:
+   self.assertEqual(c.execute("SELECT COUNT(*) FROM activation_imports WHERE source_kind='operator'").fetchone()[0],0)
+
  def test_vodafone_operator_company_is_fixed_even_for_old_client_header(self):
   job=self.source('sim_activations_vodafone')
   del job['payload']['company']

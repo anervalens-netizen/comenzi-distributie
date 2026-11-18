@@ -1,4 +1,5 @@
 import {distributionReport} from './activation-distribution-node';
+import {digiOperatorReported} from './digi-operator-source';
 import {activationFactsVersion} from './activation-semantics';
 import type {ActivationQuery} from './activation-distribution';
 import {DatabaseSync} from 'node:sqlite';
@@ -41,7 +42,39 @@ export function readActivations(month:string,sites:string[]|null,provider:Activa
     if(JSON.stringify(imports)!==meta.sourceImports)throw new Error('Stale activation report');
     if(meta.sourceGeneration!==undefined&&meta.sourceGeneration!==String(source.prepare("SELECT value FROM activation_meta WHERE key='generation'").get()?.value||''))throw new Error('Stale activation generation');
     if(['3','4'].includes(meta.version)&&meta.rules&&!query)throw new Error('Distribution rules required');
-    if(query){if(meta.version!=='4')throw new Error('Distribution projection requires rebuild');return distributionReport(report,result,meta,sites,query);}
+    if(query){
+      if(meta.version!=='4')throw new Error('Distribution projection requires rebuild');
+      const scoped=distributionReport(report,result,meta,sites,query);
+      // The operator's certified distinct ICCIDs are the manager KPI. Matching
+      // commercial evidence by exact ICCID gives TR agent attribution without
+      // altering immutable provider/import records or expanding seller scope.
+      if(provider==='digi'&&schema==='3'&&sites===null&&!query.view&&
+          query.policy==='manager'&&new Set(query.projects).size===3){
+        const certified=digiOperatorReported(source,query.months);
+        if(certified){
+          scoped.operatorReported=certified;
+          const other=certified.otherChannels+certified.noCommercialMatch+certified.unattributedTR;
+          const counts=(total:number,unassigned:number)=>({...emptyActivationCounts(),total,sim:total,unassigned});
+          scoped.totals=counts(certified.total,other);
+          const labels=new Map(report.prepare('SELECT site,label FROM sites').all().map(r=>[String(r.site),String(r.label)]));
+          scoped.sites=certified.sites.map(row=>({site:row.site,label:labels.get(row.site)||row.site,
+            ...counts(row.total,0)}));
+          if(other)scoped.sites.push({site:'',label:'Alte canale / fără vânzare TR identificată',...counts(other,other)});
+          scoped.history=certified.monthly.map(entry=>({month:entry.month,
+            ...counts(entry.total,entry.otherChannels+entry.noCommercialMatch)}));
+          scoped.months=scoped.history.map(({month,total})=>({month,total}));
+          scoped.monthly=query.months.map(month=>{
+            const entry=certified.monthly.find(item=>item.month===month);
+            return {month,reported:!!entry,counts:counts(entry?.total||0,(entry?.otherChannels||0)+(entry?.noCommercialMatch||0))};
+          });
+          scoped.coveredMonths=certified.monthly.map(entry=>entry.month);
+          // The old reconciliation value sums obsolete overlapping operator
+          // snapshots, so it is not a unique-SIM metric.
+          scoped.reconciliation=undefined;
+        }
+      }
+      return scoped;
+    }
     const allowed=sites===null?null:new Set(sites);
     const rows=(meta.version!=='1'
       ?report.prepare("SELECT month,item_type,site,count,last_date FROM monthly WHERE month<>'' AND provider=? ORDER BY month DESC,site").all(provider)

@@ -145,7 +145,7 @@ def run(request):
   period=metadata_period(path,'SIM' if internal else 'activari' if provider=='digi' else 'Detailed SIM')
   if period is not None and period!=(start,end):raise ValueError('Workbook period mismatch')
  if action=='preview':
-  count=0;earliest=None;latest=None;issues=0
+  count=0;earliest=None;latest=None;issues=0;digi_serials=set()
   if internal:
    records=activations.workbook(path)
    for rownum,record in records:
@@ -157,18 +157,39 @@ def run(request):
   else:
    records=json_records(path) if suffix=='.json.gz' else activations.versions.operator_records(path,activations.workbook,provider)
    for _,record in records:
-    _,observed,_,_=activations.versions.operator_values(record,provider,company)
+    serial,observed,_,_=activations.versions.operator_values(record,provider,company)
+    if provider=='digi':digi_serials.add(serial)
     if not start<=observed<=end:raise ValueError('Activation outside declared period')
     earliest=min(earliest or observed,observed);latest=max(latest or observed,observed);count+=1
   if not count:raise ValueError('Empty source')
+  digi_reconciliation={}
   with ro(current/'activations.sqlite') as c:
    prior=c.execute('SELECT source_kind,source_at,period_start,period_end,company FROM activation_imports WHERE sha256=? AND status=\'complete\'',(source['sha256'],)).fetchone()
+   if provider=='digi' and not internal:
+    sales_companies=[r[0] for r in c.execute("SELECT DISTINCT company FROM activation_movements WHERE provider='digi'")]
+    resolved=activations.versions.canonical_digi_company(company,sales_companies)
+    known_imeis={r[0] for r in c.execute("SELECT DISTINCT imei FROM activation_effective_movements WHERE provider='digi' AND imei<>''")}
+    matched=0;outside=0
+    for serial in digi_serials:
+     rows=c.execute("SELECT is_tr FROM activation_effective_movements INDEXED BY effective_imei WHERE company=? AND provider='digi' AND imei=?",(resolved,serial)).fetchall()
+     if any(r[0]==1 for r in rows):matched+=1
+     elif serial in known_imeis:outside+=1
+    digi_reconciliation={'sourceCompany':company,'resolvedCompany':resolved,
+                         'companyCaseNormalized':resolved!=company,
+                         'distinctSIMs':len(digi_serials),'duplicateSourceRows':count-len(digi_serials),
+                         'matchingTR':matched,'otherInternalChannel':outside,
+                         'withoutExactInternalMatch':len(digi_serials)-matched-outside}
   provenance=('internal' if internal else 'operator',source_at,start,end,'' if internal else company)
   if prior and tuple(prior)!=provenance:raise ValueError('Source provenance conflict')
-  return {'state':'ready','preview':{'provider':provider,'sourceKind':provenance[0],'sourceAt':source_at,**({'company':company} if not internal else {}),'rows':count,'rowsWithIssues':issues,'observedStart':earliest,'observedEnd':latest,'alreadyImported':bool(prior),'generation':current.name,'rulesSha256':hashlib.sha256(raw_rules.encode()).hexdigest()}}
+  return {'state':'ready','preview':{'provider':provider,'sourceKind':provenance[0],'sourceAt':source_at,**({'company':company} if not internal else {}),**digi_reconciliation,'rows':count,'rowsWithIssues':issues,'observedStart':earliest,'observedEnd':latest,'alreadyImported':bool(prior),'generation':current.name,'rulesSha256':hashlib.sha256(raw_rules.encode()).hexdigest()}}
  if action!='commit':raise ValueError('Invalid action')
  preview=job.get('preview') or {}
  if preview.get('provider')!=provider or preview.get('generation')!=current.name or preview.get('rulesSha256')!=hashlib.sha256(raw_rules.encode()).hexdigest():raise ValueError('Preview expired')
+ if provider=='digi' and not internal:
+  with ro(current/'activations.sqlite') as c:
+   resolved=activations.versions.canonical_digi_company(
+    company,[r[0] for r in c.execute("SELECT DISTINCT company FROM activation_movements WHERE provider='digi'")])
+  if preview.get('resolvedCompany')!=resolved or not isinstance(preview.get('distinctSIMs'),int) or preview['distinctSIMs']<1:raise ValueError('Digi company reconciliation preview missing or expired')
  auth=(job.get('payload') or {}).get('commit_authorization')
  if not isinstance(auth,dict) or auth.get('userId')!=job['actor']['id']:raise ValueError('Missing authorization')
  def before_stage(locked_current):
@@ -184,10 +205,29 @@ def run(request):
   with contextlib.closing(sqlite3.connect(stage/'activations.sqlite')) as c:
    item=c.execute("SELECT source_kind,source_at,period_start,period_end,company FROM activation_imports WHERE sha256=? AND status='complete'",(source['sha256'],)).fetchone()
    if item!=(batch['source_kind'],source_at,start,end,batch['company']):raise ValueError('Source provenance mismatch')
+   if provider=='digi' and not internal:
+    distinct=c.execute('SELECT COUNT(DISTINCT o.serial) FROM activation_observations o JOIN activation_imports i ON o.import_id=i.id WHERE i.sha256=?',(source['sha256'],)).fetchone()[0]
+    if distinct!=preview['distinctSIMs']:raise ValueError('Digi imported distinct SIM count differs from certified preview')
+    mismatched=c.execute("SELECT COUNT(*) FROM activation_observations o JOIN activation_imports i ON o.import_id=i.id WHERE i.sha256=? AND o.company<>?",(source['sha256'],preview['resolvedCompany'])).fetchone()[0]
+    if mismatched:raise ValueError('Digi canonical sales company mismatch in staged ledger')
+    reconciled=c.execute('''SELECT COUNT(DISTINCT o.serial) FROM activation_observations o
+      JOIN activation_imports i ON i.id=o.import_id
+      JOIN activation_facts f ON f.company=o.company AND f.provider=o.provider AND f.serial=o.serial
+      WHERE i.sha256=? AND f.activation_date=o.activation_date''',(source['sha256'],)).fetchone()[0]
+    if reconciled!=preview['distinctSIMs']:
+     raise ValueError('Digi activated SIM count is incomplete after reconciliation; publication refused')
    generation=c.execute("SELECT value FROM activation_meta WHERE key='generation'").fetchone()[0]
    c.execute('INSERT INTO activation_meta(key,value) VALUES(?,?)',('import_action_receipt:'+action_id,json.dumps(receipt,sort_keys=True,separators=(',',':'))));c.commit();c.execute('PRAGMA wal_checkpoint(TRUNCATE)')
   with ro(stage/'activation-report.sqlite') as report:
    if report.execute("SELECT value FROM report_meta WHERE key='sourceGeneration'").fetchone()[0]!=generation or report.execute('PRAGMA quick_check').fetchone()[0]!='ok':raise ValueError('Invalid activation report')
+   if provider=='digi' and not internal:
+    report.execute('ATTACH DATABASE ? AS ledger',((stage/'activations.sqlite').resolve().as_uri()+'?mode=ro',))
+    projected=report.execute('''SELECT COUNT(DISTINCT d.serial) FROM details d
+      WHERE d.provider='digi' AND d.company=? AND d.serial IN
+        (SELECT o.serial FROM ledger.activation_observations o JOIN ledger.activation_imports i ON i.id=o.import_id WHERE i.sha256=?)
+      AND d.activation_date IS NOT NULL''',(preview['resolvedCompany'],source['sha256'])).fetchone()[0]
+    if projected!=preview['distinctSIMs']:
+     raise ValueError('Digi certified operator total differs from staged activation report; publication refused')
  @contextlib.contextmanager
  def guard(stage):
   global publication_possible

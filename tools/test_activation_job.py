@@ -50,6 +50,34 @@ class JobTests(unittest.TestCase):
    with self.assertRaisesRegex(PermissionError,'authorization revoked'):run_job(data,[batch],publication_guard=denied)
    self.assertEqual((data/'current').resolve(),current)
 
+ def test_explicit_no_import_full_reconciliation_is_versioned_and_preserves_provenance(self):
+  with tempfile.TemporaryDirectory() as folder:
+   root=Path(folder);data=root/'digi'
+   file=fixture(root/'digi.xlsx',[__import__('test_activations').digi_row(Activat='0000000000000000010',DataDigi='2026-10-15')],headers=activations.DIGI_HEADERS,header_row=1)
+   batch={'files':[str(file)],'operator':'digi','site_aliases':{('ExampleCo','TR Example'):'SITE-A'}}
+   first=run_job(data,[batch])
+   old=(data/'current').resolve()
+   with closing(sqlite3.connect(old/'activations.sqlite')) as c:
+    imports=c.execute('SELECT id,sha256,company,row_count,source_kind FROM activation_imports').fetchall()
+    c.execute("UPDATE activation_facts SET company='exampleco',candidate_site=NULL,status='unresolved' WHERE company='ExampleCo' AND provider='digi'")
+    c.commit()
+   with self.assertRaisesRegex(ValueError,'cannot mix'):
+    run_job(data,[batch],force_reconcile=True)
+   self.assertEqual((data/'current').resolve(),old)
+   updated=run_job(data,[],force_reconcile=True)
+   new=(data/'current').resolve()
+   self.assertNotEqual(old,new)
+   self.assertEqual(updated['imports'],[])
+   self.assertEqual((data/'current').resolve(),new)
+   with closing(sqlite3.connect(new/'activations.sqlite')) as c:
+    self.assertEqual(c.execute('SELECT id,sha256,company,row_count,source_kind FROM activation_imports').fetchall(),imports)
+    self.assertEqual(c.execute("SELECT COUNT(*) FROM activation_facts WHERE company='exampleco'").fetchone()[0],0)
+    self.assertEqual(c.execute("SELECT candidate_site FROM activation_facts WHERE company='ExampleCo'").fetchone()[0],'SITE-A')
+    self.assertEqual(c.execute('PRAGMA quick_check').fetchone()[0],'ok')
+   with closing(sqlite3.connect(new/'activation-report.sqlite')) as c:
+    self.assertEqual(c.execute('PRAGMA quick_check').fetchone()[0],'ok')
+    self.assertEqual(c.execute("SELECT SUM(count) FROM dimension_monthly WHERE is_tr=1 AND provider='digi'").fetchone()[0],1)
+
  def test_noop_semantic_migration_is_atomic_and_preserves_prior_generation(self):
   with tempfile.TemporaryDirectory() as folder:
    root=Path(folder);data=root/'data';eligible='SIM with initial credit >= 3 EUR'

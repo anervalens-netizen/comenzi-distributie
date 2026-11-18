@@ -1,3 +1,5 @@
+import type {DigiOperatorReported} from './digi-operator-source';
+
 export type ActivationPartner={key:string;company:string;clientCode:string;pointCode:string;label:string;siteCode?:string;portfolioId?:string;total:number;recentToday?:number;lastDate:string|null;recent:Record<string,number>;kind:'point'|'generic'|'unresolved';};
 export type ActivationPartnerSummary={realPointCount:number;unassignedActivations:number;genericActivations:number;unresolvedActivations:number};
 export type ActivationDetail={id:string;date:string;itemType:string;county:string;handset:string;eligible:boolean|null;reasons:string[]};
@@ -8,6 +10,8 @@ export type ActivationSimZero={distributed:number;activated:number;withoutReport
 export type ActivationMonth={month:string;reported:boolean;counts:ActivationCounts;productBreakdown?:ActivationProductBreakdown;simZero?:ActivationSimZero};
 export type ActivationReport = {
   monthly?:ActivationMonth[];
+  /** Full operator count; never exposed to scoped managers or agents. */
+  operatorReported?:DigiOperatorReported;
   partners?:ActivationPartnerSummary&{rows:ActivationPartner[];total:number;page:number;hasMore:boolean;asOf:string|null};
   detail?:{rows:ActivationDetail[];total:number;page:number;hasMore:boolean;lastDate:string|null;recent:Record<string,number>;asOf:string|null};
   revision?:string;rulesRevision?:string;builtAt?:string;selectedMonths?:string[];coveredMonths?:string[];sourcePeriods?:{from:string;to:string}[];reconciliation?:number;

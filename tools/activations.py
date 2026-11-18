@@ -456,6 +456,10 @@ def rebuild(c, operator=None, incremental=False):
         c.execute('DELETE FROM activation_effective_movements' + (' WHERE provider=?' if operator else ''), (operator,) if operator else ())
         c.execute("DELETE FROM activation_meta WHERE key LIKE 'conflict:%'")
     official = collections.defaultdict(list)
+    # Exact company identity is case-insensitive for Digi operator evidence.
+    # Commercial names remain authoritative; raw operator labels stay in
+    # activation_imports and the immutable observations for audit.
+    digi_sales_companies = [r[0] for r in c.execute("SELECT DISTINCT company FROM activation_movements WHERE provider='digi'")]
     shared_vodafone = collections.defaultdict(list)
     sales_owner_cache = {}
     def vodafone_sales_owner(serial):
@@ -484,9 +488,11 @@ def rebuild(c, operator=None, incremental=False):
         digi_query = "SELECT o.movement_id FROM activation_occurrences o JOIN activation_movements m ON m.id=o.movement_id WHERE m.provider='digi' GROUP BY o.import_id,o.movement_id HAVING COUNT(*)>1"
         query = "SELECT m.*,COALESCE(MAX(i.source_at),'') source_at FROM activation_movements m JOIN activation_occurrences o ON o.movement_id=m.id JOIN activation_imports i ON i.id=o.import_id" + (' WHERE m.provider=?' if operator else '') + ' GROUP BY m.id ORDER BY m.company,m.provider,m.imei,m.id'
     for o in c.execute(observation_query):
+        resolved_company = (versions.canonical_digi_company(o['company'], digi_sales_companies)
+                            if o['provider']=='digi' else o['company'])
         target=(shared_vodafone[(o['provider'],o['serial'])]
                 if o['provider']=='vodafone' and o['company'] in VODAFONE_OPERATOR_COMPANIES
-                else official[(o['company'],o['provider'],o['serial'])])
+                else official[(resolved_company,o['provider'],o['serial'])])
         target.append(dict(serial=o['serial'],activation_date=o['activation_date'],county=o['county'],handset=o['handset'],priority=1,source_at=o['source_at'],ref={'importId':o['import_id'],'row':o['source_row']}))
     used=set();used_shared=set()
     repeated_digi = {r[0] for r in c.execute(digi_query)}
@@ -569,9 +575,33 @@ def reconcile_imports(c, import_ids):
         # imports or rebuilding the entire historical ledger.
         c.execute("INSERT OR IGNORE INTO affected_serial SELECT company,provider,serial FROM activation_facts WHERE instr(reasons,'post_activation_movement_rule_pending')>0")
 
+    digi_sales_companies = [r[0] for r in c.execute("SELECT DISTINCT company FROM activation_movements WHERE provider='digi'")]
+    digi_operator_labels=[r[0] for r in c.execute("SELECT DISTINCT company FROM activation_observations WHERE provider='digi'")]
+    digi_labels_by_sales=collections.defaultdict(list)
+    for label in digi_operator_labels:
+        resolved=versions.canonical_digi_company(label,digi_sales_companies)
+        if resolved!=label:digi_labels_by_sales[resolved].append(label)
     for batch in import_ids:
         c.execute('INSERT OR IGNORE INTO affected_imei SELECT DISTINCT m.company,m.provider,m.imei FROM activation_movements m JOIN activation_occurrences o ON o.movement_id=m.id WHERE o.import_id=?', (batch,))
         c.execute("INSERT OR IGNORE INTO affected_serial SELECT DISTINCT company,provider,serial FROM activation_observations WHERE import_id=? AND serial<>''", (batch,))
+        # Existing operator labels can differ only by case from the commercial
+        # company's spelling. The raw identity is kept in the closure to
+        # remove old orphan facts; the canonical identity reaches TR movements
+        # even when the internal Activat field is blank and only IMEI matches.
+        for operator_company, serial in c.execute("SELECT DISTINCT company,serial FROM activation_observations WHERE import_id=? AND provider='digi' AND serial<>''", (batch,)).fetchall():
+            canonical=versions.canonical_digi_company(operator_company,digi_sales_companies)
+            c.execute('INSERT OR IGNORE INTO affected_serial VALUES(?,?,?)',(canonical,'digi',serial))
+            c.execute('INSERT OR IGNORE INTO affected_imei SELECT company,provider,imei FROM activation_movements INDEXED BY activation_movements_identity WHERE company=? AND provider=? AND imei=?',(canonical,'digi',serial))
+        # The operator report may arrive *before* the corresponding TR sales.
+        # A later internal upload must visit previously orphaned observations
+        # under the raw spelling as well as the newly canonical sales company.
+        for sales_company, imei in c.execute('''SELECT DISTINCT m.company,m.imei FROM activation_movements m
+                JOIN activation_occurrences o ON o.movement_id=m.id
+                WHERE o.import_id=? AND m.provider='digi' AND length(m.imei)=19''',(batch,)).fetchall():
+            for label in digi_labels_by_sales.get(sales_company,()):
+                if c.execute('SELECT 1 FROM activation_observations INDEXED BY observation_identity WHERE company=? AND provider=? AND serial=? LIMIT 1',(label,'digi',imei)).fetchone():
+                    c.execute('INSERT OR IGNORE INTO affected_serial VALUES(?,?,?)',(label,'digi',imei))
+                    c.execute('INSERT OR IGNORE INTO affected_serial VALUES(?,?,?)',(sales_company,'digi',imei))
         # A provider-wide Vodafone report touches both internal brands when
         # the exact serial is present. The normal identity closure follows.
         for company in VODAFONE_SALES_COMPANIES:
@@ -685,6 +715,10 @@ def _import_files(c, directory, paths, *, operator, nominal_period='', site_alia
         # Exact historical company + label matches only; never fuzzy-match people,
         # merge companies, or infer ownership from current account activity.
         aliases = site_aliases or {}
+        digi_company = company
+        if operator == 'digi' and source_kind == 'operator':
+            digi_company = versions.canonical_digi_company(
+                company, [r[0] for r in c.execute("SELECT DISTINCT company FROM activation_movements WHERE provider='digi'")])
         if operator == 'digi':
             if c.execute("SELECT 1 FROM activation_imports WHERE operator<>'digi' LIMIT 1").fetchone():
                 raise ImportError('Digi requires its own dedicated database')
@@ -735,7 +769,9 @@ def _import_files(c, directory, paths, *, operator, nominal_period='', site_alia
                         serial,ad,county,handset=versions.operator_values(raw,operator,company)
                         if operator=='digi' and ((period_start and ad<period_start) or (period_end and ad>period_end) or (source_at and ad>source_at)):
                             raise ImportError('Digi activation outside declared period')
-                        c.execute('INSERT INTO activation_observations VALUES(?,?,?,?,?,?,?,?,?)',(batch,rn,company,operator,serial,ad,county,handset,dump(raw)))
+                        c.execute('INSERT INTO activation_observations VALUES(?,?,?,?,?,?,?,?,?)',
+                                  (batch,rn,digi_company if operator=='digi' else company,
+                                   operator,serial,ad,county,handset,dump(raw)))
                         count+=1
                         continue
                     values = normalized(raw, sha, rn, operator, aliases)
