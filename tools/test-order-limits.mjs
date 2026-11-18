@@ -14,6 +14,7 @@ const previous = Object.fromEntries(
     'MOBIUP_DATA_DIR',
     'MOBIUP_USAGE_DISABLED',
     'MOBIUP_ORDER_LIMIT_MANAGER_ID',
+    'MOBIUP_ORDER_LIMIT_ADDITIONAL_MANAGER_IDS',
   ].map((key) => [key, process.env[key]]),
 );
 const data = join(scratch, 'data');
@@ -321,6 +322,7 @@ try {
     );
 
   delete process.env.MOBIUP_ORDER_LIMIT_MANAGER_ID;
+  delete process.env.MOBIUP_ORDER_LIMIT_ADDITIONAL_MANAGER_IDS;
   const disabled = order([['cap-case', 40]]);
   assert.equal(
     (await limits(disabled)).enabled,
@@ -780,6 +782,52 @@ try {
     route.env.DB.prepare = prepare;
   }
   assert(revoked);
+  // A later multi-team rollout preserves the original pilot while applying
+  // authorization to new teams through current manager_agents assignments.
+  process.env.MOBIUP_ORDER_LIMIT_ADDITIONAL_MANAGER_IDS =
+    'manager-two, manager-new, manager-two';
+  assign('manager-two', 'other');
+  const secondTeamOrder = order([['cap-cable', 20]], 'other');
+  const secondTeamLimits = await call(
+    'GET', 'orders/' + secondTeamOrder + '/limits', 'other',
+  );
+  assert.equal(secondTeamLimits.enabled, true);
+  assert.deepEqual(
+    secondTeamLimits.violations.map((v) => [v.code, v.requested, v.limit]),
+    [['SYNTH-CABLE', 20, 10]],
+  );
+  await call('POST', 'orders/' + secondTeamOrder + '/finalize', 'other',
+    { revision: 1 }, 409);
+  const secondTeamApproval = (await call(
+    'POST', 'orders/' + secondTeamOrder + '/limit-approval', 'other',
+    { revision: 1, reason: 'Synthetic exception request' }, 201,
+  )).request;
+  await decide(secondTeamApproval.id, 'manager-two');
+  assert.equal(
+    (await call('POST', 'orders/' + secondTeamOrder + '/finalize',
+      'other', { revision: 1 })).order.status,
+    'finalized',
+  );
+  remove('manager-one');
+  const thirdTeamOrder = order([['cap-cable', 20]]);
+  assert.equal((await limits(thirdTeamOrder)).enabled, true,
+    'a third configured manager alone enables the guard');
+  await finalize(thirdTeamOrder, 1, 409);
+  remove('manager-new');
+  assert.equal((await limits(thirdTeamOrder)).enabled, false,
+    'removing the last configured assignment disables the guard');
+  await finalize(thirdTeamOrder, 1);
+  assign('manager-one');
+  assert.equal((await limits(order([['cap-cable', 20]]))).enabled, true,
+    'the original manager stays enabled after the extension');
+  remove('manager-two', 'other');
+  assert.equal((await call('GET',
+    'orders/' + order([['cap-cable', 20]], 'other') + '/limits', 'other')).enabled,
+    false, 'outside teams must remain exempt');
+  delete process.env.MOBIUP_ORDER_LIMIT_MANAGER_ID;
+  assert.equal((await limits(order([['cap-cable', 20]]))).enabled, false,
+    'without any matching assigned configured manager the gate stays off');
+
   console.log(
     'PASS order floors, returns and month coverage, HTTP guards, exact approvals, catalog/role scope, CAS, and sales/window races.',
   );

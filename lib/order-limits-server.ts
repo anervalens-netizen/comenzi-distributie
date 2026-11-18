@@ -88,24 +88,33 @@ const savedRevision = (value: unknown) => {
   return Number(value);
 };
 
-const pilotManagerId = () =>
-  process.env.MOBIUP_ORDER_LIMIT_MANAGER_ID?.trim() ?? '';
+// Preserve the original single-manager setting. Extra managers are opt-in and
+// selected through current database assignments, never a fixed agent list.
+const pilotManagerIdsJson = () => {
+  const ids = [
+    process.env.MOBIUP_ORDER_LIMIT_MANAGER_ID ?? '',
+    ...(process.env.MOBIUP_ORDER_LIMIT_ADDITIONAL_MANAGER_IDS ?? '').split(','),
+  ]
+    .map((id) => id.trim())
+    .filter(Boolean);
+  return ids.length ? JSON.stringify([...new Set(ids)].sort()) : '';
+};
 function pilotMembership(agentExpr: string) {
   return (
     'EXISTS (SELECT 1 FROM manager_agents pilot_link ' +
     "JOIN users pilot_manager ON pilot_manager.id=pilot_link.manager_id AND pilot_manager.role='manager' AND pilot_manager.active=1 " +
     "JOIN users pilot_agent ON pilot_agent.id=pilot_link.agent_id AND pilot_agent.role='agent' AND pilot_agent.active=1 " +
-    'WHERE pilot_link.manager_id=? AND pilot_link.agent_id=' +
+    'WHERE pilot_link.manager_id IN (SELECT value FROM json_each(?)) AND pilot_link.agent_id=' +
     agentExpr +
     ')'
   );
 }
-async function pilotApplies(agentId: string, managerId: string) {
+async function pilotApplies(agentId: string, managerIdsJson: string) {
   return (
-    !!managerId &&
+    !!managerIdsJson &&
     !!(await db()
       .prepare('SELECT 1 WHERE ' + pilotMembership('?'))
-      .bind(managerId, agentId)
+      .bind(managerIdsJson, agentId)
       .first())
   );
 }
@@ -153,7 +162,7 @@ async function readPolicy() {
   return {
     policy,
     raw,
-    version: sha256(JSON.stringify([raw, pilotManagerId()])),
+    version: sha256(JSON.stringify([raw, pilotManagerIdsJson()])),
   };
 }
 
@@ -263,7 +272,7 @@ function approvalScope(req: Request, user: User) {
     globalOnly: isGlobalManager(user),
   });
   const sql = actor.sql + ' AND ' + pilotMembership('a.agent_id');
-  const args = [...actor.args, pilotManagerId()];
+  const args = [...actor.args, pilotManagerIdsJson()];
   if (user.role === 'agent')
     return { sql: sql + ' AND a.agent_id=?', args: [...args, user.id] };
   if (isGlobalManager(user)) return { sql, args };
@@ -442,7 +451,7 @@ async function evaluationGuard(
   evaluation: Evaluation,
   catalog: Catalog,
   agentId: string,
-  managerId: string,
+  managerIdsJson: string,
 ) {
   await bindSalesSource();
   const { from, to } = evaluation.period;
@@ -470,7 +479,7 @@ async function evaluationGuard(
       catalog.raw,
       evaluation.validity.start,
       evaluation.validity.end,
-      managerId,
+      managerIdsJson,
       agentId,
     ],
   };
@@ -513,7 +522,7 @@ async function currentRequest(
 export async function orderLimits(req: Request, orderId: string, user: User) {
   const order = await getOrder(orderId, user);
   if (
-    !(await pilotApplies(order.userId, pilotManagerId())) ||
+    !(await pilotApplies(order.userId, pilotManagerIdsJson())) ||
     order.kind === 'sim' ||
     order.kind === 'stand_client'
   ) {
@@ -591,8 +600,8 @@ export async function requestOrderLimitApproval(
 ) {
   if (user.role !== 'agent')
     fail(403, 'Doar agentul poate solicita aprobarea comenzii sale.');
-  const managerId = pilotManagerId();
-  if (!(await pilotApplies(user.id, managerId)))
+  const managerIdsJson = pilotManagerIdsJson();
+  if (!(await pilotApplies(user.id, managerIdsJson)))
     fail(
       403,
       'Confirmarea limitelor nu este disponibilă pentru această comandă.',
@@ -620,7 +629,7 @@ export async function requestOrderLimitApproval(
     evaluation,
     catalog,
     order.userId,
-    managerId,
+    managerIdsJson,
   );
   const scope =
     actor.sql +
@@ -710,7 +719,7 @@ async function listOrderLimitApprovals(
   params: URLSearchParams,
 ) {
   requireManager(user);
-  if (!pilotManagerId()) return response({ items: [], hasMore: false });
+  if (!pilotManagerIdsJson()) return response({ items: [], hasMore: false });
   const scope = approvalScope(req, user);
   const offset = Number(params.get('offset') ?? 0),
     limit = Number(params.get('limit') ?? 30);
@@ -753,8 +762,8 @@ async function listOrderLimitApprovals(
 
 async function decideApproval(req: Request, user: User, id: string) {
   requireManager(user);
-  const managerId = pilotManagerId();
-  if (!managerId) fail(404, 'Aprobarea nu a fost găsită.');
+  const managerIdsJson = pilotManagerIdsJson();
+  if (!managerIdsJson) fail(404, 'Aprobarea nu a fost găsită.');
   const [body, versions] = await Promise.all([
     jsonBody(req),
     readSourceVersions(),
@@ -784,7 +793,7 @@ async function decideApproval(req: Request, user: User, id: string) {
     evaluation,
     catalog,
     order.userId,
-    managerId,
+    managerIdsJson,
   );
   const now = new Date().toISOString(),
     nextRevision = revision + 1;
@@ -853,7 +862,7 @@ export async function orderLimitApprovalsApi(
   if (req.method === 'GET' && !id)
     return listOrderLimitApprovals(req, user, new URL(req.url).searchParams);
   if (req.method === 'GET' && id && !action) {
-    if (!pilotManagerId()) fail(404, 'Aprobarea nu a fost găsită.');
+    if (!pilotManagerIdsJson()) fail(404, 'Aprobarea nu a fost găsită.');
     const versions = await readSourceVersions();
     return response({
       request: approvalView(await approvalById(req, id, user, versions), user),
@@ -870,14 +879,14 @@ export async function orderLimitFinalization(
   catalog: Catalog,
   user: User,
 ) {
-  const managerId = pilotManagerId();
-  if (!managerId || !containsLimitedProduct(order, catalog))
+  const managerIdsJson = pilotManagerIdsJson();
+  if (!managerIdsJson || !containsLimitedProduct(order, catalog))
     return { sql: '1', args: [], approvalId: null };
-  if (!(await pilotApplies(order.userId, managerId))) {
+  if (!(await pilotApplies(order.userId, managerIdsJson))) {
     // Recheck in the order writer; a newly assigned agent must be evaluated on retry.
     return {
       sql: 'NOT ' + pilotMembership('?'),
-      args: [managerId, order.userId],
+      args: [managerIdsJson, order.userId],
       approvalId: null,
     };
   }
@@ -887,7 +896,7 @@ export async function orderLimitFinalization(
     evaluation,
     catalog,
     order.userId,
-    managerId,
+    managerIdsJson,
   );
   const gate = {
     sql: '(' + owner.sql + ') AND (' + source.sql + ')',

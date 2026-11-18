@@ -1,6 +1,6 @@
 # Per-product order limits and manager exceptions
 
-Replenishment orders for the privately configured manager’s currently assigned agents are checked per agent and product code, per order. Without a configured manager, the new quantity limits are disabled. Current stock and quantities in other orders are not subtracted or accumulated. This is a replenishment guardrail, not a stock reservation or a rolling purchasing quota. Serial-number delivery notes are outside this rule.
+Replenishment orders for the privately configured managers’ currently assigned agents are checked per agent and product code, per order. The existing `MOBIUP_ORDER_LIMIT_MANAGER_ID` setting selects the original manager. Optional `MOBIUP_ORDER_LIMIT_ADDITIONAL_MANAGER_IDS` adds comma-separated manager IDs; blanks and duplicate IDs are ignored. An agent assigned to any configured active manager is in scope, and changes in `manager_agents` take effect without maintaining a fixed list of agents. Without a configured manager, the new quantity limits are disabled. Current stock and quantities in other orders are not subtracted or accumulated. This is a replenishment guardrail, not a stock reservation or a rolling purchasing quota. Serial-number delivery notes are outside this rule.
 
 The initial configured categories use these minimum allowances:
 
