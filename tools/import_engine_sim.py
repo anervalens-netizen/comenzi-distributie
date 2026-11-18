@@ -167,7 +167,8 @@ def run(request):
    prior=c.execute('SELECT source_kind,source_at,period_start,period_end,company FROM activation_imports WHERE sha256=? AND status=\'complete\'',(source['sha256'],)).fetchone()
    if provider=='digi' and not internal:
     sales_companies=[r[0] for r in c.execute("SELECT DISTINCT company FROM activation_movements WHERE provider='digi'")]
-    resolved=activations.versions.canonical_digi_company(company,sales_companies)
+    bound_company=prior[4] if prior and prior[4].casefold()==company.casefold() else company
+    resolved=activations.versions.canonical_digi_company(bound_company,sales_companies)
     known_imeis={r[0] for r in c.execute("SELECT DISTINCT imei FROM activation_effective_movements WHERE provider='digi' AND imei<>''")}
     matched=0;outside=0
     for serial in digi_serials:

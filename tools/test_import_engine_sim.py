@@ -19,13 +19,13 @@ class SimExecutorTests(unittest.TestCase):
   self.env=patch.dict(os.environ,{'MOBIUP_DATA_DIR':str(self.data),'MOBIUP_ACTIVATIONS_DIR':str(self.net)});self.env.start()
   self.space=patch.object(import_engine_sim.shutil,'disk_usage',return_value=SimpleNamespace(free=100*1024**3));self.space.start()
  def tearDown(self):self.space.stop();self.env.stop();self.tmp.cleanup()
- def source(self,kind,*,activation_day='2026-01-10',iccid='0000000000000000020'):
+ def source(self,kind,*,activation_day='2026-01-10',iccid='0000000000000000020',distributor='ExampleCo'):
   path=self.base/'input.xlsx'
   if kind=='sim_sales_vodafone':fixture(path,[row(DataVDF='20260110',IMEI='0000000000000000020',Activat='000000000000000002',DocumentDetailId='NEW')])
   elif kind=='sim_sales_digi':fixture(path,[digi_row(Data='2026-01-10',IMEI='0000000000000000020',Activat='0000000000000000020')],headers=activations.DIGI_HEADERS,header_row=1)
   else:
    headers=['SerieText','DATE_OF_ACTIVATION','COUNTY_OF_ACTIVATION','Paid SIM Category'] if kind.endswith('vodafone') else ['Distribuitor','Seria SIM (iccid)','Data activare']
-   item={'SerieText':'000000000000000002','DATE_OF_ACTIVATION':'2026-01-10','COUNTY_OF_ACTIVATION':'TEST','Paid SIM Category':'-'} if kind.endswith('vodafone') else {'Distribuitor':'ExampleCo','Seria SIM (iccid)':iccid,'Data activare':activation_day}
+   item={'SerieText':'000000000000000002','DATE_OF_ACTIVATION':'2026-01-10','COUNTY_OF_ACTIVATION':'TEST','Paid SIM Category':'-'} if kind.endswith('vodafone') else {'Distribuitor':distributor,'Seria SIM (iccid)':iccid,'Data activare':activation_day}
    fixture(path,[item],headers=headers,header_row=1)
    with zipfile.ZipFile(path) as z:parts={n:(z.read(n).replace(b'name="SIM"',b'name="Detailed SIM"' if kind.endswith('vodafone') else b'name="activari"') if n=='xl/workbook.xml' else z.read(n)) for n in z.namelist()}
    with zipfile.ZipFile(path,'w') as z:
@@ -60,6 +60,25 @@ class SimExecutorTests(unittest.TestCase):
    self.assertEqual(db.execute("SELECT company FROM activation_observations").fetchone()[0],'ExampleCo')
   with contextlib.closing(sqlite3.connect((self.digi/'current'/'activation-report.sqlite').resolve())) as db:
    self.assertEqual(db.execute("PRAGMA quick_check").fetchone()[0],'ok')
+
+ def test_digi_replay_before_commercial_counterpart(self):
+  job=self.source('sim_activations_digi',distributor='Operator Only')
+  def execute(action):
+   return import_engine_sim.run({'job':job,'mode':'execute','action':action,'action_id':str(uuid.uuid4())})
+  job['payload']['company']='Operator Only'
+  job['preview']=execute('preview')['preview']
+  self.assertEqual(execute('commit')['state'],'completed')
+  previous=job['id']
+  job['id']=str(uuid.uuid4())
+  spool=self.data/'import-engine-spool'
+  shutil.copytree(spool/previous,spool/job['id'])
+  job['payload']['company']='operator only'
+  job['preview']=execute('preview')['preview']
+  self.assertTrue(job['preview']['alreadyImported'])
+  self.assertEqual(job['preview']['resolvedCompany'],'Operator Only')
+  self.assertEqual(execute('commit')['state'],'completed')
+  with contextlib.closing(sqlite3.connect(self.digi/'current'/'activations.sqlite')) as c:
+   self.assertEqual(c.execute("SELECT company FROM activation_imports WHERE source_kind='operator'").fetchall(),[('Operator Only',)])
 
  def test_digi_preview_case_resolution_is_fenced_before_commit(self):
   job=self.source('sim_activations_digi');job['payload']['company']='exampleco'
