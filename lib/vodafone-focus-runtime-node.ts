@@ -7,11 +7,13 @@ import type {ActivationReport} from './activation-types';
 
 let active: Promise<unknown> = Promise.resolve();
 let requests = 0;
+// Allow overlapping loads of the three territory panels and their drill-downs.
+const maxRequests = 12;
 
 export async function readVodafoneFocus(month: string, sites: string[] | null, query: ActivationQuery): Promise<ActivationReport> {
   const script = ['vodafone-focus-worker.mjs', 'dist/standalone/vodafone-focus-worker.mjs'].map(file => resolve(file)).find(existsSync);
   if (!script && process.env.NODE_ENV === 'development') return readActivations(month, sites, 'vodafone', query);
-  if (!script || requests >= 5) throw new Error('Focus worker unavailable');
+  if (!script || requests >= maxRequests) throw new Error('Focus worker unavailable');
   requests++;
   const result = active.then(() => new Promise<ActivationReport>((accept, reject) => {
     const worker = new Worker(script, {

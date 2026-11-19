@@ -135,11 +135,19 @@ try {
   reported.run('');
   setIdentity.run('', serial(1) + '7');
   assert.equal(result(['N']), undefined);
-  const reclassified = result(null, {slips: {[serial(7)]: [{...document('T', '2026-10-14'), source: 'slip'}]}});
+  const detailQuery = {detail: 'regional'};
+  const unrelated = {[serial(99)]: [{...document('T', '2026-10-14'), source: 'slip'}]};
+  assert.equal(result(null, {...detailQuery, slips: unrelated}).revision, manager.revision);
+  assert.equal(result(null, detailQuery).revision, manager.revision);
+  const related = {[serial(7)]: [{...document('T', '2026-10-14'), source: 'slip'}]};
+  assert.notEqual(result(null, {...detailQuery, slips: related}).revision, manager.revision);
+  const reclassified = result(null, {slips: related});
   assert.equal(reclassified.regional.total, manager.regional.total);
   assert.equal(reclassified.attributed, manager.attributed + 1);
   assert.equal(reclassified.possibleStock, manager.possibleStock - 1);
   const workbook = read(vodafoneFocusWorkbook(manager), {type: 'base64'});
+  assert(utils.sheet_to_json(workbook.Sheets['Focus SUD'], {header: 1})
+    .some(([label]) => label?.includes('și în „Fără atribuire sigură”')));
   const exported = utils.sheet_to_json(workbook.Sheets['Detaliu activări']);
   assert.equal(exported.length, 7);
   assert.equal(exported.find(row => row.ICCID === serial(1))['Referință document'], '=EXAMPLE');

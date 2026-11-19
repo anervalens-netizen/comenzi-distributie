@@ -72,9 +72,9 @@ export function vodafoneFocusReport(
     WHERE ${companies} AND m.imei>=? AND m.imei<? AND LENGTH(m.imei)=19 AND UPPER(TRIM(json_extract(m.raw_json,'$.ItemType')))='SIM'`);
   const revision = createHash('sha256').update(JSON.stringify([
     generation, territory, query.months, query.projects, query.rules.revision, [...territorySites].sort(), [...visible].sort(), regionalDetails, regionalVisible,
-    focus.includeSerials, focus.detail, focus.detailSite, slips,
-  ])).digest('hex');
-  const report: FocusReport = {...blankCounts(), revision, territory, regionalDetails, months: [], sites: [], ...(regionalVisible ? {regional: blankRegional()} : {})};
+    focus.includeSerials, focus.detail, focus.detailSite,
+  ]));
+  const report: FocusReport = {...blankCounts(), revision: '', territory, regionalDetails, months: [], sites: [], ...(regionalVisible ? {regional: blankRegional()} : {})};
   const counts = new Map([...visible].map(site => [site, blankCounts()]));
   const details: FocusRow[] = [];
   const months = new Map<string, FocusMonth>();
@@ -98,6 +98,7 @@ export function vodafoneFocusReport(
   }
   if (!days.size) {
     report.months = [...months.values()];
+    report.revision = revision.update(JSON.stringify(report)).digest('hex');
     return report;
   }
 
@@ -182,8 +183,12 @@ export function vodafoneFocusReport(
   report.sites = [...counts].map(([site, siteCounts]) => ({
     site, label: labels.get(site) || site, ...siteCounts,
   })).sort((a, b) => b.attributed - a.attributed || a.site.localeCompare(b.site));
+  // Hash the report's scoped output, independent of pagination and export mode.
+  // Avize which cannot change this report should not invalidate its download.
+  revision.update(JSON.stringify(report));
   if (focus.detail) {
     details.sort((a, b) => b.date.localeCompare(a.date) || a.id.localeCompare(b.id));
+    for (const row of details) revision.update(JSON.stringify(row));
     const page = query.page ?? 0;
     const offset = focus.exportAll ? 0 : page * pageSize;
     const picked = focus.exportAll ? details : details.slice(offset, offset + pageSize);
@@ -191,5 +196,6 @@ export function vodafoneFocusReport(
     report.detail = {rows,
       total: details.length, page, hasMore: !focus.exportAll && (page + 1) * pageSize < details.length};
   }
+  report.revision = revision.digest('hex');
   return report;
 }

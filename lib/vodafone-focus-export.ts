@@ -24,7 +24,8 @@ export function vodafoneFocusWorkbook(report: FocusReport): string {
     ] as [string, number][] : []),
     [realization, report.attributed],
     ['Posibile activări din stoc', report.possibleStock],
-    ['Stocul posibil este inclus în totalul regional, dacă este afișat.'],
+    [regional ? 'Stocul posibil este inclus în totalul regional și în „Fără atribuire sigură”.'
+      : 'Stocul posibil rămâne în verificare până la confirmarea atribuirii.'],
   ], [60, 14]);
   sheet('Pe TR', [
     ['Cod TR', 'Gestiune', realization, 'Posibile activări din stoc'],

@@ -84,6 +84,9 @@ try{
  const northA=(await request(focusPath+'&focusTerritory=nord_a')).data.focus;
  assert.deepEqual([northA.regional.total,northA.attributed,northA.possibleStock],[1,0,0]);
  assert.equal((await request(focusPath+'&focusTerritory=nord_b')).data.focus.regional.total,1);
+ const parallelFocus=await Promise.all(['sud','nord_a','nord_b'].flatMap(territory =>
+   ['', '&focusKind=attributed'].map(detail => request(focusPath+'&focusTerritory='+territory+detail))));
+ assert.deepEqual(parallelFocus.map(result=>result.status),[200,200,200,200,200,200]);
  const downloaded=await request('activations?month=2026-10&view=focus-export&focusKind=possibleStock');
  const sheets=read(downloaded.data.workbook,{type:'base64'}).Sheets;
  assert.equal(utils.sheet_to_json(sheets['Detaliu activări'])[0].ICCID,focusSerial(40));
