@@ -121,6 +121,19 @@ try {
   assert.equal(disputed.attributed, manager.attributed - 1);
   assert.equal(disputed.detail.rows.find(row => row.serial === serial(1)).kind, 'unassigned');
   ledger.exec("DELETE FROM activation_meta WHERE key='conflict:1'");
+  const setIdentity = ledger.prepare('UPDATE activation_effective_movements SET serial=?,imei=? WHERE movement_id=1');
+  for (const [reported, physical] of [[serial(1), serial(99) + '7'], [serial(99), serial(1) + '7']]) {
+    setIdentity.run(reported, physical);
+    const inconsistent = result(null, {detail: 'regional'});
+    assert.equal(inconsistent.regional.total, manager.regional.total);
+    assert.equal(inconsistent.detail.rows.find(row => row.serial === serial(1)).kind, 'unassigned');
+  }
+  setIdentity.run(serial(1), serial(1) + '7');
+  const reported = ledger.prepare("UPDATE activation_effective_movements SET raw_json=json_set(raw_json,'$.Activat',?) WHERE movement_id=1");
+  reported.run(serial(99));
+  assert.equal(result(null).attributed, manager.attributed - 1, 'a reconciled effective serial cannot hide conflicting source evidence');
+  reported.run('');
+  setIdentity.run('', serial(1) + '7');
   assert.equal(result(['N']), undefined);
   const reclassified = result(null, {slips: {[serial(7)]: [{...document('T', '2026-10-14'), source: 'slip'}]}});
   assert.equal(reclassified.regional.total, manager.regional.total);

@@ -9,7 +9,8 @@ import {
 type SourceFile = {id: number; source_at: string; period_start: string; period_end: string};
 type Observation = {serial: string; activation_date: string; county: string; handset: string; raw_json: string};
 type Movement = {
-  movement_id: number; site: string; is_tr: number; movement_date: string | null; quantity: number | null;
+  movement_id: number; serial: string; reported_serial: string | null; imei: string; item_type: string; site: string; is_tr: number;
+  movement_date: string | null; quantity: number | null;
   company: string; raw_json: string; conflict: number;
 };
 const blankCounts = (): FocusCounts => ({attributed: 0, possibleStock: 0});
@@ -62,12 +63,13 @@ export function vodafoneFocusReport(
     ? `EXISTS(SELECT 1 FROM activation_movements original JOIN activation_meta issue
       ON issue.key='conflict:'||original.movement_key WHERE original.id=m.movement_id)`
     : '0';
-  const movementColumns = `m.movement_id,m.site,m.is_tr,m.movement_date,m.quantity,m.company,m.raw_json,${conflict} conflict`;
+  const movementColumns = `m.movement_id,m.serial,m.imei,json_extract(m.raw_json,'$.Activat') reported_serial,
+    UPPER(TRIM(json_extract(m.raw_json,'$.ItemType'))) item_type,
+    m.site,m.is_tr,m.movement_date,m.quantity,m.company,m.raw_json,${conflict} conflict`;
   const companies = "m.company IN ('MobiUp','MobiCell') AND m.provider='vodafone'";
   const sold = source.prepare(`SELECT ${movementColumns} FROM activation_effective_movements m WHERE ${companies} AND m.serial=?`);
   const sim = source.prepare(`SELECT ${movementColumns} FROM activation_effective_movements m
-    WHERE ${companies} AND m.imei>=? AND m.imei<? AND LENGTH(m.imei)=19 AND json_extract(m.raw_json,'$.ItemType')='SIM'
-    AND (m.serial='' OR m.serial=?)`);
+    WHERE ${companies} AND m.imei>=? AND m.imei<? AND LENGTH(m.imei)=19 AND UPPER(TRIM(json_extract(m.raw_json,'$.ItemType')))='SIM'`);
   const revision = createHash('sha256').update(JSON.stringify([
     generation, territory, query.months, query.projects, query.rules.revision, [...territorySites].sort(), [...visible].sort(), regionalDetails, regionalVisible,
     focus.includeSerials, focus.detail, focus.detailSite, slips,
@@ -131,12 +133,15 @@ export function vodafoneFocusReport(
     const {serial} = row;
     const movements = new Map<number, Movement>();
     for (const move of sold.iterate(serial) as Iterable<Movement>) movements.set(move.movement_id, move);
-    for (const move of sim.iterate(serial + '0', serial + ':', serial) as Iterable<Movement>) movements.set(move.movement_id, move);
+    for (const move of sim.iterate(serial + '0', serial + ':') as Iterable<Movement>) movements.set(move.movement_id, move);
     const matchingMovements = [...movements.values()];
     const documents = matchingMovements.map(evidence).concat(slips[serial] ?? []);
-    // The effective row of a tied version is only an arbitrary representative.
-    // Keep its activation in the region while the commercial evidence is unresolved.
-    const invalid = matchingMovements.some(move => !!move.conflict) ||
+    // ERP can disagree with the physical SIM identifier in either direction:
+    // a matching reported activation on another SIM, or the same SIM carrying
+    // another reported activation. Preserve regional count and withhold TR credit.
+    const invalid = matchingMovements.some(move => !!move.conflict || (move.item_type === 'SIM' &&
+      (!/^\d{19}$/.test(move.imei) || move.imei.slice(0, 18) !== serial || (!!move.serial && move.serial !== serial) ||
+       (!!move.reported_serial && move.reported_serial !== serial)))) ||
       documents.some(doc => !doc.date || !doc.quantity || (doc.tr && !doc.site));
     const attribution = invalid ? null : focusAttribution(row.activation_date, documents);
     const document = attribution?.document;
