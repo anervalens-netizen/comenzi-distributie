@@ -61,7 +61,8 @@ export function readActivations(month:string,sites:string[]|null,provider:Activa
       }
       const scoped=distributionReport(report,result,meta,sites,query);
       if(provider==='vodafone'&&query.focusSummaries){
-        if(schema!=='3'||!query.focusSummaries.length) return applyVodafoneFocusOverview(scoped,[]);
+        if(!query.focusSummaries.length) return applyVodafoneFocusOverview(scoped,[]);
+        if(schema!=='3') return {...scoped,commissionCoverage:'missing'};
         const labels=focusLabels(),slips=readFocusSlips();
         const summaries=query.focusSummaries.flatMap(focus=>{
           const summary=vodafoneFocusReport(source!,labels,sites,{...query,focus},focusGeneration,slips);

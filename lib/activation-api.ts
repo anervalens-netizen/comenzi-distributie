@@ -111,7 +111,14 @@ export async function activationReport(user:User,params:URLSearchParams,internal
  }else if(['months','projects','view'].some(k=>params.has(k)))fail(503,'Proiecția pentru proiecte trebuie pregătită.');
  let result:ActivationReport;
  const focusQueries=query?.focus?[query.focus]:query?.focusSummaries??[];
- try{result=query&&focusQueries.length?await readVodafoneFocus(month,sites,query):readActivations(month,sites,provider,query);}catch{fail(503,'Activările nu sunt disponibile momentan. Încearcă din nou mai târziu.');}
+ try{
+   result=query&&focusQueries.length?await readVodafoneFocus(month,sites,query):readActivations(month,sites,provider,query);
+ }catch{
+   if(!query?.focusSummaries?.length)fail(503,'Activările nu sunt disponibile momentan. Încearcă din nou mai târziu.');
+   try{
+     result={...readActivations(month,sites,provider,{...query,focusSummaries:[]}),commissionCoverage:'unavailable'};
+   }catch{fail(503,'Activările nu sunt disponibile momentan. Încearcă din nou mai târziu.');}
+ }
  // Focus calculations can wait for a worker and yield while reading commerce.
  // Recheck the exact session and reproduce its authorized scope before publishing.
  if(query&&focusQueries.length&&internal?.revalidateFocus){
@@ -122,11 +129,11 @@ export async function activationReport(user:User,params:URLSearchParams,internal
    if(current.id!==user.id||current.profileVersion!==user.profileVersion||current.role!==user.role||
       current.managerScope!==user.managerScope||currentScope.policy!==policy||
       JSON.stringify(currentScope.sites)!==JSON.stringify(sites)||JSON.stringify(currentRules)!==JSON.stringify(rules)){
-     fail(409,'Accesul la raportul Focus s-a modificat. Reîncarcă raportul.');
+     fail(409,'Accesul la raport s-a modificat. Reîncarcă activările.');
    }
    const currentQueries=await Promise.all(focusQueries.map(focus=>vodafoneFocusQuery(currentRules!,focus.territory,params,currentScope.sites,current.role==='manager')));
    if(currentQueries.some((focus,index)=>JSON.stringify(focus.historicalSites)!==JSON.stringify(focusQueries[index].historicalSites))){
-     fail(409,'Configurarea gestiunilor istorice s-a modificat. Reîncarcă raportul.');
+     fail(409,'Configurarea gestiunilor istorice s-a modificat. Reîncarcă activările.');
    }
  }
  if(focusView&&query?.revision&&result.focus?.revision!==query.revision)fail(409,'Sursele Focus s-au modificat. Reîncarcă raportul.');

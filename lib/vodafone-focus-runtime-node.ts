@@ -5,17 +5,17 @@ import {readActivations} from './activation-store-node';
 import type {ActivationQuery} from './activation-distribution';
 import type {ActivationReport} from './activation-types';
 
-let active: Promise<unknown> = Promise.resolve();
-let requests = 0;
-// Allow overlapping loads of the three territory panels and their drill-downs.
-const maxRequests = 12;
+type Queue = {tail: Promise<void>; pending: number; limit: number};
+const detailQueue: Queue = {tail: Promise.resolve(), pending: 0, limit: 12};
+const overviewQueue: Queue = {tail: Promise.resolve(), pending: 0, limit: 6};
+const inFlightOverviews = new Map<string, Promise<ActivationReport>>();
 
-export async function readVodafoneFocus(month: string, sites: string[] | null, query: ActivationQuery): Promise<ActivationReport> {
+async function runFocus(queue: Queue, month: string, sites: string[] | null, query: ActivationQuery): Promise<ActivationReport> {
   const script = ['vodafone-focus-worker.mjs', 'dist/standalone/vodafone-focus-worker.mjs'].map(file => resolve(file)).find(existsSync);
   if (!script && process.env.NODE_ENV === 'development') return readActivations(month, sites, 'vodafone', query);
-  if (!script || requests >= maxRequests) throw new Error('Focus worker unavailable');
-  requests++;
-  const result = active.then(() => new Promise<ActivationReport>((accept, reject) => {
+  if (!script || queue.pending >= queue.limit) throw new Error('Focus worker unavailable');
+  queue.pending++;
+  const result = queue.tail.then(() => new Promise<ActivationReport>((accept, reject) => {
     const worker = new Worker(script, {
       workerData: {month, sites, query}, resourceLimits: {maxOldGenerationSizeMb: 224},
     });
@@ -31,10 +31,26 @@ export async function readVodafoneFocus(month: string, sites: string[] | null, q
     worker.once('error', finish);
     worker.once('exit', code => finish(new Error('Focus worker exited with code ' + code)));
   }));
-  active = result.then(() => undefined, () => undefined);
+  queue.tail = result.then(() => undefined, () => undefined);
   try {
     return await result;
   } finally {
-    requests--;
+    queue.pending--;
+  }
+}
+
+export async function readVodafoneFocus(month: string, sites: string[] | null, query: ActivationQuery): Promise<ActivationReport> {
+  if (!query.focusSummaries) return runFocus(detailQueue, month, sites, query);
+  // Share identical in-flight overview reads only. Each waiter still rechecks
+  // its own session and current scope in activationReport before responding.
+  const key = JSON.stringify([month, sites, query]);
+  const pending = inFlightOverviews.get(key);
+  if (pending) return pending;
+  const result = runFocus(overviewQueue, month, sites, query);
+  inFlightOverviews.set(key, result);
+  try {
+    return await result;
+  } finally {
+    inFlightOverviews.delete(key);
   }
 }

@@ -20,6 +20,8 @@ export function ActivationOperatorCard({userId,query,provider,reload}:{userId:st
  const [result,setResult]=useState<{key:string;data:ActivationReport}|null>(null),[error,setError]=useState<{key:string;text:string}|null>(null);
  useEffect(()=>{const c=new AbortController();api<ActivationReport>('activations?'+search,'GET',undefined,c.signal).then(data=>{if(!c.signal.aborted){setResult({key,data});setError(null);}}).catch(e=>{if(!c.signal.aborted)setError({key,text:errorMessage(e)});});return()=>c.abort();},[key,search]);
  const data=result?.key===key?result.data:null,message=error?.key===key?error.text:'';
+ const commissionMessage=data?.commissionCoverage==='unavailable'?'calcul indisponibil temporar'
+   :data?.commissionCoverage==='outside_scope'?'fără gestiuni eligibile în selecție':'fără sursă Vodafone pentru selecție';
  return <article className="panel distribution-card activation-operator" aria-label={'Activări '+provider}>
   <OperatorLogo provider={provider}/>
   {message?<p role="alert">{message}</p>:!data?<output>Se încarcă activările…</output>:!data.available?<p>Nu sunt încă date de activare pentru acest operator.</p>:<>
@@ -30,8 +32,8 @@ export function ActivationOperatorCard({userId,query,provider,reload}:{userId:st
    {data.selectedMonths?.some(month=>!data.coveredMonths?.includes(month))&&<output className="activation-coverage-warning">Există luni fără activări raportate în selecție. Acoperirea poate fi incompletă.</output>}
    {provider==='vodafone'&&(data.totals.eligible!==undefined?
      <dl className="activation-eligibility"><ActivationMetric network={network} label="Comisionabile" value={data.totals.eligible} onClick={()=>openTrend('Comisionabile','eligible')}/></dl>
-     :<p className="activation-source-date">Comisionabile · fără sursă Vodafone pentru selecție</p>)}
-   {data.commissionPartial&&
+     :<p className="activation-source-date">Comisionabile · {commissionMessage}</p>)}
+   {data.commissionCoverage==='partial'&&
      <p className="activation-coverage-warning">Comisionabile · total pentru perioada acoperită de sursa Vodafone. Verifică acoperirea în istoricul lunar.</p>}
    {data.simZero&&<section className="activation-sim-zero"><h3>SIM 0 · distribuite în selecție</h3><dl>{(['distributed','activated','withoutReportedActivation'] as const).map(key=><ActivationMetric key={key} network={network} label={{distributed:'Distribuite',activated:'Activate dintre aceleași SIM-uri',withoutReportedActivation:'Fără activare raportată'}[key]} value={data.simZero![key]} onClick={()=>openTrend({distributed:'Distribuite',activated:'Activate dintre aceleași SIM-uri',withoutReportedActivation:'Fără activare raportată'}[key],`cohort:${key}`)}/>)}</dl><small>La data sursei; nu reprezintă stocul fizic.</small></section>}
    <details className="commerce-details"><summary>Detalii despre sursă</summary><p>Ultima activare: {activationDateLabel(data.latestDate)}. Import: {data.importedAt?new Date(data.importedAt).toLocaleString('ro-RO',{timeZone:'Europe/Bucharest'}):'—'}.</p>{!!data.totals.unassigned&&<p>Agent de verificat: {number(data.totals.unassigned)}. Incluse o singură dată în total.</p>}{!data.operatorReported&&data.reconciliation!==undefined&&data.reconciliation>0&&<p>În afara distribuției TR: {number(data.reconciliation)}. Excluse din totalul distribuției.</p>}</details>

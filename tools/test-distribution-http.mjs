@@ -109,11 +109,19 @@ try{
  assert.equal((await request(octoberOverview+'&projects=vodafone_nord')).data.totals.eligible,2);
  assert.equal((await request(octoberOverview,'south')).data.totals.eligible,southFocus.attributed);
  assert.equal((await request(octoberOverview,'north')).data.totals.eligible,northA.attributed);
+ const simultaneous = await Promise.all(Array.from({length:16},()=>request(octoberOverview)));
+ assert(simultaneous.every(r=>r.status===200&&r.data.totals.eligible===3),'simultaneous overview readers share a complete certified result');
+ const multipleSelections = await Promise.all(Array.from({length:10},(_,index)=>
+   request(octoberOverview+'&months=2026-10,2025-'+String(index+1).padStart(2,'0'))));
+ assert(multipleSelections.every(r=>r.status===200&&r.data.totals.total===8&&
+  (r.data.totals.eligible===3||r.data.commissionCoverage==='unavailable')),'busy attribution retains ordinary activation totals');
  const acrossMonths=(await request(octoberOverview+'&months=2026-09,2026-10,2026-11')).data;
- assert.equal(acrossMonths.commissionPartial,true);
+ assert.equal(acrossMonths.commissionCoverage,'partial');
  assert.equal(acrossMonths.totals.eligible,4);
  assert.deepEqual(acrossMonths.monthly.map(en=>en.counts.eligible),[undefined,3,1]);
  assert.equal((await request('activations?month=2026-09')).data.totals.eligible,undefined);
+ assert.equal((await request('activations?month=2026-09')).data.commissionCoverage,'missing');
+ assert.equal((await request(octoberOverview,'non')).data.commissionCoverage,'outside_scope');
  for(const [id,total] of [['manager',8],['north',3],['south',1],['non',0]]){const r=await request('activations?month=2026-10',id);assert.equal(r.status,200);assert.equal(r.data.totals.total,total,id);}
  for(const id of ['north','south','non'])for(const attack of ['agentId=south','managerId=manager','siteCode=S'])assert.equal((await request('activations?month=2026-10&'+attack,id)).status,403);
  assert.equal((await request('activations?month=2026-10&months=2026-09,2026-10,2026-10')).data.totals.total,9);

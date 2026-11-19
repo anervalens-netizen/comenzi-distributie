@@ -15,10 +15,13 @@ export function applyVodafoneFocusOverview(report: ActivationReport, reports: Fo
       sites.set(site.site, summary);
     }
   }
-  if (!monthly.size) return report;
+  if (!monthly.size) {
+    report.commissionCoverage = reports.length ? 'missing' : 'outside_scope';
+    return report;
+  }
 
   report.totals.eligible = [...monthly.values()].reduce((total, value) => total + value, 0);
-  report.commissionPartial = reports.some(focus => focus.months.some(month => !month.complete));
+  report.commissionCoverage = reports.some(focus => focus.months.some(month => !month.complete)) ? 'partial' : 'complete';
   report.sites = [...sites.values()];
   const history = new Map(report.history.map(month => [month.month, month]));
   for (const [month, eligible] of monthly) {
