@@ -410,6 +410,33 @@ checks the query plan. New imports create the index automatically.
 
 Prepay activation drilldowns include operator totals, internal product groups, eligibility and SIM0 cohorts. Monthly activation counts use activation dates; SIM0 cohort counts use distribution months and the source observation date. Both retain the existing authorized scope. Missing reported activation months remain marked as uncertain coverage. Large chart axes use compact labels while small values retain precision; tables and tooltips retain full values.
 
+## Vodafone Focus
+
+Prepay → Activări also reports Focus by Vodafone activation date and county.
+The certified dealer observations determine the regional figure, including
+activations with no commercial document. A finalized SIM slip or commercial
+ERP document dated no later than activation can identify one TR. A later
+document at a single TR is shown as possible stock until there is attribution
+evidence on or before the activation date. It is already included in regional.
+Competing documents stay unresolved. Each territory has a monthly history,
+matching summary and detail workbooks, and rolls up only its own assigned TRs
+under realization. The regional reconciliation shows other TRs separately.
+
+South applies a minimum first recharge of 3 EUR for AG, OT, TR and explicitly
+unassigned counties, and 5 EUR for the other South counties. Vodafone-certified
+initial credit and phone/SIM packages are eligible. Following the North offer,
+North A and North B use Vodafone SIM 5 with certified initial credit and SIM
+Zero / Free SIM with a first recharge of at least 3 EUR on their respective
+counties. Unassigned counties are included only in South. Agents have access to
+their own TR within their configured territory. Regional data require a global
+manager without a warehouse filter. Only managers can export ICCIDs within
+their authorized scope.
+
+Use the optional private settings key `vodafone-focus-historical-sites:<territory>`
+for a comma-separated list of closed warehouse codes in each territory. Focus
+uses these codes only when they have no current assignment. A change to this
+reporting setting does not require reimport or a ledger rebuild.
+
 ## Partner fiscal lookup
 
 The new-partner form starts with a debounced global active-CRM name or partial-CUI

@@ -1,3 +1,4 @@
+import {vodafoneFocusReport} from './vodafone-focus-node';
 import {distributionReport} from './activation-distribution-node';
 import {digiOperatorReported} from './digi-operator-source';
 import {activationFactsVersion} from './activation-semantics';
@@ -44,6 +45,11 @@ export function readActivations(month:string,sites:string[]|null,provider:Activa
     if(['3','4'].includes(meta.version)&&meta.rules&&!query)throw new Error('Distribution rules required');
     if(query){
       if(meta.version!=='4')throw new Error('Distribution projection requires rebuild');
+      if(query.focus&&provider==='vodafone'&&schema==='3'){
+        const labels=new Map(report.prepare('SELECT site,label FROM sites').all().map(row=>[String(row.site).toUpperCase(),String(row.label)]));
+        const focus=vodafoneFocusReport(source,labels,sites,query,JSON.stringify([directory,meta.sourceGeneration,meta.sourceImports]));
+        return {...result,available:!!focus?.months.some(month=>month.coveredThrough),focus};
+      }
       const scoped=distributionReport(report,result,meta,sites,query);
       // The operator's certified distinct ICCIDs are the manager KPI. Matching
       // commercial evidence by exact ICCID gives TR agent attribution without
@@ -99,3 +105,5 @@ export function readActivations(month:string,sites:string[]|null,provider:Activa
 }
 
 export {verifySim} from './sim-verification-node';
+
+export {readVodafoneFocus} from './vodafone-focus-runtime-node';

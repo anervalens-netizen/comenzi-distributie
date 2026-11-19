@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {spawn,spawnSync} from 'node:child_process';
 import {mkdtempSync,readFileSync,rmSync,mkdirSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';import {join} from 'node:path';
+import {read,utils} from 'xlsx';
 import {DatabaseSync} from 'node:sqlite';import {randomBytes,createHash} from 'node:crypto';
 import {build} from 'esbuild';
 import {browserFixture,waitFor} from './offline-browser-fixture.mjs';
@@ -9,6 +10,27 @@ const root=mkdtempSync(join(tmpdir(),'distribution-http-')),origin='http://127.0
 const fixture=spawnSync('python3',['tools/distribution-fixture.py',root],{encoding:'utf8'});assert.equal(fixture.status,0,fixture.stderr);
 const digiFixture=spawnSync('python3',['tools/digi-period-fixture.py',root],{encoding:'utf8'});
 assert.equal(digiFixture.status,0,digiFixture.stderr);
+const ledger=new DatabaseSync(join(root,'activations.sqlite'));
+const focusImport=Number(ledger.prepare(`INSERT INTO activation_imports
+ (sha256,filename,operator,nominal_period,parser_version,imported_at,source_kind,source_at,period_start,period_end,company,row_count,status)
+ VALUES('synthetic-focus-snapshot','synthetic.xlsx','vodafone','2026-10',3,'2026-11-04','operator','2026-11-04',
+ '2026-10-01','2026-10-31','Vodafone',5,'complete')`).run().lastInsertRowid);
+const observe=ledger.prepare("INSERT INTO activation_observations VALUES(?,?,'Vodafone','vodafone',?,'2026-10-15',?,?,?)");
+const focusSerial=n=>String(n).padStart(18,'0');
+for(const [id,n,county,category,sim,amount] of [
+ [1,5,'AG','SIM with initial credit >= 3 EUR','SIM_5EUR',''],
+ [2,40,'AG','SIM Zero with Recharge >= 3E','SIM_ZERO','3'],
+ [3,42,'OT','PACK_SIM','PACK_SIM',''],
+ [4,1,'CV','SIM with initial credit >= 3 EUR','SIM_5EUR',''],
+ [5,44,'IS','SIM Zero with Recharge >= 3E','SIM_ZERO','3'],
+]) observe.run(focusImport,id,focusSerial(n),county,category,JSON.stringify({
+ DEALER_NAME:'MOBIUP DISTRIBUTION SRL - CONSIGNATIE',SIM_TYPE:sim,FIRST_RECHARGE_VALUE:amount,
+}));
+const activeImports=ledger.prepare("SELECT sha256,operator,row_count,parser_version FROM activation_imports WHERE status='complete' ORDER BY sha256").all().map(r=>[r.sha256,r.operator,r.row_count,r.parser_version]);
+ledger.close();
+const focusProjection=new DatabaseSync(join(root,'activation-report.sqlite'));
+focusProjection.prepare("UPDATE report_meta SET value=? WHERE key='sourceImports'").run(JSON.stringify(activeImports));
+focusProjection.close();
 process.env.MOBIUP_DATA_DIR=root;
 const b=await build({entryPoints:['lib/sales-store.ts'],bundle:true,platform:'node',format:'esm',write:false});const sales=await import('data:text/javascript;base64,'+Buffer.from(b.outputFiles[0].text).toString('base64'));
 let revision=0;for(const month of ['2026-09','2026-10']){const rows=[{rowNumber:1,date:month+'-05',month,siteCode:'N',itemCode:'CREDIT',itemName:'Synthetic credit',quantity:month.endsWith('09')?2:1,valueCents:month.endsWith('09')?2000:4000,priceCents:1000,brand:'Synthetic',location:'TR North',company:'ExampleCo',asm:'',regional:'',orderNumber:'EXAMPLE',category:'Cartele',subCategory:'',agent:'Synthetic North'}];rows.push({...rows[0],rowNumber:2,siteCode:'LEGACY',itemCode:'UNMAPPED',itemName:'Synthetic historical item',location:'TR Historical',quantity:1,valueCents:500});sales.importSalesRows({rows,month,fileHash:month,filename:'synthetic.xlsx',importedBy:'manager',originalPath:'synthetic.xlsx',expectedRevision:revision++,expectedMappingHash:'same',currentMappingHash:'same',historicalAcknowledged:true});}
@@ -32,6 +54,32 @@ try{
  }
  db.prepare('INSERT INTO settings VALUES(?,?)').run('distribution-rules-v1',readFileSync(join(root,'rules.json'),'utf8'));
  const points=[['P-A','A'],['P-B','B'],['P-Z','C']];for(const [id,code] of points)db.prepare('INSERT INTO customers(id,warehouse_id,data,active) VALUES(?,?,?,1)').run(id,'WN',JSON.stringify({id,name:'Synthetic point '+code,cui:'EXAMPLE',warehouseId:'WN',warehouseIds:['WN'],county:'CV',city:'Synthetic city',address:'Synthetic address',historyFranchises:[code]}));
+ const addSlip=db.prepare("INSERT INTO orders(id,number,user_id,warehouse_id,kind,status,payload,created_at,finalized_at,revision) VALUES(?,?,?,'WS','sim','finalized',?,? ,?,1)");
+ for(const [n,day] of [[5,'01'],[40,'18']]){
+  const at='2026-10-'+day+'T12:00:00.000Z';
+  addSlip.run('FOCUS-'+n,'SIM-FICTIONAL-'+n,'south',JSON.stringify({serials:[focusSerial(n)+'9'],client:{cui:'EXAMPLE'}}),at,at);
+ }
+ const focusPath='activations?month=2026-10&view=focus';
+ const managerFocus=(await request(focusPath)).data.focus;
+ assert.deepEqual([managerFocus.regional.total,managerFocus.attributed,managerFocus.possibleStock],[3,1,1]);
+ const southFocus=(await request(focusPath+'&focusKind=attributed','south')).data.focus;
+ assert.deepEqual([southFocus.attributed,southFocus.possibleStock,southFocus.regional],[1,1,undefined]);
+ assert.equal(southFocus.detail.rows[0].serial,undefined);
+ assert.equal(southFocus.detail.rows[0].document.reference,undefined);
+ assert.equal((await request(focusPath+'&focusKind=regional','south')).status,403);
+ assert.equal((await request(focusPath+'&focusKind=attributed&focusSite=N','south')).status,403);
+ assert.equal((await request(focusPath,'denied')).status,403);
+ assert.equal((await request(focusPath,'north')).data.focus,undefined);
+ const northA=(await request(focusPath+'&focusTerritory=nord_a')).data.focus;
+ assert.deepEqual([northA.regional.total,northA.attributed,northA.possibleStock],[1,0,0]);
+ assert.equal((await request(focusPath+'&focusTerritory=nord_b')).data.focus.regional.total,1);
+ const downloaded=await request('activations?month=2026-10&view=focus-export&focusKind=possibleStock');
+ const sheets=read(downloaded.data.workbook,{type:'base64'}).Sheets;
+ assert.equal(utils.sheet_to_json(sheets['Detaliu activări'])[0].ICCID,focusSerial(40));
+ const agentExport=await request('activations?month=2026-10&view=focus-export&focusKind=attributed','south');
+ assert.equal(utils.sheet_to_json(read(agentExport.data.workbook,{type:'base64'}).Sheets['Detaliu activări'])[0].ICCID,undefined);
+ assert.equal((await request('activations?month=2026-10&view=focus-export&focusKind=regional','south')).status,403);
+ assert.equal((await request('activations?month=2026-10&view=focus-export&revision=old')).status,409);
  assert.equal((await request('activations?month=2026-10','denied')).status,403);
  for(const [id,total] of [['manager',8],['north',3],['south',1],['non',0]]){const r=await request('activations?month=2026-10',id);assert.equal(r.status,200);assert.equal(r.data.totals.total,total,id);}
  for(const id of ['north','south','non'])for(const attack of ['agentId=south','managerId=manager','siteCode=S'])assert.equal((await request('activations?month=2026-10&'+attack,id)).status,403);
@@ -95,6 +143,13 @@ try{
  await browser.evaluate('[...document.querySelectorAll(".commerce-tabs button")].find(button=>button.textContent==="Activări").click()');
  await waitFor(()=>browser.evaluate('document.querySelectorAll(".activation-primary strong")[0]?.textContent==="9"'),'activation union');
  assert.equal(await browser.evaluate('document.querySelectorAll(".activation-operator").length'),2);
+ await waitFor(()=>browser.evaluate(`document.querySelector('[aria-label="Total regional Focus SUD · detalii"]')?.textContent==='3'`),'Focus South regional result');
+ assert.equal(await browser.evaluate(`document.querySelector('[aria-label="Realizare TR SUD · detalii"]')?.textContent`),'1');
+ assert.equal(await browser.evaluate(`document.querySelector('[aria-label="Posibile activări din stoc · detalii"]')?.textContent`),'1');
+ await browser.evaluate(`document.querySelector('[aria-label="Posibile activări din stoc · detalii"]').click()`);
+ await waitFor(()=>browser.evaluate(`document.querySelector('.vodafone-focus')?.textContent.includes(${JSON.stringify(focusSerial(40))})`),'Focus stock drill-down');
+ await browser.evaluate(`[...document.querySelectorAll('.vodafone-focus button')].find(button=>button.textContent==='Închide detaliul').click()`);
+
  await waitFor(()=>browser.evaluate(`document.querySelector('[aria-label="Evoluție lunară · Activări Digi"] strong')?.textContent==="2"`),'distinct Digi activations from separate periods after case-only replay');
  for(const label of ['Activări Vodafone','SIM 0 · Vodafone','SIM cu credit · Vodafone','Comisionabile · Vodafone','Distribuite · Vodafone','Activări Digi']){
   await browser.evaluate('(()=>{const b=[...document.querySelectorAll("button")].find(b=>b.getAttribute("aria-label")==='+JSON.stringify('Evoluție lunară · '+label)+');b.focus();b.click()})()');
