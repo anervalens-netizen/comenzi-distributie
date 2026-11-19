@@ -347,7 +347,8 @@ async function dispatch(req: Request) {
   if(path.join('/')==='sim/verify'&&req.method==='POST')return response(await simVerification(user,await jsonBody(req)));
   if(path.join('/')==='activations'&&req.method==='GET'){
     const params=new URL(req.url).searchParams,view=params.get('view');
-    const report=await activationReport(isVodafoneFocusView(view)?user:readUser,params);
+    const focus=isVodafoneFocusView(view);
+    const report=await activationReport(focus?user:readUser,params,focus?{revalidateFocus:()=>requireUser(req)}:undefined);
     if(view==='focus-export'){
       if(report.provider!=='vodafone'||!report.focusWorkbook)fail(404,'Raportul Focus nu este disponibil în această selecție.');
       return response({workbook:report.focusWorkbook});

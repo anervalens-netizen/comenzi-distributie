@@ -1,4 +1,4 @@
-import {territories,type DistributionProject,type Territory} from './distribution-rules';
+import {territories,type DistributionProject,type DistributionRules,type Territory} from './distribution-rules';
 import {canonicalCounty} from './portfolio-facets';
 
 export const focusTerritories = ['sud', 'nord_a', 'nord_b'] as const satisfies readonly Territory[];
@@ -66,6 +66,25 @@ export type FocusQuery = {
   includeSerials: boolean;
   exportAll?: boolean;
 };
+
+export function focusSiteScope(
+  rules: DistributionRules, territory: Territory, historicalSites: string[], sites: string[] | null, manager: boolean,
+) {
+  const configuredSites = rules.assignments.filter(row => row.territoryId === territory).map(row => row.siteCode.toUpperCase());
+  const territorySites = new Set(configuredSites);
+  const assigned = new Set(rules.assignments.map(row => row.siteCode.toUpperCase()));
+  for (const site of historicalSites) {
+    if (!assigned.has(site)) territorySites.add(site);
+  }
+  const allowed = new Set(sites?.map(site => site.toUpperCase()));
+  const regionalDetails = manager && sites === null;
+  // Team managers covering the entire configured roster also need the regional
+  // aggregate and the territory's closed warehouses.
+  const regionalVisible = regionalDetails || (manager && configuredSites.length > 0 &&
+    configuredSites.every(site => allowed.has(site)));
+  const visible = regionalVisible ? territorySites : new Set([...allowed].filter(site => territorySites.has(site)));
+  return {territorySites, visible, regionalDetails, regionalVisible};
+}
 
 const southThree = new Set(['AG', 'TR', 'OT', '<UNASSIGNED>']);
 export function focusCounty(county: string) {

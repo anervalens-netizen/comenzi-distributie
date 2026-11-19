@@ -44,6 +44,8 @@ try {
   ledger.exec(`CREATE TABLE activation_imports(id INTEGER PRIMARY KEY,operator TEXT,status TEXT,source_kind TEXT,
     company TEXT,source_at TEXT,period_start TEXT,period_end TEXT);
     CREATE TABLE activation_observations(import_id INTEGER,serial TEXT,activation_date TEXT,county TEXT,handset TEXT,raw_json TEXT);
+    CREATE TABLE activation_movements(id INTEGER PRIMARY KEY,movement_key TEXT);
+    CREATE TABLE activation_meta(key TEXT PRIMARY KEY,value TEXT);
     CREATE TABLE activation_effective_movements(movement_id INTEGER PRIMARY KEY,company TEXT,provider TEXT,
       serial TEXT,imei TEXT,site TEXT,is_tr INTEGER,movement_date TEXT,quantity INTEGER,raw_json TEXT);`);
   const addImport = ledger.prepare("INSERT INTO activation_imports VALUES(?,'vodafone','complete','operator',?,?,?,?)");
@@ -74,11 +76,15 @@ try {
   observe(3, 11, 'AG', credit, 'SIM5', 0, '2026-11-02');
   observe(4, 12, 'AG', credit, 'SIM5', 0, '2026-10-15', 'Another dealer');
   const sale = ledger.prepare("INSERT INTO activation_effective_movements VALUES(?,'MobiUp','vodafone',?,?,?,?,?,?,?)");
-  const addSale = (id, n, site, tr, date, exact = true) => sale.run(
+  const movement = ledger.prepare('INSERT INTO activation_movements VALUES(?,?)');
+  const addSale = (id, n, site, tr, date, exact = true) => {
+    movement.run(id, String(id));
+    sale.run(
     id, exact ? serial(n) : '', serial(n) + '7', site, tr, date, 1, JSON.stringify({
       ItemType: 'SIM', Nr: '=EXAMPLE', CIF: '12345', CodPunctDeLucru: 'P-1',
     }),
-  );
+    );
+  };
   addSale(1, 1, 'S', 1, '2026-10-15', false);
   addSale(2, 4, 'H', 1, '2026-10-10');
   addSale(3, 5, 'N', 1, '2026-10-09');
@@ -106,6 +112,15 @@ try {
   assert.equal(regionalManager.attributed, manager.attributed);
   assert.equal(regionalManager.regionalDetails, false);
   assert.equal(regionalManager.detail.total, 0);
+  const historyDetail = result(['S','T'], {detail: 'attributed', detailSite: 'H'});
+  assert.equal(historyDetail.detail.total, 1);
+  assert.equal(historyDetail.detail.rows[0].site, 'H');
+  ledger.exec("INSERT INTO activation_meta VALUES('conflict:1','1')");
+  const disputed = result(null, {detail: 'regional'});
+  assert.equal(disputed.regional.total, manager.regional.total);
+  assert.equal(disputed.attributed, manager.attributed - 1);
+  assert.equal(disputed.detail.rows.find(row => row.serial === serial(1)).kind, 'unassigned');
+  ledger.exec("DELETE FROM activation_meta WHERE key='conflict:1'");
   assert.equal(result(['N']), undefined);
   const reclassified = result(null, {slips: {[serial(7)]: [{...document('T', '2026-10-14'), source: 'slip'}]}});
   assert.equal(reclassified.regional.total, manager.regional.total);

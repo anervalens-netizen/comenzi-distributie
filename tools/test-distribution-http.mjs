@@ -66,6 +66,12 @@ try{
  const regionalFocus=(await request(focusPath,'regional')).data.focus;
  assert.deepEqual([regionalFocus.regional.total,regionalFocus.attributed,regionalFocus.possibleStock],[3,1,1]);
  assert.equal(regionalFocus.regionalDetails,false);
+ db.exec("INSERT INTO settings VALUES('vodafone-focus-historical-sites:sud','HISTORY')");
+ const historicalFocus=await request(focusPath+'&focusKind=attributed&focusSite=HISTORY','regional');
+ assert.equal(historicalFocus.status,200);
+ assert.equal(historicalFocus.data.focus.detail.total,0);
+ const historicalExport=await request('activations?month=2026-10&view=focus-export&focusKind=attributed&focusSite=HISTORY','regional');
+ assert.equal(historicalExport.status,200);
  assert.equal((await request(focusPath+'&focusKind=regional','regional')).status,403);
  const southFocus=(await request(focusPath+'&focusKind=attributed','south')).data.focus;
  assert.deepEqual([southFocus.attributed,southFocus.possibleStock,southFocus.regional],[1,1,undefined]);

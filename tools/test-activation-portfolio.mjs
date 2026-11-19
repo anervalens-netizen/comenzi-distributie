@@ -26,7 +26,8 @@ try{
       build.onResolve({filter:/^(?:\.\/server|#mobiup-activation-store)$/},({path})=>({path,namespace:'synthetic-activation'}));
       build.onLoad({filter:/.*/,namespace:'synthetic-activation'},({path})=>({contents:path==='#mobiup-activation-store'
         ?`import {activationPartnerView} from '${process.cwd()}/lib/activation-partners-node.ts';
-          export function readVodafoneFocus(){throw new Error('Focus is outside this fixture');} export function readActivations(month,sites,provider,query){const fixture=globalThis.__activationPortfolioFixture;
+          export async function readVodafoneFocus(){return globalThis.__activationPortfolioFixture.focusRead();}
+          export function readActivations(month,sites,provider,query){const fixture=globalThis.__activationPortfolioFixture;
             if(fixture.ledger){
               const report={provider,latestDate:query.todayWindow.to};
               const allowed=query.rules.assignments.filter(a=>query.projects.includes(a.projectId)&&(sites===null||sites.some(s=>s.toUpperCase()===a.siteCode.toUpperCase()))).map(a=>a.siteCode.toUpperCase());
@@ -77,6 +78,20 @@ try{
   process.env.MOBIUP_ACTIVATIONS_PILOT_AGENT_ID='north';
   process.env.MOBIUP_ACTIVATIONS_PILOT_ADDITIONAL_AGENT_IDS='south,nonexclusive,unknown,numeric';
   const user=id=>{const row=database.prepare('SELECT * FROM users WHERE id=?').get(id);return {id,role:row.role,active:row.active,warehouseId:row.warehouse_id,siteCode:row.site_code,managerScope:row.manager_scope};};
+  const focusParams=new URLSearchParams({month:'2026-10',view:'focus'});
+  fixture.focusRead=async()=>({provider:'vodafone',focus:{revision:'synthetic'}});
+  assert.equal((await activationReport(user('south'),focusParams,{revalidateFocus:async()=>user('south')})).focus.revision,'synthetic');
+  await assert.rejects(()=>activationReport(user('south'),focusParams,{revalidateFocus:async()=>{
+    throw Object.assign(new Error('Synthetic expired session'),{status:401});
+  }}), error=>error.status===401);
+  const northFocus=new URLSearchParams({month:'2026-10',view:'focus',focusTerritory:'nord_a'});
+  fixture.focusRead=async()=>{
+    database.exec("DELETE FROM manager_agents WHERE manager_id='regional' AND agent_id='north'");
+    return {provider:'vodafone',focus:{revision:'synthetic'}};
+  };
+  await assert.rejects(()=>activationReport(user('regional'),northFocus,{revalidateFocus:async()=>user('regional')}),error=>error.status===409);
+  database.exec("INSERT INTO manager_agents VALUES('regional','north')");
+  delete fixture.focusRead;
   const baseline=`EXISTS(SELECT 1 FROM users u JOIN json_each(COALESCE(json_extract(c.data,'$.warehouseIds'),json_array(c.warehouse_id))) w ON w.value=u.warehouse_id WHERE u.role='agent' AND u.active=1 AND UPPER(TRIM(u.site_code)) IN (SELECT value FROM json_each(?)))`;
   async function read(id,filters,expected){
     queries.length=0;

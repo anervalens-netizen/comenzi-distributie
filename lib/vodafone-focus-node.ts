@@ -2,7 +2,7 @@ import {createHash} from 'node:crypto';
 import type {DatabaseSync} from 'node:sqlite';
 import type {ActivationQuery} from './activation-distribution';
 import {
-  focusAttribution, focusCounty, focusCategory, focusProjects,
+  focusAttribution, focusCounty, focusCategory, focusProjects, focusSiteScope,
   type FocusCounts, type FocusDocument, type FocusMonth, type FocusRegional, type FocusReport, type FocusRow,
 } from './vodafone-focus';
 
@@ -10,7 +10,7 @@ type SourceFile = {id: number; source_at: string; period_start: string; period_e
 type Observation = {serial: string; activation_date: string; county: string; handset: string; raw_json: string};
 type Movement = {
   movement_id: number; site: string; is_tr: number; movement_date: string | null; quantity: number | null;
-  company: string; raw_json: string;
+  company: string; raw_json: string; conflict: number;
 };
 const blankCounts = (): FocusCounts => ({attributed: 0, possibleStock: 0});
 const blankRegional = (): FocusRegional => ({
@@ -46,18 +46,8 @@ export function vodafoneFocusReport(
   const focus = query.focus;
   if (!focus || !query.projects.includes(focusProjects[focus.territory])) return undefined;
   const {territory} = focus;
-  const configuredSites = query.rules.assignments.filter(row => row.territoryId === territory).map(row => row.siteCode.toUpperCase());
-  const territorySites = new Set(configuredSites);
-  for (const site of focus.historicalSites) {
-    if (!query.rules.assignments.some(row => row.siteCode.toUpperCase() === site)) territorySites.add(site);
-  }
-  const allowed = sites?.map(site => site.toUpperCase());
-  const regionalDetails = allowed === undefined;
-  // Managers responsible for every configured TR in a territory need its
-  // regional KPI and closed warehouses. Unattributed ICCIDs stay national.
-  const regionalVisible = regionalDetails || (query.policy === 'manager' && configuredSites.length > 0 &&
-    configuredSites.every(site => allowed.includes(site)));
-  const visible = new Set(regionalVisible ? territorySites : allowed!.filter(site => territorySites.has(site)));
+  const {territorySites, visible, regionalDetails, regionalVisible} =
+    focusSiteScope(query.rules, territory, focus.historicalSites, sites, query.policy === 'manager');
   if (!regionalVisible && !visible.size) return undefined;
   const files = (source.prepare(`SELECT id,source_at,period_start,period_end
     FROM activation_imports WHERE operator='vodafone' AND status='complete' AND source_kind='operator'
@@ -67,12 +57,17 @@ export function vodafoneFocusReport(
       AND UPPER(TRIM(JSON_EXTRACT(o.raw_json,'$.DEALER_NAME')))=?)`).all(dealer) as unknown as SourceFile[]).sort(sourceOrder);
   const observations = source.prepare(`SELECT serial,activation_date,county,handset,raw_json
     FROM activation_observations WHERE import_id=? AND activation_date BETWEEN ? AND ?`);
-  const movementColumns = 'movement_id,site,is_tr,movement_date,quantity,company,raw_json';
-  const companies = "company IN ('MobiUp','MobiCell') AND provider='vodafone'";
-  const sold = source.prepare(`SELECT ${movementColumns} FROM activation_effective_movements WHERE ${companies} AND serial=?`);
-  const sim = source.prepare(`SELECT ${movementColumns} FROM activation_effective_movements
-    WHERE ${companies} AND imei>=? AND imei<? AND LENGTH(imei)=19 AND json_extract(raw_json,'$.ItemType')='SIM'
-    AND (serial='' OR serial=?)`);
+  const hasConflicts = !!source.prepare("SELECT 1 FROM activation_meta WHERE key GLOB 'conflict:*' LIMIT 1").get();
+  const conflict = hasConflicts
+    ? `EXISTS(SELECT 1 FROM activation_movements original JOIN activation_meta issue
+      ON issue.key='conflict:'||original.movement_key WHERE original.id=m.movement_id)`
+    : '0';
+  const movementColumns = `m.movement_id,m.site,m.is_tr,m.movement_date,m.quantity,m.company,m.raw_json,${conflict} conflict`;
+  const companies = "m.company IN ('MobiUp','MobiCell') AND m.provider='vodafone'";
+  const sold = source.prepare(`SELECT ${movementColumns} FROM activation_effective_movements m WHERE ${companies} AND m.serial=?`);
+  const sim = source.prepare(`SELECT ${movementColumns} FROM activation_effective_movements m
+    WHERE ${companies} AND m.imei>=? AND m.imei<? AND LENGTH(m.imei)=19 AND json_extract(m.raw_json,'$.ItemType')='SIM'
+    AND (m.serial='' OR m.serial=?)`);
   const revision = createHash('sha256').update(JSON.stringify([
     generation, territory, query.months, query.projects, query.rules.revision, [...territorySites].sort(), [...visible].sort(), regionalDetails, regionalVisible,
     focus.includeSerials, focus.detail, focus.detailSite, slips,
@@ -137,11 +132,13 @@ export function vodafoneFocusReport(
     const movements = new Map<number, Movement>();
     for (const move of sold.iterate(serial) as Iterable<Movement>) movements.set(move.movement_id, move);
     for (const move of sim.iterate(serial + '0', serial + ':', serial) as Iterable<Movement>) movements.set(move.movement_id, move);
-    const documents = [...movements.values()].map(evidence).concat(slips[serial] ?? []);
-    // A document with missing chronology, quantity or TR identity cannot prove
-    // that competing evidence belongs before or after the activation.
-    const attribution = documents.some(doc => !doc.date || !doc.quantity || (doc.tr && !doc.site))
-      ? null : focusAttribution(row.activation_date, documents);
+    const matchingMovements = [...movements.values()];
+    const documents = matchingMovements.map(evidence).concat(slips[serial] ?? []);
+    // The effective row of a tied version is only an arbitrary representative.
+    // Keep its activation in the region while the commercial evidence is unresolved.
+    const invalid = matchingMovements.some(move => !!move.conflict) ||
+      documents.some(doc => !doc.date || !doc.quantity || (doc.tr && !doc.site));
+    const attribution = invalid ? null : focusAttribution(row.activation_date, documents);
     const document = attribution?.document;
     const site = document?.tr ? document.site : undefined;
     const kind = attribution?.attributed

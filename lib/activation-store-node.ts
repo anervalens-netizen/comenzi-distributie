@@ -34,6 +34,7 @@ export function readActivations(month:string,sites:string[]|null,provider:Activa
     const meta=Object.fromEntries(report.prepare('SELECT key,value FROM report_meta').all().map(r=>[String(r.key),String(r.value)]));
     if(!['1','2','3','4'].includes(meta.version))throw new Error('Unsupported activation report');
     source=new DatabaseSync(resolve(directory,'activations.sqlite'),{readOnly:true});
+    if(query?.focus)source.exec('BEGIN');
     const schema=String(source.prepare("SELECT value FROM activation_meta WHERE key='schema_version'").get()?.value);
     if(!['2','3'].includes(schema))throw new Error('Unsupported activation ledger');
     // Activation generation switches are atomic, but an application deploy can
