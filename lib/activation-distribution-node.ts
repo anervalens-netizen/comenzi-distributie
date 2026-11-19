@@ -3,7 +3,7 @@ import type {DatabaseSync} from 'node:sqlite';
 import {createHash} from 'node:crypto';
 import {parseDistributionRules,vodafoneEligibility,type DistributionRules} from './distribution-rules';
 import {visibleActivation,type ActivationQuery} from './activation-distribution';
-import {emptyActivationCounts,type ActivationReport,type ActivationCounts,type ActivationProvider,type ActivationProductBreakdown,type ActivationSimZero} from './activation-types';
+import {emptyActivationCounts,type ActivationReport,type ActivationCounts,type ActivationProductBreakdown,type ActivationSimZero} from './activation-types';
 export const canonicalRules=(r:unknown):string=>JSON.stringify(r&&typeof r==='object'&&!Array.isArray(r)?Object.fromEntries(Object.entries(r).sort(([a],[b])=>a.localeCompare(b)).map(([k,v])=>[k,JSON.parse(canonicalRules(v))])):Array.isArray(r)?r.map(v=>JSON.parse(canonicalRules(v))):r);
 type Dimension={month:string;site:string;item_type:string;county:string;handset:string;contradictory:number;count:number;last_date:string};
 function add(t:ActivationCounts,r:Dimension,rules:DistributionRules,countLegacyEligibility:boolean){
