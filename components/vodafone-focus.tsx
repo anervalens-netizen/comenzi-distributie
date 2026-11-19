@@ -106,9 +106,10 @@ function VodafoneFocusSelection({query, territory}: {query: string; territory: T
   const currentDetail = detail?.key === detailKey ? detail : undefined;
   const selectedRows = currentDetail?.report?.detail;
   const covered = visible.months.some(month => month.coveredThrough);
-  const metric = (kind: FocusKind, title: string, value: number) =>
-    <div><dt>{title}</dt><dd><button type="button" className="activation-trend-value"
-      aria-label={title + ' · detalii'} disabled={!value} onClick={() => select({kind, title})}>{number(value)}</button></dd></div>;
+  const metric = (kind: FocusKind, title: string, value: number, showDetails = true) =>
+    <div><dt>{title}</dt><dd>{showDetails ? <button type="button" className="activation-trend-value"
+      aria-label={title + ' · detalii'} disabled={!value} onClick={() => select({kind, title})}>{number(value)}</button>
+      : <strong>{number(value)}</strong>}</dd></div>;
 
   return <section className="vodafone-focus" aria-label={'Focus Vodafone ' + name}>
     <div className="distribution-partner-toolbar">
@@ -117,7 +118,7 @@ function VodafoneFocusSelection({query, territory}: {query: string; territory: T
     </div>
     {!covered ? <p>Nu există observații Vodafone pentru lunile selectate.</p> : <>
       <dl className="activation-eligibility">
-        {region && metric('regional', 'Total regional Focus ' + name, region.total)}
+        {region && metric('regional', 'Total regional Focus ' + name, region.total, visible.regionalDetails)}
         {metric('attributed', 'Realizare TR ' + name, visible.attributed)}
         {metric('possibleStock', 'Posibile activări din stoc', visible.possibleStock)}
       </dl>

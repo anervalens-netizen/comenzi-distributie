@@ -428,9 +428,10 @@ initial credit and phone/SIM packages are eligible. Following the North offer,
 North A and North B use Vodafone SIM 5 with certified initial credit and SIM
 Zero / Free SIM with a first recharge of at least 3 EUR on their respective
 counties. Unassigned counties are included only in South. Agents have access to
-their own TR within their configured territory. Regional data require a global
-manager without a warehouse filter. Only managers can export ICCIDs within
-their authorized scope.
+their own TR within their configured territory. Managers covering the whole
+territory can see its regional totals and historical warehouses. Regional
+serial-level details require a global manager without a warehouse filter.
+Only managers can export ICCIDs within their authorized scope.
 
 Use the optional private settings key `vodafone-focus-historical-sites:<territory>`
 for a comma-separated list of closed warehouse codes in each territory. Focus

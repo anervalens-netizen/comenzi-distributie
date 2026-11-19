@@ -42,16 +42,17 @@ const insertHistory=history.prepare('INSERT INTO history_rows VALUES(?,?,?,?,?,?
 insertHistory.run(1,'2025-11-05','TR North','101','CREDIT','Synthetic credit','Example','Cartele','SIM',2000000,2420,1);
 insertHistory.run(1,'2025-11-05','TR south','102','CREDIT','Synthetic credit','Example','Cartele','SIM',3000000,3630,2);
 history.close();
-const child=spawn(process.execPath,['dist/standalone/server.js'],{env:{...process.env,MOBIUP_DATA_DIR:root,MOBIUP_ACTIVATIONS_DIR:root,MOBIUP_ACTIVATIONS_PILOT_MANAGER_ID:'manager',MOBIUP_ACTIVATIONS_PILOT_AGENT_ID:'north',MOBIUP_ACTIVATIONS_PILOT_ADDITIONAL_AGENT_IDS:'south,non',MOBIUP_USAGE_DISABLED:'1',HOST:'127.0.0.1',PORT:'3096'},stdio:'ignore'});
+const child=spawn(process.execPath,['dist/standalone/server.js'],{env:{...process.env,MOBIUP_DATA_DIR:root,MOBIUP_ACTIVATIONS_DIR:root,MOBIUP_ACTIVATIONS_PILOT_MANAGER_ID:'manager',MOBIUP_ACTIVATIONS_PILOT_ADDITIONAL_MANAGER_IDS:'regional',MOBIUP_ACTIVATIONS_PILOT_AGENT_ID:'north',MOBIUP_ACTIVATIONS_PILOT_ADDITIONAL_AGENT_IDS:'south,non',MOBIUP_USAGE_DISABLED:'1',HOST:'127.0.0.1',PORT:'3096'},stdio:'ignore'});
 let browser;const cookies={};
 async function request(path,id='manager'){const r=await fetch(origin+'/api/'+path,{headers:{Cookie:'mobiup_session='+cookies[id]}});return {status:r.status,data:await r.json()};}
 try{
  await waitFor(async()=>{try{return (await fetch(origin+'/api/bootstrap')).ok;}catch{return false;}},'distribution server');
  const db=new DatabaseSync(root+'/mobiup.sqlite');
- for(const [id,role,site,warehouse] of [['manager','manager','',''],['north','agent','N','WN'],['south','agent','S','WS'],['non','agent','X','WX'],['denied','agent','D','WD']]){
+ for(const [id,role,site,warehouse] of [['manager','manager','',''],['regional','manager','',''],['north','agent','N','WN'],['south','agent','S','WS'],['non','agent','X','WX'],['denied','agent','D','WD']]){
   db.prepare("INSERT INTO users(id,username,name,role,manager_scope,password_hash,must_change_password,active,site_code,warehouse_id,warehouse_name) VALUES(?,?,?,?,'global','synthetic-invalid',0,1,?,?,?)").run(id,id,'Synthetic '+id,role,site,warehouse,id==='north'?'TR North':'TR '+id);
   const token=randomBytes(24).toString('hex');cookies[id]=token;db.prepare('INSERT INTO sessions VALUES(?,?,?)').run(createHash('sha256').update(token).digest('hex'),id,Date.now()+3600000);
  }
+ db.exec("UPDATE users SET manager_scope='assigned' WHERE id='regional'; INSERT INTO manager_agents(manager_id,agent_id) VALUES('regional','south')");
  db.prepare('INSERT INTO settings VALUES(?,?)').run('distribution-rules-v1',readFileSync(join(root,'rules.json'),'utf8'));
  const points=[['P-A','A'],['P-B','B'],['P-Z','C']];for(const [id,code] of points)db.prepare('INSERT INTO customers(id,warehouse_id,data,active) VALUES(?,?,?,1)').run(id,'WN',JSON.stringify({id,name:'Synthetic point '+code,cui:'EXAMPLE',warehouseId:'WN',warehouseIds:['WN'],county:'CV',city:'Synthetic city',address:'Synthetic address',historyFranchises:[code]}));
  const addSlip=db.prepare("INSERT INTO orders(id,number,user_id,warehouse_id,kind,status,payload,created_at,finalized_at,revision) VALUES(?,?,?,'WS','sim','finalized',?,? ,?,1)");
@@ -62,6 +63,10 @@ try{
  const focusPath='activations?month=2026-10&view=focus';
  const managerFocus=(await request(focusPath)).data.focus;
  assert.deepEqual([managerFocus.regional.total,managerFocus.attributed,managerFocus.possibleStock],[3,1,1]);
+ const regionalFocus=(await request(focusPath,'regional')).data.focus;
+ assert.deepEqual([regionalFocus.regional.total,regionalFocus.attributed,regionalFocus.possibleStock],[3,1,1]);
+ assert.equal(regionalFocus.regionalDetails,false);
+ assert.equal((await request(focusPath+'&focusKind=regional','regional')).status,403);
  const southFocus=(await request(focusPath+'&focusKind=attributed','south')).data.focus;
  assert.deepEqual([southFocus.attributed,southFocus.possibleStock,southFocus.regional],[1,1,undefined]);
  assert.equal(southFocus.detail.rows[0].serial,undefined);

@@ -35,24 +35,30 @@ function evidence(row: Movement): FocusDocument {
     site: row.site.trim().toUpperCase(), tr: !!row.is_tr,
     date: row.movement_date || '', quantity: row.quantity ?? 0,
     source: 'erp', reference: String(raw.Nr || raw.DocumentId || raw.DocumentDetailId || ''),
-    company: row.company, clientCode: raw.CIF || undefined, pointCode: raw.CodPunctDeLucru || undefined,
+    company: row.company, itemCode: raw.ItemCode || undefined, clientCode: raw.CIF || undefined, pointCode: raw.CodPunctDeLucru || undefined,
   };
 }
 
 export function vodafoneFocusReport(
   source: DatabaseSync, labels: ReadonlyMap<string, string>, sites: string[] | null,
-  query: ActivationQuery, generation: string,
+  query: ActivationQuery, generation: string, slips: Readonly<Record<string, FocusDocument[]>>,
 ): FocusReport | undefined {
   const focus = query.focus;
   if (!focus || !query.projects.includes(focusProjects[focus.territory])) return undefined;
   const {territory} = focus;
-  const territorySites = new Set(query.rules.assignments.filter(row => row.territoryId === territory).map(row => row.siteCode.toUpperCase()));
+  const configuredSites = query.rules.assignments.filter(row => row.territoryId === territory).map(row => row.siteCode.toUpperCase());
+  const territorySites = new Set(configuredSites);
   for (const site of focus.historicalSites) {
     if (!query.rules.assignments.some(row => row.siteCode.toUpperCase() === site)) territorySites.add(site);
   }
-  const visible = new Set(sites === null ? territorySites : sites.map(site => site.toUpperCase()).filter(site => territorySites.has(site)));
-  if (sites !== null && !visible.size) return undefined;
-  const regionalVisible = sites === null;
+  const allowed = sites?.map(site => site.toUpperCase());
+  const regionalDetails = allowed === undefined;
+  // Managers responsible for every configured TR in a territory need its
+  // regional KPI and closed warehouses. Unattributed ICCIDs stay national.
+  const regionalVisible = regionalDetails || (query.policy === 'manager' && configuredSites.length > 0 &&
+    configuredSites.every(site => allowed.includes(site)));
+  const visible = new Set(regionalVisible ? territorySites : allowed!.filter(site => territorySites.has(site)));
+  if (!regionalVisible && !visible.size) return undefined;
   const files = (source.prepare(`SELECT id,source_at,period_start,period_end
     FROM activation_imports WHERE operator='vodafone' AND status='complete' AND source_kind='operator'
     AND UPPER(TRIM(company)) IN ('VODAFONE','MOBIUP','MOBIUP DISTRIBUTION SRL')
@@ -68,10 +74,10 @@ export function vodafoneFocusReport(
     WHERE ${companies} AND imei>=? AND imei<? AND LENGTH(imei)=19 AND json_extract(raw_json,'$.ItemType')='SIM'
     AND (serial='' OR serial=?)`);
   const revision = createHash('sha256').update(JSON.stringify([
-    generation, territory, query.months, query.projects, query.rules.revision, [...territorySites].sort(), [...visible].sort(), regionalVisible,
-    focus.includeSerials, focus.detail, focus.detailSite, focus.slips,
+    generation, territory, query.months, query.projects, query.rules.revision, [...territorySites].sort(), [...visible].sort(), regionalDetails, regionalVisible,
+    focus.includeSerials, focus.detail, focus.detailSite, slips,
   ])).digest('hex');
-  const report: FocusReport = {...blankCounts(), revision, territory, months: [], sites: [], ...(regionalVisible ? {regional: blankRegional()} : {})};
+  const report: FocusReport = {...blankCounts(), revision, territory, regionalDetails, months: [], sites: [], ...(regionalVisible ? {regional: blankRegional()} : {})};
   const counts = new Map([...visible].map(site => [site, blankCounts()]));
   const details: FocusRow[] = [];
   const months = new Map<string, FocusMonth>();
@@ -131,7 +137,7 @@ export function vodafoneFocusReport(
     const movements = new Map<number, Movement>();
     for (const move of sold.iterate(serial) as Iterable<Movement>) movements.set(move.movement_id, move);
     for (const move of sim.iterate(serial + '0', serial + ':', serial) as Iterable<Movement>) movements.set(move.movement_id, move);
-    const documents = [...movements.values()].map(evidence).concat(focus.slips[serial] ?? []);
+    const documents = [...movements.values()].map(evidence).concat(slips[serial] ?? []);
     // A document with missing chronology, quantity or TR identity cannot prove
     // that competing evidence belongs before or after the activation.
     const attribution = documents.some(doc => !doc.date || !doc.quantity || (doc.tr && !doc.site))
@@ -158,14 +164,14 @@ export function vodafoneFocusReport(
     }
     if (!focus.detail || (focus.detailSite && site !== focus.detailSite)) continue;
     if (focus.detail !== 'regional' && (!scopedSite || focus.detail !== kind)) continue;
-    if (focus.detail === 'regional' && !regionalVisible) continue;
+    if (focus.detail === 'regional' && !regionalDetails) continue;
     details.push({
       id: createHash('sha256').update(serial + '|' + row.activation_date).digest('hex'),
       ...(focus.includeSerials ? {serial} : {}), date: row.activation_date, county, category, kind, site,
-      ...(document && (regionalVisible || scopedSite) ? {
+      ...(document && (regionalDetails || scopedSite) ? {
         document: {date: document.date, source: document.source, ...(focus.includeSerials ? {reference: document.reference} : {})},
       } : {}),
-      ...(attribution?.uniqueLocation && attribution.attributed && (regionalVisible || scopedSite) ? {
+      ...(attribution?.uniqueLocation && attribution.attributed && (regionalDetails || scopedSite) ? {
         clientCode: document?.clientCode, pointCode: document?.pointCode,
       } : {}),
     });

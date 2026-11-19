@@ -1,3 +1,5 @@
+import {vodafoneFocusWorkbook} from './vodafone-focus-export';
+import {readFocusSlips} from './vodafone-focus-documents-node';
 import {vodafoneFocusReport} from './vodafone-focus-node';
 import {distributionReport} from './activation-distribution-node';
 import {digiOperatorReported} from './digi-operator-source';
@@ -47,8 +49,12 @@ export function readActivations(month:string,sites:string[]|null,provider:Activa
       if(meta.version!=='4')throw new Error('Distribution projection requires rebuild');
       if(query.focus&&provider==='vodafone'&&schema==='3'){
         const labels=new Map(report.prepare('SELECT site,label FROM sites').all().map(row=>[String(row.site).toUpperCase(),String(row.label)]));
-        const focus=vodafoneFocusReport(source,labels,sites,query,JSON.stringify([directory,meta.sourceGeneration,meta.sourceImports]));
-        return {...result,available:!!focus?.months.some(month=>month.coveredThrough),focus};
+        const focus=vodafoneFocusReport(source,labels,sites,query,JSON.stringify([directory,meta.sourceGeneration,meta.sourceImports,meta.builtAt]),readFocusSlips());
+        const available=!!focus?.months.some(month=>month.coveredThrough);
+        if(query.focus.exportAll&&available&&focus&&(!query.revision||query.revision===focus.revision)){
+          return {...result,available,focus:{...focus,detail:undefined},focusWorkbook:vodafoneFocusWorkbook(focus)};
+        }
+        return {...result,available,focus};
       }
       const scoped=distributionReport(report,result,meta,sites,query);
       // The operator's certified distinct ICCIDs are the manager KPI. Matching

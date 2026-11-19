@@ -8,7 +8,6 @@ import {simVerification,simVerificationAccess} from '@/lib/sim-verification-api'
 import {operationalWriteGuard} from '@/lib/operational-write-guard';
 import {activationReport} from '@/lib/activation-api';
 import {isVodafoneFocusView} from '@/lib/vodafone-focus-api';
-import {vodafoneFocusWorkbook} from '@/lib/vodafone-focus-export';
 import {timedResponse} from '@/lib/request-timing';
 import {usageAuth,usagePulse,usageReport} from '@/lib/usage-api';
 import { managerFilter } from '@/lib/manager-scope';
@@ -350,8 +349,8 @@ async function dispatch(req: Request) {
     const params=new URL(req.url).searchParams,view=params.get('view');
     const report=await activationReport(isVodafoneFocusView(view)?user:readUser,params);
     if(view==='focus-export'){
-      if(report.provider!=='vodafone'||!report.available||!report.focus)fail(404,'Raportul Focus nu este disponibil în această selecție.');
-      return response({workbook:vodafoneFocusWorkbook(report.focus)});
+      if(report.provider!=='vodafone'||!report.focusWorkbook)fail(404,'Raportul Focus nu este disponibil în această selecție.');
+      return response({workbook:report.focusWorkbook});
     }
     return response(report);
   }

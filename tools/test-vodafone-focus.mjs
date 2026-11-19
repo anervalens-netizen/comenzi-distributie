@@ -16,7 +16,7 @@ const rules = {revision: 'synthetic', assignments: [
   {siteCode: 'T', territoryId: 'sud'},
   {siteCode: 'N', territoryId: 'nord_a'},
 ]};
-const document = (site, date, quantity = 1) => ({site, date, quantity, tr: true, source: 'erp', reference: 'EXAMPLE'});
+const document = (site, date, quantity = 1) => ({site, date, quantity, tr: true, source: 'erp', reference: 'EXAMPLE', company: 'ExampleCo', clientCode: '12345', pointCode: 'P-1', itemCode: 'ITEM'});
 const serial = n => String(n).padStart(18, '0');
 const later = document('S', '2026-10-25');
 const prior = document('S', '2026-10-12');
@@ -33,7 +33,10 @@ assert.equal(focusCategory('nord_a', '<UNASSIGNED>', '', 'SIM_ZERO', 5), null);
 assert.equal(focusCategory('nord_b', 'CV', '', 'SIM_ZERO', 5), null);
 assert.equal(focusAttribution('2026-10-20', [prior, {...prior, quantity: -1}]).attributed, true);
 assert.equal(focusAttribution('2026-10-20', [prior, {...prior, site: 'T'}]), null);
-assert.equal(focusAttribution('2026-10-20', [prior, {...prior, site: 'T'}, {...prior, site: 'T', quantity: -1}]).document.site, 'S');
+assert.equal(focusAttribution('2026-10-20', [prior, {...prior, site: 'T'}, {...prior, site: 'T', date: '2026-10-13', quantity: -1}]).document.site, 'S');
+assert.equal(focusAttribution('2026-10-20', [prior, {...prior, site: 'T'}, {...prior, site: 'T', quantity: -1}]), null);
+assert.equal(focusAttribution('2026-10-20', [prior, {...prior, site: 'T'}, {...prior, site: 'T', date: '2026-10-11', quantity: -1}]), null);
+assert.equal(focusAttribution('2026-10-20', [prior, {...prior, site: 'T'}, {...prior, site: 'T', date: '2026-10-13', clientCode: '67890', quantity: -1}]), null);
 assert.equal(focusAttribution('2026-10-20', [later, {...later, site: 'T'}]), null);
 assert.equal(focusAttribution('2026-10-20', [later]).attributed, false);
 
@@ -81,10 +84,10 @@ try {
   addSale(3, 5, 'N', 1, '2026-10-09');
   addSale(4, 6, 'STORE', 0, '2026-10-08');
   addSale(5, 7, 'T', 1, '2026-10-19');
-  const options = {territory: 'sud', historicalSites: ['H'], slips: {}, includeSerials: true};
+  const options = {territory: 'sud', historicalSites: ['H'], includeSerials: true};
   const query = {rules, projects: ['vodafone_sud'], months: ['2026-09', '2026-10', '2026-11'], policy: 'manager'};
-  const result = (sites, override = {}) => vodafoneFocusReport(
-    ledger, new Map([['H', 'Synthetic closed warehouse']]), sites, {...query, focus: {...options, ...override}}, 'generation',
+  const result = (sites, {slips = {}, ...override} = {}) => vodafoneFocusReport(
+    ledger, new Map([['H', 'Synthetic closed warehouse']]), sites, {...query, focus: {...options, ...override}}, 'generation', slips,
   );
   const manager = result(null, {detail: 'regional', exportAll: true});
   assert.deepEqual(manager.regional, {total: 7, otherTR: 1, otherChannels: 1, unassigned: 3, unassignedCounty: 1, sourceConflicts: 2});
@@ -98,6 +101,11 @@ try {
   assert.deepEqual(agent.sites.map(row => row.site), ['S']);
   assert.deepEqual(agent.detail.rows.map(row => [row.site, row.serial, row.document.reference]), [['S', undefined, undefined]]);
   assert.equal(result(['S'], {detail: 'regional'}).detail.total, 0);
+  const regionalManager = result(['S','T'], {detail: 'regional'});
+  assert.equal(regionalManager.regional.total, manager.regional.total);
+  assert.equal(regionalManager.attributed, manager.attributed);
+  assert.equal(regionalManager.regionalDetails, false);
+  assert.equal(regionalManager.detail.total, 0);
   assert.equal(result(['N']), undefined);
   const reclassified = result(null, {slips: {[serial(7)]: [{...document('T', '2026-10-14'), source: 'slip'}]}});
   assert.equal(reclassified.regional.total, manager.regional.total);

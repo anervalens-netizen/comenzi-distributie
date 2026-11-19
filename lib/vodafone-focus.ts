@@ -19,6 +19,7 @@ export type FocusDocument = {
   clientCode?: string;
   pointCode?: string;
   company?: string;
+  itemCode?: string;
 };
 export type FocusCounts = {attributed: number; possibleStock: number};
 export type FocusSite = FocusCounts & {site: string; label: string};
@@ -51,6 +52,7 @@ export type FocusRow = {
 export type FocusReport = FocusCounts & {
   revision: string;
   territory: Territory;
+  regionalDetails: boolean;
   regional?: FocusRegional;
   months: FocusMonth[];
   sites: FocusSite[];
@@ -59,7 +61,6 @@ export type FocusReport = FocusCounts & {
 export type FocusQuery = {
   territory: Territory;
   historicalSites: string[];
-  slips: Record<string, FocusDocument[]>;
   detail?: FocusKind;
   detailSite?: string;
   includeSerials: boolean;
@@ -90,32 +91,31 @@ export function focusCategory(territory: Territory, county: string, handset: str
 const documentSite = (document: FocusDocument) => (document.tr ? 'TR:' : 'other:') + document.site;
 export function focusAttribution(date: string, documents: FocusDocument[]) {
   const prior = documents.filter(document => document.date <= date);
-  const positive = prior.filter(document => document.quantity > 0);
-  const positiveSites = new Set(positive.map(documentSite));
-  const priorSites = new Set(prior.map(documentSite));
-  const net = new Map<string, number>();
-  const slips = new Set<string>();
-  for (const document of prior) {
-    const site = documentSite(document);
-    if (document.source === 'slip') slips.add(site);
-    else net.set(site, (net.get(site) ?? 0) + document.quantity);
-  }
-
-  let owner: string | undefined;
-  if (positiveSites.size === 1 && priorSites.size === 1) {
-    owner = positiveSites.values().next().value;
-  } else if (positiveSites.size) {
-    const candidates = [...positiveSites].filter(site => (net.get(site) ?? 0) > 0 || slips.has(site));
-    if (candidates.length === 1 && [...priorSites].every(site => site === candidates[0] || (net.get(site) ?? 0) === 0)) {
-      owner = candidates[0];
+  let positive = prior.filter(document => document.quantity > 0);
+  // A positive document from the only site establishes the historical seller
+  // even if a later return cancelled the commercial quantity.
+  if (new Set(prior.map(documentSite)).size > 1) {
+    positive = [];
+    for (const document of prior.sort((a, b) => a.date.localeCompare(b.date))) {
+      if (document.quantity > 0) {
+        positive.push(document);
+        continue;
+      }
+      // When sites compete, a return can eliminate only an identified earlier
+      // ERP sale at the same site, company, customer, point and product.
+      if (!document.company || !document.clientCode || !document.pointCode || !document.itemCode) return null;
+      const matches = positive.filter(sale => sale.source === 'erp' && sale.date < document.date &&
+        sale.company === document.company && sale.clientCode === document.clientCode && sale.pointCode === document.pointCode &&
+        sale.itemCode === document.itemCode && documentSite(sale) === documentSite(document));
+      if (matches.length !== 1) return null;
+      positive = positive.filter(sale => sale !== matches[0]);
     }
   }
-  if (owner !== undefined) {
-    const matches = positive.filter(document => documentSite(document) === owner);
-    // A single site can be proven even when several customers or locations
-    // appear on its documents. Do not pick a customer from competing evidence.
-    const identities = new Set(matches.map(row => JSON.stringify([row.clientCode, row.pointCode])));
-    const document = matches.reduce((latest, row) => row.date > latest.date ? row : latest);
+  if (positive.length && new Set(positive.map(documentSite)).size === 1) {
+    // Multiple documents can establish a single site but leave the work point
+    // uncertain. Show client/point identity only if the documents agree.
+    const identities = new Set(positive.map(row => JSON.stringify([row.company, row.clientCode, row.pointCode])));
+    const document = positive.reduce((latest, row) => row.date > latest.date ? row : latest);
     return {attributed: true, document, uniqueLocation: identities.size === 1};
   }
   if (prior.length) return null;
