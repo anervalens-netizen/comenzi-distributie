@@ -11,7 +11,7 @@ export function applyVodafoneFocusOverview(report: ActivationReport, reports: Fo
     }
     for (const site of focus.sites) {
       const summary = sites.get(site.site) ?? {site: site.site, label: site.label, ...emptyActivationCounts()};
-      summary.eligible = site.attributed;
+      summary.eligible = (summary.eligible ?? 0) + site.attributed;
       sites.set(site.site, summary);
     }
   }
