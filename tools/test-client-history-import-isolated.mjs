@@ -168,8 +168,14 @@ fixture(root/'empty.xlsx',[],'2024-02-01','2024-02-29')
  ready=await upload('upload.xlsx');assert.equal(ready.state,'ready',ready.error);
  // Commit immediately: launch must handle the preview's exiting flock.
  assert.equal((await commit(ready.id)).status,202);
- let completed=await poll(ready.id);assert.equal(completed.state,'completed',completed.error);await sleep(30);
- assert(existsSync(join(root,'rebuild-checked')));assert(!existsSync(join(base,ready.id,'input.xlsx')));assert.equal((await commit(ready.id)).status,200);
+ let completed=await poll(ready.id);assert.equal(completed.state,'completed',completed.error);
+ assert(existsSync(join(root,'rebuild-checked')));
+ // The worker records completion before removing the staged workbook.
+ const stagedWorkbook=join(base,ready.id,'input.xlsx');
+ const cleanupDeadline=performance.now()+5000;
+ while(existsSync(stagedWorkbook)&&performance.now()<cleanupDeadline)await sleep(20);
+ assert(!existsSync(stagedWorkbook),'worker removes input.xlsx after recording completion');
+ assert.equal((await commit(ready.id)).status,200);
  ready=await upload('empty.xlsx');assert.equal(ready.state,'ready',ready.error);assert.equal(ready.preview.rows,0);assert.equal(ready.preview.removedOccurrences,2);assert(ready.preview.requiresAcknowledgement);
  await commit(ready.id);completed=await poll(ready.id);assert.equal(completed.state,'completed',completed.error);assert.equal(completed.result.valueCents,0);assert.equal((await commit(ready.id)).status,200);
  for(let n=0;n<100;n++){const stored=jobs.readJob(root,join(base,ready.id,'status.json'));if(jobs.workerAlive(stored)===false)break;await sleep(20);}
