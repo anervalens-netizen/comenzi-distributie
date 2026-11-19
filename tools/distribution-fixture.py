@@ -6,7 +6,7 @@ import activations as a
 from activation_report import build_report
 from test_activations import row,fixture
 root=Path(sys.argv[1]);c=a.connect(root)
-rules={'version':1,'revision':'synthetic-1','history':'all','assignments':[{'userId':'north','siteCode':'N','projectId':'vodafone_nord','territoryId':'nord_a','counties':['CV']},{'userId':'south','siteCode':'S','projectId':'vodafone_sud','territoryId':'sud','counties':['AG']},{'userId':'non','siteCode':'X','projectId':'non_exclusiv','territoryId':None,'counties':['TM']}],'products':{'ZERO':'vodafone_0','CREDIT':'vodafone_3'}}
+rules={'version':1,'revision':'synthetic-1','history':'all','assignments':[{'userId':'north','siteCode':'N','projectId':'vodafone_nord','territoryId':'nord_a','counties':['CV']},{'userId':'north-b','siteCode':'B','projectId':'vodafone_nord','territoryId':'nord_b','counties':['IS']},{'userId':'south','siteCode':'S','projectId':'vodafone_sud','territoryId':'sud','counties':['AG']},{'userId':'non','siteCode':'X','projectId':'non_exclusiv','territoryId':None,'counties':['TM']}],'products':{'ZERO':'vodafone_0','CREDIT':'vodafone_3'}}
 rows=[]
 for i,(site,county,handset,code,active,month,point) in enumerate([
  ('N','Covasna','SIM with initial credit >= 3 EUR','CREDIT',True,'202610','A'),

@@ -12,6 +12,7 @@ export type ActivationSimZero={distributed:number;activated:number;withoutReport
 export type ActivationMonth={month:string;reported:boolean;counts:ActivationCounts;productBreakdown?:ActivationProductBreakdown;simZero?:ActivationSimZero};
 export type ActivationReport = {
   focus?:FocusReport;
+  commissionPartial?:boolean;
   focusWorkbook?:string;
   monthly?:ActivationMonth[];
   /** Full operator count; never exposed to scoped managers or agents. */

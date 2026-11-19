@@ -6,9 +6,9 @@ import {visibleActivation,type ActivationQuery} from './activation-distribution'
 import {emptyActivationCounts,type ActivationReport,type ActivationCounts,type ActivationProvider,type ActivationProductBreakdown,type ActivationSimZero} from './activation-types';
 export const canonicalRules=(r:unknown):string=>JSON.stringify(r&&typeof r==='object'&&!Array.isArray(r)?Object.fromEntries(Object.entries(r).sort(([a],[b])=>a.localeCompare(b)).map(([k,v])=>[k,JSON.parse(canonicalRules(v))])):Array.isArray(r)?r.map(v=>JSON.parse(canonicalRules(v))):r);
 type Dimension={month:string;site:string;item_type:string;county:string;handset:string;contradictory:number;count:number;last_date:string};
-function add(t:ActivationCounts,r:Dimension,rules:DistributionRules,provider:ActivationProvider){
+function add(t:ActivationCounts,r:Dimension,rules:DistributionRules,countLegacyEligibility:boolean){
  t.total+=r.count;t[r.item_type==='SIM'?'sim':r.item_type==='TELSIM'?'telsim':'other']+=r.count;if(!r.site)t.unassigned+=r.count;
- if(provider!=='vodafone')return;
+ if(!countLegacyEligibility)return;
  const a=rules.assignments.find(a=>a.siteCode.toUpperCase()===r.site.toUpperCase());
  const e=vodafoneEligibility(r.county,r.handset,a?.territoryId||null,!!r.contradictory);
  if(e.eligible){t.eligible=(t.eligible||0)+r.count;const key=e.region==='own'?'ownRegion':e.region==='other'?'otherRegion':'unknownRegion';t[key]=(t[key]||0)+r.count;}
@@ -26,6 +26,7 @@ export function distributionReport(report:DatabaseSync,base:ActivationReport,met
   if(canonicalRules(structural(projectedRules))!==canonicalRules(structural(rules)))throw new Error();
  }catch{throw new Error('Stale distribution rules');}
  const {provider}=base;
+ const countLegacyEligibility=provider==='vodafone'&&query.focusSummaries===undefined;
  const revision=createHash('sha256').update(meta.version+'|'+meta.builtAt+'|'+meta.sourceImports+'|'+meta.sourceGeneration+'|'+meta.rules+'|'+canonicalRules(rules)+'|'+query.policy+'|'+JSON.stringify(sites)+'|'+JSON.stringify([query.projects,query.months,query.q,query.point,query.company,query.portfolioRevision,query.todayWindow])).digest('hex');
  if(query.revision&&query.revision!==revision)throw new Error('Stale activation selection');
  const clauses=['provider=?','is_tr=1'],args:(string|number)[]=[provider];
@@ -38,15 +39,15 @@ export function distributionReport(report:DatabaseSync,base:ActivationReport,met
  if(query.policy!=='manager')clauses.push('activation_visible(county,handset,contradictory)=1');
  const where=clauses.join(' AND '),monthWhere=query.months.length?`month IN (${query.months.map(()=>'?').join(',')})`:'0';
  const dimensions=report.prepare(`SELECT COALESCE(month,'') month,site,item_type,county,handset,contradictory,count,last_date FROM dimension_monthly WHERE ${where} ORDER BY month DESC,site`).all(...args) as Dimension[];
- const newCounts=():ActivationCounts=>({...emptyActivationCounts(),...(provider==='vodafone'?{eligible:0,ownRegion:0,otherRegion:0,unknownRegion:0,...(query.policy==='south'?{}:{ineligible:0,reasons:{}})}:{})});
+ const newCounts=():ActivationCounts=>({...emptyActivationCounts(),...(countLegacyEligibility?{eligible:0,ownRegion:0,otherRegion:0,unknownRegion:0,...(query.policy==='south'?{}:{ineligible:0,reasons:{}})}:{})});
  const labels=new Map(report.prepare('SELECT site,label FROM sites').all().map(r=>[String(r.site),String(r.label)])),history=new Map<string,ActivationCounts>(),agents=new Map<string,ActivationCounts>();
  const result={...base,available:JSON.parse(meta.sourceImports).some((i:unknown[])=>i[1]===provider),importedAt:meta.importedAt,latestDate:meta.latestDate||null,revision,rulesRevision:rules.revision,selectedMonths:query.months,builtAt:meta.builtAt,totals:newCounts(),history:[],months:[],sites:[]} as ActivationReport;
  for(const row of dimensions){
    if(!row.month)continue;
-   const h=history.get(row.month)||newCounts();add(h,row,rules,provider);history.set(row.month,h);
+   const h=history.get(row.month)||newCounts();add(h,row,rules,countLegacyEligibility);history.set(row.month,h);
    if(row.last_date&&(!result.latestDate||row.last_date>result.latestDate))result.latestDate=row.last_date;
    if(!query.months.includes(row.month))continue;
-   add(result.totals,row,rules,provider);const a=agents.get(row.site)||newCounts();add(a,row,rules,provider);agents.set(row.site,a);
+   add(result.totals,row,rules,countLegacyEligibility);const a=agents.get(row.site)||newCounts();add(a,row,rules,countLegacyEligibility);agents.set(row.site,a);
  }
  const monthlyProducts=new Map<string,ActivationProductBreakdown>(),monthlyCohorts=new Map<string,ActivationSimZero>();
  const blankProducts=():ActivationProductBreakdown=>({zero:0,credit:0,packages:0,other:0,unknown:0});
@@ -59,14 +60,14 @@ export function distributionReport(report:DatabaseSync,base:ActivationReport,met
      const group=rules.products[row.item_code];
      const key=row.item_type==='TELSIM'?'packages':group==='vodafone_0'?'zero':['vodafone_3','vodafone_5','vodafone_credit'].includes(group)?'credit':!row.item_code?'unknown':'other';
      products[key]+=row.count;const monthly=monthlyProducts.get(row.month)||blankProducts();monthly[key]+=row.count;monthlyProducts.set(row.month,monthly);
-     if(query.policy!=='south'){
+     if(countLegacyEligibility&&query.policy!=='south'){
        const assignment=rules.assignments.find(a=>a.siteCode.toUpperCase()===row.site.toUpperCase());
        const eligibility=vodafoneEligibility(row.county,row.handset,assignment?.territoryId||null,!!row.contradictory);
        if(!eligibility.eligible){const source=row.handset?.trim()||'-';sources[source]=(sources[source]||0)+row.count;}
      }
    }
    result.productBreakdown=products;
-   if(query.policy!=='south')result.ineligibleSourceTypes=sources;
+   if(countLegacyEligibility&&query.policy!=='south')result.ineligibleSourceTypes=sources;
  }
  result.history=[...history].map(([month,counts])=>({month,...counts}));result.months=result.history.map(({month,total})=>({month,total}));
  result.sites=[...agents].map(([site,counts])=>({site,label:site?(labels.get(site)||site):'Agent de verificat',...counts})).sort((a,b)=>b.total-a.total||a.site.localeCompare(b.site));

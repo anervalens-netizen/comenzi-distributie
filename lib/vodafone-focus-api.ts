@@ -8,6 +8,10 @@ export function isVodafoneFocusView(view: string | null) {
   return view === 'focus' || view === 'focus-export';
 }
 
+export function isVodafoneOverview(params: URLSearchParams) {
+  return (params.get('provider') || 'vodafone') === 'vodafone' && !params.get('view');
+}
+
 export function vodafoneFocusTerritory(params: URLSearchParams): Territory {
   const territory=params.get('focusTerritory') ?? 'sud';
   if (!focusTerritories.includes(territory as Territory)) fail(400, 'Teritoriul Focus este invalid.');

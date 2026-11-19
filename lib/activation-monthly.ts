@@ -5,7 +5,9 @@ export function activationMonthlyPoints(report:ActivationReport,months:string[],
   const entry=report.monthly?.find(p=>p.month===month),history=report.history.find(p=>p.month===month);
   const cohort=metric.startsWith('cohort:'),product=metric.startsWith('product:');
   const value=cohort?entry?.simZero?.[metric.slice(7) as 'distributed'|'activated'|'withoutReportedActivation']:product?entry?.productBreakdown?.[metric.slice(8) as 'zero'|'credit'|'packages'|'other'|'unknown']:(entry?.counts||history)?.[metric as keyof ActivationCounts];
-  const reported=report.available&&(cohort?entry?.simZero!==undefined:entry?.reported??!!history);
+  const reported=metric==='eligible'&&report.commissionPartial!==undefined
+    ? typeof value==='number'
+    : report.available&&(cohort?entry?.simZero!==undefined:entry?.reported??!!history);
   return {month,reported:reported&&typeof value==='number',total:typeof value==='number'?value:null};
  });
 }
