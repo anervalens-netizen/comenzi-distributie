@@ -1,6 +1,7 @@
 import {vodafoneFocusWorkbook} from './vodafone-focus-export';
 import {readFocusSlips} from './vodafone-focus-documents-node';
 import {vodafoneFocusReport} from './vodafone-focus-node';
+import {applyVodafoneFocusOverview} from './vodafone-focus-overview';
 import {distributionReport} from './activation-distribution-node';
 import {digiOperatorReported} from './digi-operator-source';
 import {activationFactsVersion} from './activation-semantics';
@@ -34,7 +35,7 @@ export function readActivations(month:string,sites:string[]|null,provider:Activa
     const meta=Object.fromEntries(report.prepare('SELECT key,value FROM report_meta').all().map(r=>[String(r.key),String(r.value)]));
     if(!['1','2','3','4'].includes(meta.version))throw new Error('Unsupported activation report');
     source=new DatabaseSync(resolve(directory,'activations.sqlite'),{readOnly:true});
-    if(query?.focus)source.exec('BEGIN');
+    if(query?.focus||query?.focusSummaries?.length)source.exec('BEGIN');
     const schema=String(source.prepare("SELECT value FROM activation_meta WHERE key='schema_version'").get()?.value);
     if(!['2','3'].includes(schema))throw new Error('Unsupported activation ledger');
     // Activation generation switches are atomic, but an application deploy can
@@ -48,9 +49,10 @@ export function readActivations(month:string,sites:string[]|null,provider:Activa
     if(['3','4'].includes(meta.version)&&meta.rules&&!query)throw new Error('Distribution rules required');
     if(query){
       if(meta.version!=='4')throw new Error('Distribution projection requires rebuild');
+      const focusLabels=()=>new Map(report.prepare('SELECT site,label FROM sites').all().map(row=>[String(row.site).toUpperCase(),String(row.label)]));
+      const focusGeneration=JSON.stringify([directory,meta.sourceGeneration,meta.sourceImports,meta.builtAt]);
       if(query.focus&&provider==='vodafone'&&schema==='3'){
-        const labels=new Map(report.prepare('SELECT site,label FROM sites').all().map(row=>[String(row.site).toUpperCase(),String(row.label)]));
-        const focus=vodafoneFocusReport(source,labels,sites,query,JSON.stringify([directory,meta.sourceGeneration,meta.sourceImports,meta.builtAt]),readFocusSlips());
+        const focus=vodafoneFocusReport(source,focusLabels(),sites,query,focusGeneration,readFocusSlips());
         const available=!!focus?.months.some(month=>month.coveredThrough);
         if(query.focus.exportAll&&available&&focus&&(!query.revision||query.revision===focus.revision)){
           return {...result,available,focus:{...focus,detail:undefined},focusWorkbook:vodafoneFocusWorkbook(focus)};
@@ -58,6 +60,16 @@ export function readActivations(month:string,sites:string[]|null,provider:Activa
         return {...result,available,focus};
       }
       const scoped=distributionReport(report,result,meta,sites,query);
+      if(provider==='vodafone'&&query.focusSummaries){
+        if(!query.focusSummaries.length) return applyVodafoneFocusOverview(scoped,[]);
+        if(schema!=='3') return {...scoped,commissionCoverage:'missing'};
+        const labels=focusLabels(),slips=readFocusSlips();
+        const summaries=query.focusSummaries.flatMap(focus=>{
+          const summary=vodafoneFocusReport(source!,labels,sites,{...query,focus},focusGeneration,slips);
+          return summary?[summary]:[];
+        });
+        return applyVodafoneFocusOverview(scoped,summaries);
+      }
       // The operator's certified distinct ICCIDs are the manager KPI. Matching
       // commercial evidence by exact ICCID gives TR agent attribution without
       // altering immutable provider/import records or expanding seller scope.

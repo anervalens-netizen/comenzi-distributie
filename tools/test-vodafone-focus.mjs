@@ -4,10 +4,10 @@ import {build} from 'esbuild';
 import {read, utils} from 'xlsx';
 
 const {outputFiles} = await build({
-  stdin: {resolveDir: process.cwd(), contents: "export * from './lib/vodafone-focus-node.ts'; export * from './lib/vodafone-focus.ts'; export * from './lib/vodafone-focus-export.ts';"},
+  stdin: {resolveDir: process.cwd(), contents: "export * from './lib/vodafone-focus-node.ts'; export * from './lib/vodafone-focus.ts'; export * from './lib/vodafone-focus-export.ts'; export * from './lib/vodafone-focus-overview.ts';"},
   bundle: true, platform: 'node', format: 'esm', write: false,
 });
-const {vodafoneFocusReport, focusCategory, focusAttribution, vodafoneFocusWorkbook} =
+const {vodafoneFocusReport, focusCategory, focusAttribution, vodafoneFocusWorkbook, applyVodafoneFocusOverview} =
   await import('data:text/javascript;base64,' + Buffer.from(outputFiles[0].text).toString('base64'));
 
 const ledger = new DatabaseSync(':memory:');
@@ -18,6 +18,16 @@ const rules = {revision: 'synthetic', assignments: [
 ]};
 const document = (site, date, quantity = 1) => ({site, date, quantity, tr: true, source: 'erp', reference: 'EXAMPLE', company: 'ExampleCo', clientCode: '12345', pointCode: 'P-1', itemCode: 'ITEM'});
 const serial = n => String(n).padStart(18, '0');
+const sharedHistory = ['sud','nord_a','nord_b'].map((territory,index) => {
+  const attributed = [2,3,0][index];
+  return {
+    territory,
+    sites: [{site: 'H', label: 'Synthetic historical warehouse', attributed, possibleStock: 0}],
+    months: [{month: '2026-10', coveredThrough: '2026-10-31', complete: true, attributed, possibleStock: 0}],
+  };
+});
+const overview = applyVodafoneFocusOverview({sites: [], totals: {}, history: []}, sharedHistory);
+assert.deepEqual([overview.totals.eligible,overview.sites[0].eligible,overview.history[0].eligible],[5,5,5]);
 const later = document('S', '2026-10-25');
 const prior = document('S', '2026-10-12');
 assert.equal(focusCategory('sud', 'AG', '', 'FREE_SIM', '3,00'), 'zero3');

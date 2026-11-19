@@ -7,7 +7,7 @@ import {importsCatalog,importsJobs,importsJob} from '@/lib/import-engine-runtime
 import {simVerification,simVerificationAccess} from '@/lib/sim-verification-api';
 import {operationalWriteGuard} from '@/lib/operational-write-guard';
 import {activationReport} from '@/lib/activation-api';
-import {isVodafoneFocusView} from '@/lib/vodafone-focus-api';
+import {isVodafoneFocusView,isVodafoneOverview} from '@/lib/vodafone-focus-api';
 import {timedResponse} from '@/lib/request-timing';
 import {usageAuth,usagePulse,usageReport} from '@/lib/usage-api';
 import { managerFilter } from '@/lib/manager-scope';
@@ -348,7 +348,13 @@ async function dispatch(req: Request) {
   if(path.join('/')==='activations'&&req.method==='GET'){
     const params=new URL(req.url).searchParams,view=params.get('view');
     const focus=isVodafoneFocusView(view);
-    const report=await activationReport(focus?user:readUser,params,focus?{revalidateFocus:()=>requireUser(req)}:undefined);
+    const overview=isVodafoneOverview(params);
+    const report=await activationReport(focus?user:readUser,params,focus||overview?{
+      revalidateFocus:async()=>{
+        const current=await requireUser(req);
+        return focus?current:nationalReadScope(current);
+      },
+    }:undefined);
     if(view==='focus-export'){
       if(report.provider!=='vodafone'||!report.focusWorkbook)fail(404,'Raportul Focus nu este disponibil în această selecție.');
       return response({workbook:report.focusWorkbook});

@@ -11,8 +11,8 @@ import {bucharestMonthKey} from './bucharest-month';
 import {readDistributionRules} from './distribution-config';
 import {assignmentFor,projectIds,type DistributionProject,type DistributionRules} from './distribution-rules';
 import type {ActivationPolicy,ActivationQuery} from './activation-distribution';
-import {isVodafoneFocusView,vodafoneFocusQuery,vodafoneFocusTerritory} from './vodafone-focus-api';
-import {focusProjects} from './vodafone-focus';
+import {isVodafoneFocusView,isVodafoneOverview,vodafoneFocusQuery,vodafoneFocusTerritory} from './vodafone-focus-api';
+import {focusProjects,focusSiteScope,focusTerritories} from './vodafone-focus';
 import type {User} from './types';
 async function activationScope(user:User,params:URLSearchParams,rules:DistributionRules|null){
  let sites:string[]|null;let policy:ActivationPolicy='manager';
@@ -88,6 +88,14 @@ export async function activationReport(user:User,params:URLSearchParams,internal
      if(query.projects.includes(focusProjects[territory])&&(policy==='manager'||rules.assignments.some(a=>a.userId===user.id&&a.territoryId===territory))){
        query.focus=await vodafoneFocusQuery(rules,territory,params,sites,user.role==='manager');
      }else return {month,provider,available:false,scoped:sites!==null,importedAt:'',latestDate:null,months:[],totals:emptyActivationCounts(),sites:[],history:[]};
+   }else if(isVodafoneOverview(params)){
+     const territories=focusTerritories.filter(territory=>query!.projects.includes(focusProjects[territory])&&
+       (policy==='manager'||rules.assignments.some(a=>a.userId===user.id&&a.territoryId===territory)));
+     const summaries=await Promise.all(territories.map(territory=>vodafoneFocusQuery(rules,territory,params,sites,user.role==='manager')));
+     query.focusSummaries=summaries.filter(summary=>{
+       const scope=focusSiteScope(rules,summary.territory,summary.historicalSites,sites,user.role==='manager');
+       return scope.regionalVisible||scope.visible.size>0;
+     });
    }
    if(view==='partners'){
      query.todayWindow=internal?.todayWindow||activationTodayWindow();
@@ -102,10 +110,18 @@ export async function activationReport(user:User,params:URLSearchParams,internal
    }
  }else if(['months','projects','view'].some(k=>params.has(k)))fail(503,'Proiecția pentru proiecte trebuie pregătită.');
  let result:ActivationReport;
- try{result=query?.focus?await readVodafoneFocus(month,sites,query):readActivations(month,sites,provider,query);}catch{fail(503,'Activările nu sunt disponibile momentan. Încearcă din nou mai târziu.');}
+ const focusQueries=query?.focus?[query.focus]:query?.focusSummaries??[];
+ try{
+   result=query&&focusQueries.length?await readVodafoneFocus(month,sites,query):readActivations(month,sites,provider,query);
+ }catch{
+   if(!query?.focusSummaries?.length)fail(503,'Activările nu sunt disponibile momentan. Încearcă din nou mai târziu.');
+   try{
+     result={...readActivations(month,sites,provider,{...query,focusSummaries:[]}),commissionCoverage:'unavailable'};
+   }catch{fail(503,'Activările nu sunt disponibile momentan. Încearcă din nou mai târziu.');}
+ }
  // Focus calculations can wait for a worker and yield while reading commerce.
  // Recheck the exact session and reproduce its authorized scope before publishing.
- if(query?.focus&&internal?.revalidateFocus){
+ if(query&&focusQueries.length&&internal?.revalidateFocus){
    const current=await internal.revalidateFocus();
    if(!canViewActivations(current))fail(403,'Secțiunea Activări nu este disponibilă pentru acest cont.');
    const currentRules=await readDistributionRules();
@@ -113,11 +129,11 @@ export async function activationReport(user:User,params:URLSearchParams,internal
    if(current.id!==user.id||current.profileVersion!==user.profileVersion||current.role!==user.role||
       current.managerScope!==user.managerScope||currentScope.policy!==policy||
       JSON.stringify(currentScope.sites)!==JSON.stringify(sites)||JSON.stringify(currentRules)!==JSON.stringify(rules)){
-     fail(409,'Accesul la raportul Focus s-a modificat. Reîncarcă raportul.');
+     fail(409,'Accesul la raport s-a modificat. Reîncarcă activările.');
    }
-   const currentQuery=await vodafoneFocusQuery(currentRules!,query.focus.territory,params,currentScope.sites,current.role==='manager');
-   if(JSON.stringify(currentQuery.historicalSites)!==JSON.stringify(query.focus.historicalSites)){
-     fail(409,'Configurarea gestiunilor istorice s-a modificat. Reîncarcă raportul.');
+   const currentQueries=await Promise.all(focusQueries.map(focus=>vodafoneFocusQuery(currentRules!,focus.territory,params,currentScope.sites,current.role==='manager')));
+   if(currentQueries.some((focus,index)=>JSON.stringify(focus.historicalSites)!==JSON.stringify(focusQueries[index].historicalSites))){
+     fail(409,'Configurarea gestiunilor istorice s-a modificat. Reîncarcă activările.');
    }
  }
  if(focusView&&query?.revision&&result.focus?.revision!==query.revision)fail(409,'Sursele Focus s-au modificat. Reîncarcă raportul.');
