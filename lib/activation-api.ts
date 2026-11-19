@@ -1,23 +1,48 @@
-import type {ActivationReport,CombinedActivationPartners} from './activation-types';
+import {emptyActivationCounts,type ActivationReport,type CombinedActivationPartners} from './activation-types';
 import {activationPartnerSummary} from './activation-partner-summary';
 import {activationPartnerSortKeys,compareActivationPartners,activationTodayWindow,type ActivationPartnerSort,type ActivationSortDirection} from './activation-partner-sort';
 import {partnerScope} from './partner-portfolio';
 import {normalizedCui} from './partner-company-identity';
 import {canViewActivations} from './activation-access';
-import {readActivations} from '#mobiup-activation-store';
+import {readActivations,readVodafoneFocus} from '#mobiup-activation-store';
 import {db,fail,isGlobalManager,sha256} from './server';
 import {managerFilter} from './manager-scope';
 import {bucharestMonthKey} from './bucharest-month';
 import {readDistributionRules} from './distribution-config';
-import {assignmentFor,projectIds,type DistributionProject} from './distribution-rules';
+import {assignmentFor,projectIds,type DistributionProject,type DistributionRules} from './distribution-rules';
 import type {ActivationPolicy,ActivationQuery} from './activation-distribution';
+import {isVodafoneFocusView,vodafoneFocusQuery,vodafoneFocusTerritory} from './vodafone-focus-api';
+import {focusProjects} from './vodafone-focus';
 import type {User} from './types';
-export async function activationReport(user:User,params:URLSearchParams,internal?:{allPartners:boolean;todayWindow?:{from:string;to:string}}):Promise<ActivationReport|CombinedActivationPartners>{
+async function activationScope(user:User,params:URLSearchParams,rules:DistributionRules|null){
+ let sites:string[]|null;let policy:ActivationPolicy='manager';
+ if(user.role==='manager'){
+   const filter=await managerFilter(user,params);
+   sites=filter?.siteCodes??null;
+   if(!isGlobalManager(user)&&!filter)sites=(await managerFilter(user,new URLSearchParams({managerId:user.id})))?.siteCodes||[];
+ }else{
+   if(['agentId','managerId','siteCode'].some(k=>params.has(k)))fail(403,'Filtrul nu este disponibil pentru acest cont.');
+   const code=user.siteCode?.trim();
+   const owners=code?(await db().prepare("SELECT id FROM users WHERE role='agent' AND UPPER(TRIM(site_code))=UPPER(?)").bind(code).all<{id:string}>()).results:[];
+   sites=code&&owners.length===1&&owners[0].id===user.id?[code]:[];
+   if(rules){const a=assignmentFor(rules,user.id,code||'');if(!a)sites=[];policy=a?.projectId==='vodafone_nord'?'north':a?.projectId==='vodafone_sud'?'south':'nonexclusive';}
+ }
+ if(params.has('siteCode')){
+   const site=params.get('siteCode')?.trim()||'';
+   sites=site&&(sites===null||sites.some(s=>s.toUpperCase()===site.toUpperCase()))?[site]:[];
+ }
+ return {sites,policy};
+}
+
+export async function activationReport(user:User,params:URLSearchParams,internal?:{allPartners?:boolean;todayWindow?:{from:string;to:string};revalidateFocus?:()=>Promise<User>}):Promise<ActivationReport|CombinedActivationPartners>{
  if(!canViewActivations(user))fail(403,'Secțiunea Activări nu este disponibilă pentru acest cont.');
- for(const key of params.keys())if(!['provider','month','months','projects','managerId','agentId','siteCode','view','point','company','q','page','revision','sort','direction'].includes(key))fail(400,'Filtru necunoscut.');
+ for(const key of params.keys())if(!['provider','month','months','projects','managerId','agentId','siteCode','view','point','company','q','page','revision','sort','direction','focusKind','focusSite','focusTerritory'].includes(key))fail(400,'Filtru necunoscut.');
  const sort=params.get('sort')||'total',direction=params.get('direction')||'desc';
  if(!(activationPartnerSortKeys as readonly string[]).includes(sort)||!['asc','desc'].includes(direction))fail(400,'Sortare invalidă.');
  const provider=params.get('provider')||'vodafone';
+ const focusView=isVodafoneFocusView(params.get('view'));
+ if(focusView&&provider!=='vodafone')fail(400,'Focus este disponibil pentru Vodafone.');
+ if(!focusView&&(params.has('focusKind')||params.has('focusSite')||params.has('focusTerritory')))fail(400,'Filtru Focus necunoscut.');
  if(provider==='both'){
    if(params.get('view')!=='partners')fail(400,'Vedere invalidă pentru ambii operatori.');
    const rawPage=params.get('page')||'0';if(!/^\d{1,6}$/.test(rawPage))fail(400,'Pagină invalidă.');
@@ -48,30 +73,22 @@ export async function activationReport(user:User,params:URLSearchParams,internal
  const values=(key:string,fallback:string[])=>params.has(key)?[...new Set(params.getAll(key).flatMap(v=>v.split(',')).filter(Boolean))].sort():fallback;
  const months=values('months',[month]),projects=values('projects',[...projectIds]);
  if(months.length>36||months.some(m=>!validMonth(m))||projects.some(p=>!(projectIds as readonly string[]).includes(p)))fail(400,'Selecția perioadei sau proiectelor este invalidă.');
- let sites:string[]|null;let policy:ActivationPolicy='manager';
  const rules=await readDistributionRules();
- if(user.role==='manager'){
-   const filter=await managerFilter(user,params);
-   sites=filter?.siteCodes??null;
-   if(!isGlobalManager(user)&&!filter)sites=(await managerFilter(user,new URLSearchParams({managerId:user.id})))?.siteCodes||[];
- }else{
-   if(['agentId','managerId','siteCode'].some(k=>params.has(k)))fail(403,'Filtrul nu este disponibil pentru acest cont.');
-   const code=user.siteCode?.trim();
-   const owners=code?(await db().prepare("SELECT id FROM users WHERE role='agent' AND UPPER(TRIM(site_code))=UPPER(?)").bind(code).all<{id:string}>()).results:[];
-   sites=code&&owners.length===1&&owners[0].id===user.id?[code]:[];
-   if(rules){const a=assignmentFor(rules,user.id,code||'');if(!a)sites=[];policy=a?.projectId==='vodafone_nord'?'north':a?.projectId==='vodafone_sud'?'south':'nonexclusive';}
- }
- if(params.has('siteCode')){
-   const site=params.get('siteCode')?.trim()||'';
-   sites=site&&(sites===null||sites.some(s=>s.toUpperCase()===site.toUpperCase()))?[site]:[];
- }
+ const {sites,policy}=await activationScope(user,params,rules);
  let query:ActivationQuery|undefined;
  if(rules){
    const view=params.get('view')||'';
-   if(view&&!['partners','detail','export'].includes(view))fail(400,'Vedere invalidă.');
+   if(view&&!focusView&&!['partners','detail','export'].includes(view))fail(400,'Vedere invalidă.');
    const page=params.get('page')||'0';if(!/^\d{1,6}$/.test(page))fail(400,'Pagină invalidă.');
    for(const k of ['point','company','q','revision'])if((params.get(k)?.length||0)>500)fail(400,'Filtru prea lung.');
    query={allPartners:internal?.allPartners,rules,policy,months,projects:projects as DistributionProject[],view:view as ActivationQuery['view'],point:params.get('point')||undefined,company:params.get('company')||undefined,q:params.get('q')||'',page:Number(page),revision:params.get('revision')||undefined};
+   if(focusView){
+     query.view=undefined;
+     const territory=vodafoneFocusTerritory(params);
+     if(query.projects.includes(focusProjects[territory])&&(policy==='manager'||rules.assignments.some(a=>a.userId===user.id&&a.territoryId===territory))){
+       query.focus=await vodafoneFocusQuery(rules,territory,params,sites,user.role==='manager');
+     }else return {month,provider,available:false,scoped:sites!==null,importedAt:'',latestDate:null,months:[],totals:emptyActivationCounts(),sites:[],history:[]};
+   }
    if(view==='partners'){
      query.todayWindow=internal?.todayWindow||activationTodayWindow();
      const scope=partnerScope(user);
@@ -84,5 +101,25 @@ export async function activationReport(user:User,params:URLSearchParams,internal
      query.portfolioRevision=sha256(JSON.stringify(query.portfolio));
    }
  }else if(['months','projects','view'].some(k=>params.has(k)))fail(503,'Proiecția pentru proiecte trebuie pregătită.');
- try{return readActivations(month,sites,provider,query);}catch{fail(503,'Activările nu sunt disponibile momentan. Încearcă din nou mai târziu.');}
+ let result:ActivationReport;
+ try{result=query?.focus?await readVodafoneFocus(month,sites,query):readActivations(month,sites,provider,query);}catch{fail(503,'Activările nu sunt disponibile momentan. Încearcă din nou mai târziu.');}
+ // Focus calculations can wait for a worker and yield while reading commerce.
+ // Recheck the exact session and reproduce its authorized scope before publishing.
+ if(query?.focus&&internal?.revalidateFocus){
+   const current=await internal.revalidateFocus();
+   if(!canViewActivations(current))fail(403,'Secțiunea Activări nu este disponibilă pentru acest cont.');
+   const currentRules=await readDistributionRules();
+   const currentScope=await activationScope(current,params,currentRules);
+   if(current.id!==user.id||current.profileVersion!==user.profileVersion||current.role!==user.role||
+      current.managerScope!==user.managerScope||currentScope.policy!==policy||
+      JSON.stringify(currentScope.sites)!==JSON.stringify(sites)||JSON.stringify(currentRules)!==JSON.stringify(rules)){
+     fail(409,'Accesul la raportul Focus s-a modificat. Reîncarcă raportul.');
+   }
+   const currentQuery=await vodafoneFocusQuery(currentRules!,query.focus.territory,params,currentScope.sites,current.role==='manager');
+   if(JSON.stringify(currentQuery.historicalSites)!==JSON.stringify(query.focus.historicalSites)){
+     fail(409,'Configurarea gestiunilor istorice s-a modificat. Reîncarcă raportul.');
+   }
+ }
+ if(focusView&&query?.revision&&result.focus?.revision!==query.revision)fail(409,'Sursele Focus s-au modificat. Reîncarcă raportul.');
+ return result;
 }

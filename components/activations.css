@@ -3,3 +3,19 @@
 .activation-source-date{font-size:12px!important}.activation-coverage-warning{display:block;background:#fff7e7;border-radius:6px;color:#806025;font-size:12px;padding:9px 11px;line-height:1.5}.activation-eligibility{font-size:13px}.activation-eligibility>div:first-child dd{color:#246542;font-weight:700}.activation-sim-zero{background:#f5f7f9;border:1px solid #e5e9ee;border-radius:8px;padding:12px 14px;margin:16px 0}.activation-sim-zero h3{font-size:13px;margin:0 0 8px}.activation-sim-zero dl{font-size:12px}.activation-sim-zero>small{font-size:10px;color:#7c8790}.activation-operator>.commerce-details{margin-top:2px}.activation-operator>.commerce-details h3{font-size:13px;margin-top:12px}
 
 button.activation-primary{display:flex;flex-direction:column;width:100%;border:0;background:transparent;color:inherit;text-align:left;font:inherit;cursor:pointer}.activation-trend-value{padding:2px 4px;border:0;border-radius:4px;background:transparent;color:inherit;font:inherit;cursor:pointer}.activation-trend-value:hover,button.activation-primary:hover{background:#fff3f4}.activation-trend-value:focus-visible,button.activation-primary:focus-visible{outline:2px solid #df2637;outline-offset:3px}
+
+.vodafone-focus {
+  display: grid;
+  gap: .65rem;
+  min-width: 0;
+  margin-block: .65rem;
+  padding-block-end: .8rem;
+  border-bottom: 1px solid var(--border);
+}
+.vodafone-focus .activation-eligibility {
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+}
+.vodafone-focus .distribution-table th button,
+.vodafone-focus .distribution-table td button {
+  white-space: normal;
+}

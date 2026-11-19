@@ -9,6 +9,7 @@ import {OperatorLogo} from './distribution-cards';
 import {MonthlyActivationsDialog} from './monthly-activations';
 import {activationMonthlyPoints,type ActivationTrendMetric} from '@/lib/activation-monthly';
 import {ActivationPartners} from './activation-partners';
+import {VodafoneFocusPanel} from './vodafone-focus';
 import './activations.css';
 const number=(n:number)=>n.toLocaleString('ro-RO');
 function ActivationMetric({label,value,network,onClick}:{label:string;value:number;network:string;onClick:()=>void}){const id=useId();return <div><dt>{label}</dt><dd><button type="button" className="activation-trend-value" aria-label={'Evoluție lunară · '+label+' · '+network} aria-describedby={id} onClick={onClick}><span id={id}>{number(value)}</span><small aria-hidden="true"> ↗</small></button></dd></div>;}
@@ -33,6 +34,7 @@ export function ActivationOperatorCard({userId,query,provider,reload}:{userId:st
    <details className="commerce-details"><summary>Pe agent și istoric lunar</summary><div className="distribution-table-scroll"><table className="distribution-table"><thead><tr><th>Agent / TR</th><th>Total</th></tr></thead><tbody>{data.sites.map(site=><tr key={site.site}><th>{site.site?site.label:'Agent de verificat'}</th><td>{number(site.total)}</td></tr>)}</tbody></table><table className="distribution-table"><thead><tr><th>Luna</th><th>Total</th></tr></thead><tbody>{data.history.map(month=><tr key={month.month}><th>{month.month}</th><td>{number(month.total)}</td></tr>)}</tbody></table></div></details>
    {trend&&<MonthlyActivationsDialog key={trend.metric} title={trend.label+' · '+network} cohort={trend.metric.startsWith('cohort:')} points={activationMonthlyPoints(data,data.selectedMonths||params.get('months')?.split(',').filter(Boolean)||[data.month],trend.metric)} onClose={()=>setTrend(null)}/>}
   </>}
+  {provider==='vodafone'&&<VodafoneFocusPanel userId={userId} query={search} reload={reload}/>}
  </article>;
 }
 export function ActivationsPanel({userId,scopeQuery='',scopeLabel='Activările mele',compact=false,embedded=false,distributionConfigured=false,refreshVersion=0}:{userId:string;scopeQuery?:string;scopeLabel?:string;compact?:boolean;embedded?:boolean;distributionConfigured?:boolean;refreshVersion?:number}){
