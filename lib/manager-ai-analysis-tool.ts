@@ -33,7 +33,7 @@ export function managerAiAnalysisTool(tables:readonly string[]){
           properties:{table:{type:'string',enum:tables},fromMonth:month,toMonth:month},
           required:['table','fromMonth','toMonth'],
         }},
-        files:{type:'array',description:'Numele fișierelor din conversația autorizată ori din pașii de analiză anteriori.',items:{type:'string'}},
+        files:{type:'array',description:'Numele distincte din lista încărcărilor autorizate ori selectionName din pașii anteriori.',items:{type:'string'}},
       },
       required:['language','code','tables','files'],
     },

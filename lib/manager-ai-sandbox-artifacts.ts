@@ -36,14 +36,20 @@ function valuesOnlyWorkbook(bytes:Uint8Array) {
   return new Uint8Array(write(output,{type:'array',bookType:'xlsx',compression:true}));
 }
 
+function delimitedCell(value:Value) {
+  // Raw parsing keeps input formulas inert. Recover only whole signed decimal
+  // literals without converting them through Number, which can lose precision.
+  if(typeof value==='string'&&/^[+-](?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$/.test(value))return value;
+  return csvCell(typeof value==='boolean'?(value?'true':'false'):value);
+}
+
 function sanitizeDelimited(bytes:Uint8Array, tabSeparated:boolean) {
   const text=strictText(bytes);
   const separator=tabSeparated?'\t':csvSeparator(text);
   const input=read(text,{type:'string',dense:true,raw:true,FS:separator,cellFormula:false});
   if(input.SheetNames.length!==1)throw Error('Invalid delimited export');
   const values=worksheetValues(input.Sheets[input.SheetNames[0]]);
-  return new TextEncoder().encode('\uFEFF'+values.map(row=>row.map(value=>
-    csvCell(typeof value==='boolean'?(value?'true':'false'):value)).join(separator)).join('\r\n')+'\r\n');
+  return new TextEncoder().encode('\uFEFF'+values.map(row=>row.map(delimitedCell).join(separator)).join('\r\n')+'\r\n');
 }
 
 /** Convert generated document downloads to inert values and keep original binary media only after runner validation. */
