@@ -3,7 +3,7 @@
 import {useEffect,useRef,useState} from 'react';
 import {api,errorMessage} from '@/lib/client-api';
 import {bucharestMonthKey} from '@/lib/bucharest-month';
-import {firstVodafoneBonusMonth,vodafoneBonusReasonLabels,type VodafoneBonusReport} from '@/lib/vodafone-bonus-types';
+import {filterVodafoneBonusRows,firstVodafoneBonusMonth,vodafoneBonusReasonLabels,type VodafoneBonusReport} from '@/lib/vodafone-bonus-types';
 import './vodafone-bonus.css';
 
 type View = 'points' | 'documents' | 'unresolved';
@@ -43,7 +43,7 @@ export function VodafoneBonus({scopeQuery}: {scopeQuery: string}) {
       .catch(error=>{if(!request.signal.aborted)setRead({key,error:errorMessage(error)});});
     return ()=>request.abort();
   },[key,reload]);
-  useEffect(()=>()=>exportRequest.current?.abort(),[key]);
+  useEffect(()=>()=>exportRequest.current?.abort(),[key,find]);
 
   async function download(all: boolean) {
     const request = new AbortController();
@@ -54,6 +54,7 @@ export function VodafoneBonus({scopeQuery}: {scopeQuery: string}) {
     const params = new URLSearchParams(key);
     params.set('view','export');
     if (all) params.set('all','1');
+    if (find.trim()) params.set('q',find.trim());
     if (report?.revision) params.set('revision',report.revision);
     try {
       const {workbook} = await api<{workbook: string}>('vodafone/bonuses?'+params,'GET',undefined,request.signal);
@@ -71,11 +72,7 @@ export function VodafoneBonus({scopeQuery}: {scopeQuery: string}) {
       if (exportRequest.current===request) setExporting(false);
     }
   }
-  const query = find.toLocaleLowerCase('ro').trim();
-  const matches = (...options: (string|null)[]) => options.some(item=>item?.toLocaleLowerCase('ro').includes(query));
-  const points = report?.points.filter(row=>matches(row.partner,row.pointCode,row.cui,...row.sites.map(site=>site.site))) || [];
-  const documents = report?.documents.filter(row=>matches(row.partner,row.pointCode,row.cui,row.number,...row.sites)) || [];
-  const unresolved = report?.unresolved.filter(row=>matches(row.partner,row.cui,row.site)) || [];
+  const {points,documents,unresolved} = report ? filterVodafoneBonusRows(report,find) : {points:[],documents:[],unresolved:[]};
   const selectedRows = view==='points' ? points : view==='documents' ? documents : unresolved;
 
   return <section className="panel distribution-card vodafone-bonus" aria-label="Registru bonus Vodafone">
@@ -84,22 +81,23 @@ export function VodafoneBonus({scopeQuery}: {scopeQuery: string}) {
       {report && <label>Luna <select value={month} onChange={event=>{setChoice(event.target.value);setLimit(50);}}>
         {[...report.months].reverse().map(row=><option key={row.month} value={row.month}>{monthLabel(row.month)}</option>)}
       </select></label>}
-      <button type="button" className="secondary" disabled={!report || exporting} onClick={()=>void download(false)}>Excel luna selectată</button>
-      <button type="button" className="secondary" disabled={!report || exporting} onClick={()=>void download(true)}>Excel tot istoricul</button>
+      <button type="button" className="secondary" disabled={!report || exporting} onClick={()=>void download(false)}>{find.trim()?'Excel selecția din lună':'Excel luna selectată'}</button>
+      <button type="button" className="secondary" disabled={!report || exporting} onClick={()=>void download(true)}>{find.trim()?'Excel selecția din istoric':'Excel tot istoricul'}</button>
       <button type="button" className="secondary" onClick={()=>{setRead(undefined);setReload(x=>x+1);}}>Reîncarcă</button>
     </div>
     {visible?.error && <p className="error-banner" role="alert">{visible.error}</p>}
     {exportError && <p className="error-banner" role="alert">{exportError}</p>}
     {!visible && <output className="commerce-loading">Se încarcă registrul Vodafone…</output>}
     {coverage && <>
-      <p className="commerce-source">{coverage.publishedOn ? 'Raport final din '+dateLabel(coverage.publishedOn) : 'Raportul final nu este disponibil'} · Date până la {dateLabel(coverage.sourceThrough)} · {count(coverage.activations)} activări partenere · {count(coverage.unresolvedActivations)} fără franciză identificată</p>
+      <p className="commerce-source">{coverage.publishedOn ? 'Raport final din '+dateLabel(coverage.publishedOn) : 'Raportul final nu este disponibil'} · Date până la {dateLabel(coverage.sourceThrough)} · {count(coverage.activations)} activări în portofoliu · {count(coverage.unresolvedActivations)} fără franciză identificată</p>
       {!report?.fiscalKindsComplete && <p className="commerce-source-warning">Tipul fiscal lipsește pentru unele documente. Acestea pot apărea în simulare când vânzarea sau factura la zero se reconciliază între surse.</p>}
+      <p className="commerce-source">Simularea SIM 0 pornește cu sold zero la 1 iunie 2026. Restanțele anterioare nu sunt incluse.</p>
       {report?.points.some(row=>row.partial) && <p className="commerce-source-warning">Punctele comune cu alte gestiuni arată numai contribuțiile accesibile. Sumele pe punct apar când selecția include întreaga lui activitate.</p>}
       <div className="vodafone-bonus-actions">
         <div className="vodafone-bonus-views" aria-label="Vederi registru">
           {(['points','documents','unresolved'] as const).map(item=><button type="button" className="secondary" aria-pressed={view===item} key={item} onClick={()=>{setView(item);setLimit(50);}}>{labels[item]}</button>)}
         </div>
-        <input aria-label="Caută în registru" type="search" placeholder="Partener, franciză, CUI sau TR" value={find} onChange={event=>{setFind(event.target.value);setLimit(50);}}/>
+        <input aria-label="Caută în registru" type="search" maxLength={180} placeholder="Partener, franciză, CUI sau TR" value={find} onChange={event=>{setFind(event.target.value);setLimit(50);}}/>
       </div>
       <div className="distribution-table-scroll">
         {view==='points' && <table className="distribution-table"><thead><tr>

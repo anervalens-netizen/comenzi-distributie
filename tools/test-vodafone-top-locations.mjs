@@ -9,9 +9,11 @@ import { parseVodafoneTopLocations } from '../lib/vodafone-top-locations-schema.
 const dir = mkdtempSync(join(tmpdir(), 'synthetic-vodafone-targets-'));
 try {
   const workbook = join(dir, 'fixture.xlsx'), output = join(dir, 'targets.json');
-  function write(rows) {
+  function write(rows, format) {
     const book = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet(rows), 'Targets');
+    const sheet = XLSX.utils.aoa_to_sheet(rows);
+    if (format) sheet.C2.z = format;
+    XLSX.utils.book_append_sheet(book, sheet, 'Targets');
     writeFileSync(workbook, XLSX.write(book, { type: 'buffer', bookType: 'xlsx' }));
   }
   const run = (month, path, extra = []) => spawnSync(process.execPath, [
@@ -34,6 +36,18 @@ try {
   assert.deepEqual(JSON.parse(readFileSync(next, 'utf8')).rows.map(r => [r.month, r.bonus]), [
     ['2026-10', null], ['2026-10', null], ['2026-11', 3], ['2026-11', 0],
   ]);
+  for (const column of ['Bonus (lei)', 'Bonus', 'Valoare bonus SIM', 'Bonus SIM (%)', 'Bonus SIM €']) {
+    write([['Cod Franciză','Target',column],['X-01',6,50]]);
+    assert.match(run('2026-10',join(dir,'ambiguous.json'),['--bonus-units-column',column]).stderr,/bonus unit/i,column);
+  }
+  write([['Cod Franciză','Target','Bonus (lei)'],['X-01',6,50]]);
+  const onlyTarget=join(dir,'target-only.json');
+  assert.equal(run('2026-10',onlyTarget).status,0);
+  assert.equal(JSON.parse(readFileSync(onlyTarget)).rows[0].bonus,null);
+  write([['Cod Franciză','Target','Nr. SIM 5 EUR'],['X-01',6,3]]);
+  assert.equal(run('2026-10',join(dir,'denomination.json'),['--bonus-units-column','Nr. SIM 5 EUR']).status,0);
+  write([['Cod Franciză','Target','Bonus (bucăți)'],['X-01',6,50]],'0 "lei"');
+  assert.match(run('2026-10',join(dir,'currency.json'),['--bonus-units-column','Bonus (bucăți)']).stderr,/bonus unit/i);
   write([['Cod Franciză', 'Target'], [' X-01 ', 2], ['x-01', 3]]);
   assert.match(run('2026-10', join(dir, 'duplicate.json')).stderr, /Duplicate work point/);
   write([['Cod Franciză', 'Target'], ['X-01', 1.5]]);

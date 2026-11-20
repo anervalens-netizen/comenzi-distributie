@@ -5,6 +5,7 @@ import {pathToFileURL} from 'node:url';
 import {join} from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
 import {build} from 'esbuild';
+import XLSX from 'xlsx';
 
 const root=mkdtempSync(join(tmpdir(),'synthetic-vodafone-bonus-'));
 try {
@@ -88,6 +89,24 @@ try {
     assert.equal(unresolvedCampaign.documents[0].allocations[0].month,'2026-07');
     assert.equal(unresolvedCampaign.points.find(row=>row.month==='2026-07'&&row.pointCode==='P1').remaining,null);
   }
+  // Without the earlier campaign statement, a later balance cannot be certified.
+  const incompleteCampaign={
+    ...input,
+    activation:[act('2026-06','A','P1'),...input.activation.filter(row=>row.month==='2026-07')],
+    targets:[input.targets[1]],
+  };
+  const gap=vodafoneBonusLedger(incompleteCampaign,null,null);
+  const july=gap.points.find(row=>row.month==='2026-07' && row.pointCode==='P1');
+  assert.equal(july.remaining,null,'missing June campaign must keep the July balance unconfirmed');
+  assert.equal(july.simulatedApplied,2,'SIM 0 simulation remains available');
+  assert.ok(gap.documents.every(row=>row.allocations.every(allocation=>allocation.status==='simulation')));
+
+  const filteredBook=XLSX.read(vodafoneBonusWorkbook(vodafoneBonusLedger(input,null,null),'  p2 '),{type:'base64'});
+  const rows=name=>XLSX.utils.sheet_to_json(filteredBook.Sheets[name],{header:1}).slice(1);
+  assert.deepEqual(rows('Registru pe punct').map(row=>row[1]),['P2'],'Excel honors the same search as the register');
+  assert.equal(rows('Documente').length,0);
+  assert.equal(rows('Stingeri FIFO').length,0);
+  assert.equal(rows('Luni').length,input.coverage.length,'coverage always describes the selected portfolio');
   const provisional={...input,documents:[doc('2026-08-08','pending','P1',3,'document-unknown')],coverage:input.coverage.map(m=>({...m,publishedOn:null}))};
   const p=vodafoneBonusLedger(provisional,null,null);
   assert.equal(p.fiscalKindsComplete,false);

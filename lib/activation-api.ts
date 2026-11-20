@@ -43,30 +43,8 @@ export async function activationReport(user:User,params:URLSearchParams,internal
  const focusView=isVodafoneFocusView(params.get('view'));
  if(focusView&&provider!=='vodafone')fail(400,'Focus este disponibil pentru Vodafone.');
  if(!focusView&&(params.has('focusKind')||params.has('focusSite')||params.has('focusTerritory')))fail(400,'Filtru Focus necunoscut.');
- if(provider==='both'){
-   if(params.get('view')!=='partners')fail(400,'Vedere invalidă pentru ambii operatori.');
-   const rawPage=params.get('page')||'0';if(!/^\d{1,6}$/.test(rawPage))fail(400,'Pagină invalidă.');
-   const page=Number(rawPage),operators:CombinedActivationPartners['operators']={},groups=new Map<string,import('./activation-types').ActivationPartner&{vodafone:number;digi:number}>();
-   const revisions:string[]=[],recentWindow=activationTodayWindow();
-   const managerIds=(process.env.MOBIUP_ACTIVATIONS_VODAFONE_ONLY_MANAGER_IDS||'').split(',').map(id=>id.trim()).filter(Boolean);
-   const showDigi=user.role==='manager'?!managerIds.includes(user.id):!managerIds.length||!await db().prepare('SELECT 1 ok FROM manager_agents WHERE agent_id=? AND manager_id IN (SELECT value FROM json_each(?)) LIMIT 1').bind(user.id,JSON.stringify(managerIds)).first();
-   for(const network of ['vodafone','digi'] as const){
-     const q=new URLSearchParams(params);q.set('provider',network);q.set('page','0');q.delete('revision');
-     try{
-       const report=await activationReport(user,q,{allPartners:true,todayWindow:recentWindow});
-       if(report.provider==='both')throw new Error('Invalid network report');
-       operators[network]={available:report.available,latestDate:report.latestDate,importedAt:report.importedAt};revisions.push(report.revision||'');
-       for(const p of report.partners?.rows||[]){const existing=groups.get(p.key)||{...p,total:0,recentToday:0,vodafone:0,digi:0,recent:{'7':0,'14':0,'30':0}};existing.total+=p.total;existing.recentToday=(existing.recentToday||0)+(p.recentToday||0);existing[network]+=p.total;for(const days of ['7','14','30'])existing.recent[days]+=p.recent[days]||0;if(p.lastDate&&(!existing.lastDate||p.lastDate>existing.lastDate))existing.lastDate=p.lastDate;groups.set(p.key,existing);}
-     }catch{operators[network]={available:false,error:'Datele operatorului nu sunt disponibile.'};revisions.push('unavailable');}
-   }
-   const revision=sha256(JSON.stringify([revisions,user.id,params.get('months'),params.get('projects'),params.get('q'),sort,direction,recentWindow,showDigi]));
-   if(params.has('revision')&&params.get('revision')!==revision)fail(409,'Proiecția s-a modificat. Reîncarcă lista.');
-   const activePortfolio=new Set([...groups.values()].filter(p=>(p.total>0||(p.recentToday||0)>0)&&p.portfolioId).map(p=>p.portfolioId));
-   const values=[...groups.values()].filter(p=>p.total>0||(p.recentToday||0)>0||!p.portfolioId||!activePortfolio.has(p.portfolioId)).sort((a,b)=>compareActivationPartners(a,b,sort as ActivationPartnerSort,direction as ActivationSortDirection));
-   return {provider:'both' as const,showDigi,recentWindow,operators,revision,partners:{...activationPartnerSummary(values),rows:values.slice(page*50,(page+1)*50),total:values.length,page,hasMore:(page+1)*50<values.length}};
- }
-
- if(provider!=='vodafone'&&provider!=='digi')fail(400,'Alege un operator valid.');
+ if(provider==='both'&&params.get('view')!=='partners')fail(400,'Vedere invalidă pentru ambii operatori.');
+ if(provider!=='both'&&provider!=='vodafone'&&provider!=='digi')fail(400,'Alege un operator valid.');
  const month=params.get('month')||bucharestMonthKey(new Date());
  const validMonth=(m:string)=>/^20\d{2}-(0[1-9]|1[0-2])$/.test(m);
  if(!validMonth(month))fail(400,'Alege o lună validă.');
@@ -87,7 +65,7 @@ export async function activationReport(user:User,params:URLSearchParams,internal
      const territory=vodafoneFocusTerritory(params);
      if(query.projects.includes(focusProjects[territory])&&(policy==='manager'||rules.assignments.some(a=>a.userId===user.id&&a.territoryId===territory))){
        query.focus=await vodafoneFocusQuery(rules,territory,params,sites,user.role==='manager');
-     }else return {month,provider,available:false,scoped:sites!==null,importedAt:'',latestDate:null,months:[],totals:emptyActivationCounts(),sites:[],history:[]};
+     }else return {month,provider:'vodafone',available:false,scoped:sites!==null,importedAt:'',latestDate:null,months:[],totals:emptyActivationCounts(),sites:[],history:[]};
    }else if(!internal?.omitFocus&&isVodafoneOverview(params)){
      const territories=focusTerritories.filter(territory=>query!.projects.includes(focusProjects[territory])&&
        (policy==='manager'||rules.assignments.some(a=>a.userId===user.id&&a.territoryId===territory)));
@@ -109,6 +87,10 @@ export async function activationReport(user:User,params:URLSearchParams,internal
      query.portfolioRevision=sha256(JSON.stringify(query.portfolio));
    }
  }else if(['months','projects','view'].some(k=>params.has(k)))fail(503,'Proiecția pentru proiecte trebuie pregătită.');
+ if(provider==='both'){
+   if(!query)fail(503,'Proiecția pentru proiecte trebuie pregătită.');
+   return combinedPartners(user,params,month,sites,query,sort as ActivationPartnerSort,direction as ActivationSortDirection);
+ }
  let result:ActivationReport;
  const focusQueries=query?.focus?[query.focus]:query?.focusSummaries??[];
  try{
@@ -137,4 +119,58 @@ export async function activationReport(user:User,params:URLSearchParams,internal
  }
  if(focusView&&query?.revision&&result.focus?.revision!==query.revision)fail(409,'Sursele Focus s-au modificat. Reîncarcă raportul.');
  return result;
+}
+
+// Compute both operators for the same authorized portfolio and reporting window.
+async function combinedPartners(
+  user: User, params: URLSearchParams, month: string, sites: string[] | null,
+  query: ActivationQuery, sort: ActivationPartnerSort, direction: ActivationSortDirection,
+): Promise<CombinedActivationPartners> {
+  const page = query.page || 0;
+  const recentWindow = query.todayWindow ?? activationTodayWindow();
+  const networkQuery = {...query, page: 0, revision: undefined, allPartners: true, todayWindow: recentWindow};
+  const operators: CombinedActivationPartners['operators'] = {};
+  const groups = new Map<string, CombinedActivationPartners['partners']['rows'][number]>();
+  const revisions: string[] = [];
+  const managerIds = (process.env.MOBIUP_ACTIVATIONS_VODAFONE_ONLY_MANAGER_IDS || '').split(',').map(id => id.trim()).filter(Boolean);
+  const showDigi = user.role === 'manager' ? !managerIds.includes(user.id) : !managerIds.length ||
+    !await db().prepare('SELECT 1 ok FROM manager_agents WHERE agent_id=? AND manager_id IN (SELECT value FROM json_each(?)) LIMIT 1')
+      .bind(user.id, JSON.stringify(managerIds)).first();
+
+  for (const network of ['vodafone', 'digi'] as const) {
+    let report: ActivationReport;
+    try {
+      report = readActivations(month, sites, network, networkQuery);
+    } catch {
+      operators[network] = {available: false, error: 'Datele operatorului nu sunt disponibile.'};
+      revisions.push('unavailable');
+      continue;
+    }
+    operators[network] = {available: report.available, latestDate: report.latestDate, importedAt: report.importedAt};
+    revisions.push(report.revision || '');
+    for (const point of report.partners?.rows || []) {
+      const entry = groups.get(point.key) ?? {
+        ...point, total: 0, recentToday: 0, vodafone: 0, digi: 0, recent: {'7': 0, '14': 0, '30': 0},
+      };
+      entry.total += point.total;
+      entry.recentToday = (entry.recentToday || 0) + (point.recentToday || 0);
+      entry[network] += point.total;
+      for (const days of ['7', '14', '30']) entry.recent[days] += point.recent[days] || 0;
+      if (point.lastDate && (!entry.lastDate || point.lastDate > entry.lastDate)) entry.lastDate = point.lastDate;
+      groups.set(point.key, entry);
+    }
+  }
+  const revision = sha256(JSON.stringify([revisions,user.id,params.get('months'),params.get('projects'),params.get('q'),sort,direction,recentWindow,showDigi]));
+  if (params.has('revision') && params.get('revision') !== revision) fail(409,'Proiecția s-a modificat. Reîncarcă lista.');
+
+  const allPoints = [...groups.values()];
+  const hasActivations = (point: typeof allPoints[number]) => point.total > 0 || (point.recentToday || 0) > 0;
+  const represented = new Set(allPoints.filter(hasActivations).map(point => point.portfolioId).filter(Boolean));
+  const points = allPoints.filter(point => hasActivations(point) || !point.portfolioId || !represented.has(point.portfolioId));
+  points.sort((a, b) => compareActivationPartners(a, b, sort, direction));
+  return {
+    provider: 'both', showDigi, recentWindow, operators, revision,
+    partners: {...activationPartnerSummary(points), rows: points.slice(page * 50, (page + 1) * 50),
+      total: points.length, page, hasMore: (page + 1) * 50 < points.length},
+  };
 }
