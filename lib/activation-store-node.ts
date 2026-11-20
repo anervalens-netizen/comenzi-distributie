@@ -72,9 +72,6 @@ export function readActivations(month:string,sites:string[]|null,provider:Activa
         });
         return applyVodafoneFocusOverview(scoped,summaries);
       }
-      // The operator's certified distinct ICCIDs are the manager KPI. Matching
-      // commercial evidence by exact ICCID gives TR agent attribution without
-      // altering immutable provider/import records or expanding seller scope.
       if(provider==='digi'){
         for(const entry of scoped.monthly||[])if(entry.reported)entry.source='internal';
         for(const entry of scoped.history)entry.source='internal';
@@ -86,7 +83,6 @@ export function readActivations(month:string,sites:string[]|null,provider:Activa
           scoped.operatorReported=certified;
           const other=certified.otherChannels+certified.noCommercialMatch+certified.unattributedTR;
           const counts=(total:number,unassigned:number)=>({...emptyActivationCounts(),total,sim:total,unassigned});
-          scoped.totals=counts(certified.total,other);
           const labels=new Map(report.prepare('SELECT site,label FROM sites').all().map(r=>[String(r.site),String(r.label)]));
           scoped.sites=certified.sites.map(row=>({site:row.site,label:labels.get(row.site)||row.site,
             ...counts(row.total,0)}));
@@ -97,10 +93,20 @@ export function readActivations(month:string,sites:string[]|null,provider:Activa
             return official?{month:official.month,reported:true,source:'operator' as const,
               counts:counts(official.total,official.otherChannels+official.noCommercialMatch)}:internal;
           });
-          // The monthly comparison keeps internal-only months. The certified
-          // total and TR breakdown above use only the selected operator reports.
           scoped.history=(scoped.monthly||[]).filter(entry=>entry.reported)
             .map(({month,source,counts})=>({month,source,...counts}));
+          // Use the same months as the chart for the selection total. The
+          // operator subtotal and its exact TR reconciliation stay in operatorReported.
+          const totals=counts(certified.total,other);
+          for(const entry of scoped.history){
+            if(entry.source!=='internal')continue;
+            totals.total+=entry.total;
+            totals.sim+=entry.sim;
+            totals.telsim+=entry.telsim;
+            totals.other+=entry.other;
+            totals.unassigned+=entry.unassigned;
+          }
+          scoped.totals=totals;
           scoped.months=scoped.history.map(({month,total})=>({month,total}));
           scoped.coveredMonths=scoped.history.map(entry=>entry.month);
           // The old reconciliation value sums obsolete overlapping operator
