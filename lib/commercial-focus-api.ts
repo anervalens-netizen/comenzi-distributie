@@ -3,7 +3,7 @@ import {isAbsolute, resolve} from 'node:path';
 import {runtimeKind} from '#mobiup-runtime';
 import {bucharestMonthKey} from './bucharest-month';
 import {calculateFocus, focusOffers, type CommercialFocusReport} from './commercial-focus';
-import {readFocusSalesAsync} from './commercial-focus-runtime';
+import {readFocusSalesAsync} from './sales-view-runtime';
 import {readDistributionRules} from './distribution-config';
 import {assignmentFor} from './distribution-rules';
 import {managerFilter} from './manager-scope';

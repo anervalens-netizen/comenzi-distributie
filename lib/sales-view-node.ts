@@ -135,3 +135,4 @@ function runtimeIdentity(): Identity {
   } finally { db.close(); }
 }
 export const getSalesViewRuntime = createSalesViewRuntime({ identity: runtimeIdentity });
+export { readFocusSalesAsync } from './commercial-focus-runtime';
