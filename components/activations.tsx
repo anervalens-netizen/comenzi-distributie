@@ -78,7 +78,7 @@ export function ActivationOperatorCard({userId,query,provider,reload}:{userId:st
        }
      }
      if(provider==='vodafone'){
-       void fetchReport('totals').then(data=>accept(data,false),error=>{if(!controller.signal.aborted&&!final)scopeFailure(error);});
+       void fetchReport('totals').then(data=>accept(data,false),error=>{if(!controller.signal.aborted)scopeFailure(error);});
        void fetchReport('panels').then(data=>accept(data,true),error=>{
          if(!controller.signal.aborted&&!scopeFailure(error)){
            panelError=errorMessage(error);

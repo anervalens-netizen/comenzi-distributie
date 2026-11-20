@@ -55,6 +55,13 @@ try{
   await waitFor(()=>fresh.evaluate(text+".includes('s-a actualizat din nou')"),'second rotation requires explicit refresh');
   assert.equal(await fresh.evaluate(total),undefined);
   assert.equal(queues.totals.length,4);
+  const revoked=await browser.newTab(origin);
+  await reply('panels',4,{...report('two',26),separateFocusScope:false});
+  await waitFor(()=>revoked.evaluate(total+"==='26'"),'completed panel can arrive first');
+  await reply('totals',4,{error:'Acces revocat'},403);
+  await waitFor(()=>revoked.evaluate(text+".includes('Acces revocat')"),'late permission failure clears authorized panels');
+  assert.equal(await revoked.evaluate(total),undefined);
+  assert.equal(queues.totals.length,5);
   console.log('PASS: background totals stay optional; mixed publications are discarded and retry once; rapid rotation clears stale figures.');
 }finally{
   await browser?.close();
