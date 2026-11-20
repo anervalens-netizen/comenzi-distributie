@@ -63,6 +63,31 @@ try {
   assert.equal(shared.applied,null);
   assert.deepEqual(scoped.documents,[]);
   assert.doesNotMatch(JSON.stringify(scoped),/"site":"B"/);
+  const foreignName='Fictional alias from another warehouse';
+  const labelInput={...input,activation:[
+    {...act('2026-06','B','P1'),partner:foreignName},
+    ...input.activation.map(row=>row.site==='B'?{...row,partner:foreignName}:row),
+  ]};
+  assert.equal(vodafoneBonusLedger(labelInput,['A'],'2026-06').points.find(row=>row.pointCode==='P1').partner,companies.partner);
+  assert.ok(!JSON.stringify(vodafoneBonusLedger(labelInput,['A'],'2026-06')).includes(foreignName));
+  const supplemental={...input,
+    documents:[...input.documents,{...doc('2026-08-10','doc-3','ONLY-INVOICE',1),partner:'Invoice point'}],
+    portfolios:[{pointCode:'ONLY-TARGET',cui:companies.fixture,sites:[{site:'B',partner:foreignName},{site:'A',partner:'Target point'}]}],
+    targets:[...input.targets,{pointCode:'ONLY-TARGET',month:'2026-06',target:4,bonus:0}],
+  };
+  const labelRows=vodafoneBonusLedger(supplemental,['A'],null).points;
+  assert.equal(labelRows.find(row=>row.pointCode==='ONLY-INVOICE').partner,'Invoice point');
+  assert.equal(labelRows.find(row=>row.pointCode==='ONLY-TARGET').partner,'Target point');
+  const unknownOldTarget={...input,
+    activation:input.activation.filter(row=>row.site!=='B'),
+    targets:[{pointCode:'P1',month:'2026-06',target:2,bonus:null},input.targets[1]],
+  };
+  for (const activation of [unknownOldTarget.activation,unknownOldTarget.activation.filter(row=>row.month!=='2026-06')]) {
+    const unresolvedCampaign=vodafoneBonusLedger({...unknownOldTarget,activation},null,null);
+    assert.ok(unresolvedCampaign.documents.every(row=>row.allocations.every(allocation=>allocation.status==='simulation')));
+    assert.equal(unresolvedCampaign.documents[0].allocations[0].month,'2026-07');
+    assert.equal(unresolvedCampaign.points.find(row=>row.month==='2026-07'&&row.pointCode==='P1').remaining,null);
+  }
   const provisional={...input,documents:[doc('2026-08-08','pending','P1',3,'document-unknown')],coverage:input.coverage.map(m=>({...m,publishedOn:null}))};
   const p=vodafoneBonusLedger(provisional,null,null);
   assert.equal(p.fiscalKindsComplete,false);

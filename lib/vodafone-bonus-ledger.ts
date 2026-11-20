@@ -14,15 +14,14 @@ export type BonusLedgerInput = {
   documents: Omit<VodafoneBonusDocument, 'allocations'>[];
   coverage: Pick<VodafoneBonusMonth, 'month' | 'sourceThrough' | 'publishedOn'>[];
   targets: readonly VodafoneTopLocation[];
-  portfolios: {pointCode: string; cui: string; partner: string; sites: string[]}[];
+  portfolios: {pointCode: string; cui: string; sites: {site: string; partner: string}[]}[];
   revision: string;
 };
 type Position = {
   month: string;
   pointCode: string;
   cui: string;
-  partner: string;
-  sites: Map<string, {activations: number; confirmed: number}>;
+  sites: Map<string, {activations: number; confirmed: number; partner: string}>;
   top: VodafoneTopLocation | undefined;
   pending: void | {simulation: number; confirmedSim0: number; confirmedTop: number};
   simulatedApplied: number;
@@ -30,9 +29,10 @@ type Position = {
   given: number;
   candidate: number;
 };
-function addSite(row: Position, site: string) {
+function addSite(row: Position, site: string, partner: string) {
   let contribution = row.sites.get(site);
-  if (!contribution) row.sites.set(site, contribution = {activations: 0, confirmed: 0});
+  if (!contribution) row.sites.set(site, contribution = {activations: 0, confirmed: 0, partner});
+  else if (!contribution.partner && partner) contribution.partner=partner;
   return contribution;
 }
 const pointMonth = (point: string, month: string) => JSON.stringify([point, month]);
@@ -46,17 +46,23 @@ export function vodafoneBonusLedger(input: BonusLedgerInput, scope: VodafoneBonu
   const portfolio = new Map(input.portfolios.map(point => [point.pointCode, point]));
   const targets = new Map(input.targets.map(target => [pointMonth(target.pointCode, target.month), target]));
   const coverage = new Map(input.coverage.map(source => [source.month, {...source, activations: 0, confirmedActivations: 0, unresolvedActivations: 0}]));
+  const firstUnknownTop = new Map<string, string>();
+  for (const target of input.targets) {
+    if (target.bonus !== null || !coverage.has(target.month)) continue;
+    const previous=firstUnknownTop.get(target.pointCode);
+    if (!previous || target.month<previous) firstUnknownTop.set(target.pointCode,target.month);
+  }
   const positions = new Map<string, Position>();
   const byPoint = new Map<string, Position[]>();
   const unresolved = new Map<string, VodafoneBonusUnresolved>();
   const unresolvedCompanies = new Set<string>();
   const uncertainDocuments = new Set<string>();
   const historySites = new Map<string, Set<string>>();
-  function position(pointCode: string, month: string, cui: string, partner: string) {
+  function position(pointCode: string, month: string, cui: string) {
     const key = pointMonth(pointCode, month);
     let row = positions.get(key);
     if (!row) {
-      row = {month,pointCode,cui,partner,sites:new Map(),top:targets.get(key),pending:undefined,simulatedApplied:0,applied:0,given:0,candidate:0};
+      row = {month,pointCode,cui,sites:new Map(),top:targets.get(key),pending:undefined,simulatedApplied:0,applied:0,given:0,candidate:0};
       positions.set(key, row);
       const history = byPoint.get(pointCode);
       if (history) history.push(row);
@@ -80,8 +86,8 @@ export function vodafoneBonusLedger(input: BonusLedgerInput, scope: VodafoneBonu
       if (!row.pointCode) summary.unresolvedActivations++;
     }
     if (row.pointCode) {
-      const point = position(row.pointCode,month,cui,partner);
-      const contribution = addSite(point,site);
+      const point = position(row.pointCode,month,cui);
+      const contribution = addSite(point,site,partner);
       contribution.activations++;
       if (reason === 'commercial') contribution.confirmed++;
       linkSite(row.pointCode,site);
@@ -97,9 +103,9 @@ export function vodafoneBonusLedger(input: BonusLedgerInput, scope: VodafoneBonu
   for (const {pointCode,month} of input.targets) {
     const known = portfolio.get(pointCode);
     if (!known || !coverage.has(month)) continue;
-    const row = position(pointCode,month,known.cui,known.partner);
-    for (const site of known.sites) {
-      addSite(row,site);
+    const row = position(pointCode,month,known.cui);
+    for (const {site,partner} of known.sites) {
+      addSite(row,site,partner);
       linkSite(pointCode,site);
     }
   }
@@ -112,17 +118,19 @@ export function vodafoneBonusLedger(input: BonusLedgerInput, scope: VodafoneBonu
     if (reason !== 'commercial' && reason !== 'mixed') uncertainDocuments.add(pointCode);
     if (reason !== 'commercial' && reason !== 'document-unknown') continue;
     if (quantity === null) continue;
-    const row = position(pointCode,doc.date.slice(0,7),cui,partner);
+    const row = position(pointCode,doc.date.slice(0,7),cui);
     if (reason === 'commercial') row.given += quantity;
     else row.candidate += quantity;
     for (const site of sites) {
-      addSite(row,site);
+      addSite(row,site,partner);
       linkSite(pointCode,site);
     }
   }
   for (const history of byPoint.values()) history.sort((a,b) => a.month.localeCompare(b.month));
   function canConfirm(row: Position) {
-    return row.top?.bonus != null && coverage.get(row.month)?.publishedOn && sum(row) === confirmedSum(row) &&
+    const earlierUnknown = firstUnknownTop.get(row.pointCode);
+    return (!earlierUnknown || earlierUnknown >= row.month) &&
+      row.top?.bonus != null && coverage.get(row.month)?.publishedOn && sum(row) === confirmedSum(row) &&
       !uncertainDocuments.has(row.pointCode) && !unresolvedCompanies.has(row.cui);
   }
   for (const row of positions.values()) {
@@ -150,7 +158,7 @@ export function vodafoneBonusLedger(input: BonusLedgerInput, scope: VodafoneBonu
         }
         // An older unverified right stops definitive allocation to newer rights.
         const publication = coverage.get(row.month)?.publishedOn;
-        if ((sum(row) >= 3 || row.top?.bonus) && (!canConfirm(row) || !publication || publication > doc.date)) remainingConfirmed = 0;
+        if ((sum(row) >= 3 || row.top?.bonus || row.top?.bonus === null) && (!canConfirm(row) || !publication || publication > doc.date)) remainingConfirmed = 0;
         if (!remainingConfirmed || !publication || publication > doc.date) continue;
         for (const [balance, kind] of [['confirmedSim0','SIM 0'],['confirmedTop','Top Locații']] as const) {
           const quantity = Math.min(remainingConfirmed,pending[balance]);
@@ -170,9 +178,10 @@ export function vodafoneBonusLedger(input: BonusLedgerInput, scope: VodafoneBonu
   const points: VodafoneBonusPoint[] = [];
   for (const row of positions.values()) {
     if (!visibleMonth(row.month)) continue;
-    const sites = [...row.sites.entries()].filter(([site]) => allowed(site)).sort(([a],[b]) => a.localeCompare(b))
-      .map(([site, counts]) => ({site,...counts}));
+    const visibleSites = [...row.sites.entries()].filter(([site]) => allowed(site)).sort(([a],[b]) => a.localeCompare(b));
+    const sites = visibleSites.map(([site, {activations,confirmed}]) => ({site,activations,confirmed}));
     if (!sites.length) continue;
+    const partner = visibleSites.find(([,item])=>item.partner)?.[1].partner || row.pointCode;
     const activations = sites.reduce((total, item) => total + item.activations,0);
     const confirmedActivations = sites.reduce((total,item) => total + item.confirmed,0);
     const partial = !fullyVisible(row.pointCode);
@@ -180,7 +189,7 @@ export function vodafoneBonusLedger(input: BonusLedgerInput, scope: VodafoneBonu
     const topBonus = partial ? null : row.top?.bonus ?? null;
     const totalBonus = sim0Bonus !== null && topBonus !== null ? sim0Bonus + topBonus : null;
     points.push({
-      month:row.month,pointCode:row.pointCode,cui:row.cui,partner:row.partner,sites,activations,confirmedActivations,
+      month:row.month,pointCode:row.pointCode,cui:row.cui,partner,sites,activations,confirmedActivations,
       target:row.top?.target ?? null,topBonus,sim0Bonus,totalBonus,
       givenOnDocuments:partial ? 0 : row.given,candidateOnDocuments:partial ? 0 : row.candidate,
       applied:partial || !canConfirm(row) ? null : row.applied,

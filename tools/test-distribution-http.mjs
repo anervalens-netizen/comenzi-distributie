@@ -275,6 +275,12 @@ try{
  await waitFor(()=>browser.evaluate('document.body.textContent.includes("Reper sursă")'),'refresh keeps selected partner detail');
  assert(await browser.evaluate('[...document.querySelectorAll("button")].some(button=>button.textContent==="Pe partener"&&button.getAttribute("aria-pressed")==="true")'),'refresh preserves partner view');
  for(const [width,height] of [[1280,900],[820,1180],[390,844]]){await browser.send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:width<700});assert(await browser.evaluate('document.documentElement.scrollWidth<=innerWidth'),'no overflow '+width);mkdirSync('work/evidence',{recursive:true});const screenshot=await browser.send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});writeFileSync('work/evidence/distribution-'+width+'.png',Buffer.from(screenshot.data,'base64'));}
+ await browser.evaluate(`window.bonusRequests=[];window.bonusOriginalFetch=window.fetch;window.fetch=(...args)=>{window.bonusRequests.push(String(args[0]));return window.bonusOriginalFetch(...args);};true`);
+ await browser.evaluate('[...document.querySelectorAll(".activation-workspace button")].find(button=>button.textContent==="Bonusuri Vodafone").click()');
+ await waitFor(()=>browser.evaluate(`window.bonusRequests.some(path=>path.startsWith('/api/vodafone/bonuses?')&&new URL(path,location.origin).searchParams.get('month')==='2026-10')`),'bonus report uses historical reporting month on opening');
+ await browser.evaluate(`document.querySelector('[aria-label="octombrie 2026"]').click()`);
+ await waitFor(()=>browser.evaluate(`window.bonusRequests.some(path=>path.startsWith('/api/vodafone/bonuses?')&&new URL(path,location.origin).searchParams.get('month')==='2026-09')`),'bonus report follows changes to the reporting month');
+ await browser.evaluate(`document.querySelector('[aria-label="octombrie 2026"]').click();window.fetch=window.bonusOriginalFetch;true`);
  await browser.evaluate('[...document.querySelectorAll(".main-nav [role=tab]")].find(button=>button.textContent==="Accesorii").click()');
  await waitFor(()=>browser.evaluate('document.querySelectorAll(".commerce-category-card").length===3'),'accessory categories');
  await browser.evaluate(`(()=>{const b=[...document.querySelectorAll('button')].find(b=>b.getAttribute('aria-label')==='Evoluție lunară · Accesorii');b.focus();b.click();})()`);

@@ -13,11 +13,12 @@ import {vodafoneBonusLedger,type BonusActivation,type BonusLedgerInput} from './
 
 type DocFields = {date: string; site: string; number: string};
 type Activation = {month: string; activation_date: string; distribution_date: string|null; company: string; serial: string; client_code: string; point_code: string; item_code: string; label: string; site: string; contradictory: number};
-type Movement = {site: string; is_tr: number; movement_date: string; item_code: string; raw_json: string; quantity: number};
+type Movement = {site: string; is_tr: number; movement_date: string; raw_json: string; quantity: number};
+type MovementLink = DocFields & {tradeSite: string; realClient: boolean; fiscalKind: ReturnType<typeof fiscalKind>};
 type HistoryLine = {
   date: string; document_number: string; site_id: string; tr: string; client_code: string; franchise_code: string; point_key: string|null;
   allocation_status: string; item_code: string; customer_name: string; quantity_micros: number; price_cents: number|null; value_cents: number|null;
-  raw_json: string;
+  kind: ReturnType<typeof fiscalKind>;
 };
 type CommercialLine = {company: string; site_code: string; date: string; location: string; order_number: string; item_code: string; quantity: number; price_cents: number; value_cents: number};
 type Point = BonusLedgerInput['portfolios'][number];
@@ -88,7 +89,7 @@ function keys(a: {date: string; site: string; number: string}[]) {
   return [...new Map(a.map(x => [docKey(x.date,x.site,x.number),x])).values()];
 }
 
-function historyInvoices(history: DatabaseSync, documents: DocFields[]) {
+function historyInvoices(history: DatabaseSync, documents: DocFields[], purpose: 'sale' | 'payment') {
   // The date/site index is selective even for historical SIM issuance years before activation.
   const statement = history.prepare(`
     WITH wanted AS (SELECT value ->> '$.date' date,value ->> '$.site' site,value ->> '$.number' number FROM json_each(?))
@@ -101,7 +102,9 @@ function historyInvoices(history: DatabaseSync, documents: DocFields[]) {
     LEFT JOIN history_allocations a ON a.identity_id=r.identity_id
       AND a.reference_id=(SELECT value FROM history_meta WHERE key='current_reference')`);
   const result = new Map<string,HistoryLine[]>();
-  for (const line of statement.iterate(JSON.stringify(keys(documents))) as unknown as Iterable<HistoryLine>) {
+  type SourceLine = Omit<HistoryLine,'kind'> & {raw_json: string};
+  for (const {raw_json,...fields} of statement.iterate(JSON.stringify(keys(documents))) as unknown as Iterable<SourceLine>) {
+    const line: HistoryLine = {...fields,kind:fiscalKind(JSON.parse(raw_json),fields.document_number,fields.customer_name,purpose)};
     const key = docKey(line.date,line.site_id,line.document_number);
     const list = result.get(key);
     if (list) list.push(line);
@@ -110,7 +113,7 @@ function historyInvoices(history: DatabaseSync, documents: DocFields[]) {
   return result;
 }
 
-function identityIndex(app: DatabaseSync, history: DatabaseSync, observed: Activation[]) {
+function identityIndex(app: DatabaseSync, history: DatabaseSync, observed: Activation[], targetPoints: ReadonlySet<string>) {
   const ownerByAlias = new Map<string,Set<string>>();
   const ownersByPoint = new Map<string,Set<string>>();
   const codesByCustomer = new Map<string,Set<string>>();
@@ -127,17 +130,22 @@ function identityIndex(app: DatabaseSync, history: DatabaseSync, observed: Activ
     add(ownerByAlias,cui,cui);
     add(ownerByAlias,alias,cui);
   }
+  const knownCuis = new Map<string,string>();
   const legal = (value: string) => {
-    const normalized = normalizedCui(value);
-    if (isVodafoneGenericPartner(normalized)) return '';
-    const owned = ownerByAlias.get(normalized);
-    return owned ? uniform(owned) ?? '' : normalized;
+    const existing=knownCuis.get(value);
+    if (existing!==undefined) return existing;
+    const normalized=normalizedCui(value);
+    const owned=ownerByAlias.get(normalized);
+    const result=isVodafoneGenericPartner(normalized) ? '' : owned ? uniform(owned) ?? '' : normalized;
+    knownCuis.set(value,result);
+    return result;
   };
-  const customers = new Map<string,{data:Raw; cui: string}>();
-  for (const row of app.prepare('SELECT id,data FROM customers').iterate()) {
+  const customers = new Map<string,{cui: string; active: boolean; partner: string; warehouseIds: string[]}>();
+  for (const row of app.prepare('SELECT id,data,active,warehouse_id FROM customers').iterate()) {
     const data = JSON.parse(s(row.data)) as Raw;
     const cui = legal(s(data.cui));
-    customers.set(s(row.id),{data,cui});
+    const warehouseIds=Array.isArray(data.warehouseIds) ? data.warehouseIds : [data.warehouseId||row.warehouse_id];
+    customers.set(s(row.id),{cui,active:Number(row.active)===1,partner:s(data.name),warehouseIds:warehouseIds.map(s)});
     const codes = Array.isArray(data.historyFranchises) ? data.historyFranchises : [];
     for (const code of codes) {
       const franchise = salesSiteKey(s(code));
@@ -195,17 +203,16 @@ function identityIndex(app: DatabaseSync, history: DatabaseSync, observed: Activ
   for (const row of app.prepare("SELECT warehouse_id,site_code FROM users WHERE role='agent' AND active=1 AND TRIM(site_code)<>''").iterate()) {
     add(sites,s(row.warehouse_id),salesSiteKey(s(row.site_code)));
   }
-  for (const {id,cui,warehouse_id} of app.prepare("SELECT id,warehouse_id,json_extract(data,'$.cui') cui FROM customers WHERE active=1").iterate()) {
-    const customerId = s(id);
-    const customer = customers.get(customerId);
-    const canonical = legal(s(cui));
-    const code = fromCustomer(customerId,canonical);
-    if (!customer || !code || isVodafoneGenericPartner(s(customer.data.name))) continue;
-    const warehouseIds = Array.isArray(customer.data.warehouseIds) ? customer.data.warehouseIds : [customer.data.warehouseId || warehouse_id];
-    const scope = new Set(warehouseIds.map(warehouse => uniform(sites.get(s(warehouse))||[])).filter((x):x is string=>!!x));
+  if (targetPoints.size) for (const [customerId,customer] of customers) {
+    if (!customer.active || isVodafoneGenericPartner(customer.partner)) continue;
+    const code = fromCustomer(customerId,customer.cui);
+    if (!code || !targetPoints.has(code)) continue;
+    const scope = new Set(customer.warehouseIds.map(warehouse => uniform(sites.get(warehouse)||[])).filter((x):x is string=>!!x));
     if (!scope.size) continue;
     const existing = names.get(code);
-    names.set(code,{pointCode:code,cui:canonical,partner:s(customer.data.name),sites:[...new Set([...(existing?.sites||[]),...scope])].sort()});
+    const labels=new Map(existing?.sites.map(entry=>[entry.site,entry.partner]));
+    for (const site of scope) if (!labels.get(site)) labels.set(site,customer.partner);
+    names.set(code,{pointCode:code,cui:customer.cui,sites:[...labels].map(([site,partner])=>({site,partner}))});
   }
   return {legal,valid,fromCustomer,fromHistory,fallback,portfolios:[...names.values()]};
 }
@@ -251,54 +258,49 @@ function slipPoints(app: DatabaseSync, identities: Identity, activations: Activa
   };
 }
 
-function matchActivations(source: DatabaseSync, history: DatabaseSync, app: DatabaseSync, activations: Activation[], evidence: Map<string,'commercial'|'excluded'>) {
+function matchActivations(source: DatabaseSync, history: DatabaseSync, app: DatabaseSync, activations: Activation[], evidence: Map<string,'commercial'|'excluded'>, targetPoints: ReadonlySet<string>) {
   const movement = source.prepare(`
-    SELECT m.site,m.is_tr,m.movement_date,m.item_code,m.raw_json,m.quantity
+    SELECT m.site,m.is_tr,m.movement_date,m.raw_json,m.quantity
     FROM activation_facts f JOIN activation_movements m ON m.id=json_extract(f.evidence_json,'$.remainingSaleIds[0]')
     WHERE f.provider='vodafone' AND f.company=? AND f.serial=?
       AND json_array_length(f.evidence_json,'$.remainingSaleIds')=1`);
-  const links = new Map<Activation,{move: Movement; raw: Raw; date: string; site: string; number: string}>();
+  const links = new Map<Activation,MovementLink>();
   const wanted: DocFields[] = [];
   for (const row of activations) {
     const move = movement.get(row.company,row.serial) as Movement | undefined;
     if (!move) continue;
     const raw = JSON.parse(move.raw_json) as Raw;
     const date = move.movement_date || '', site = s(raw.SiteId), number = s(raw.Nr);
-    links.set(row,{move,raw,date,site,number});
-    if (date && site && number && move.is_tr && move.quantity > 0) wanted.push({date,site,number});
+    const partner=s(raw['Denumire Client']);
+    const tradeSite=move.is_tr === 1 && move.quantity > 0 ? salesSiteKey(move.site) : '';
+    const realClient=!isVodafoneGenericPartner(s(raw.CIF),partner);
+    links.set(row,{date,site,number,tradeSite,realClient,fiscalKind:fiscalKind(raw,number,partner,'sale')});
+    if (date && site && number && tradeSite && realClient) wanted.push({date,site,number});
   }
-  const invoices = historyInvoices(history,wanted);
-  const identity = identityIndex(app,history,activations);
+  const invoices = historyInvoices(history,wanted,'sale');
+  const identity = identityIndex(app,history,activations,targetPoints);
   const slips = slipPoints(app,identity,activations);
-  const lineKinds = new Map<HistoryLine,ReturnType<typeof fiscalKind>>();
-  const classify = (line: HistoryLine) => {
-    const known = lineKinds.get(line);
-    if (known) return known;
-    const kind = fiscalKind(JSON.parse(line.raw_json),line.document_number,line.customer_name,'sale');
-    lineKinds.set(line,kind);
-    return kind;
-  };
   const activation = activations.map((row): BonusActivation => {
     const site = salesSiteKey(row.site), cui = identity.legal(row.client_code);
     const result: BonusActivation = {month:row.month,site,cui,partner:row.label,reason:'point-unknown',pointCode:null};
     const link = links.get(row);
-    if (isVodafoneGenericPartner(row.client_code,row.label,s(link?.raw.CIF),s(link?.raw['Denumire Client']))) {
+    if (link?.realClient===false || isVodafoneGenericPartner(row.client_code,row.label)) {
       return {...result,reason:'excluded'};
     }
-    const movementKind = link ? fiscalKind(link.raw,link.number,s(link.raw['Denumire Client']),'sale') : 'unknown';
+    const movementKind = link?.fiscalKind || 'unknown';
     const override = link ? evidence.get(bonusEvidenceIdentity('activation',row.company,link.date,link.site,link.number)) : undefined;
     if (override==='excluded' || movementKind==='excluded') return {...result,reason:'excluded'};
     if (row.contradictory) return {...result,reason:'conflict'};
     if (!cui) return {...result,reason:'client-missing'};
-    if (!site || !link || link.move.is_tr !== 1 || link.move.quantity <= 0 || salesSiteKey(link.move.site) !== site) {
+    if (!site || !link || link.tradeSite !== site) {
       return {...result,reason:'unmatched'};
     }
     const matched = invoices.get(docKey(link.date,link.site,link.number)) || [];
     const onArticle=matched.filter(line=>line.item_code===row.item_code && line.quantity_micros>0);
     const generic=(line: HistoryLine)=>isVodafoneGenericPartner(line.client_code,line.customer_name) || line.allocation_status==='consumer';
-    if (onArticle.length && onArticle.every(line=>generic(line)||classify(line)==='excluded')) return {...result,reason:'excluded'};
+    if (onArticle.length && onArticle.every(line=>generic(line)||line.kind==='excluded')) return {...result,reason:'excluded'};
     const inDocument = onArticle.filter(line=>identity.legal(line.client_code)===cui);
-    const historyKinds = inDocument.map(classify);
+    const historyKinds = inDocument.map(line=>line.kind);
     if (historyKinds.includes('excluded') ||
         inDocument.some(line=>isVodafoneGenericPartner(line.client_code,line.customer_name))) return {...result,reason:'excluded'};
     const candidates = slips(row,cui);
@@ -344,8 +346,13 @@ function paymentDocuments(history: DatabaseSync, sales: DatabaseSync, identity: 
     FROM history_rows r JOIN history_imports b ON b.id=r.import_id AND b.state='active'
     WHERE r.date BETWEEN ? AND ? AND r.price_cents=0
       AND r.item_code IN(SELECT value FROM json_each(?))`).all(firstDay,today,JSON.stringify(giftCodes)) as DocFields[];
-  const lookup = new Set(wanted.map(key=>rowKey(key.date,key.number)));
-  const invoiceRows = historyInvoices(history,wanted);
+  const invoiceRows = historyInvoices(history,wanted,'payment');
+  const lookup = new Set<string>();
+  for (const [key,lines] of invoiceRows) {
+    if (lines.some(line=>line.kind==='excluded' || line.allocation_status==='consumer' || isVodafoneGenericPartner(line.client_code,line.customer_name))) {
+      invoiceRows.delete(key);
+    } else lookup.add(rowKey(lines[0].date,lines[0].document_number));
+  }
   const byIdentity = new Map<string,Map<string,CommercialLine[]>>();
   for (const line of sales.prepare(`
     SELECT r.company,r.site_code,r.date,r.location,r.order_number,r.item_code,r.quantity,r.price_cents,r.value_cents
@@ -362,10 +369,7 @@ function paymentDocuments(history: DatabaseSync, sales: DatabaseSync, identity: 
   }
   const gifts = new Set(giftCodes), documents: BonusLedgerInput['documents'] = [];
   for (const lines of invoiceRows.values()) {
-    if (lines.some(line=>isVodafoneGenericPartner(line.client_code,line.customer_name) || line.allocation_status==='consumer')) continue;
     const first = lines[0], {date,site_id:siteId,document_number:number} = first;
-    const kinds = lines.map(line=>fiscalKind(JSON.parse(line.raw_json),number,line.customer_name,'payment'));
-    if (kinds.includes('excluded')) continue;
     const loc = uniform(lines.map(line=>salesLocationKey(line.tr)));
     const candidates = [...(byIdentity.get(rowKey(date,number))?.values() || [])]
       .filter(rows=>loc && rows.every(line=>salesLocationKey(line.location)===loc && !!salesSiteKey(line.site_code)));
@@ -376,7 +380,7 @@ function paymentDocuments(history: DatabaseSync, sales: DatabaseSync, identity: 
     if (override==='excluded') continue;
     const cui = uniform(lines.map(line=>identity.legal(line.client_code))) || '';
     const point = uniform(lines.map(identity.fromHistory)) || '';
-    let reason: VodafoneBonusReason = override==='commercial'||kinds.includes('commercial') ? 'commercial' : 'document-unknown';
+    let reason: VodafoneBonusReason = override==='commercial'||lines.some(line=>line.kind==='commercial') ? 'commercial' : 'document-unknown';
     let quantity: number|null = lines.reduce((total,line)=>total+line.quantity_micros,0)/1_000_000;
     if (lines.some(line=>!gifts.has(line.item_code)||line.price_cents!==0||line.value_cents!==0)) {
       reason='mixed';
@@ -447,12 +451,12 @@ export function readVodafoneBonus(input: VodafoneBonusRead): VodafoneBonusReport
     const open = (path: string) => {
       const database = new DatabaseSync(path,{readOnly:true});
       databases.push(database);
-      database.exec('PRAGMA query_only=ON; PRAGMA cache_size=-16384; PRAGMA temp_store=MEMORY; BEGIN');
+      database.exec('PRAGMA query_only=ON; PRAGMA cache_size=-4096; PRAGMA temp_store=MEMORY; BEGIN');
       return database;
     };
     const app = open(paths[0]);
     const appIdentity = applicationIdentity(app,paths[0]);
-    const key = JSON.stringify([appIdentity,before,generation,input.today,input.rules,input.evidence,input.targets]);
+    const key = createHash('sha256').update(JSON.stringify([appIdentity,before,generation,input.today,input.rules,input.evidence,input.targets])).digest('hex');
     if (cached?.key===key) return reportForScope(cached.snapshot);
     const [history,sales,source,report] = paths.slice(1).map(open);
     const meta = Object.fromEntries(report.prepare('SELECT key,value FROM report_meta').all().map(row=>[row.key,row.value]));
@@ -471,7 +475,7 @@ export function readVodafoneBonus(input: VodafoneBonusRead): VodafoneBonusReport
       AND item_code IN (SELECT value FROM json_each(?))`)
       .all(firstVodafoneBonusMonth,input.today.slice(0,7),firstVodafoneBonusMonth+'-01',input.today,JSON.stringify(zero)) as unknown as Activation[];
     const evidence = new Map(input.evidence.documents.map(row=>[bonusEvidenceIdentity(row.source,row.company,row.date,row.site,row.number),row.kind]));
-    const {activation,identity} = matchActivations(source,history,app,activations,evidence);
+    const {activation,identity} = matchActivations(source,history,app,activations,evidence,new Set(input.targets.map(row=>row.pointCode)));
     const sim5 = Object.keys(input.rules.products).filter(code=>input.rules.products[code]==='vodafone_5');
     const documents = paymentDocuments(history,sales,identity,[...new Set([...sim5,...knownVoucherCodes])],input.today,evidence);
     const coverage = monthCoverage(source,activations,input.today,input.evidence);
@@ -479,8 +483,7 @@ export function readVodafoneBonus(input: VodafoneBonusRead): VodafoneBonusReport
         appIdentity!==applicationIdentity(open(paths[0]),paths[0])) {
       throw new Error('Vodafone report source updated during read');
     }
-    const revision = createHash('sha256').update(key).digest('hex');
-    const snapshot = {activation,documents,coverage,targets:input.targets,portfolios:identity.portfolios,revision};
+    const snapshot = {activation,documents,coverage,targets:input.targets,portfolios:identity.portfolios,revision:key};
     cached={key,snapshot};
     return reportForScope(snapshot);
   } finally {

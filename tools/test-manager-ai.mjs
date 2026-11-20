@@ -8,11 +8,26 @@ const {outputFiles} = await build({
     export * from './lib/manager-ai-query.ts';
     export * from './lib/manager-ai.ts';
     export * from './lib/manager-ai-operations.ts';
+    export * from './lib/manager-ai-data.ts';
   `},
   bundle:true,platform:'node',format:'esm',write:false,
   plugins:[{name:'isolated-app-error',setup(build){
     build.onResolve({filter:/^\.\/server$/},()=>({path:'server',namespace:'test'}));
-    build.onResolve({filter:/^\.\/(distribution-config|stock-server)$/},args=>({path:args.path.slice(2),namespace:'test'}));
+    const mocks = {
+      'activation-api':'activationReport',
+      'commercial-focus-api':'commercialFocus',
+      'client-sales-portfolio':'clientSalesPortfolio',
+      'vodafone-bonus-api':'readVodafoneBonusForManager',
+      'vodafone-activation-targets':'applyVodafoneActivationTargets',
+      'manager-scope':'managerFilter',
+    };
+    build.onResolve({filter:/^\.\/(distribution-config|stock-server|sales-server|activation-api|commercial-focus-api|client-sales-portfolio|vodafone-bonus-api|vodafone-activation-targets|manager-scope)$/},
+      args=>({path:args.path.slice(2),namespace:'test'}));
+    build.onLoad({filter:/^sales-server$/,namespace:'test'},()=>({contents:`
+      export async function salesView(request,user) { return Response.json(globalThis.syntheticManagerAISales(request,user)); }
+    `}));
+    build.onLoad({filter:/^(activation-api|commercial-focus-api|client-sales-portfolio|vodafone-bonus-api|vodafone-activation-targets|manager-scope)$/,namespace:'test'},
+      args=>({contents:`export function ${mocks[args.path]}() { throw Error('Unexpected dataset'); }`}));
     build.onLoad({filter:/^distribution-config$/,namespace:'test'},()=>({contents:`
       export async function readDistributionRules() { return {products:{SKU1:'vodafone_0',SKU2:'vodafone_5',SKU3:'digi'}}; }
     `}));
@@ -22,11 +37,12 @@ const {outputFiles} = await build({
     build.onLoad({filter:/^server$/,namespace:'test'},()=>({contents:`
       export class AppError extends Error { constructor(status,message) { super(message); this.status=status; } }
       export function fail(status,message) { throw new AppError(status,message); }
+      export const isGlobalManager = user => user.managerScope === 'global';
       export const db = () => ({prepare:sql=>({bind:(...args)=>({all:async()=>({results:globalThis.syntheticManagerAISqlite.prepare(sql).all(...args)})})})});
     `}));
   }}],
 });
-const {parseManagerAiQuery,makeManagerAiReport,managerAiMonths,runManagerAi,defaultManagerAiModel,managerAiModels,managerAiOperations} =
+const {parseManagerAiQuery,makeManagerAiReport,managerAiMonths,runManagerAi,defaultManagerAiModel,managerAiModels,managerAiOperations,managerAiReader} =
   await import('data:text/javascript;base64,'+Buffer.from(outputFiles[0].text).toString('base64'));
 
 const query = {dataset:'bonuses',fromMonth:'2026-06',toMonth:'2026-09',site:'',groupBy:['franchise'],
@@ -146,6 +162,52 @@ try {
   delete globalThis.syntheticManagerAISqlite;
   delete globalThis.syntheticManagerAIStock;
 }
+
+const salesScope = {params:new URLSearchParams({managerId:'M',agentId:'T'}),filter:{agentIds:['T'],warehouseIds:['WH-A'],siteCodes:['A','B']},signature:'test'};
+const scopedUser={id:'M',role:'manager',managerScope:'assigned'};
+const salesChecks=[],salesCalls=[];
+const fact=(itemCode,rows,quantity,value,missingValueRows=0)=>({itemCode,itemName:itemCode,brand:'Synthetic',category:'test',subCategory:'other',rows,quantity,value,missingValueRows});
+function salesFixture(sites,products) {
+  return {source:'client-history',revision:3,importedAt:'2026-11-01',fileHash:null,sites:sites.map(([siteCode,rows])=>({siteCode,rows})),
+    summary:{rows:sites.reduce((sum,[,count])=>sum+count,0)},daily:[{date:'2026-10-25'}],products};
+}
+const salesSourceViews = {
+  '':salesFixture([['a',2],['A ',1],['B',1],['HISTORY:8',2]],[fact('SKU1',5,14,110,1),fact('SKU3',1,10,80)]),
+  A:salesFixture([['A',3]],[fact('SKU1',2,5,50),fact('SKU3',1,10,80)]),
+  B:salesFixture([['B',1]],[fact('SKU1',1,3,30)]),
+  DENIED:salesFixture([],[]),
+};
+globalThis.syntheticManagerAISales=(req,user)=>{
+  assert.equal(user,scopedUser);
+  const params=new URL(req.url).searchParams;
+  assert.equal(params.get('managerId'),'M');
+  assert.equal(params.get('agentId'),'T');
+  assert.equal(params.get('month'),'2026-10');
+  const site=params.get('siteCode')||'';
+  salesCalls.push(site);
+  return salesSourceViews[site];
+};
+const readSales=managerAiReader(new Request('https://example.com/api/manager-ai'),salesScope,async()=>{salesChecks.push(true);return scopedUser;});
+const salesQuery = {dataset:'sales',fromMonth:'2026-10',toMonth:'2026-10',site:'',groupBy:['month'],filters:[],orderBy:'units',descending:true,limit:50};
+const executeSales = async query => makeManagerAiReport(query,await readSales(query),'S1');
+const saleTotals=await executeSales(salesQuery);
+assert.deepEqual(saleTotals.rows,[['2026-10',5,14,null]]);
+assert.deepEqual(salesCalls,['']);
+const siteGroups=await executeSales({...salesQuery,groupBy:['site']});
+assert.deepEqual(siteGroups.rows,[[null,2,6,null],['A',2,5,50],['B',1,3,30]]);
+assert.deepEqual(salesCalls.splice(0),['','','A','B']);
+const siteFiltered=await executeSales({...salesQuery,filters:[{field:'site',op:'contains',value:'b'}]});
+assert.deepEqual(siteFiltered.rows,[['2026-10',1,3,30]]);
+assert.deepEqual(salesCalls.splice(0),['','B']);
+const blockedFilter=await executeSales({...salesQuery,filters:[{field:'site',op:'eq',value:'denied'}]});
+assert.deepEqual(blockedFilter.rows,[]);
+assert.deepEqual(salesCalls.splice(0),['']);
+const blockedExact=await executeSales({...salesQuery,site:'denied'});
+assert.deepEqual(blockedExact.rows,[]);
+assert.deepEqual(salesCalls.splice(0),['DENIED']);
+assert.ok(salesChecks.length>=salesCalls.length+8);
+delete globalThis.syntheticManagerAISales;
+console.log('PASS: products grouped and filtered by authorized SiteCode without altering sales totals.');
 
 console.log('PASS: authorized operational reads for orders, transfers, inventories and stock.');
 console.log('PASS: grouped analyst queries, exact scope fields, null preservation, bounded export, both models, stateless tools, and revocation.');

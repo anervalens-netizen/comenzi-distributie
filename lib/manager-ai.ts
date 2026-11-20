@@ -27,7 +27,7 @@ export const managerAiFields = {
   sales: {
     dimensions: ['month', 'site', 'sku', 'product', 'brand', 'category', 'productGroup'],
     measures: ['lines', 'units', 'valueLei'],
-    purpose: 'Vânzări nete Vodafone ale produselor clasificate exact în catalogul Prepay. Filtrul site restrânge la o gestiune.',
+    purpose: 'Vânzări nete Vodafone ale produselor clasificate exact în catalogul Prepay. Grupează sau filtrează după site pentru detalierea gestiunilor. Un SiteCode gol reprezintă o gestiune fără cod confirmat în datele detaliate.',
   },
   activations: {
     dimensions: ['month', 'site'],

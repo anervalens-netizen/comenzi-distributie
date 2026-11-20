@@ -1,3 +1,4 @@
+import {createHash} from 'node:crypto';
 import {existsSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {Worker} from 'node:worker_threads';
@@ -12,7 +13,7 @@ const deadlineMs = 42_000;
 
 function workerFor(script: string) {
   if (service) return service;
-  const worker = new Worker(script,{resourceLimits:{maxOldGenerationSizeMb:384}});
+  const worker = new Worker(script,{resourceLimits:{maxOldGenerationSizeMb:192,maxYoungGenerationSizeMb:24}});
   service = worker;
   worker.once('exit',()=>{
     if (service===worker) service=undefined;
@@ -23,7 +24,7 @@ export async function readVodafoneBonusAsync(options: VodafoneBonusRead): Promis
   const script = ['vodafone-bonus-worker.mjs','dist/standalone/vodafone-bonus-worker.mjs'].map(path=>resolve(path)).find(existsSync);
   if (!script && process.env.NODE_ENV==='development') return readVodafoneBonus(options);
   if (!script) throw new Error('Vodafone bonus worker is unavailable');
-  const key = JSON.stringify(options);
+  const key = createHash('sha256').update(JSON.stringify(options)).digest('hex');
   const existing = active.get(key);
   if (existing) return existing;
   if (active.size>=limit) throw new Error('Vodafone bonus worker queue is full');

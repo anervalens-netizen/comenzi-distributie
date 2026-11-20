@@ -2,9 +2,9 @@ import {activationReport} from './activation-api';
 import {bucharestMonthKey, bucharestMonthUtcRange} from './bucharest-month';
 import {commercialFocus} from './commercial-focus-api';
 import {readDistributionRules} from './distribution-config';
-import {productGroup} from './distribution-rules';
 import {managerFilter, type ManagerFilter} from './manager-scope';
 import {managerAiOperations} from './manager-ai-operations';
+import {managerAiSales,managerAiSalesSiteMode} from './manager-ai-sales';
 import {clientSalesPortfolio} from './client-sales-portfolio';
 import {salesView} from './sales-server';
 import {db, fail, isGlobalManager} from './server';
@@ -33,7 +33,6 @@ export async function managerAiScope(user: User, requested: URLSearchParams): Pr
 const coverage = (source: string, month: string, available: boolean, through?: string|null, revision?: string, note?: string): ManagerAiCoverage =>
   ({source,month,available,through,revision,note});
 const valueLei = (cents: number|null) => cents === null ? null : cents / 100;
-const saleSource = 'Prepay · Vânzări Vodafone';
 const activationSource = 'Prepay · Activări Vodafone';
 const bonusSource = 'Registru bonusuri Vodafone';
 const focusSource = 'Focus comercial Vodafone';
@@ -50,20 +49,15 @@ export function managerAiReader(request: Request, scope: AiScope, check: () => P
 
     switch(query.dataset) {
       case 'sales': {
-        const rules = await readDistributionRules();
-        if (!rules) return {rows:[],coverage:[coverage(saleSource,month,false,null,undefined,'Catalogul Vodafone nu este configurat.')]};
-        const url = new URL('/api/sales',request.url);
-        url.search = params.toString();
-        const result = await (await salesView(new Request(url),user)).json() as SalesView;
-        const covered = Boolean(result.importedAt);
-        const rows = result.products.flatMap(p=>{
-          const group = productGroup(rules,p.itemCode);
-          if (!group.startsWith('vodafone_')) return [];
-          return [{month,site:query.site||null,sku:p.itemCode,product:p.itemName,brand:p.brand,category:p.category,productGroup:group,
-            lines:p.rows,units:p.quantity,valueLei:p.missingValueRows ? null : p.value}];
+        return managerAiSales(query,month,await readDistributionRules(),async site=>{
+          const current = await check();
+          const selection = new URLSearchParams(params);
+          if (site) selection.set('siteCode',site);
+          else selection.delete('siteCode');
+          const url = new URL('/api/sales',request.url);
+          url.search = selection.toString();
+          return await (await salesView(new Request(url),current)).json() as SalesView;
         });
-        return {rows,coverage:[coverage(saleSource,month,covered,result.daily.at(-1)?.date||null,String(result.revision),
-          result.source==='client-history'?'Istoric comercial pe clienți.':'Import lunar de vânzări. Valori în lei conform raportului Prepay.')]};
       }
       case 'activations':
       case 'activationsPartners': {
@@ -181,7 +175,7 @@ export function managerAiReader(request: Request, scope: AiScope, check: () => P
     const months = (query.dataset==='partners'||query.dataset==='stock') ? [bucharestMonthKey(new Date())] : managerAiMonths(query.fromMonth,query.toMonth);
     for (const month of months) {
       // Reuse completed queries within one turn, especially after a model drills down.
-      const key = JSON.stringify([query.dataset,query.site,month]);
+      const key = JSON.stringify([query.dataset,query.site,month,query.dataset==='sales'?managerAiSalesSiteMode(query):null]);
       if (!monthlyCache.has(key)) monthlyCache.set(key,readMonth(query,month));
       const source = await monthlyCache.get(key)!;
       result.rows.push(...source.rows);

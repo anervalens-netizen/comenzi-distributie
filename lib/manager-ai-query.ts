@@ -91,7 +91,7 @@ export function parseManagerAiQuery(raw: string, current = bucharestMonthKey(new
 }
 
 const normalize = (value: string) => value.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase('ro');
-function matches(row: AiSourceRow, {field,op,value}: AiFilter) {
+export function managerAiFilterMatches(row: AiSourceRow, {field,op,value}: AiFilter) {
   const entry = row[field];
   if (typeof entry === 'string' && typeof value === 'string') {
     return op === 'eq' ? normalize(entry) === normalize(value) : op === 'contains' && normalize(entry).includes(normalize(value));
@@ -107,7 +107,7 @@ function matches(row: AiSourceRow, {field,op,value}: AiFilter) {
 export function makeManagerAiReport(query: AiReportQuery, source: AiSource, id: string): ManagerAiReport {
   const dimensions: readonly string[] = managerAiFields[query.dataset].dimensions;
   const measures: readonly string[] = managerAiFields[query.dataset].measures;
-  let rows = source.rows.filter(row => query.filters.filter(f=> !query.groupBy.length || dimensions.includes(f.field)).every(filter => matches(row,filter)));
+  let rows = source.rows.filter(row => query.filters.filter(f=> !query.groupBy.length || dimensions.includes(f.field)).every(filter => managerAiFilterMatches(row,filter)));
   if (query.groupBy.length) {
     const names = query.groupBy;
     const groups = new Map<string,AiSourceRow>();
@@ -127,7 +127,7 @@ export function makeManagerAiReport(query: AiReportQuery, source: AiSource, id: 
       }
     }
     const aggregateFilters = query.filters.filter(f=> !dimensions.includes(f.field));
-    rows = [...groups.values()].filter(row=>aggregateFilters.every(filter=>matches(row,filter)));
+    rows = [...groups.values()].filter(row=>aggregateFilters.every(filter=>managerAiFilterMatches(row,filter)));
   }
   const columns = [...(query.groupBy.length ? query.groupBy : dimensions),...measures];
   rows.sort((a,b) => {
