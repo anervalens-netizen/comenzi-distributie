@@ -446,7 +446,13 @@ try{
   assert(requests.filter(path=>path.startsWith('/api/sales/clients?')).every(path=>!/[?&](months|projects)=/.test(path)),'agent customer report excludes product-report query fields');
   assert(!(await browser.evaluate('window.agentRequests.some(path=>path.includes("/sales/clients/reconciliation"))')),'agent never requests national reconciliation');
   await browser.send('Emulation.setDeviceMetricsOverride',{width:320,height:800,deviceScaleFactor:1,mobile:true});
-  await browser.evaluate('[...document.querySelectorAll(".main-nav [role=tab]")].find(button=>button.textContent==="Stocul meu").scrollIntoView({block:"nearest",inline:"nearest"})');
+  await waitFor(()=>browser.evaluate('innerWidth===320&&document.querySelector(".nav-wrap")?.clientWidth===320'),'320px agent navigation '+id);
+  // Let the app's ResizeObserver reveal the selected tab before the user's horizontal scroll.
+  await browser.evaluate(`(async()=>{
+   await new Promise(done=>requestAnimationFrame(()=>requestAnimationFrame(done)));
+   [...document.querySelectorAll('.main-nav [role=tab]')].find(button=>button.textContent==='Stocul meu').scrollIntoView({behavior:'instant',block:'nearest',inline:'nearest'});
+   await new Promise(done=>requestAnimationFrame(done));
+  })()`);
   const stockTarget=await browser.evaluate('(()=>{const button=[...document.querySelectorAll(".main-nav [role=tab]")].find(button=>button.textContent==="Stocul meu"),r=button.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2,visible:r.left>=0&&r.right<=innerWidth,hit:button.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)),width:innerWidth,left:r.left,right:r.right,scroll:button.closest(".nav-wrap").scrollLeft}})()');
   assert(stockTarget.visible&&stockTarget.hit,'last agent operational tab remains reachable by horizontal navigation at 320px: '+JSON.stringify(stockTarget));
   await browser.send('Input.dispatchMouseEvent',{type:'mousePressed',button:'left',clickCount:1,x:stockTarget.x,y:stockTarget.y});await browser.send('Input.dispatchMouseEvent',{type:'mouseReleased',button:'left',clickCount:1,x:stockTarget.x,y:stockTarget.y});
