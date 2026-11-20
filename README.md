@@ -438,6 +438,50 @@ for a comma-separated list of closed warehouse codes in each territory. Focus
 uses these codes only when they have no current assignment. A change to this
 reporting setting does not require reimport or a ledger rebuild.
 
+## Commercial Focus and partner stands
+
+The Focus workspace reads the current monthly sales import. The private JSON
+policy defaults to `vodafone-commercial-focus-rules.json` inside
+`MOBIUP_DATA_DIR`. `MOBIUP_COMMERCIAL_FOCUS_RULES` can supply an absolute override.
+Each month uses a single versioned offer. Keep a finished period in the file
+when opening the next one so historical rates and targets remain reproducible.
+Mark an offer with `"simulation": true` when its effective date or historical
+applicability is unverified.
+
+```json
+{
+  "version": 1,
+  "periods": [
+    {
+      "fromMonth": "2026-10",
+      "throughMonth": "2026-12",
+      "simulation": true,
+      "accessories": [{"code": "TEST-ACC", "name": "Example accessory"}],
+      "phones": [
+        {"code": "TEST-PHONE", "name": "Example phone", "belowTargetCents": 400, "reachedTargetCents": 750}
+      ],
+      "targets": [{"userId": "example-agent", "units": 10}]
+    }
+  ]
+}
+```
+
+Targets use stable account IDs. Seller attribution requires an exact
+normalized SiteCode and warehouse-name pair from the active actor or an
+explicit `sales-agent-aliases-v1` match. An ambiguous match earns no incentive.
+Each configured accessory pays 500 bani per net item. Eligible phones with a
+zero rate count toward the target. Reaching the target applies the upper rate
+to all eligible net units for the agent in the month. Exact line matches with
+the customer sales history exclude generic clients and consumption or stock
+adjustment documents where the source identifies them. Other reported lines
+retain their original quantities and the coverage note counts unmatched lines.
+
+The partner card reads finalized stand slips for its exact CRM point and
+verified merges. It preserves the stand name from each signed-off slip, even
+when variants share the same code. The first identified invoice comes from the
+exact point's sales history. A slip in the same day as the first identified
+invoice is reported as such.
+
 ## Partner fiscal lookup
 
 The new-partner form starts with a debounced global active-CRM name or partial-CUI

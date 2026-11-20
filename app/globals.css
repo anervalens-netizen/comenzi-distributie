@@ -133,7 +133,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 html { scroll-padding-top:calc(var(--app-header-height) + var(--editor-toolbar-height) + 24px); }
 .app-header { position:sticky; top:0; z-index:50; height:calc(var(--app-header-height) + env(safe-area-inset-top)); min-height:calc(var(--app-header-height) + env(safe-area-inset-top)); padding:calc(10px + env(safe-area-inset-top)) max(3%,env(safe-area-inset-right)) 10px max(3%,env(safe-area-inset-left)); box-shadow:0 2px 10px #20243008; }
 .profile strong,.profile small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.nav-wrap { position:sticky; top:calc(var(--app-header-height) + env(safe-area-inset-top)); z-index:40; }
+.nav-wrap { position:sticky; top:calc(var(--app-header-height) + env(safe-area-inset-top)); z-index:40; scroll-padding-inline:8px; overflow-x:auto; }
 .editor-top { position:sticky; top:calc(var(--app-header-height) + env(safe-area-inset-top)); z-index:35; height:var(--editor-toolbar-height); margin-bottom:12px; background:var(--background); border-bottom:1px solid #e5e7eb; }
 .editor-page .page-heading { margin-top:14px; }
 .catalog-controls { position:sticky; top:calc(var(--app-header-height) + var(--editor-toolbar-height) + env(safe-area-inset-top)); z-index:25; background:var(--background); padding-top:10px; box-shadow:0 5px 8px var(--background); }

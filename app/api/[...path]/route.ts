@@ -7,6 +7,11 @@ import {importsCatalog,importsJobs,importsJob} from '@/lib/import-engine-runtime
 import {simVerification,simVerificationAccess} from '@/lib/sim-verification-api';
 import {operationalWriteGuard} from '@/lib/operational-write-guard';
 import {activationReport} from '@/lib/activation-api';
+import {applyVodafoneActivationTargets} from '@/lib/vodafone-activation-targets';
+import {vodafoneBonusResponse} from '@/lib/vodafone-bonus-api';
+import {commercialFocus} from '@/lib/commercial-focus-api';
+import {partnerStands} from '@/lib/partner-stands-api';
+import {managerAi} from '@/lib/manager-ai-api';
 import {isVodafoneFocusView,isVodafoneOverview} from '@/lib/vodafone-focus-api';
 import {timedResponse} from '@/lib/request-timing';
 import {usageAuth,usagePulse,usageReport} from '@/lib/usage-api';
@@ -345,6 +350,15 @@ async function dispatch(req: Request) {
   if(path.join('/')==='usage/pulse'&&req.method==='POST')return response(await usagePulse(req,user));
   if(path.join('/')==='sim/verify'&&req.method==='GET')return response(await simVerificationAccess(user));
   if(path.join('/')==='sim/verify'&&req.method==='POST')return response(await simVerification(user,await jsonBody(req)));
+  if(path.join('/')==='vodafone/bonuses'&&req.method==='GET'){
+    requireManager(user);
+    return vodafoneBonusResponse(user,new URL(req.url).searchParams,()=>requireUser(req));
+  }
+  if(path.join('/')==='focus/commercial'&&req.method==='GET')return response(await commercialFocus(user,new URL(req.url).searchParams,()=>requireUser(req)));
+  if(path.join('/')==='manager-ai'&&['GET','POST'].includes(req.method)){
+    requireManager(user);
+    return managerAi(req,user);
+  }
   if(path.join('/')==='activations'&&req.method==='GET'){
     const params=new URL(req.url).searchParams,view=params.get('view');
     const focus=isVodafoneFocusView(view);
@@ -359,6 +373,7 @@ async function dispatch(req: Request) {
       if(report.provider!=='vodafone'||!report.focusWorkbook)fail(404,'Raportul Focus nu este disponibil în această selecție.');
       return response({workbook:report.focusWorkbook});
     }
+    if(report.provider==='both'&&view==='partners')return response(await applyVodafoneActivationTargets(await requireUser(req),params,report));
     return response(report);
   }
   if(path.join('/')==='usage/report'&&req.method==='GET')return response(await usageReport(readUser,new URL(req.url).searchParams));
@@ -374,6 +389,8 @@ async function dispatch(req: Request) {
   if(path.join('/')==='partner/browse'&&req.method==='GET')return response(await browsePartners(readUser,new URL(req.url).searchParams,user));
   if(path.join('/')==='partner/map'&&req.method==='GET')return response(await mapPartners(readUser,new URL(req.url).searchParams,user));
   if(path.join('/')==='partner/summary'&&req.method==='GET')return response({partners:await portfolioSummary(readUser)});
+  if(path[0]==='partner'&&path[1]==='portfolio'&&path[2]&&path[3]==='stands'&&!path[4]&&req.method==='GET')
+    return response(await partnerStands(req,readUser,path[2],user));
   if(path[0]==='partner'&&path[1]==='portfolio'&&path[2]&&path[3]==='sales'&&!path[4]&&req.method==='GET') {
     const version=await clientPortfolioVersion();
     const detail=await partnerDetail(readUser,path[2],null,user);

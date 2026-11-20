@@ -1,0 +1,24 @@
+.vodafone-bonus .distribution-table {
+  min-width: max-content;
+}
+.vodafone-bonus-actions,
+.vodafone-bonus-views {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .5rem;
+  align-items: center;
+}
+.vodafone-bonus-actions select,
+.vodafone-bonus-actions input {
+  border: 1px solid var(--border);
+  border-radius: .5rem;
+  background: var(--background);
+  padding: .4rem .6rem;
+}
+.vodafone-bonus-views [aria-pressed='true'] {
+  border-color: currentColor;
+  font-weight: 700;
+}
+.vodafone-bonus .distribution-table small {
+  display: block;
+}

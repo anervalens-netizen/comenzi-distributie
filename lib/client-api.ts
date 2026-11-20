@@ -123,7 +123,8 @@ export async function networkApi<T=Record<string,unknown>>(path: string,method='
   const isPrivate=!publicRequest(path,method);
   const controller=new AbortController();
   const cancel=()=>controller.abort(signal?.reason);signal?.addEventListener('abort',cancel,{once:true});if(signal?.aborted)cancel();
-  const timer=setTimeout(()=>controller.abort(new Error('Cererea a depășit timpul de așteptare.')),20000);
+  const budget=method==='GET'&&/^vodafone\/bonuses(?:\?|$)/.test(path)?50000:20000;
+  const timer=setTimeout(()=>controller.abort(new Error('Cererea a depășit timpul de așteptare.')),budget);
   const headers:Record<string,string>={};if(isPrivate&&requestOwner)headers['X-Operation-User']=requestOwner;
   const options:RequestInit={method,credentials:'same-origin',signal:controller.signal,headers};
   if(body && method!=='GET' && method!=='HEAD'){headers['Content-Type']='application/json';if(operationId)headers['X-Operation-Id']=operationId;options.body=JSON.stringify(body);}
@@ -181,7 +182,10 @@ export async function networkApi<T=Record<string,unknown>>(path: string,method='
   }
   return data as T;
 }
-const cacheable=(path:string)=>bootstrapPath(path)||path==='auth/session'||/^orders(?:\?|$)/.test(path)||/^orders\/[^/]+$/.test(path)||path==='catalog'||/^transfers(?:[?]|$)/.test(path)||/^transfers\/[^/?]+(?:\/stock)?$/.test(path)||/^partner\/(browse|map|summary|portfolio|planning)([/?]|$)/.test(path)||/^clients[?]/.test(path)||/^stock[/?]/.test(path);
+const cacheable=(path:string)=>{
+  if(/^partner\/portfolio\/[^/?]+\/stands(?:\?|$)/.test(path))return false;
+  return bootstrapPath(path)||path==='auth/session'||/^orders(?:\?|$)/.test(path)||/^orders\/[^/]+$/.test(path)||path==='catalog'||/^transfers(?:[?]|$)/.test(path)||/^transfers\/[^/?]+(?:\/stock)?$/.test(path)||/^partner\/(browse|map|summary|portfolio|planning)([/?]|$)/.test(path)||/^clients[?]/.test(path)||/^stock[/?]/.test(path);
+};
 export async function api<T=Record<string,unknown>>(path:string,method='GET',body?:unknown,signal?:AbortSignal,options:ApiReadOptions={}):Promise<T>{
  method=method.toUpperCase();synchronizeReadCache();
  if(signal?.aborted)throw signal.reason??new DOMException('Cerere anulată.','AbortError');

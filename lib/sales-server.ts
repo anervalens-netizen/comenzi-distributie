@@ -55,6 +55,18 @@ async function mappingSnapshot() {
   return { actors, grouped, locations, hash: salesHash(JSON.stringify(canonical)), sourceStamp: JSON.stringify([result.results,aliasRow?.value??null]), actorRows: result.results, aliasRaw: aliasRow?.value??null };
 }
 
+/** Preserve exact active seller identity and owner-approved aliases for incentive calculations. */
+export async function salesActorIdentities() {
+  const snapshot = await mappingSnapshot();
+  return {
+    primary: snapshot.actorRows.filter(row => row.role === 'agent').map(row => ({
+      id: row.id, name: row.name, siteCode: row.site_code?.trim() || '',
+    })),
+    identities: snapshot.actors.filter(actor => actor.warehouseName)
+      .map(({id, siteCode, warehouseName}) => ({id, siteCode, warehouseName})),
+  };
+}
+
 function validateMonth(value: string | null) {
   if (!value || !/^\d{4}-(?:0[1-9]|1[0-2])$/.test(value)) fail(400, 'Luna trebuie să fie în formatul AAAA-LL.');
   return value;

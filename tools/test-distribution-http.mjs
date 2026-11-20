@@ -46,6 +46,11 @@ const insertHistory=history.prepare('INSERT INTO history_rows VALUES(?,?,?,?,?,?
 insertHistory.run(1,'2025-11-05','TR North','101','CREDIT','Synthetic credit','Example','Cartele','SIM',2000000,2420,1);
 insertHistory.run(1,'2025-11-05','TR south','102','CREDIT','Synthetic credit','Example','Cartele','SIM',3000000,3630,2);
 history.close();
+writeFileSync(join(root,'vodafone-top-locations.json'),JSON.stringify({version:1,rows:[
+ {month:'2026-10',pointCode:'A',target:6,bonus:2},
+ {month:'2026-10',pointCode:'B',target:0},
+ {month:'2026-09',pointCode:'A',target:4},
+]}));
 const child=spawn(process.execPath,['dist/standalone/server.js'],{env:{...process.env,MOBIUP_DATA_DIR:root,MOBIUP_ACTIVATIONS_DIR:root,MOBIUP_ACTIVATIONS_PILOT_MANAGER_ID:'manager',MOBIUP_ACTIVATIONS_PILOT_ADDITIONAL_MANAGER_IDS:'regional',MOBIUP_ACTIVATIONS_PILOT_AGENT_ID:'north',MOBIUP_ACTIVATIONS_PILOT_ADDITIONAL_AGENT_IDS:'south,non',MOBIUP_USAGE_DISABLED:'1',HOST:'127.0.0.1',PORT:'3096'},stdio:'ignore'});
 let browser;const cookies={};
 async function request(path,id='manager'){const r=await fetch(origin+'/api/'+path,{headers:{Cookie:'mobiup_session='+cookies[id]}});return {status:r.status,data:await r.json()};}
@@ -145,6 +150,16 @@ try{
  assert.equal(digiAgent.operatorReported,undefined);
  assert(!digiAgent.monthly.some(month=>month.source==='operator'),'agent cannot receive national operator data');
  const list=await request('activations?month=2026-10&provider=both&view=partners','north');assert.equal(list.status,200);assert(list.data.partners.rows.some(p=>p.total===0));assert.equal(list.data.partners.rows.reduce((n,p)=>n+p.total,0),3);
+ assert.deepEqual(list.data.partners.rows.find(p=>p.pointCode==='A').vodafoneTargets,[{month:'2026-10',units:6}]);
+ assert.deepEqual(list.data.partners.rows.find(p=>p.pointCode==='B').vodafoneTargets,[{month:'2026-10',units:0}]);
+ const targetQuery='activations?months=2026-09,2026-10&provider=both&view=partners';
+ const globalTargets=await request(targetQuery);
+ assert.deepEqual(globalTargets.data.partners.rows.find(p=>p.pointCode==='A').vodafoneTargets,[{month:'2026-09',units:4},{month:'2026-10',units:6}]);
+ const regionalTargets=await request(targetQuery,'regional');
+ assert.equal(regionalTargets.status,200);assert(regionalTargets.data.partners.rows.some(p=>p.pointCode==='A'));
+ assert(!regionalTargets.data.partners.rows.some(p=>p.vodafoneTargets),'national activation browsing does not grant private targets');
+ assert.equal((await request('vodafone/bonuses','north')).status,403);
+ assert.equal((await request('manager-ai','north')).status,403);
  const selected=list.data.partners.rows.find(p=>p.total>0);const point=encodeURIComponent(selected.key);
  assert.equal((await request('activations?month=2026-10&view=detail&point='+point,'north')).data.detail.total,selected.total);
  assert.equal((await request('activations?month=2026-10&view=detail&point=unknown','north')).data.detail.total,0);
@@ -260,6 +275,12 @@ try{
  await waitFor(()=>browser.evaluate('document.body.textContent.includes("Reper sursă")'),'refresh keeps selected partner detail');
  assert(await browser.evaluate('[...document.querySelectorAll("button")].some(button=>button.textContent==="Pe partener"&&button.getAttribute("aria-pressed")==="true")'),'refresh preserves partner view');
  for(const [width,height] of [[1280,900],[820,1180],[390,844]]){await browser.send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:width<700});assert(await browser.evaluate('document.documentElement.scrollWidth<=innerWidth'),'no overflow '+width);mkdirSync('work/evidence',{recursive:true});const screenshot=await browser.send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});writeFileSync('work/evidence/distribution-'+width+'.png',Buffer.from(screenshot.data,'base64'));}
+ await browser.evaluate(`window.bonusRequests=[];window.bonusOriginalFetch=window.fetch;window.fetch=(...args)=>{window.bonusRequests.push(String(args[0]));return window.bonusOriginalFetch(...args);};true`);
+ await browser.evaluate('[...document.querySelectorAll(".activation-workspace button")].find(button=>button.textContent==="Bonusuri Vodafone").click()');
+ await waitFor(()=>browser.evaluate(`window.bonusRequests.some(path=>path.startsWith('/api/vodafone/bonuses?')&&new URL(path,location.origin).searchParams.get('month')==='2026-10')`),'bonus report uses historical reporting month on opening');
+ await browser.evaluate(`document.querySelector('[aria-label="octombrie 2026"]').click()`);
+ await waitFor(()=>browser.evaluate(`window.bonusRequests.some(path=>path.startsWith('/api/vodafone/bonuses?')&&new URL(path,location.origin).searchParams.get('month')==='2026-09')`),'bonus report follows changes to the reporting month');
+ await browser.evaluate(`document.querySelector('[aria-label="octombrie 2026"]').click();window.fetch=window.bonusOriginalFetch;true`);
  await browser.evaluate('[...document.querySelectorAll(".main-nav [role=tab]")].find(button=>button.textContent==="Accesorii").click()');
  await waitFor(()=>browser.evaluate('document.querySelectorAll(".commerce-category-card").length===3'),'accessory categories');
  await browser.evaluate(`(()=>{const b=[...document.querySelectorAll('button')].find(b=>b.getAttribute('aria-label')==='Evoluție lunară · Accesorii');b.focus();b.click();})()`);
@@ -301,7 +322,9 @@ try{
   await waitFor(()=>browser.evaluate('document.querySelector(".profile strong")?.textContent==='+JSON.stringify('Synthetic '+id)),'agent session '+id);
   await browser.evaluate('window.agentRequests=[];window.agentOriginalFetch=window.fetch;window.fetch=(...args)=>{window.agentRequests.push(String(args[0]));return window.agentOriginalFetch(...args);};true');
   const destinations=await browser.evaluate('[...document.querySelectorAll(".main-nav [role=tab]")].map(button=>button.textContent)');
-  assert(['Comenzi','Avize','Transfer','Parteneri','Accesorii','Prepay','Stocul meu'].every(label=>destinations.includes(label)),'agent operational destinations and shared commercial labels remain reachable');
+  assert(['Comenzi','Avize','Transfer','Parteneri','Accesorii','Prepay','Focus','Stocul meu'].every(label=>destinations.includes(label)),'agent operational destinations and shared commercial labels remain reachable');
+  assert.deepEqual(destinations.slice(destinations.indexOf('Prepay'),destinations.indexOf('Prepay')+3),['Prepay','Focus','Stocul meu']);
+  assert(!destinations.includes('AI manager'),'AI is a manager destination');
   await browser.evaluate('[...document.querySelectorAll(".main-nav [role=tab]")].find(button=>button.textContent==="Accesorii").click()');
   await waitFor(()=>browser.evaluate('document.querySelectorAll(".agent-commerce .commerce-category-card").length===3'),'agent accessory reports '+id);
   assert(!(await browser.evaluate('!!document.querySelector(".manager-scope-bar")||!!document.querySelector(".distribution-projects")')),'agent reports never expose manager or project selectors');
@@ -328,8 +351,8 @@ try{
   assert(!(await browser.evaluate('window.agentRequests.some(path=>path.includes("/sales/clients/reconciliation"))')),'agent never requests national reconciliation');
   await browser.send('Emulation.setDeviceMetricsOverride',{width:320,height:800,deviceScaleFactor:1,mobile:true});
   await browser.evaluate('[...document.querySelectorAll(".main-nav [role=tab]")].find(button=>button.textContent==="Stocul meu").scrollIntoView({block:"nearest",inline:"nearest"})');
-  const stockTarget=await browser.evaluate('(()=>{const button=[...document.querySelectorAll(".main-nav [role=tab]")].find(button=>button.textContent==="Stocul meu"),r=button.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2,visible:r.left>=0&&r.right<=innerWidth,hit:button.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))}})()');
-  assert(stockTarget.visible&&stockTarget.hit,'last agent operational tab remains reachable by horizontal navigation at320px');
+  const stockTarget=await browser.evaluate('(()=>{const button=[...document.querySelectorAll(".main-nav [role=tab]")].find(button=>button.textContent==="Stocul meu"),r=button.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2,visible:r.left>=0&&r.right<=innerWidth,hit:button.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)),width:innerWidth,left:r.left,right:r.right,scroll:button.closest(".nav-wrap").scrollLeft}})()');
+  assert(stockTarget.visible&&stockTarget.hit,'last agent operational tab remains reachable by horizontal navigation at 320px: '+JSON.stringify(stockTarget));
   await browser.send('Input.dispatchMouseEvent',{type:'mousePressed',button:'left',clickCount:1,x:stockTarget.x,y:stockTarget.y});await browser.send('Input.dispatchMouseEvent',{type:'mouseReleased',button:'left',clickCount:1,x:stockTarget.x,y:stockTarget.y});
   await waitFor(()=>browser.evaluate('[...document.querySelectorAll(".main-nav [role=tab]")].some(button=>button.textContent==="Stocul meu"&&button.getAttribute("aria-selected")==="true")'),'agent stock navigation '+id);
  }

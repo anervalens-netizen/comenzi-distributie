@@ -1,0 +1,58 @@
+.commercial-focus {
+  display: grid;
+  gap: 1rem;
+}
+.commercial-focus .page-heading {
+  align-items: end;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  justify-content: space-between;
+}
+.commercial-focus .page-heading label {
+  align-items: center;
+  display: inline-flex;
+  gap: 0.5rem;
+}
+.commercial-focus-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.commercial-focus-seller {
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  min-width: 0;
+  padding: 0.75rem;
+}
+.commercial-focus-seller summary {
+  cursor: pointer;
+  min-height: 1.75rem;
+}
+.commercial-focus-seller summary strong {
+  display: inline-block;
+  margin-inline-start: 0.75rem;
+}
+.commercial-focus-scroll {
+  margin-top: 0.75rem;
+  max-width: 100%;
+  overflow-x: auto;
+}
+.commercial-focus-scroll table {
+  border-collapse: collapse;
+  min-width: 26rem;
+  width: 100%;
+}
+.commercial-focus-scroll th,
+.commercial-focus-scroll td {
+  border-bottom: 1px solid var(--border);
+  padding: 0.6rem;
+  text-align: end;
+}
+.commercial-focus-scroll th:first-child,
+.commercial-focus-scroll td:first-child {
+  text-align: start;
+}
+.commercial-focus-scroll small {
+  display: block;
+}

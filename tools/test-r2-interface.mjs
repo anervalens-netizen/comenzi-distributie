@@ -22,10 +22,10 @@ const unused=names=>names.map(name=>`export const ${name}=()=>{throw new Error('
 const stubs={
   runtime:'export const env={DB:globalThis.__r2Db};export const runtimeKind="standalone";'+unused(['operationalStatus']),
   'usage-store':'export const recordUsageAuth=()=>false;export const recordUsagePulse=()=>false;'+unused(['readUsage']),
-  'activation-store':unused(['readActivations','readVodafoneFocus','verifySim']),
+  'activation-store':unused(['readActivations','readVodafoneFocus','readVodafoneBonusAsync','verifySim']),
   catalog:'export const readCatalog=async()=>({products:[]});'+unused(['changeProduct','readProductPhoto']),
-  'stock-server':`export const stockForWarehouse=async()=>({importedAt:'2026-09-01T00:00:00Z',filename:'synthetic.xlsx',rows:[{code:'SYNTHETIC',name:'Synthetic product',quantity:10}]});${unused(['stockImportStatus','stockView','stockUpload'])}`,
-  'sales-server':unused(['salesImportStatus','salesView','salesUpload','orderLimitSalesScope']),
+  'stock-server':`export const stockForWarehouse=async()=>({importedAt:'2026-09-01T00:00:00Z',filename:'synthetic.xlsx',rows:[{code:'SYNTHETIC',name:'Synthetic product',quantity:10}]});${unused(['stockForWarehouses','stockImportStatus','stockView','stockUpload'])}`,
+  'sales-server':unused(['salesActorIdentities','salesImportStatus','salesView','salesUpload','orderLimitSalesScope']),
   exports:unused(['templateExport','combinedExport','repairOrderExport','simExport','mailFor','emlFor']),
   'push-notifications':unused(['managerRequestInbox','readPartnerNotifications','pushPublicConfig','removePushSubscription','upsertPushSubscription','sendPartnerRequestPush','sendNotificationPush']),
   'partner-mail':unused(['partnerMail']),
@@ -36,9 +36,10 @@ const stubs={
   // Its real filesystem/HTTP import contract is exercised by its own suite.
   'client-history-import-runtime':unused(['historyImportStatus','historyImportPreview','historyImportCommit']),
   'import-engine-runtime':unused(['importsCatalog','importsJobs','importsJob']),
+  'commercial-focus-runtime':unused(['readFocusSalesAsync']),
 };
 const serverPlugin={name:'synthetic-infrastructure',setup(b){
-  b.onResolve({filter:/^#mobiup-activation-store$/},()=>({path:'activation-store',namespace:'fixture'}));
+  b.onResolve({filter:/^#mobiup-(activation-store|commercial-focus-runtime|runtime)$/},args=>({path:args.path.slice('#mobiup-'.length),namespace:'fixture'}));
   b.onResolve({filter:/^(?:@\/lib\/|\.\/)([^/]+)$/},args=>{const name=args.path.split('/').at(-1);if(name in stubs)return {path:name,namespace:'fixture'};});
   b.onResolve({filter:/^@\/resources\//},args=>({path:args.path.split('/').at(-1),namespace:'resource'}));
   b.onLoad({filter:/.*/,namespace:'fixture'},args=>({loader:'js',contents:stubs[args.path]}));
@@ -290,7 +291,7 @@ try {
   for(const [who,selectedAgent,chosenAgent,allowed] of [['regional','','b',['a','a-shared']],['regional','b','b',[]],['regional','a','a',['a']],['global','b','b',['b']]]){
     const bootstrap={user:user(who),users,orders:[outside,inside],products:[],warehouses:[]};
     globalThis.__r2Selection={userId:who,managerId:'',agentId:selectedAgent};
-    const html=render(DistributionApp,{},[bootstrap,false,'',false,'portfolio',false,'stock','2026-09','orders',null,false,'combined',chosenAgent,false,'','all','all',Date.now()]);
+    const html=render(DistributionApp,{},[bootstrap,false,'',false,'portfolio',false,false,'stock','2026-09','orders',null,false,'combined',chosenAgent,false,'','all','all',Date.now()]);
     const select=html.match(/<select[^>]*id="order-agent"[^>]*>([\s\S]*?)<\/select>/);
     check(select,'actual create-as-agent dialog rendered');
     equal([...select[1].matchAll(/<option[^>]*value="([^"]*)"/g)].map(match=>match[1]).sort(),allowed.sort(),'creation targets intersect authenticated writes with selected read scope');
@@ -299,7 +300,7 @@ try {
   }
   for(const who of ['regional','global']){
     globalThis.__r2Selection={userId:who,managerId:'',agentId:''};
-    const html=render(DistributionApp,{},[{user:user(who),users,orders:[outside],products:[]},false,'',false,'portfolio',false,'stock','2026-09','orders',null,false,null,'b',false,'','all','all',Date.now(),outside,false,'']);
+    const html=render(DistributionApp,{},[{user:user(who),users,orders:[outside],products:[]},false,'',false,'portfolio',false,false,'stock','2026-09','orders',null,false,null,'b',false,'','all','all',Date.now(),outside,false,'']);
     const confirm=html.match(/<button class="danger"([^>]*)>/);
     check(confirm,'actual delete confirmation rendered');
     equal(confirm[1].includes('disabled'),who==='regional','delete confirmation also fails closed outside write scope');
