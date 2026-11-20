@@ -8,6 +8,7 @@ import type {ActivationReport} from './activation-types';
 type Queue = {tail: Promise<void>; pending: number; limit: number};
 const detailQueue: Queue = {tail: Promise.resolve(), pending: 0, limit: 12};
 const overviewQueue: Queue = {tail: Promise.resolve(), pending: 0, limit: 6};
+const baseOverviewQueue: Queue = {tail: Promise.resolve(), pending: 0, limit: 12};
 const inFlightOverviews = new Map<string, Promise<ActivationReport>>();
 const focusDeadlineMs = 17_000;
 type WorkerMessage = {type: 'overviewBase' | 'report'; report: ActivationReport} | null;
@@ -74,7 +75,14 @@ export async function readVodafoneFocus(month: string, sites: string[] | null, q
   const key = JSON.stringify([month, sites, query]);
   const pending = inFlightOverviews.get(key);
   if (pending) return pending;
-  const result = runFocus(overviewQueue, month, sites, query);
+  const requiresFocus = query.focusSummaries.length > 0;
+  const focusBusy = requiresFocus && overviewQueue.pending >= overviewQueue.limit;
+  // Keep ordinary totals available if the certified calculation queue is full.
+  // This separate lane stays bounded and also runs off the request thread.
+  const result = focusBusy
+    ? runFocus(baseOverviewQueue, month, sites, {...query, focusSummaries: []})
+       .then((report): ActivationReport => ({...report, commissionCoverage: 'unavailable'}))
+    : runFocus(requiresFocus ? overviewQueue : baseOverviewQueue, month, sites, query);
   inFlightOverviews.set(key, result);
   try {
     return await result;

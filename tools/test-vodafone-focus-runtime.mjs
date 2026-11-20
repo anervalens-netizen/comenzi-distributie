@@ -25,8 +25,8 @@ try {
       type:'overviewBase',report:{month, totals:{total:50}, commissionCoverage:'unavailable'},
     });
     if (month === 'failure') parentPort.postMessage(null);
-    else if (month !== 'slow' && month !== 'detail') parentPort.postMessage({
-      type:'report',report:{month, totals:{total:50, eligible:20}, commissionCoverage:'complete'},
+    else if (!month.startsWith('slow') && month !== 'detail') parentPort.postMessage({
+      type:'report',report:{month, totals:{total:50,...(query.focusSummaries?.length ? {eligible:20} : {})}},
     });
     else await new Promise(resolve=>setTimeout(resolve,20_000));
   `);
@@ -50,6 +50,13 @@ try {
   await Promise.all([queued, rejected]);
   assert.equal((await readVodafoneFocus('recovered', null, overview)).totals.eligible, 20);
   assert.ok(!readFileSync('started', 'utf8').split('\n').includes('obsolete'));
+
+  const saturated = Promise.allSettled(Array.from({length:6}, (_, i) => readVodafoneFocus('slow-'+i,null,overview)));
+  const ordinary = await readVodafoneFocus('ordinary', null, overview);
+  assert.equal(ordinary.totals.total, 50);
+  assert.equal(ordinary.totals.eligible, undefined);
+  assert.equal(ordinary.commissionCoverage, 'unavailable');
+  await saturated;
   console.log('Vodafone worker returns certified results or the ordinary totals by its deadline and recovers for the next request.');
 } finally {
   globalThis.setTimeout = realTimeout;
