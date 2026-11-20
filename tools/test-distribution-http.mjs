@@ -126,6 +126,19 @@ try{
  for(const id of ['north','south','non'])for(const attack of ['agentId=south','managerId=manager','siteCode=S'])assert.equal((await request('activations?month=2026-10&'+attack,id)).status,403);
  assert.equal((await request('activations?month=2026-10&months=2026-09,2026-10,2026-10')).data.totals.total,9);
  assert.equal((await request('activations?month=2026-10&projects=vodafone_sud,vodafone_nord')).data.totals.total,7);
+ const digiMonths='activations?provider=digi&months=2026-03,2026-04,2026-10';
+ const digiAnnual=await request(digiMonths);
+ assert.equal(digiAnnual.status,200);
+ assert.equal(digiAnnual.data.totals.total,2,'official months still drive the national Digi card');
+ assert.deepEqual(digiAnnual.data.monthly.map(m=>[m.month,m.reported,m.source,m.counts.total]),[
+   ['2026-03',true,'internal',1],['2026-04',false,undefined,0],['2026-10',true,'operator',2],
+ ]);
+ assert.deepEqual(digiAnnual.data.history.map(m=>[m.month,m.source,m.total]),[
+   ['2026-03','internal',1],['2026-10','operator',2],
+ ]);
+ const digiAgent=(await request(digiMonths,'north')).data;
+ assert.equal(digiAgent.operatorReported,undefined);
+ assert(!digiAgent.monthly.some(month=>month.source==='operator'),'agent cannot receive national operator data');
  const list=await request('activations?month=2026-10&provider=both&view=partners','north');assert.equal(list.status,200);assert(list.data.partners.rows.some(p=>p.total===0));assert.equal(list.data.partners.rows.reduce((n,p)=>n+p.total,0),3);
  const selected=list.data.partners.rows.find(p=>p.total>0);const point=encodeURIComponent(selected.key);
  assert.equal((await request('activations?month=2026-10&view=detail&point='+point,'north')).data.detail.total,selected.total);
@@ -203,6 +216,18 @@ try{
   await waitFor(()=>browser.evaluate('!document.querySelector("[role=dialog]")'),'close activation trend');
   assert.equal(await browser.evaluate('document.activeElement?.getAttribute("aria-label")'),'Evoluție lunară · '+label);
  }
+ await browser.evaluate(`document.querySelector('[aria-label="martie 2026"]').click()`);
+ await waitFor(()=>browser.evaluate(`document.querySelector('[aria-label="Evoluție lunară · Activări Digi"] strong')?.textContent==="2"`),'Digi mixed-coverage card keeps the official total');
+ await browser.evaluate(`document.querySelector('[aria-label="Evoluție lunară · Activări Digi"]').click()`);
+ await waitFor(()=>browser.evaluate(`document.querySelector('[role="dialog"] [data-month="2026-03"]')?.textContent.includes("Evidență internă TR")`),'Digi historic activation month in the chart');
+ const digiLegend=await browser.evaluate(`[...document.querySelectorAll('[role="dialog"] .monthly-trend-legend li')].map(node=>node.textContent)`);
+ assert.deepEqual(digiLegend,['Evidență internă TR','Raport oficial Digi']);
+ assert.equal(await browser.evaluate(`document.querySelectorAll('[role="dialog"] .monthly-trend-plot circle').length`),2);
+ await browser.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape'});
+ await browser.send('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape'});
+ await waitFor(()=>browser.evaluate('!document.querySelector("[role=dialog]")'),'close Digi mixed-coverage trend');
+ await browser.evaluate(`document.querySelector('[aria-label="martie 2026"]').click()`);
+ await waitFor(()=>browser.evaluate(`document.querySelector('[aria-label="Evoluție lunară · Activări Vodafone"] strong')?.textContent==="9"`),'restore the original activation selection');
 
  for(const [width,height] of [[360,800],[390,844]]){
   await browser.send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:true});await browser.evaluate('scrollTo(0,0)');

@@ -75,6 +75,10 @@ export function readActivations(month:string,sites:string[]|null,provider:Activa
       // The operator's certified distinct ICCIDs are the manager KPI. Matching
       // commercial evidence by exact ICCID gives TR agent attribution without
       // altering immutable provider/import records or expanding seller scope.
+      if(provider==='digi'){
+        for(const entry of scoped.monthly||[])if(entry.reported)entry.source='internal';
+        for(const entry of scoped.history)entry.source='internal';
+      }
       if(provider==='digi'&&schema==='3'&&sites===null&&!query.view&&
           query.policy==='manager'&&new Set(query.projects).size===3){
         const certified=digiOperatorReported(source,query.months);
@@ -87,14 +91,18 @@ export function readActivations(month:string,sites:string[]|null,provider:Activa
           scoped.sites=certified.sites.map(row=>({site:row.site,label:labels.get(row.site)||row.site,
             ...counts(row.total,0)}));
           if(other)scoped.sites.push({site:'',label:'Alte canale / fără vânzare TR identificată',...counts(other,other)});
-          scoped.history=certified.monthly.map(entry=>({month:entry.month,
-            ...counts(entry.total,entry.otherChannels+entry.noCommercialMatch)}));
-          scoped.months=scoped.history.map(({month,total})=>({month,total}));
-          scoped.monthly=query.months.map(month=>{
-            const entry=certified.monthly.find(item=>item.month===month);
-            return {month,reported:!!entry,counts:counts(entry?.total||0,(entry?.otherChannels||0)+(entry?.noCommercialMatch||0))};
+          const certifiedByMonth=new Map(certified.monthly.map(entry=>[entry.month,entry]));
+          scoped.monthly=scoped.monthly?.map(internal=>{
+            const official=certifiedByMonth.get(internal.month);
+            return official?{month:official.month,reported:true,source:'operator' as const,
+              counts:counts(official.total,official.otherChannels+official.noCommercialMatch)}:internal;
           });
-          scoped.coveredMonths=certified.monthly.map(entry=>entry.month);
+          // The monthly comparison keeps internal-only months. The certified
+          // total and TR breakdown above use only the selected operator reports.
+          scoped.history=(scoped.monthly||[]).filter(entry=>entry.reported)
+            .map(({month,source,counts})=>({month,source,...counts}));
+          scoped.months=scoped.history.map(({month,total})=>({month,total}));
+          scoped.coveredMonths=scoped.history.map(entry=>entry.month);
           // The old reconciliation value sums obsolete overlapping operator
           // snapshots, so it is not a unique-SIM metric.
           scoped.reconciliation=undefined;

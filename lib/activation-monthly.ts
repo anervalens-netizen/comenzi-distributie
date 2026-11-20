@@ -8,6 +8,6 @@ export function activationMonthlyPoints(report:ActivationReport,months:string[],
   const reported=metric==='eligible'&&report.commissionCoverage!==undefined
     ? typeof value==='number'
     : report.available&&(cohort?entry?.simZero!==undefined:entry?.reported??!!history);
-  return {month,reported:reported&&typeof value==='number',total:typeof value==='number'?value:null};
+  return {month,reported:reported&&typeof value==='number',total:typeof value==='number'?value:null,source:entry?.source??history?.source};
  });
 }

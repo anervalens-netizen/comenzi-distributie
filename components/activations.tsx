@@ -4,7 +4,7 @@ import {RefreshCw} from 'lucide-react';
 import {api,errorMessage} from '@/lib/client-api';
 import {bucharestMonthKey} from '@/lib/bucharest-month';
 import type {ActivationReport,ActivationProvider} from '@/lib/activation-types';
-import {activationDateLabel} from '@/lib/activation-labels';
+import {activationDateLabel,digiActivationSourceLabels} from '@/lib/activation-labels';
 import {OperatorLogo} from './distribution-cards';
 import {MonthlyActivationsDialog} from './monthly-activations';
 import {activationMonthlyPoints,type ActivationTrendMetric} from '@/lib/activation-monthly';
@@ -39,7 +39,7 @@ export function ActivationOperatorCard({userId,query,provider,reload}:{userId:st
    <details className="commerce-details"><summary>Detalii despre sursă</summary><p>Ultima activare: {activationDateLabel(data.latestDate)}. Import: {data.importedAt?new Date(data.importedAt).toLocaleString('ro-RO',{timeZone:'Europe/Bucharest'}):'—'}.</p>{!!data.totals.unassigned&&<p>Agent de verificat: {number(data.totals.unassigned)}. Incluse o singură dată în total.</p>}{!data.operatorReported&&data.reconciliation!==undefined&&data.reconciliation>0&&<p>În afara distribuției TR: {number(data.reconciliation)}. Excluse din totalul distribuției.</p>}</details>
    <details className="commerce-details"><summary>Pe agent și istoric lunar</summary><div className="distribution-table-scroll">
      <table className="distribution-table"><thead><tr><th>Agent / TR</th><th>Activări</th>{data.totals.eligible!==undefined&&<th>Comisionabile</th>}</tr></thead><tbody>{data.sites.map(site=><tr key={site.site}><th>{site.site?site.label:'Agent de verificat'}</th><td>{number(site.total)}</td>{data.totals.eligible!==undefined&&<td>{site.eligible===undefined?'—':number(site.eligible)}</td>}</tr>)}</tbody></table>
-     <table className="distribution-table"><thead><tr><th>Luna</th><th>Activări</th>{data.totals.eligible!==undefined&&<th>Comisionabile</th>}</tr></thead><tbody>{data.history.map(month=><tr key={month.month}><th>{month.month}</th><td>{number(month.total)}</td>{data.totals.eligible!==undefined&&<td>{month.eligible===undefined?'—':number(month.eligible)}</td>}</tr>)}</tbody></table>
+     <table className="distribution-table"><thead><tr><th>Luna</th><th>Activări</th>{data.totals.eligible!==undefined&&<th>Comisionabile</th>}</tr></thead><tbody>{data.history.map(month=><tr key={month.month}><th>{month.month}{month.source&&<small>{digiActivationSourceLabels[month.source]}</small>}</th><td>{number(month.total)}</td>{data.totals.eligible!==undefined&&<td>{month.eligible===undefined?'—':number(month.eligible)}</td>}</tr>)}</tbody></table>
    </div></details>
    {trend&&<MonthlyActivationsDialog key={trend.metric} title={trend.label+' · '+network} cohort={trend.metric.startsWith('cohort:')} points={activationMonthlyPoints(data,data.selectedMonths||params.get('months')?.split(',').filter(Boolean)||[data.month],trend.metric)} onClose={()=>setTrend(null)}/>}
   </>}
