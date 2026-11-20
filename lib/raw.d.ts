@@ -12,6 +12,8 @@ declare module '#mobiup-stock-parser' {
 }
 declare module '#mobiup-sales-view' {
   export function getSalesViewRuntime(month:string,siteCode:import('./sales-location').SalesScope|undefined,fromMonth:string,toMonth:string,catalog:readonly import('./sales-classification').SalesCatalogEntry[]):Promise<import('./sales-types').SalesView>;
+}
+declare module '#mobiup-commercial-focus-runtime' {
   export const readFocusSalesAsync: typeof import('./commercial-focus-runtime').readFocusSalesAsync;
 }
 

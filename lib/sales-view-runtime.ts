@@ -1,1 +1,1 @@
-export { getSalesViewRuntime, readFocusSalesAsync } from '#mobiup-sales-view';
+export { getSalesViewRuntime } from '#mobiup-sales-view';
