@@ -111,7 +111,7 @@ def environment(job):
   providers={x[0] for x in c.execute('SELECT DISTINCT operator FROM activation_imports')}
   if providers and providers!={provider}:raise ValueError('Provider mismatch')
   aliases=None
-  if provider=='digi':
+  if provider=='digi' and internal:
    alias_row=c.execute("SELECT value FROM activation_meta WHERE key='digi_site_aliases'").fetchone()
    if not alias_row:raise ValueError('Digi aliases unavailable')
    values=json.loads(alias_row[0]);aliases={(a,b):site for a,b,site in values}
@@ -202,7 +202,7 @@ def run(request):
   projected=2*sum((current/name).stat().st_size for name in ('activations.sqlite','activation-report.sqlite'))+3*path.stat().st_size
   if shutil.disk_usage(root).free<40*1024**3+projected:raise ValueError('Insufficient storage reserve')
  batch={'operator':provider,'files':[str(path)],'source_kind':'internal' if internal else 'operator','source_at':source_at,'period_start':start,'period_end':end,'company':'' if internal else company}
- if provider=='digi':batch['site_aliases']=aliases
+ if provider=='digi' and internal:batch['site_aliases']=aliases
  receipt={'verified':True,'effect':'published','action_id':action_id,'source_sha256':source['sha256'],'actor':job['actor'],'declared_period':{'start':start,'end':end},'source_at':source_at,'provider':provider,'source_kind':batch['source_kind']}
  if not internal:receipt['company']=company
  def before_publish(stage):

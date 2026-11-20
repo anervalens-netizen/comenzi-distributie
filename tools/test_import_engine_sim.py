@@ -61,6 +61,20 @@ class SimExecutorTests(unittest.TestCase):
   with contextlib.closing(sqlite3.connect((self.digi/'current'/'activation-report.sqlite').resolve())) as db:
    self.assertEqual(db.execute("PRAGMA quick_check").fetchone()[0],'ok')
 
+ def test_digi_operator_preview_and_commit_without_site_aliases(self):
+  empty=self.data/'independent-activations'
+  digi=empty/'digi';digi.mkdir(parents=True)
+  activation_job.run_job(digi,[],self.rules)
+  job=self.source('sim_activations_digi')
+  with patch.dict(os.environ,{'MOBIUP_ACTIVATIONS_DIR':str(empty)}):
+   job['preview']=import_engine_sim.run({'job':job,'mode':'execute','action':'preview','action_id':str(uuid.uuid4())})['preview']
+   self.assertEqual(job['preview']['withoutExactInternalMatch'],1)
+   result=import_engine_sim.run({'job':job,'mode':'execute','action':'commit','action_id':str(uuid.uuid4())})
+  self.assertEqual(result['state'],'completed')
+  with contextlib.closing(sqlite3.connect(digi/'current'/'activations.sqlite')) as c:
+   self.assertIsNone(c.execute("SELECT value FROM activation_meta WHERE key='digi_site_aliases'").fetchone())
+   self.assertEqual(c.execute('SELECT activation_date,candidate_site FROM activation_facts').fetchone(),('2026-01-10',None))
+
  def test_digi_replay_before_commercial_counterpart(self):
   job=self.source('sim_activations_digi',distributor='Operator Only')
   def execute(action):

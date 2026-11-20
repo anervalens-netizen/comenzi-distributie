@@ -33,7 +33,7 @@ class DigiOperatorTests(unittest.TestCase):
             items['xl/styles.xml']=f'<styleSheet xmlns="{a.NS["s"]}"><cellXfs count="2"><xf numFmtId="0"/><xf numFmtId="14"/></cellXfs></styleSheet>'.encode()
         with zipfile.ZipFile(p,'w') as z:
             for n,data in items.items():z.writestr(n,data)
-        options=dict(operator='digi',source_kind='operator',company='ExampleCo',source_at=at,period_start='2026-10-01',period_end='2026-10-28',site_aliases=self.aliases)
+        options=dict(operator='digi',source_kind='operator',company='ExampleCo',source_at=at,period_start='2026-10-01',period_end='2026-10-28')
         options.update(kw)
         return a.import_files(self.c,self.root/'data',[p],**options),p,options
 
@@ -47,6 +47,48 @@ class DigiOperatorTests(unittest.TestCase):
         self.internal([f.digi_row(DataDigi='2026-09-15')])
         self.assertEqual(self.fact()['candidate_site'],'SITE-A')
         self.assertEqual(self.fact()['activation_date'],'2026-10-15')
+
+    def test_official_date_repairs_digi_attribution_and_legacy_replay(self):
+        self.internal([f.digi_row(Activat='',DataDigi='not-a-date')])
+        _,path,options=self.operator([self.official()])
+        fact=self.fact()
+        self.assertEqual((fact['activation_date'],fact['candidate_site']),('2026-10-15','SITE-A'))
+        self.assertNotIn('invalid_DataDigi',fact['reasons'])
+        source=self.c.execute("SELECT issues,raw_json FROM activation_movements").fetchone()
+        self.assertIn('invalid_DataDigi',source['issues'])
+        self.assertEqual(json.loads(source['raw_json'])['DataDigi'],'not-a-date')
+        self.c.execute("DELETE FROM activation_meta WHERE key='digi_operator_date_reconciled'")
+        self.c.execute("UPDATE activation_facts SET candidate_site=NULL,status='unresolved',reasons='[\"invalid_DataDigi\"]'")
+        self.c.commit()
+        replay=a.import_files(self.c,self.root/'data',[path],**options)
+        self.assertEqual(replay['files'][0]['status'],'already_imported')
+        self.assertEqual(self.fact()['candidate_site'],'SITE-A')
+        self.assertEqual(self.c.execute('SELECT COUNT(*) FROM activation_imports').fetchone()[0],2)
+
+    def test_official_date_does_not_clear_invalid_movement_date(self):
+        self.internal([f.digi_row(Data='not-a-date',Activat='',DataDigi='not-a-date')])
+        self.operator([self.official()])
+        self.assertIsNone(self.fact()['candidate_site'])
+        self.assertIn('invalid_Data',json.loads(self.fact()['reasons']))
+        self.assertNotIn('invalid_DataDigi',json.loads(self.fact()['reasons']))
+
+    def test_operator_does_not_freeze_or_replace_digi_site_mapping(self):
+        self.operator([self.official()])
+        alias=lambda:self.c.execute("SELECT value FROM activation_meta WHERE key='digi_site_aliases'").fetchone()
+        self.assertIsNone(alias())
+        # Simulate an operator-only ledger initialized by an older importer.
+        self.c.execute("INSERT INTO activation_meta VALUES('digi_site_aliases','[]')")
+        self.c.commit()
+        self.internal([f.digi_row(Activat='',DataDigi='')])
+        original=alias()[0]
+        self.assertEqual(json.loads(original),[['ExampleCo','TR Example','SITE-A']])
+        self.operator([self.official(date='2026-10-16')],at='2026-10-30')
+        self.assertEqual(alias()[0],original)
+        self.assertEqual(self.fact()['candidate_site'],'SITE-A')
+        self.aliases={('ExampleCo','TR Example'):'SITE-B'}
+        with self.assertRaisesRegex(ValueError,'Digi site mapping changed'):
+            self.internal([f.digi_row(Activat='',DataDigi='')])
+        self.assertEqual(alias()[0],original)
 
     def test_company_isolation_and_missing_distribution(self):
         self.internal([f.digi_row(Canal='OtherCo',Activat='',DataDigi='')])
