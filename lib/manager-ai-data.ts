@@ -38,7 +38,7 @@ const activationSource = 'Prepay · Activări Vodafone';
 const bonusSource = 'Registru bonusuri Vodafone';
 const focusSource = 'Focus comercial Vodafone';
 
-export function managerAiReader(request: Request, scope: AiScope, check: () => Promise<User>) {
+export function managerAiReader(request: Request, scope: AiScope, check: () => Promise<User>, options?:{cacheMonths:false}) {
   const monthlyCache = new Map<string,Promise<AiSource>>();
   let registry: Promise<VodafoneBonusReport>|undefined;
   let billing: {version:string;points:Map<string,BillingPoint>}|undefined;
@@ -197,8 +197,8 @@ export function managerAiReader(request: Request, scope: AiScope, check: () => P
     for (const month of months) {
       // Reuse completed queries within one turn, especially after a model drills down.
       const key = JSON.stringify([query.dataset,query.site,month,query.dataset==='sales'?managerAiSalesSiteMode(query):null]);
-      if (!monthlyCache.has(key)) monthlyCache.set(key,readMonth(query,month));
-      const source = await monthlyCache.get(key)!;
+      if (!options && !monthlyCache.has(key)) monthlyCache.set(key,readMonth(query,month));
+      const source = await (options ? readMonth(query,month) : monthlyCache.get(key)!);
       result.rows.push(...source.rows);
       result.coverage.push(...source.coverage);
     }

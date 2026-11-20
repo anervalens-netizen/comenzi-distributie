@@ -168,31 +168,7 @@ async function duplicateImportMessage(kind:'Vânzările'|'Stocurile',userId:stri
   return `${kind} din acest fișier au fost deja importate de ${row?.name||'un alt manager'}. Nu este nevoie să le imporți din nou.`;
 }
 
-export async function salesView(req: Request, user: User) {
-  const query = new URL(req.url).searchParams;
-  const month = validateMonth(query.get('month'));
-  if(query.has('months')){
-    const months=[...new Set(query.getAll('months').flatMap(v=>v.split(',')).filter(Boolean))].sort();
-    if(months.length>36)fail(400,'Selectează maximum 36 de luni.');
-    months.forEach(validateMonth);
-    const rules=await readDistributionRules();if(!rules)fail(503,'Configurația proiectelor trebuie pregătită.');
-    const historyGeneration=historicalSalesGeneration();
-    const generation=salesRevision(),identity=(await mappingSnapshot()).hash,views:SalesView[]=[];
-    // Reuse the existing authorized worker for each distinct month; a generation change rejects the union.
-    for(const selected of months){const url=new URL(req.url);url.searchParams.delete('months');url.searchParams.set('month',selected);for(const key of ['from','to','fromMonth','toMonth'])url.searchParams.delete(key);const view=await (await salesView(new Request(url),user)).json() as SalesView;views.push(withSalesVat({...view,products:view.products.map(p=>({...p,distributionGroup:productGroup(rules,p.itemCode)}))}));}
-    let fallback=views[0];
-    if(!fallback){const url=new URL(req.url);url.searchParams.delete('months');url.searchParams.set('projects','');fallback=await (await salesView(new Request(url),user)).json() as SalesView;}
-    if(historyGeneration!==historicalSalesGeneration()||generation!==salesRevision()||identity!==(await mappingSnapshot()).hash||JSON.stringify(rules)!==JSON.stringify(await readDistributionRules()))fail(409,'Datele s-au modificat. Reîncarcă selecția.');
-    const combined=combineSalesViews(views,fallback);
-    combined.products=combined.products.map(p=>({...p,distributionGroup:productGroup(rules,p.itemCode)}));
-    return response({...combined,distribution:distributionSales(views,rules,months)});
-  }
-  // The current-month view must not aggregate the complete imported history.
-  // History callers opt into a range explicitly.
-  const fromMonth = validateMonth(query.get('fromMonth') || query.get('from') || month);
-  const toMonth = validateMonth(query.get('toMonth') || query.get('to') || month);
-  if (fromMonth > toMonth) fail(400, 'Intervalul lunar este invalid.');
-  const snapshot = await mappingSnapshot();
+async function scopedSalesSelection(query: URLSearchParams, user: User, snapshot: Awaited<ReturnType<typeof mappingSnapshot>>) {
   const requestedSite = query.get('siteCode')?.trim() || undefined;
   let siteScope: SalesScope | undefined = requestedSite;
   let actorIds: string[] | undefined;
@@ -225,7 +201,42 @@ export async function salesView(req: Request, user: User) {
     if(projects.length<projectIds.length)actorIds=actorIds?actorIds.filter(id=>projectActors.includes(id)):projectActors;
   }
   if (actorIds) siteScope = actorScope(actorIds, snapshot, user.role === 'agent' ? undefined : requestedSite);
-  return response(decoratedView(await getSalesViewRuntime(month, siteScope, fromMonth, toMonth, await salesCatalog()), snapshot));
+  return siteScope;
+}
+
+/** Use exactly the active reporting identities and alias rules for analytical extracts. */
+export async function managerSalesAnalysisScope(user: User, params: URLSearchParams) {
+  requireManager(user);
+  const snapshot = await mappingSnapshot();
+  return { scope: await scopedSalesSelection(params, user, snapshot), revision: snapshot.hash };
+}
+
+export async function salesView(req: Request, user: User) {
+  const query = new URL(req.url).searchParams;
+  const month = validateMonth(query.get('month'));
+  if(query.has('months')){
+    const months=[...new Set(query.getAll('months').flatMap(v=>v.split(',')).filter(Boolean))].sort();
+    if(months.length>36)fail(400,'Selectează maximum 36 de luni.');
+    months.forEach(validateMonth);
+    const rules=await readDistributionRules();if(!rules)fail(503,'Configurația proiectelor trebuie pregătită.');
+    const historyGeneration=historicalSalesGeneration();
+    const generation=salesRevision(),identity=(await mappingSnapshot()).hash,views:SalesView[]=[];
+    // Reuse the existing authorized worker for each distinct month; a generation change rejects the union.
+    for(const selected of months){const url=new URL(req.url);url.searchParams.delete('months');url.searchParams.set('month',selected);for(const key of ['from','to','fromMonth','toMonth'])url.searchParams.delete(key);const view=await (await salesView(new Request(url),user)).json() as SalesView;views.push(withSalesVat({...view,products:view.products.map(p=>({...p,distributionGroup:productGroup(rules,p.itemCode)}))}));}
+    let fallback=views[0];
+    if(!fallback){const url=new URL(req.url);url.searchParams.delete('months');url.searchParams.set('projects','');fallback=await (await salesView(new Request(url),user)).json() as SalesView;}
+    if(historyGeneration!==historicalSalesGeneration()||generation!==salesRevision()||identity!==(await mappingSnapshot()).hash||JSON.stringify(rules)!==JSON.stringify(await readDistributionRules()))fail(409,'Datele s-au modificat. Reîncarcă selecția.');
+    const combined=combineSalesViews(views,fallback);
+    combined.products=combined.products.map(p=>({...p,distributionGroup:productGroup(rules,p.itemCode)}));
+    return response({...combined,distribution:distributionSales(views,rules,months)});
+  }
+  // The current-month view must not aggregate the complete imported history.
+  // History callers opt into a range explicitly.
+  const fromMonth = validateMonth(query.get('fromMonth') || query.get('from') || month);
+  const toMonth = validateMonth(query.get('toMonth') || query.get('to') || month);
+  if (fromMonth > toMonth) fail(400, 'Intervalul lunar este invalid.');
+  const snapshot = await mappingSnapshot();
+  return response(decoratedView(await getSalesViewRuntime(month, await scopedSalesSelection(query, user, snapshot), fromMonth, toMonth, await salesCatalog()), snapshot));
 }
 
 export function salesImportStatus() {

@@ -89,9 +89,10 @@ export async function readManagerAiBilling(
   points:Map<string,BillingPoint>,
   rules:DistributionRules|null,
   directory=process.env.MOBIUP_DATA_DIR||'./work/server-data',
+  options?:{allProducts:true;maxRows:number},
 ):Promise<AiSource> {
   const unavailable = (note:string):AiSource => ({rows:[],coverage:[{source:label,month,available:false,note}]});
-  if (!rules) return unavailable('Catalogul Vodafone nu este configurat.');
+  if (!rules && !options) return unavailable('Catalogul Vodafone nu este configurat.');
   const path=resolve(directory,'client-history','client-sales-history.sqlite');
   if (!existsSync(path)) return unavailable('Istoricul comercial nu este importat.');
   const generation=historyFileGeneration(path);
@@ -106,10 +107,11 @@ export async function readManagerAiBilling(
     if (!reference||!active.length) return unavailable('Luna nu are acoperire declarată în istoricul activ.');
     if (active.some((row,i)=>i>0&&row.from<=active[i-1].to)) fail(409,'Importurile active au perioade suprapuse. Verifică istoricul comercial.');
     const covered=available(active,from,to);
-    const revision=createHash('sha256').update(JSON.stringify([reference,active,generation,rules.revision])).digest('hex');
-    const skus=Object.keys(rules.products).filter(sku=>productGroup(rules,sku).startsWith('vodafone_'));
+    const revision=createHash('sha256').update(JSON.stringify([reference,active,generation,rules?.revision])).digest('hex');
+    const skus=rules?Object.keys(rules.products).filter(sku=>productGroup(rules,sku).startsWith('vodafone_')):[];
     const rows:AiSourceRow[]=[];
-    if (points.size&&skus.length) {
+    if (points.size&&(options||skus.length)) {
+      const productFilter=options?'':'AND r.item_code IN (SELECT value FROM json_each(?))';
       const records=connection.prepare(`SELECT r.date,r.site_id erpSite,r.document_number document,r.tr seller,
         r.item_code sku,r.item_name product,r.customer_name sourcePartner,
         r.quantity_micros quantity,r.value_cents value,
@@ -118,9 +120,9 @@ export async function readManagerAiBilling(
         JOIN history_imports h ON h.id=r.import_id AND h.state='active' AND r.date BETWEEN h.period_start AND h.period_end
         JOIN history_allocations a ON a.identity_id=r.identity_id AND a.reference_id=?
         JOIN history_identities i ON i.id=r.identity_id
-        WHERE r.date BETWEEN ? AND ? AND r.item_code IN (SELECT value FROM json_each(?))
+        WHERE r.date BETWEEN ? AND ? ${productFilter}
         AND a.status='direct_code' AND json_array_length(a.partner_ids_json)=1
-        ORDER BY r.date,r.import_id,r.sheet,r.source_row`).iterate(reference,from,to,JSON.stringify(skus));
+        ORDER BY r.date,r.import_id,r.sheet,r.source_row`).iterate(reference,from,to,...(options?[]:[JSON.stringify(skus)]));
       const documents=new Map<string,BillingDocument>();
       let evaluated=0;
       try {
@@ -133,6 +135,7 @@ export async function readManagerAiBilling(
             isVodafoneGenericPartner(row.cui,row.sourcePartner)||vodafoneDocumentKind([row.document],'sale',row.sourcePartner)==='excluded') continue;
           const units=row.quantity/1e6;
           if (dataset==='salesByPoint') {
+            if (options&&rows.length>=options.maxRows) fail(413,'Istoricul pe punct depășește limita. Restrânge perioada sau portofoliul.');
             rows.push({month,date:row.date,franchise,partner:point.name,seller:row.seller,erpSite:row.erpSite,document:row.document,
               sku:row.sku,product:row.product,units,valueLei:row.value===null?null:row.value/100,lines:1,
               missingValueLines:row.value===null?1:0});
@@ -165,7 +168,7 @@ export async function readManagerAiBilling(
       }
     }
     if (generation!==historyFileGeneration(path)) fail(409,'Istoricul comercial s-a modificat. Reîncarcă raportul.');
-    const note=[sourceLimit,`Acoperire declarată ${covered.coverage.join(', ')}.`,covered.complete?'':'Luna are acoperire parțială.'].filter(Boolean).join(' ');
-    return {rows,coverage:[{source:label,month,available:true,through:covered.through,revision,note}]};
+    const note=[options?sourceLimit.replace('Numai pozițiile Vodafone','Pozițiile de produs'):sourceLimit,`Acoperire declarată ${covered.coverage.join(', ')}.`,covered.complete?'':'Luna are acoperire parțială.'].filter(Boolean).join(' ');
+    return {rows,coverage:[{source:options?'Istoric comercial · poziții pe punct':label,month,available:true,through:covered.through,revision,note}]};
   } finally {connection.close();}
 }

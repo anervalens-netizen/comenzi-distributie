@@ -3,7 +3,7 @@ import type {DatabaseSync} from 'node:sqlite';
 import {createHash} from 'node:crypto';
 import {parseDistributionRules,vodafoneEligibility,type DistributionRules} from './distribution-rules';
 import {visibleActivation,type ActivationQuery} from './activation-distribution';
-import {emptyActivationCounts,type ActivationReport,type ActivationCounts,type ActivationProductBreakdown,type ActivationSimZero} from './activation-types';
+import {emptyActivationCounts,type ActivationReport,type ActivationCounts,type ActivationProductBreakdown,type ActivationSimZero,type ActivationAnalysisDay} from './activation-types';
 export const canonicalRules=(r:unknown):string=>JSON.stringify(r&&typeof r==='object'&&!Array.isArray(r)?Object.fromEntries(Object.entries(r).sort(([a],[b])=>a.localeCompare(b)).map(([k,v])=>[k,JSON.parse(canonicalRules(v))])):Array.isArray(r)?r.map(v=>JSON.parse(canonicalRules(v))):r);
 type Dimension={month:string;site:string;item_type:string;county:string;handset:string;contradictory:number;count:number;last_date:string};
 function add(t:ActivationCounts,r:Dimension,rules:DistributionRules,countLegacyEligibility:boolean){
@@ -88,6 +88,13 @@ export function distributionReport(report:DatabaseSync,base:ActivationReport,met
  result.monthly=query.months.map(month=>({month,reported:history.has(month),counts:history.get(month)||newCounts(),...(result.productBreakdown?{productBreakdown:monthlyProducts.get(month)||blankProducts()}:{}),...(result.simZero?{simZero:monthlyCohorts.get(month)||{distributed:0,activated:0,withoutReportedActivation:0}}:{})}));
  // No operator-only serial enters distribution KPI; managers see a separate reconciliation count.
  if(query.policy==='manager'&&sites===null&&query.projects.length===3)result.reconciliation=Number(report.prepare(`SELECT SUM(count) n FROM dimension_monthly WHERE provider=? AND is_tr=0 AND ${monthWhere}`).get(provider,...query.months)?.n||0);
+ if(query.analysisLimit!==undefined){
+   result.analysisDays=report.prepare(`SELECT activation_date date,site,item_type itemType,item_code sku,county,handset,
+     contradictory conflict,COUNT(*) count FROM details WHERE ${where} AND ${monthWhere}
+     GROUP BY activation_date,site,item_type,item_code,county,handset,contradictory
+     ORDER BY activation_date,site,item_type,item_code,county,handset,contradictory LIMIT ?`)
+     .all(...args,...query.months,query.analysisLimit+1) as ActivationAnalysisDay[];
+ }
  activationPartnerView(report,result,where,args,query);
  return result;
 }

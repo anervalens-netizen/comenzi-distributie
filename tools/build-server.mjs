@@ -22,7 +22,7 @@ await build({entryPoints:['lib/client-history-import-worker.ts'],outfile:'dist/s
 await build({entryPoints:['lib/vodafone-focus-worker.ts'],outfile:'dist/standalone/vodafone-focus-worker.mjs',bundle:true,platform:'node',format:'esm',packages:'external',sourcemap:'external'});
 await build({entryPoints:['lib/commercial-focus-worker.ts'],outfile:'dist/standalone/commercial-focus-worker.mjs',bundle:true,platform:'node',format:'esm',packages:'external',sourcemap:'external'});
 await build({entryPoints:['lib/vodafone-bonus-worker.ts'],outfile:'dist/standalone/vodafone-bonus-worker.mjs',bundle:true,platform:'node',format:'esm',packages:'external',sourcemap:'external'});
-for(const name of ['client_sales_history.py','client_history_upload.py','client_catalog_plan.py','activation_versions.py','activation_projection.py','activations.py','activation_report.py','activation_job.py','distribution_configure.py','import_engine_history.py','import_engine_sim.py','import-engine-executor.mjs'])copyFileSync('tools/'+name,'dist/standalone/'+name);
+for(const name of ['client_sales_history.py','client_history_upload.py','client_catalog_plan.py','activation_versions.py','activation_projection.py','activations.py','activation_report.py','activation_job.py','distribution_configure.py','run-manager-ai-sandbox.py','import_engine_history.py','import_engine_sim.py','import-engine-executor.mjs'])copyFileSync('tools/'+name,'dist/standalone/'+name);
 
 // Workers must be emitted before tracing so their dependencies are included.
 const {packageRuntime} = await import('./package-runtime.mjs');

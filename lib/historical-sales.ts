@@ -22,14 +22,20 @@ export function historicalScopeMatch(scope:SalesScope|undefined,location:string,
   ||(!!site&&scope.siteCodes.some(s=>salesSiteKey(s)===site)&&!scope.excludedWarehouseNames.some(n=>salesLocationKey(n)===key));
 }
 const zero=():SalesAggregate=>({rows:0,quantity:0,value:0});
-export function historicalSalesView(empty:SalesView,scope:SalesScope|undefined,catalog:readonly SalesCatalogEntry[],sales:DatabaseSync):SalesView|null{
+export type HistoricalSalesLine = {
+ date:string;site:string;location:string;erpSite:string;sku:string;product:string;brand:string;category:string;
+ quantity:number;valueCents:number|null;
+};
+export function* iterateHistoricalSalesMonth(
+ month:string,scope:SalesScope|undefined,sales:DatabaseSync|null,
+):Generator<HistoricalSalesLine,{importedAt:string|null;through:string}|null> {
  const file=historicalSalesPath();if(!existsSync(file))return null;
  const before=historicalSalesGeneration(),c=new DatabaseSync(file,{readOnly:true});
  try{
  c.exec('BEGIN;');
  const fields=new Set(c.prepare('PRAGMA table_info(history_rows)').all().map(r=>r.name));if(!['site_id','tr','article_type','category','quantity_micros','value_cents'].every(k=>fields.has(k)))return null;
  const importFields=new Set(c.prepare('PRAGMA table_info(history_imports)').all().map(r=>r.name));if(!importFields.has('imported_at'))return null;
- const month=empty.month,from=month+'-01',next=new Date(Date.UTC(Number(month.slice(0,4)),Number(month.slice(5)),1)).toISOString().slice(0,10);
+ const from=month+'-01',next=new Date(Date.UTC(Number(month.slice(0,4)),Number(month.slice(5)),1)).toISOString().slice(0,10);
  const imports=c.prepare("SELECT id,period_start,period_end,imported_at FROM history_imports WHERE state='active' AND period_start<? AND period_end>=? ORDER BY period_start,id").all(next,from);
  for(let i=1;i<imports.length;i++)if(String(imports[i].period_start)<=String(imports[i-1].period_end))throw new Error('Istoricul conține perioade suprapuse.');
  // Only complete declared coverage can replace an absent monthly report.
@@ -37,23 +43,47 @@ export function historicalSalesView(empty:SalesView,scope:SalesScope|undefined,c
  for(const row of imports){if(String(row.period_start)>through)break;if(String(row.period_end)>=through)through=new Date(Date.parse(String(row.period_end)) +86400000).toISOString().slice(0,10);}
  if(through<next)return null;
  const codes=new Map<string,Set<string>>();
- for(const r of sales.prepare('SELECT DISTINCT location,site_code FROM sales_rows').all()){const k=salesLocationKey(String(r.location)),set=codes.get(k)||new Set<string>();set.add(salesSiteKey(String(r.site_code)));codes.set(k,set);}
- const result:SalesView={...empty,source:'client-history',filename:'Istoric pe clienți',importedAt:imports.map(r=>String(r.imported_at)).sort().at(-1)||null,products:[],sites:[],daily:[],summary:zero(),missingValueRows:0};
- const products=new Map<string,SalesProduct>(),sites=new Map<string,SalesView['sites'][number]>(),days=new Map<string,SalesView['daily'][number]>();
- const classifier=createSalesProductClassifier(catalog),importIds=new Set(imports.map(row=>Number(row.id)));
- // Keep the date-range query so existing date indexes can bound each month.
- // Active import coverage was validated above; the source stays read-only.
- for(const row of c.prepare("SELECT r.import_id,r.date,r.tr,r.site_id,r.item_code,r.item_name,r.brand,r.category,r.article_type,r.quantity_micros,r.value_cents FROM history_rows r JOIN history_imports i ON i.id=r.import_id AND i.state='active' WHERE r.date>=? AND r.date<? ORDER BY r.date,r.import_id,r.source_row").iterate(from,next)){
- if(!importIds.has(Number(row.import_id)))continue;
- const location=String(row.tr),set=codes.get(salesLocationKey(location)),code=set?.size===1?[...set][0]:'';
- if(!isTrSalesLocation(location)||!historicalScopeMatch(scope,location,code))continue;
- const quantity=Number(row.quantity_micros)/1e6,value=Number(row.value_cents??0)/100,missing=row.value_cents===null?1:0,itemCode=String(row.item_code),itemName=String(row.item_name),brand=String(row.brand),category=String(row.category),date=String(row.date);
- const key=JSON.stringify([itemCode,itemName,brand,category]),p=products.get(key)||{...zero(),itemCode,itemName,brand,category,subCategory:'',missingValueRows:0};
- p.rows++;p.quantity+=quantity;p.value+=value;p.missingValueRows=(p.missingValueRows||0)+missing;products.set(key,p);
- const sk=JSON.stringify([code,location]),s=sites.get(sk)||{...zero(),siteCode:code||'HISTORY:'+String(row.site_id),location,agent:''};s.rows++;s.quantity+=quantity;s.value+=value;sites.set(sk,s);
- const d=days.get(date)||{...zero(),date};d.rows++;d.quantity+=quantity;d.value+=value;days.set(date,d);
- result.summary.rows++;result.summary.quantity+=quantity;result.summary.value+=value;result.missingValueRows!+=missing;
+ if(sales)for(const r of sales.prepare('SELECT DISTINCT location,site_code FROM sales_rows').all()){
+  const k=salesLocationKey(String(r.location)),set=codes.get(k)||new Set<string>();
+  set.add(salesSiteKey(String(r.site_code)));codes.set(k,set);
  }
+ const importIds=new Set(imports.map(row=>Number(row.id)));
+ // Keep the existing date-range index and full declared coverage before falling back.
+ for(const row of c.prepare("SELECT r.import_id,r.date,r.tr,r.site_id,r.item_code,r.item_name,r.brand,r.category,r.quantity_micros,r.value_cents FROM history_rows r JOIN history_imports i ON i.id=r.import_id AND i.state='active' WHERE r.date>=? AND r.date<? ORDER BY r.date,r.import_id,r.source_row").iterate(from,next)){
+  if(!importIds.has(Number(row.import_id)))continue;
+  const location=String(row.tr),set=codes.get(salesLocationKey(location)),site=set?.size===1?[...set][0]:'';
+  if(!isTrSalesLocation(location)||!historicalScopeMatch(scope,location,site))continue;
+  yield {date:String(row.date),site,location,erpSite:String(row.site_id),sku:String(row.item_code),
+   product:String(row.item_name),brand:String(row.brand),category:String(row.category),quantity:Number(row.quantity_micros)/1e6,
+   valueCents:row.value_cents===null?null:Number(row.value_cents)};
+ }
+ c.exec('COMMIT;');
+ if(before!==historicalSalesGeneration())throw new Error('Istoricul s-a modificat. Reîncarcă raportul.');
+ return {importedAt:imports.map(r=>String(r.imported_at)).sort().at(-1)||null,through:new Date(Date.parse(next)-86400000).toISOString().slice(0,10)};
+ }finally{c.close();}
+}
+export function historicalSalesView(empty:SalesView,scope:SalesScope|undefined,catalog:readonly SalesCatalogEntry[],sales:DatabaseSync):SalesView|null{
+ const result:SalesView={...empty,source:'client-history',filename:'Istoric pe clienți',products:[],sites:[],daily:[],summary:zero(),missingValueRows:0};
+ const products=new Map<string,SalesProduct>(),sites=new Map<string,SalesView['sites'][number]>(),days=new Map<string,SalesView['daily'][number]>();
+ const classifier=createSalesProductClassifier(catalog);
+ const lines=iterateHistoricalSalesMonth(empty.month,scope,sales);
+ let next:ReturnType<typeof lines.next>;
+ try {
+  for (;;) {
+  next=lines.next();
+  if(next.done)break;
+  const row=next.value;
+  const {site,location,sku:itemCode,product:itemName,brand,category,date,quantity}=row;
+  const value=(row.valueCents??0)/100,missing=row.valueCents===null?1:0;
+  const key=JSON.stringify([itemCode,itemName,brand,category]),p=products.get(key)||{...zero(),itemCode,itemName,brand,category,subCategory:'',missingValueRows:0};
+  p.rows++;p.quantity+=quantity;p.value+=value;p.missingValueRows=(p.missingValueRows||0)+missing;products.set(key,p);
+  const sk=JSON.stringify([site,location]),s=sites.get(sk)||{...zero(),siteCode:site||'HISTORY:'+row.erpSite,location,agent:''};s.rows++;s.quantity+=quantity;s.value+=value;sites.set(sk,s);
+  const d=days.get(date)||{...zero(),date};d.rows++;d.quantity+=quantity;d.value+=value;days.set(date,d);
+  result.summary.rows++;result.summary.quantity+=quantity;result.summary.value+=value;result.missingValueRows!+=missing;
+  }
+ } finally { lines.return(null); }
+ if(!next.value)return null;
+ result.importedAt=next.value.importedAt;
  for(const p of products.values()){
  p.value=Math.round(p.value*100)/100;const presentation=salesProductPresentation({itemCode:p.itemCode,itemName:p.itemName,quantity:p.quantity,valueCents:Math.round(p.value*100),category:p.category,subCategory:''},classifier);
  p.segment=presentation.segment;if(presentation.subsegment)p.subsegment=presentation.subsegment;
@@ -62,7 +92,5 @@ export function historicalSalesView(empty:SalesView,scope:SalesScope|undefined,c
  }
  result.products=[...products.values()].sort((a,b)=>b.value-a.value);result.sites=[...sites.values()];result.daily=[...days.values()];
  for(const a of [result.summary,...result.sites,...result.daily,...Object.values(result.segments).map(s=>s.summary)])a.value=Math.round(a.value*100)/100;
- c.exec('COMMIT;');if(before!==historicalSalesGeneration())throw new Error('Istoricul s-a modificat. Reîncarcă raportul.');
  return result;
- }finally{c.close();}
 }

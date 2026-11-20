@@ -34,7 +34,7 @@ async function activationScope(user:User,params:URLSearchParams,rules:Distributi
  return {sites,policy};
 }
 
-export async function activationReport(user:User,params:URLSearchParams,internal?:{allPartners?:boolean;todayWindow?:{from:string;to:string};revalidateFocus?:()=>Promise<User>}):Promise<ActivationReport|CombinedActivationPartners>{
+export async function activationReport(user:User,params:URLSearchParams,internal?:{allPartners?:boolean;analysisLimit?:number;omitFocus?:boolean;todayWindow?:{from:string;to:string};revalidateFocus?:()=>Promise<User>}):Promise<ActivationReport|CombinedActivationPartners>{
  if(!canViewActivations(user))fail(403,'Secțiunea Activări nu este disponibilă pentru acest cont.');
  for(const key of params.keys())if(!['provider','month','months','projects','managerId','agentId','siteCode','view','point','company','q','page','revision','sort','direction','focusKind','focusSite','focusTerritory'].includes(key))fail(400,'Filtru necunoscut.');
  const sort=params.get('sort')||'total',direction=params.get('direction')||'desc';
@@ -81,14 +81,14 @@ export async function activationReport(user:User,params:URLSearchParams,internal
    if(view&&!focusView&&!['partners','detail','export'].includes(view))fail(400,'Vedere invalidă.');
    const page=params.get('page')||'0';if(!/^\d{1,6}$/.test(page))fail(400,'Pagină invalidă.');
    for(const k of ['point','company','q','revision'])if((params.get(k)?.length||0)>500)fail(400,'Filtru prea lung.');
-   query={allPartners:internal?.allPartners,rules,policy,months,projects:projects as DistributionProject[],view:view as ActivationQuery['view'],point:params.get('point')||undefined,company:params.get('company')||undefined,q:params.get('q')||'',page:Number(page),revision:params.get('revision')||undefined};
+   query={allPartners:internal?.allPartners,analysisLimit:internal?.analysisLimit,rules,policy,months,projects:projects as DistributionProject[],view:view as ActivationQuery['view'],point:params.get('point')||undefined,company:params.get('company')||undefined,q:params.get('q')||'',page:Number(page),revision:params.get('revision')||undefined};
    if(focusView){
      query.view=undefined;
      const territory=vodafoneFocusTerritory(params);
      if(query.projects.includes(focusProjects[territory])&&(policy==='manager'||rules.assignments.some(a=>a.userId===user.id&&a.territoryId===territory))){
        query.focus=await vodafoneFocusQuery(rules,territory,params,sites,user.role==='manager');
      }else return {month,provider,available:false,scoped:sites!==null,importedAt:'',latestDate:null,months:[],totals:emptyActivationCounts(),sites:[],history:[]};
-   }else if(isVodafoneOverview(params)){
+   }else if(!internal?.omitFocus&&isVodafoneOverview(params)){
      const territories=focusTerritories.filter(territory=>query!.projects.includes(focusProjects[territory])&&
        (policy==='manager'||rules.assignments.some(a=>a.userId===user.id&&a.territoryId===territory)));
      const summaries=await Promise.all(territories.map(territory=>vodafoneFocusQuery(rules,territory,params,sites,user.role==='manager')));

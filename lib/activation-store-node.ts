@@ -76,7 +76,7 @@ export function readActivations(month:string,sites:string[]|null,provider:Activa
         for(const entry of scoped.monthly||[])if(entry.reported)entry.source='internal';
         for(const entry of scoped.history)entry.source='internal';
       }
-      if(provider==='digi'&&schema==='3'&&sites===null&&!query.view&&
+      if(provider==='digi'&&schema==='3'&&sites===null&&!query.view&&query.analysisLimit===undefined&&
           query.policy==='manager'&&new Set(query.projects).size===3){
         const certified=digiOperatorReported(source,query.months);
         if(certified){

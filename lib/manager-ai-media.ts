@@ -26,7 +26,7 @@ function filename(input:string) {
   const ext=/\.[a-z0-9]{1,8}$/i.exec(file)?.[0] || '';
   return (file.slice(0,file.length-ext.length).slice(0,112).trim().replace(/^[. ]+|[. ]+$/g,'') || 'document')+ext;
 }
-function strictText(bytes:Uint8Array) {
+export function strictText(bytes:Uint8Array) {
   const encoding = bytes[0]===0xff && bytes[1]===0xfe ? 'utf-16le' :
     bytes[0]===0xfe && bytes[1]===0xff ? 'utf-16be' : 'utf-8';
   let value:string;
@@ -39,7 +39,7 @@ function strictText(bytes:Uint8Array) {
 }
 
 /** Parse the ZIP directory first, and bound native inflation per member and cumulatively. */
-function boundedWorkbook(bytes:Uint8Array) {
+export function boundedWorkbook(bytes:Uint8Array) {
   const maxUnpacked=4*1024*1024;
   const view=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength);
   const endMin=Math.max(0,bytes.length-65_557);
@@ -136,7 +136,7 @@ function delimitedExcerpt(value:string,separator:string) {
   }
   return rows;
 }
-function csvSeparator(value:string) {
+export function csvSeparator(value:string) {
   let quoted=false,commas=0,semicolons=0;
   for(const c of value) {
     if(c==='"')quoted=!quoted;
@@ -208,7 +208,7 @@ export async function prepareManagerAiInputs(uploads:readonly File[]):Promise<{f
   return {files,context,media:managerAiMediaParts(files)};
 }
 
-function csvCell(value:ManagerAiCell) {
+export function csvCell(value:ManagerAiCell) {
   if(value===null)return '';
   if(typeof value==='number')return String(value);
   // Excel can evaluate even quoted CSV cells after trimming.

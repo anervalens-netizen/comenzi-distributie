@@ -218,6 +218,26 @@ must stop the private runner. Relative tooling paths support isolated recovery;
 restoring never starts the runner or a service. Install the matching
 `sim_tooling.py` helper with backup/restore and include it in the runtime.
 
+## Analize SQL și Python pentru manageri
+
+Panoul AI poate analiza tabele de business din portofoliul selectat în conversație și poate
+atașa exporturi la răspuns. Cererile de analiză pot folosi SQL pentru îmbinări și agregări,
+sau Python pentru calcule și fișiere. Perioada, granulația și acoperirea surselor sunt disponibile în
+tabelele `_datasets` și `_coverage`. Limita unei selecții este de șase tabele, 12 luni
+pentru fiecare sursă temporală și 80.000 de rânduri cumulate. O sursă neacoperită sau o
+selecție prea mare este semnalată. Un export limitat precizează numărul de rânduri.
+Fișierele Excel generate sunt livrate ca valori, iar exporturile CSV și TSV sunt rescrise
+pentru a trata formulele din câmpurile text drept text.
+
+Funcția este disponibilă pe instanța Node Linux cu `MOBIUP_MANAGER_AI_SANDBOX_ENABLED=1`,
+Bubblewrap, libseccomp și runtime-ul Python gestionat de administrator. Construcția standalone
+include programul de execuție. Sandboxul folosește o copie SQLite cu datele autorizate,
+atașamentele selectate și un spațiu temporar de lucru, cu un singur proces de analiză
+simultan pe instanță. Accesul la rețea și la fișierele aplicației de pe gazdă este izolat.
+Verifică pornirea în condițiile serviciului și o analiză SQL/Python cu date fictive înainte de activare.
+Cheia OpenAI rămâne în configurația privată a serviciului. Când runtime-ul izolat
+nu este disponibil, rapoartele standard din panoul AI rămân disponibile.
+
 ## Lucru mobil și offline
 
 Datele consultate și ciornele se păstrează automat pe dispozitiv, fără activare manuală. Aplicația nu descarcă preventiv întregul portofoliu; fără conexiune sunt disponibile doar datele deja păstrate local. Fundalul hărții necesită conexiune.

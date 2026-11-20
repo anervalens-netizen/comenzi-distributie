@@ -45,6 +45,9 @@ node tools/test-vodafone-top-locations.mjs
 node tools/test-vodafone-bonus.mjs
 node tools/test-manager-ai.mjs
 node tools/test-manager-ai-media.mjs
+node tools/test-manager-ai-analysis-provider.mjs
+node tools/test-manager-ai-sandbox.mjs
+node tools/test-manager-ai-analysis-data.mjs
 node tools/test-manager-ai-chat.mjs
 node tools/test-activation-partners.mjs
 node tools/test-activation-current-window.mjs
