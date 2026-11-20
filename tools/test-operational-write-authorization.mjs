@@ -17,7 +17,7 @@ process.env.MOBIUP_DATA_DIR=join(directory,'data');process.env.MOBIUP_USAGE_DISA
 let server,sql,checks=0;
 try{
  const file=join(directory,'route.mjs');
- await build({stdin:{contents:"export * from './app/api/[...path]/route';export {env} from './lib/runtime';export {readCatalog} from './lib/catalog';export {weekKey} from './lib/server';",loader:'ts',resolveDir:resolve('.')},outfile:file,bundle:true,platform:'node',format:'esm',packages:'external',logLevel:'silent',plugins:[{name:'actual-node-runtime',setup(build){
+ await build({stdin:{contents:"export * from './app/api/[...path]/route';export {env} from './lib/runtime';export {readCatalog} from './lib/catalog';export {weekKey} from './lib/server';",loader:'ts',resolveDir:resolve('.')},outfile:file,bundle:true,platform:'node',format:'esm',loader:{'.py':'text'},packages:'external',logLevel:'silent',plugins:[{name:'actual-node-runtime',setup(build){
   build.onResolve({filter:/^#mobiup-/},args=>({path:resolve('lib/'+args.path.slice('#mobiup-'.length)+'-node.ts')}));
   build.onResolve({filter:/\.sql\?raw$/},args=>({path:resolve(args.path.replace(/^@\//,'').replace(/\?raw$/,'')),namespace:'raw'}));
   build.onLoad({filter:/.*/,namespace:'raw'},args=>({contents:readFileSync(args.path,'utf8'),loader:'text'}));

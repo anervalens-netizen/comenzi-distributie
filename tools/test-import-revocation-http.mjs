@@ -16,7 +16,7 @@ let app,server;
 try {
  symlinkSync(resolve('node_modules'),join(work,'node_modules'));
  const bundle=join(work,'routes.mjs');
- await build({stdin:{contents:"export * from './app/api/[...path]/route';export {env} from './lib/runtime';",loader:'ts',resolveDir:cwd},outfile:bundle,bundle:true,platform:'node',format:'esm',packages:'external',plugins:[{name:'runtime',setup(b){b.onResolve({filter:/^#mobiup-/},a=>({path:resolve('lib/'+a.path.slice(8)+'-node.ts')}));b.onResolve({filter:/\.sql\?raw$/},a=>({path:resolve(a.path.replace(/^@\//,'').replace(/\?raw$/,'')),namespace:'raw'}));b.onLoad({filter:/.*/,namespace:'raw'},a=>({contents:readFileSync(a.path,'utf8'),loader:'text'}));}}]});
+ await build({stdin:{contents:"export * from './app/api/[...path]/route';export {env} from './lib/runtime';",loader:'ts',resolveDir:cwd},outfile:bundle,bundle:true,platform:'node',format:'esm',loader:{'.py':'text'},packages:'external',plugins:[{name:'runtime',setup(b){b.onResolve({filter:/^#mobiup-/},a=>({path:resolve('lib/'+a.path.slice(8)+'-node.ts')}));b.onResolve({filter:/\.sql\?raw$/},a=>({path:resolve(a.path.replace(/^@\//,'').replace(/\?raw$/,'')),namespace:'raw'}));b.onLoad({filter:/.*/,namespace:'raw'},a=>({contents:readFileSync(a.path,'utf8'),loader:'text'}));}}]});
  for(const kind of ['stock','sales'])await build({entryPoints:[`lib/${kind}-parser-worker.ts`],outfile:join(work,`${kind}-parser-worker.mjs`),bundle:true,platform:'node',format:'esm',packages:'external'});
  const routes=await import(pathToFileURL(bundle));await routes.env.DB.prepare('SELECT 1').first();
  app=new DatabaseSync(join(work,'data','mobiup.sqlite'));app.exec('PRAGMA busy_timeout=5000');

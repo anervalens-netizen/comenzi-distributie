@@ -33,6 +33,7 @@ try {
     outfile: bundle,
     bundle: true,
     platform: 'node',
+    loader: { '.py': 'text' },
     format: 'esm',
     packages: 'external',
     logLevel: 'silent',
