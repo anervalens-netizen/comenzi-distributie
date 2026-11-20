@@ -112,16 +112,15 @@ export async function activationReport(user:User,params:URLSearchParams,internal
  let result:ActivationReport;
  const focusQueries=query?.focus?[query.focus]:query?.focusSummaries??[];
  try{
-   result=query&&focusQueries.length?await readVodafoneFocus(month,sites,query):readActivations(month,sites,provider,query);
+   result=query&&(query.focus||query.focusSummaries)
+     ?await readVodafoneFocus(month,sites,query)
+     :readActivations(month,sites,provider,query);
  }catch{
-   if(!query?.focusSummaries?.length)fail(503,'Activările nu sunt disponibile momentan. Încearcă din nou mai târziu.');
-   try{
-     result={...readActivations(month,sites,provider,{...query,focusSummaries:[]}),commissionCoverage:'unavailable'};
-   }catch{fail(503,'Activările nu sunt disponibile momentan. Încearcă din nou mai târziu.');}
+   fail(503,'Activările nu sunt disponibile momentan. Încearcă din nou mai târziu.');
  }
  // Focus calculations can wait for a worker and yield while reading commerce.
  // Recheck the exact session and reproduce its authorized scope before publishing.
- if(query&&focusQueries.length&&internal?.revalidateFocus){
+ if(query&&(query.focus||query.focusSummaries)&&internal?.revalidateFocus){
    const current=await internal.revalidateFocus();
    if(!canViewActivations(current))fail(403,'Secțiunea Activări nu este disponibilă pentru acest cont.');
    const currentRules=await readDistributionRules();

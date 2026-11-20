@@ -19,7 +19,7 @@ function add(totals:ActivationCounts,row:Row){
   else totals.other+=row.count;
   if(!row.site)totals.unassigned+=row.count;
 }
-export function readActivations(month:string,sites:string[]|null,provider:ActivationProvider='vodafone',query?:ActivationQuery):ActivationReport{
+export function readActivations(month:string,sites:string[]|null,provider:ActivationProvider='vodafone',query?:ActivationQuery,onOverviewBase?:(report:ActivationReport)=>void):ActivationReport{
   const result:ActivationReport={month,provider,available:false,scoped:sites!==null,importedAt:'',latestDate:null,months:[],totals:emptyActivationCounts(),sites:[],history:[]};
   const base=resolve(process.env.MOBIUP_ACTIVATIONS_DIR||process.env.MOBIUP_DATA_DIR||'./work/server-data');
   const network=provider==='digi'?resolve(base,'digi'):base;
@@ -63,6 +63,8 @@ export function readActivations(month:string,sites:string[]|null,provider:Activa
       if(provider==='vodafone'&&query.focusSummaries){
         if(!query.focusSummaries.length) return applyVodafoneFocusOverview(scoped,[]);
         if(schema!=='3') return {...scoped,commissionCoverage:'missing'};
+        // The ordinary totals are ready before matching the official Focus source.
+        onOverviewBase?.({...scoped,commissionCoverage:'unavailable'});
         const labels=focusLabels(),slips=readFocusSlips();
         const summaries=query.focusSummaries.flatMap(focus=>{
           const summary=vodafoneFocusReport(source!,labels,sites,{...query,focus},focusGeneration,slips);

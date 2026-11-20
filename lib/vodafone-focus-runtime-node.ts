@@ -5,17 +5,35 @@ import {readActivations} from './activation-store-node';
 import type {ActivationQuery} from './activation-distribution';
 import type {ActivationReport} from './activation-types';
 
-type Queue = {tail: Promise<void>; pending: number; limit: number};
-const detailQueue: Queue = {tail: Promise.resolve(), pending: 0, limit: 12};
-const overviewQueue: Queue = {tail: Promise.resolve(), pending: 0, limit: 6};
+type Lane = {tail: Promise<void>; pending: number};
+type Queue = {lanes: Lane[]; limit: number};
+const createQueue = (workers: number, limit: number): Queue => ({
+  lanes: Array.from({length: workers}, () => ({tail: Promise.resolve(), pending: 0})), limit,
+});
+const pendingCount = (queue: Queue) => queue.lanes.reduce((total, lane) => total + lane.pending, 0);
+const detailQueue = createQueue(1, 12);
+const overviewQueue = createQueue(1, 6);
+const baseOverviewQueue = createQueue(3, 24);
 const inFlightOverviews = new Map<string, Promise<ActivationReport>>();
+const focusDeadlineMs = 17_000;
+type WorkerMessage = {type: 'overviewBase' | 'report'; report: ActivationReport} | null;
 
 async function runFocus(queue: Queue, month: string, sites: string[] | null, query: ActivationQuery): Promise<ActivationReport> {
   const script = ['vodafone-focus-worker.mjs', 'dist/standalone/vodafone-focus-worker.mjs'].map(file => resolve(file)).find(existsSync);
-  if (!script && process.env.NODE_ENV === 'development') return readActivations(month, sites, 'vodafone', query);
-  if (!script || queue.pending >= queue.limit) throw new Error('Focus worker unavailable');
-  queue.pending++;
-  const result = queue.tail.then(() => new Promise<ActivationReport>((accept, reject) => {
+  if (!script && process.env.NODE_ENV === 'development') {
+    let partial: ActivationReport | undefined;
+    try { return readActivations(month, sites, 'vodafone', query, base => { partial = base; }); }
+    catch (error) { if (partial) return partial; throw error; }
+  }
+  if (!script || pendingCount(queue) >= queue.limit) throw new Error('Focus worker unavailable');
+  const lane = queue.lanes.reduce((shortest, item) => item.pending < shortest.pending ? item : shortest);
+  lane.pending++;
+  let expired = false;
+  let base: ActivationReport | undefined;
+  let abortCalculation: (() => void) | undefined;
+  const timeoutError = new Error('Focus calculation timed out');
+  const result = lane.tail.then(() => new Promise<ActivationReport>((accept, reject) => {
+    if (expired) { reject(timeoutError); return; }
     const worker = new Worker(script, {
       workerData: {month, sites, query}, resourceLimits: {maxOldGenerationSizeMb: 224},
     });
@@ -23,20 +41,51 @@ async function runFocus(queue: Queue, month: string, sites: string[] | null, que
     const finish = (error?: Error, report?: ActivationReport) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
       void worker.terminate().then(() => error ? reject(error) : accept(report!), reject);
     };
-    const timer = setTimeout(() => finish(new Error('Focus calculation timed out')), 15_000);
-    worker.once('message', (report: ActivationReport | null) => report ? finish(undefined, report) : finish(new Error('Focus calculation failed')));
+    abortCalculation = () => finish(timeoutError);
+    worker.on('message', (message: WorkerMessage) => {
+      if (message?.type === 'overviewBase') base = message.report;
+      else if (message?.type === 'report') finish(undefined, message.report);
+      else finish(new Error('Focus calculation failed'));
+    });
     worker.once('error', finish);
     worker.once('exit', code => finish(new Error('Focus worker exited with code ' + code)));
   }));
-  queue.tail = result.then(() => undefined, () => undefined);
+  const release = () => { lane.pending--; };
+  lane.tail = result.then(release, release);
+  // The HTTP deadline includes time spent waiting to start. A native SQLite
+  // call can delay worker termination, so keep its slot until the real exit.
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      expired = true;
+      abortCalculation?.();
+      reject(timeoutError);
+    }, focusDeadlineMs);
+  });
   try {
-    return await result;
+    return await Promise.race([result, deadline]);
+  } catch (error) {
+    if (base) return base;
+    throw error;
   } finally {
-    queue.pending--;
+    clearTimeout(timer);
   }
+}
+
+function readBusyOverview(month: string, sites: string[] | null, query: ActivationQuery): Promise<ActivationReport> {
+  // Start ordinary totals while this selection still has time left. Waiting
+  // until Focus expires would leave no budget for a fallback.
+  const ordinary = runFocus(baseOverviewQueue, month, sites, {...query, focusSummaries: []})
+    .then((report): ActivationReport => ({...report, commissionCoverage: 'unavailable'}));
+  if (pendingCount(overviewQueue) >= overviewQueue.limit) return ordinary;
+  const fallback = ordinary.catch(() => undefined);
+  return runFocus(overviewQueue, month, sites, query).catch(async error => {
+    const report = await fallback;
+    if (report) return report;
+    throw error;
+  });
 }
 
 export async function readVodafoneFocus(month: string, sites: string[] | null, query: ActivationQuery): Promise<ActivationReport> {
@@ -46,7 +95,11 @@ export async function readVodafoneFocus(month: string, sites: string[] | null, q
   const key = JSON.stringify([month, sites, query]);
   const pending = inFlightOverviews.get(key);
   if (pending) return pending;
-  const result = runFocus(overviewQueue, month, sites, query);
+  const result = !query.focusSummaries.length
+    ? runFocus(baseOverviewQueue, month, sites, query)
+    : pendingCount(overviewQueue)
+      ? readBusyOverview(month, sites, query)
+      : runFocus(overviewQueue, month, sites, query);
   inFlightOverviews.set(key, result);
   try {
     return await result;
