@@ -25,43 +25,72 @@ export function ActivationOperatorCard({userId,query,provider,reload}:{userId:st
    focus?:FocusReport[]; focusError?:string; focusUnavailable?:ActivationReport['focusUnavailable'];
  }>();
  useEffect(()=>{
-   const controller=new AbortController();
-   const path='activations?'+search;
-   const fetchReport=(phase?:string)=>api<ActivationReport>(path+(phase?'&overviewPhase='+phase:''),'GET',undefined,controller.signal);
-   const update=(fields:Partial<NonNullable<typeof read>>)=>{
-     if(!controller.signal.aborted)setRead(old=>({...(old?.key===key?old:{}),key,...fields}));
-   };
-   let final=false, separateStarted=false, panelError='';
-   function scopeFailure(error:unknown) {
-     if(!(error instanceof ApiError)||![401,403,404,409].includes(error.status))return false;
-     update({error:errorMessage(error),data:undefined,focus:undefined,focusError:undefined,focusUnavailable:undefined});
-     controller.abort();
-     return true;
-   }
-   function accept(data:ActivationReport,complete:boolean){
-     if(controller.signal.aborted||final)return;
-     final=complete;
-     update({data,complete:complete||!!panelError,error:panelError||undefined,...(!data.separateFocusScope?{focus:data.focusCards,focusUnavailable:data.focusUnavailable}:{})});
-     if(data.separateFocusScope&&!separateStarted){
-       separateStarted=true;
-       void fetchReport('cards').then(cards=>update({focus:cards.focusCards??[],focusUnavailable:cards.focusUnavailable}),error=>{
-         // The restricted Focus request has its own permission scope.
-         update({focus:undefined,focusUnavailable:undefined,focusError:errorMessage(error)});
+   let active:AbortController;
+   function load(retried:boolean){
+     const controller=new AbortController();
+     active=controller;
+     const path='activations?'+search;
+     const fetchReport=(phase?:string)=>api<ActivationReport>(path+(phase?'&overviewPhase='+phase:''),'GET',undefined,controller.signal);
+     const update=(fields:Partial<NonNullable<typeof read>>)=>{
+       if(!controller.signal.aborted)setRead(old=>({...(old?.key===key?old:{}),key,...fields}));
+     };
+     let final=false, separateStarted=false, panelError='';
+     let publication:string|null|undefined;
+     function restartPublication() {
+       if(controller.signal.aborted)return;
+       controller.abort();
+       setRead({key,...(retried?{error:'Sursa activărilor s-a actualizat din nou. Reîncarcă activările.'}:{})});
+       if(!retried)load(true);
+     }
+     function samePublication(report:ActivationReport) {
+       if(controller.signal.aborted)return false;
+       const next=report.publication??null;
+       if(publication!==undefined&&publication!==next){restartPublication();return false;}
+       publication=next;
+       return true;
+     }
+     function publicationConflict(error:unknown) {
+       if(error instanceof ApiError&&error.status===409&&typeof error.data==='object'&&error.data!==null&&'currentRevision' in error.data){
+         restartPublication();return true;
+       }
+       return false;
+     }
+     function scopeFailure(error:unknown) {
+       if(publicationConflict(error))return true;
+       if(!(error instanceof ApiError)||![401,403,404,409].includes(error.status))return false;
+       update({error:errorMessage(error),data:undefined,focus:undefined,focusError:undefined,focusUnavailable:undefined});
+       controller.abort();
+       return true;
+     }
+     function accept(data:ActivationReport,complete:boolean){
+       if(final||!samePublication(data))return;
+       final=complete;
+       update({data,complete:complete||!!panelError,error:panelError||undefined,...(!data.separateFocusScope?{focus:data.focusCards,focusUnavailable:data.focusUnavailable}:{})});
+       if(data.separateFocusScope&&!separateStarted){
+         separateStarted=true;
+         void fetchReport('cards').then(cards=>{
+           if(samePublication(cards))update({focus:cards.focusCards,focusUnavailable:cards.focusUnavailable});
+         },error=>{
+           // The restricted Focus request has its own permission scope.
+           if(publicationConflict(error))return;
+           update({focus:undefined,focusUnavailable:undefined,focusError:errorMessage(error)});
+         });
+       }
+     }
+     if(provider==='vodafone'){
+       void fetchReport('totals').then(data=>accept(data,false),error=>{if(!controller.signal.aborted&&!final)scopeFailure(error);});
+       void fetchReport('panels').then(data=>accept(data,true),error=>{
+         if(!controller.signal.aborted&&!scopeFailure(error)){
+           panelError=errorMessage(error);
+           update({error:panelError,complete:true});
+         }
        });
+     }else{
+       void fetchReport().then(data=>accept(data,true),error=>{if(!publicationConflict(error))update({error:errorMessage(error)});});
      }
    }
-   if(provider==='vodafone'){
-     void fetchReport('totals').then(data=>accept(data,false),error=>{if(!controller.signal.aborted)scopeFailure(error);});
-     void fetchReport('panels').then(data=>accept(data,true),error=>{
-       if(!controller.signal.aborted&&!scopeFailure(error)){
-         panelError=errorMessage(error);
-         update({error:panelError,complete:true});
-       }
-     });
-   }else{
-     void fetchReport().then(data=>accept(data,true),error=>update({error:errorMessage(error)}));
-   }
-   return()=>controller.abort();
+   load(false);
+   return()=>active.abort();
  },[key,search,provider]);
  const current=read?.key===key?read:undefined,data=current?.data,message=!data?current?.error:'';
  const commissionMessage=!current?.complete&&!current?.error?'se calculează…':current?.error||data?.commissionCoverage==='unavailable'?'calcul indisponibil temporar'

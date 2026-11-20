@@ -2,6 +2,7 @@ import {vodafoneFocusWorkbook} from './vodafone-focus-export';
 import {readFocusSlips} from './vodafone-focus-documents-node';
 import {selectFocusSource, vodafoneFocusReport} from './vodafone-focus-node';
 import {applyVodafoneFocusOverview,readFocusSummaries} from './vodafone-focus-overview';
+import {activationPublicationVersion} from './activation-publication-node';
 import {distributionReport} from './activation-distribution-node';
 import {digiOperatorReported} from './digi-operator-source';
 import {activationFactsVersion} from './activation-semantics';
@@ -27,6 +28,7 @@ export function readActivations(month:string,sites:string[]|null,provider:Activa
   const pointer=resolve(network,'current');
   const pointerInfo=lstatSync(pointer,{throwIfNoEntry:false});
   if(pointerInfo){if(!pointerInfo.isSymbolicLink())throw new Error('Invalid generation pointer');directory=realpathSync(pointer);if(dirname(directory)!==resolve(network,'generations'))throw new Error('Invalid generation location');}
+  if(onOverviewBase||query?.focus||query?.focusSummaries)result.publication=activationPublicationVersion(provider,directory);
   const path=resolve(directory,'activation-report.sqlite');
   if(!existsSync(path))return result;
   const report=new DatabaseSync(path,{readOnly:true});
@@ -153,6 +155,7 @@ export function readActivations(month:string,sites:string[]|null,provider:Activa
   }finally{source?.close();report.close();}
 }
 
+export {activationPublicationVersion};
 export {verifySim} from './sim-verification-node';
 
 export {readDigiOverview,readVodafoneFocus} from './vodafone-focus-runtime-node';

@@ -136,6 +136,8 @@ try{
  assert.equal((await request(octoberOverview,'south')).data.totals.eligible,southFocus.attributed);
  assert.equal((await request(octoberOverview,'north')).data.totals.eligible,northA.attributed);
  const [first, panels]=await Promise.all(['totals','panels'].map(phase=>request(octoberOverview+'&overviewPhase='+phase)));
+ assert.match(first.data.publication,/^[a-f0-9]{64}$/);
+ assert.equal(panels.data.publication,first.data.publication);
  assert.equal(first.data.totals.total,overview.totals.total);
  assert.equal(panels.data.totals.eligible,overview.totals.eligible);
  assert.deepEqual(panels.data.focusCards.map(card=>card.territory),['sud','nord_a','nord_b']);
@@ -144,7 +146,9 @@ try{
  assert.equal(teamOverview.totals.eligible,3);
  assert.equal(teamOverview.separateFocusScope,true);
  assert.equal(teamOverview.focusCards,undefined);
- const teamCards=(await request(octoberOverview+'&overviewPhase=cards','regional')).data.focusCards;
+ const regionalCards=(await request(octoberOverview+'&overviewPhase=cards','regional')).data;
+ assert.equal(regionalCards.publication,teamOverview.publication);
+ const teamCards=regionalCards.focusCards;
  assert.deepEqual(teamCards.map(card=>card.territory),['sud']);
  assert.equal(teamCards[0].regionalDetails,false);
  const ownTeam=(await request(octoberOverview+'&managerId=regional&overviewPhase=panels','regional')).data;

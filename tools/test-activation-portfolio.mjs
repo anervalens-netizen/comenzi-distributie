@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {mkdtempSync,readFileSync,rmSync} from 'node:fs';
+import {mkdirSync,mkdtempSync,readFileSync,renameSync,rmSync,symlinkSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {DatabaseSync} from 'node:sqlite';
@@ -31,7 +31,9 @@ try{
       build.onResolve({filter:/^(?:\.\/server|#mobiup-activation-store)$/},({path})=>({path,namespace:'synthetic-activation'}));
       build.onLoad({filter:/.*/,namespace:'synthetic-activation'},({path})=>({contents:path==='#mobiup-activation-store'
         ?`import {activationPartnerView} from '${process.cwd()}/lib/activation-partners-node.ts';
-          export async function readDigiOverview(){return globalThis.__activationPortfolioFixture.digiOverview();}
+          import {activationPublicationVersion} from '${process.cwd()}/lib/activation-publication-node.ts';
+          export {activationPublicationVersion};
+          export async function readDigiOverview(){return {publication:activationPublicationVersion('digi'),...await globalThis.__activationPortfolioFixture.digiOverview()};}
           import {combinePartnerReports} from '${process.cwd()}/lib/combined-activation-partners.ts';
           import {portfolioSelection,portfolioPoint} from '${process.cwd()}/lib/activation-portfolio.ts';
           import {readCombinedActivationPartners as workerRead} from '${process.cwd()}/lib/activation-partners-runtime-node.ts';
@@ -44,7 +46,7 @@ try{
             if(fixture.duringRead)fixture.duringRead();
             return {...all,partners:{...all.partners,rows:rows.slice(page*50,(page+1)*50),page,hasMore:(page+1)*50<rows.length}};
           }
-          export async function readVodafoneFocus(){return globalThis.__activationPortfolioFixture.focusRead();}
+          export async function readVodafoneFocus(){return {publication:activationPublicationVersion('vodafone'),...await globalThis.__activationPortfolioFixture.focusRead()};}
           export function readActivations(month,sites,provider,query){const fixture=globalThis.__activationPortfolioFixture;
             if(fixture.ledger){
               const report={provider,latestDate:query.todayWindow.to};
@@ -55,6 +57,7 @@ try{
             return {month,sites,provider,portfolio:query?.portfolio,portfolioRevision:query?.portfolioRevision,partners:{rows:fixture.partnerRows?.[provider]||[]}};}`
         :`import {createHash} from 'node:crypto';
           export const db=()=>globalThis.__activationPortfolioFixture;
+          export class AppError extends Error {constructor(status,message,currentRevision){super(message);Object.assign(this,{status,currentRevision});}}
           export function fail(status,message){throw Object.assign(new Error(message),{status});}
           export const isGlobalManager=user=>user.role==='manager'&&user.managerScope==='global';
           export const sha256=value=>createHash('sha256').update(value).digest('hex');
@@ -116,6 +119,29 @@ try{
   await assert.rejects(()=>activationReport(user('south'),focusParams,{revalidateFocus:async()=>{
     throw Object.assign(new Error('Synthetic expired session'),{status:401});
   }}), error=>error.status===401);
+  // Publish between the worker result and the final session/scope check. Each phase must
+  // reject the old source even when the user, permissions and selection remain identical.
+  const sourceRoot=join(temporary,'publication');
+  process.env.MOBIUP_ACTIVATIONS_DIR=sourceRoot;
+  for(const provider of ['vodafone','digi']){
+    const store=provider==='vodafone'?sourceRoot:join(sourceRoot,'digi');
+    for(const version of ['one','two']){
+      const dir=join(store,'generations',version);mkdirSync(dir,{recursive:true});
+      for(const file of ['activation-report.sqlite','activations.sqlite'])writeFileSync(join(dir,file),version);
+    }
+    const publish=version=>{symlinkSync('generations/'+version,join(store,'next'));renameSync(join(store,'next'),join(store,'current'));};
+    const params=new URLSearchParams({provider,month:'2026-10'});
+    for(const phase of provider==='vodafone'?['totals','panels','cards']:[undefined]){
+      publish('one');
+      const opts={overviewPhase:phase,returnFocusCards:provider==='vodafone',revalidateFocus:async()=>user('global')};
+      const first=await activationReport(user('global'),params,opts);
+      await assert.rejects(()=>activationReport(user('global'),params,{...opts,revalidateFocus:async()=>{
+        publish('two');return user('global');
+      }}),error=>error.status===409&&/^[a-f0-9]{64}$/.test(error.currentRevision));
+      const latest=await activationReport(user('global'),params,opts);
+      assert.notEqual(latest.publication,first.publication);
+    }
+  }
   const northFocus=new URLSearchParams({month:'2026-10',view:'focus',focusTerritory:'nord_a'});
   fixture.focusRead=async()=>{
     database.exec("DELETE FROM manager_agents WHERE manager_id='regional' AND agent_id='north'");

@@ -220,6 +220,7 @@ if [ -n "$CHROME_BIN" ]; then
   CHROME_BIN="$CHROME_BIN" node tools/test-order-pagination-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-stock-coverage-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-imports-journal-browser.mjs
+  CHROME_BIN="$CHROME_BIN" node tools/test-activation-publication-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-client-sales-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-report-error-recovery-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-client-history-import-browser.mjs

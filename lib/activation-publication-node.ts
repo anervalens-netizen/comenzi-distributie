@@ -1,3 +1,4 @@
+import {createHash} from 'node:crypto';
 import {lstatSync,realpathSync} from 'node:fs';
 import {dirname,resolve} from 'node:path';
 import {historyFileGeneration} from './history-source-generation';
@@ -13,8 +14,18 @@ export function activationPublicationStamp(provider:ActivationProvider):string|n
     const info=lstatSync(pointer,{throwIfNoEntry:false});
     const directory=info?realpathSync(pointer):base;
     if(info&&(!info.isSymbolicLink()||dirname(directory)!==resolve(base,'generations')))return null;
-    const report=historyFileGeneration(resolve(directory,'activation-report.sqlite'));
-    const source=historyFileGeneration(resolve(directory,'activations.sqlite'));
-    return report&&source?JSON.stringify([report,source]):null;
+    return directoryStamp(directory);
   }catch{return null;}
+}
+
+function directoryStamp(directory:string):string|null {
+  const report=historyFileGeneration(resolve(directory,'activation-report.sqlite'));
+  const source=historyFileGeneration(resolve(directory,'activations.sqlite'));
+  return report&&source?JSON.stringify([report,source]):null;
+}
+
+/** Give separate authorized scopes the same opaque version for the same provider files. */
+export function activationPublicationVersion(provider:ActivationProvider,directory?:string):string {
+  const stamp=directory===undefined?activationPublicationStamp(provider):directoryStamp(directory);
+  return createHash('sha256').update(stamp||'unpublished').digest('hex');
 }

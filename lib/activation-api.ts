@@ -2,8 +2,8 @@ import {emptyActivationCounts,type ActivationReport,type CombinedActivationPartn
 import {activationPartnerSortKeys,activationTodayWindow,type ActivationPartnerSort,type ActivationSortDirection} from './activation-partner-sort';
 import {ActivationPartnerProjectionChanged,portfolioSelection,portfolioPoint,type PortfolioFields,type CombinedPartnerRead} from './activation-portfolio';
 import {canViewActivations} from './activation-access';
-import {readActivations,readDigiOverview,readVodafoneFocus,readCombinedActivationPartners} from '#mobiup-activation-store';
-import {db,fail,isGlobalManager,sha256} from './server';
+import {activationPublicationVersion,readActivations,readDigiOverview,readVodafoneFocus,readCombinedActivationPartners} from '#mobiup-activation-store';
+import {AppError,db,fail,isGlobalManager,sha256} from './server';
 import {managerFilter} from './manager-scope';
 import {bucharestMonthKey} from './bucharest-month';
 import {readDistributionRules} from './distribution-config';
@@ -142,6 +142,8 @@ export async function activationReport(user:User,params:URLSearchParams,internal
    if(currentQueries.some((focus,index)=>JSON.stringify(focus.historicalSites)!==JSON.stringify(focusQueries[index].historicalSites))){
      fail(409,'Configurarea gestiunilor istorice s-a modificat. Reîncarcă activările.');
    }
+   const publication=activationPublicationVersion(provider);
+   if(result.publication!==publication)throw new AppError(409,'Sursa activărilor s-a actualizat. Reîncarcă activările.',publication);
  }
  if(focusView&&query?.revision&&result.focus?.revision!==query.revision)fail(409,'Sursele Focus s-au modificat. Reîncarcă raportul.');
  return result;

@@ -14,12 +14,15 @@ export type ActivationSimZero={distributed:number;activated:number;withoutReport
 export type DigiActivationSource='internal'|'operator';
 export type ActivationMonth={month:string;reported:boolean;counts:ActivationCounts;source?:DigiActivationSource;productBreakdown?:ActivationProductBreakdown;simZero?:ActivationSimZero};
 export type ActivationReport = {
+  /** Opaque provider publication shared by ordinary totals and independently scoped Focus. */
+  publication?:string;
   focus?:FocusReport;
   focusCards?:FocusReport[];
   focusUnavailable?:FocusReport['territory'][];
   separateFocusScope?:boolean;
   commissionCoverage?:'complete'|'partial'|'missing'|'outside_scope'|'unavailable';
   focusWorkbook?:string;
+  /** Optional panels may still be loading when authorized totals and history are available. */
   monthly?:ActivationMonth[];
   analysisDays?:ActivationAnalysisDay[];
   /** Full operator count; never exposed to scoped managers or agents. */
