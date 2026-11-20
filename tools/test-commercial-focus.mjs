@@ -6,7 +6,7 @@ import {DatabaseSync} from 'node:sqlite';
 import {build} from 'esbuild';
 
 const {outputFiles} = await build({
-  stdin: {resolveDir: process.cwd(), contents: "export * from './lib/commercial-focus.ts'; export * from './lib/commercial-focus-store.ts'; export * from './lib/commercial-focus-runtime.ts';"},
+  stdin: {resolveDir: process.cwd(), contents: "export * from './lib/commercial-focus.ts'; export * from './lib/commercial-focus-store.ts'; export * from './lib/commercial-focus-runtime-node.ts';"},
   bundle: true, platform: 'node', format: 'esm', write: false,
 });
 const {focusOffers, calculateFocus, readFocusSales, readFocusSalesAsync} =
