@@ -59,6 +59,15 @@ try {
     assert.equal(clipped.rows.exportTruncated,true);
     assert.equal(clipped.rows.exportedRows,1);
 
+    const reusedExport=await runManagerAiSandbox({
+      ...request,language:'python',
+      inputs:[{filename:'large-report.txt',mime_type:'text/plain',kind:'input',bytes:Buffer.alloc(1280*1024,65)}],
+      code:'from pathlib import Path\nprint(next(Path("/input/files").iterdir()).stat().st_size)',
+    });
+    assert.equal(reusedExport.exitCode,0);
+    assert.equal(reusedExport.stdout.trim(),String(1280*1024),'A retained export can exceed the original upload size limit.');
+
+
     process.env.MOBIUP_SANDBOX_TEST_SENTINEL='synthetic-value';
     const python=await runManagerAiSandbox({
       ...request,language:'python',inputs:[{filename:'sample.txt',mime_type:'text/plain',kind:'input',bytes:Buffer.from('fixture only')}],

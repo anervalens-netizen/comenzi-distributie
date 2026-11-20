@@ -105,7 +105,7 @@ async function stageInputs(dir:string,request:ManagerAiSandboxRequest) {
     fail(413,'Setul de analiză SQLite este invalid sau depășește 32 MiB.');
   }
   if(language==='sql'&&!database)fail(400,'Alege seturile de date înainte de interogarea SQL.');
-  if(inputs.length>maxFiles||inputs.some(item=>item.kind!=='input'||item.bytes.byteLength>1024*1024)||
+  if(inputs.length>maxFiles||inputs.some(item=>item.kind!=='input'||item.bytes.byteLength>maxArtifactBytes)||
     inputs.reduce((sum,item)=>sum+item.bytes.byteLength,0)>inputBytes)fail(413,'Atașamentele pentru analiză depășesc limita admisă.');
   await writeFile(join(dir,language==='sql'?'program.sql':'program.py'),code,{mode:0o600,flag:'wx'});
   if(database)await writeFile(join(dir,'data.sqlite'),database,{mode:0o600,flag:'wx'});
