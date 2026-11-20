@@ -1,4 +1,4 @@
-import { ArrowLeft, ChevronDown, Maximize2, MessageSquarePlus } from 'lucide-react';
+import { ArrowLeft, ChevronDown, History, Maximize2, MessageSquarePlus } from 'lucide-react';
 
 import { AiHaloOrb } from './AiHaloOrb';
 import type { AiConversation, AiRunStatus } from './types';
@@ -59,18 +59,18 @@ export function AiPanelHeader({
           value={conversationId ?? ''}
           disabled={runStatus === 'loading' || runStatus === 'unavailable'}
           onChange={(event) => onSelectConversation(event.target.value)}
-          className="block h-9 w-full appearance-none truncate rounded-xl border border-slate-200 bg-slate-50 py-1.5 pl-3 pr-7 text-xs font-semibold text-slate-700 outline-none transition hover:border-indigo-200 hover:bg-white focus:ring-2 focus:ring-indigo-100 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+          className="block h-11 w-full appearance-none truncate rounded-xl border border-slate-200 bg-slate-50 py-1.5 pl-3 pr-7 text-xs font-semibold text-slate-700 outline-none transition hover:border-indigo-200 hover:bg-white focus:ring-2 focus:ring-indigo-100 disabled:opacity-50 sm:h-9 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
         >
           {conversations.map((conversation) => <option key={conversation.id} value={conversation.id}>{conversation.title}</option>)}
         </select>
-        <ChevronDown size={13} className="pointer-events-none absolute right-2 top-3 text-slate-400" aria-hidden="true" />
+        <ChevronDown size={13} className="pointer-events-none absolute top-1/2 right-2 -translate-y-1/2 text-slate-400" aria-hidden="true" />
       </label> : <div className="min-w-0 flex-1 truncate rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">Sesiunea curentă</div>}
 
       {onNewConversation && <button
         type="button"
         disabled={runStatus === 'loading' || runStatus === 'unavailable'}
         onClick={onNewConversation}
-        className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-xl bg-indigo-600 px-3 text-xs font-bold text-white shadow-sm transition hover:bg-indigo-700 disabled:opacity-40"
+        className="inline-flex h-11 shrink-0 items-center gap-1.5 rounded-xl bg-indigo-600 px-3 text-xs font-bold text-white shadow-sm transition hover:bg-indigo-700 disabled:opacity-40 sm:h-9"
         aria-label="Sesiune nouă"
       >
         <MessageSquarePlus size={15} aria-hidden="true" />
@@ -80,11 +80,14 @@ export function AiPanelHeader({
       {hasOlderConversations && onLoadOlderConversations && <button
         type="button"
         aria-label="Încarcă sesiuni mai vechi"
+        title="Încarcă sesiuni mai vechi"
+        aria-busy={loadingOlderConversations || undefined}
         disabled={loadingOlderConversations || runStatus === 'running' || runStatus === 'stopping'}
         onClick={onLoadOlderConversations}
-        className="hidden h-9 shrink-0 rounded-xl border border-slate-200 px-2.5 text-[10px] font-semibold text-indigo-600 hover:bg-indigo-50 disabled:opacity-40 sm:inline-flex sm:items-center dark:border-slate-700 dark:text-indigo-300 dark:hover:bg-indigo-950/40"
+        className="inline-flex size-11 shrink-0 items-center justify-center gap-1.5 rounded-xl border border-slate-200 text-[10px] font-semibold text-indigo-600 hover:bg-indigo-50 disabled:opacity-40 sm:h-9 sm:w-auto sm:px-2.5 dark:border-slate-700 dark:text-indigo-300 dark:hover:bg-indigo-950/40"
       >
-        {loadingOlderConversations ? '…' : 'Mai vechi'}
+        <History size={15} aria-hidden="true" />
+        <span className="hidden sm:inline">{loadingOlderConversations ? 'Se încarcă…' : 'Mai vechi'}</span>
       </button>}
     </div>
   </header>;

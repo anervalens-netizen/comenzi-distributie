@@ -505,7 +505,7 @@ export function AiAssistantPanel({
 
 
   return <>
-    {open && <div style={{ '--ai-panel-width': `${width}px` } as React.CSSProperties} className="fixed inset-0 z-50 flex justify-end bg-slate-950/20 backdrop-blur-[1px] xl:static xl:z-auto xl:w-[var(--ai-panel-width)] xl:min-w-0 xl:bg-transparent xl:backdrop-blur-none">
+    {open && <div style={{ '--ai-panel-width': `${width}px` } as React.CSSProperties} className="fixed inset-0 z-50 flex justify-end bg-slate-950/20 backdrop-blur-[1px] xl:sticky xl:inset-auto xl:top-0 xl:z-auto xl:h-dvh xl:w-[var(--ai-panel-width)] xl:min-w-0 xl:shrink-0 xl:self-start xl:bg-transparent xl:backdrop-blur-none">
       <button type="button" aria-label="Închide AI Comenzi" className="absolute inset-0 xl:hidden" onClick={closePanel} />
       <aside
         ref={panelRef}

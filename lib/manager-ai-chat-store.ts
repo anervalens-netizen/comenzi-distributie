@@ -4,6 +4,7 @@ import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import { assertManagerSession, type ImportAuthorization } from './import-write-authorization';
 import type { ManagerAiPreparedArtifact } from './manager-ai-media';
 import { managerAiAttachmentLimits } from './manager-ai-media-contract';
+import { defaultManagerAiModel, type ManagerAiModel } from './manager-ai';
 import type {
   ManagerAiArtifact, ManagerAiChatEvent, ManagerAiChatMessage, ManagerAiConversation,
   ManagerAiEffort, ManagerAiRunState, ManagerAiSubmissionStatus,
@@ -19,9 +20,10 @@ type Submission = {
   id:string; order_key:number; mode:'turn'|'steer'; message_id:string; digest:string; context:string;
   run_id:string;
 };
+type RunOptions = { model:ManagerAiModel; effort:ManagerAiEffort };
 type Submit = {
   id:string; digest:string; text:string; context:string; scopeKey:string; files:readonly ManagerAiPreparedArtifact[];
-  effort:ManagerAiEffort;
+  model:ManagerAiModel|null; effort:ManagerAiEffort|null;
 };
 type MessageRow = Omit<ManagerAiChatMessage,'attachments'> & {attachments:string};
 const leaseGraceMs=10_000;
@@ -132,6 +134,14 @@ function getSubmission(db:DatabaseSync,conversationId:string,id:string) {
   return one<Submission>(db,'SELECT * FROM manager_ai_submissions WHERE conversation_id=? AND id=?',conversationId,id);
 }
 
+function getRunOptions(db:DatabaseSync,runId:string) {
+  return one<RunOptions>(db,'SELECT model,effort FROM manager_ai_run_options WHERE run_id=?',runId);
+}
+
+function validateRunEffort(model:ManagerAiModel,effort:ManagerAiEffort) {
+  if(model==='gpt-6.2-sol'&&effort==='none')fail(400,'Sol 6.2 necesită un nivel de analiză de cel puțin low.');
+}
+
 function submissionStatus(id:string,r?:Run,submission?:Submission):ManagerAiSubmissionStatus {
   return {
     submission_id:id,state:r?.state??'unseen', mode:submission?.mode??null,order_key:submission?.order_key??null,
@@ -165,14 +175,23 @@ export function beginAiSubmission(db:DatabaseSync,account:AiAccount,conversation
   const last=one<{ordinal:number}>(db,'SELECT COALESCE(MAX(ordinal),0) ordinal FROM manager_ai_messages WHERE conversation_id=?',conversationId)!.ordinal;
   if(last>=maxMessages-1) fail(409,'Conversația a atins limita de mesaje.');
   let runId=active?.id;
+  let effectiveEffort=input.effort??'low';
   if(mode==='turn') {
+    const model=input.model??defaultManagerAiModel;
+    validateRunEffort(model,effectiveEffort);
     if(one(db,"SELECT id FROM manager_ai_runs WHERE account_id=? AND state='running'",account.auth.userId)) fail(409,'O analiză este deja în curs pentru contul tău.');
     if(one<{total:number}>(db,"SELECT COUNT(*) total FROM manager_ai_runs WHERE state='running'")!.total>=maxGlobalRuns) fail(503,'Toate sesiunile AI sunt ocupate.');
     runId=randomUUID();
     run(db,'INSERT INTO manager_ai_runs(id,attempt_id,conversation_id,account_id,scope_key,token_hash,state,expires_at) VALUES(?,?,?,?,?,?,?,?)',
       runId,randomUUID(),conversationId,account.auth.userId,input.scopeKey,account.auth.tokenHash,'running',Date.now()+managerAiRunTimeoutMs+leaseGraceMs);
+    run(db,'INSERT INTO manager_ai_run_options(run_id,model,effort) VALUES(?,?,?)',runId,model,effectiveEffort);
   } else {
     if(!active||active.scope_key!==input.scopeKey||active.token_hash!==account.auth.tokenHash) fail(409,'Nu există o analiză activă în această sesiune și selecție.');
+    const options=getRunOptions(db,active.id);
+    if(!options) fail(409,'Această analiză a pornit într-o versiune anterioară. Trimite o analiză nouă pentru a schimba nivelul de analiză.');
+    if(input.model&&options.model!==input.model)fail(409,'Păstrează modelul analizei active pentru a trimite o instrucțiune suplimentară.');
+    effectiveEffort=input.effort??options.effort;
+    validateRunEffort(options.model,effectiveEffort);
     if(one<{total:number}>(db,'SELECT COUNT(*) total FROM manager_ai_submissions WHERE run_id=?',active.id)!.total>=8) fail(409,'Analiza are prea multe instrucțiuni suplimentare.');
     if(input.files.some(nativeMedia)) {
       const used=one<{bytes:number;files:number}>(db,`SELECT COALESCE(SUM(a.size_bytes),0) bytes,COUNT(*) files
@@ -183,10 +202,11 @@ export function beginAiSubmission(db:DatabaseSync,account:AiAccount,conversation
       if(used.bytes+media.reduce((sum,file)=>sum+file.bytes.byteLength,0)>managerAiAttachmentLimits.maxTotalBytes||
         used.files+media.length>managerAiAttachmentLimits.maxFiles)fail(413,'Fișierele din întreaga analiză depășesc limita admisă.');
     }
+    run(db,'UPDATE manager_ai_run_options SET effort=? WHERE run_id=?',effectiveEffort,active.id);
   }
   const userMessage=addMessage(db,account.owner,conversationId,'user',input.text,input.files,'complete',input.id);
   run(db,'INSERT INTO manager_ai_submissions VALUES(?,?,?,?,?,?,?,?)',input.id,conversationId,runId!,userMessage.id,userMessage.ordinal,mode,input.digest,input.context);
-  if (last===0) run(db,'UPDATE manager_ai_conversations SET title=?,effort=? WHERE id=?',input.text.replace(/\s+/g,' ').slice(0,64)||input.files[0]?.filename||'Sesiune nouă',input.effort,conversationId);
+  if (last===0) run(db,'UPDATE manager_ai_conversations SET title=?,effort=? WHERE id=?',input.text.replace(/\s+/g,' ').slice(0,64)||input.files[0]?.filename||'Sesiune nouă',effectiveEffort,conversationId);
   const status=aiSubmissionStatus(db,conversationId,input.id);
   addEvent(db,runId!,{type:'submission_status',...status});
   addEvent(db,runId!,{type:'user_message',message:userMessage});
@@ -215,7 +235,7 @@ export function aiRunInputs(db:DatabaseSync,owner:string,conversationId:string,r
     files.push({ordinal:m.ordinal,file:{...getAiArtifact(db,owner,conversationId,attachment.id),kind:'input'}});
   }
   const order=one<{ord:number}>(db,'SELECT MAX(order_key) ord FROM manager_ai_submissions WHERE run_id=?',runId)!.ord;
-  return {r,recent,order,files};
+  return {r,recent,order,files,options:getRunOptions(db,runId)};
 }
 
 export function aiRunEvent(db:DatabaseSync,runId:string,order:number,event:ManagerAiChatEvent) {
