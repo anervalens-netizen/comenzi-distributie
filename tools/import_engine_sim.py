@@ -98,7 +98,7 @@ def published(root):
 
 def ro(path):return contextlib.closing(sqlite3.connect(path.resolve(strict=True).as_uri()+'?mode=ro',uri=True))
 
-def environment(job):
+def environment(job, reconcile):
  kind=job['kind'];provider='digi' if kind.endswith('_digi') else 'vodafone'
  internal=kind.startswith('sim_sales_')
  base=Path(os.environ.get('MOBIUP_ACTIVATIONS_DIR') or os.environ['MOBIUP_DATA_DIR']).resolve(strict=True)
@@ -107,23 +107,34 @@ def environment(job):
  with ro(settings) as c:row=c.execute("SELECT value FROM settings WHERE key='distribution-rules-v1'").fetchone()
  if not row:raise ValueError('Missing distribution rules')
  rules=json.loads(row[0]);activation_projection.validate_rules(rules)
+ aliases=None
+ reference_digest=None
+ use_reference=False
  with ro(current/'activations.sqlite') as c:
   providers={x[0] for x in c.execute('SELECT DISTINCT operator FROM activation_imports')}
   if providers and providers!={provider}:raise ValueError('Provider mismatch')
-  aliases=None
-  if provider=='digi' and internal:
+  if provider=='digi' and internal and not reconcile:
    alias_row=c.execute("SELECT value FROM activation_meta WHERE key='digi_site_aliases'").fetchone()
-   if not alias_row:raise ValueError('Digi aliases unavailable')
-   values=json.loads(alias_row[0]);aliases={(a,b):site for a,b,site in values}
-   if len(aliases)!=len(values):raise ValueError('Ambiguous Digi aliases')
- return provider,internal,root,current,settings,row[0],rules,aliases
+   if alias_row is None or alias_row[0]=='[]':
+    kinds={record[0] for record in c.execute('SELECT DISTINCT source_kind FROM activation_imports')}
+    use_reference='internal' not in kinds and (alias_row is None or 'operator' in kinds)
+   if not use_reference:
+    if alias_row is None:raise ValueError('Digi aliases unavailable')
+    values=json.loads(alias_row[0]);aliases={(a,b):site for a,b,site in values}
+    if len(aliases)!=len(values):raise ValueError('Ambiguous Digi aliases')
+ if use_reference:
+  with ro(published(base)/'activations.sqlite') as reference:
+   aliases=activations.historical_site_aliases(reference)
+  if not aliases:raise ValueError('Digi aliases unavailable')
+  reference_digest=hashlib.sha256(json.dumps(sorted(aliases.items())).encode()).hexdigest()
+ return provider,internal,root,current,settings,row[0],rules,aliases,reference_digest
 
 def run(request):
  global publication_possible
  publication_possible=False
  job=request['job'];source=job['source'];action=request['action'];action_id=request['action_id']
  if str(uuid.UUID(job['id']))!=job['id'] or str(uuid.UUID(action_id))!=action_id:raise ValueError('Invalid operation ID')
- provider,internal,root,current,settings,raw_rules,rules,aliases=environment(job)
+ provider,internal,root,current,settings,raw_rules,rules,aliases,reference_digest=environment(job,request['mode']=='reconcile')
  if request['mode']=='reconcile':
   if action=='preview':return {'state':'not_committed'}
   with ro(current/'activations.sqlite') as c:row=c.execute('SELECT value FROM activation_meta WHERE key=?',('import_action_receipt:'+action_id,)).fetchone()
@@ -162,7 +173,7 @@ def run(request):
     if not start<=observed<=end:raise ValueError('Activation outside declared period')
     earliest=min(earliest or observed,observed);latest=max(latest or observed,observed);count+=1
   if not count:raise ValueError('Empty source')
-  digi_reconciliation={}
+  digi_reconciliation={'referenceAliasesSha256':reference_digest} if reference_digest is not None else {}
   with ro(current/'activations.sqlite') as c:
    prior=c.execute('SELECT source_kind,source_at,period_start,period_end,company FROM activation_imports WHERE sha256=? AND status=\'complete\'',(source['sha256'],)).fetchone()
    if provider=='digi' and not internal:
@@ -188,6 +199,7 @@ def run(request):
  if action!='commit':raise ValueError('Invalid action')
  preview=job.get('preview') or {}
  if preview.get('provider')!=provider or preview.get('generation')!=current.name or preview.get('rulesSha256')!=hashlib.sha256(raw_rules.encode()).hexdigest():raise ValueError('Preview expired')
+ if preview.get('referenceAliasesSha256')!=reference_digest:raise ValueError('Digi site reference changed; preview again')
  if provider=='digi' and not internal:
   with ro(current/'activations.sqlite') as c:
    existing=c.execute("SELECT company FROM activation_imports WHERE sha256=? AND status='complete'",(source['sha256'],)).fetchone()

@@ -804,6 +804,17 @@ def _import_files(c, directory, paths, *, operator, nominal_period='', site_alia
     return {'files': results} if defer_rebuild else {'files': results, **summary(c)}
 
 
+def historical_site_aliases(reference):
+    if reference.execute("SELECT value FROM activation_meta WHERE key='schema_version'").fetchone() not in (('2',),(str(VERSION),)):
+        raise ImportError('Unsupported site reference ledger')
+    return {(company, agent):site for company, agent, site in reference.execute("""
+        SELECT company, agent, MIN(site)
+        FROM activation_movements
+        WHERE provider='vodafone' AND is_tr=1 AND site<>''
+        GROUP BY company, agent HAVING COUNT(DISTINCT site)=1
+    """)}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--data-dir', required=True, type=Path)
@@ -825,9 +836,7 @@ def main():
             raise ImportError('Site reference must be a separate read-only ledger for Digi')
         reference = sqlite3.connect((args.site_reference_data_dir.resolve() / 'activations.sqlite').as_uri() + '?mode=ro', uri=True)
         try:
-            if reference.execute("SELECT value FROM activation_meta WHERE key='schema_version'").fetchone() not in (('2',),(str(VERSION),)):
-                raise ImportError('Unsupported site reference ledger')
-            aliases = {(r[0], r[1]): r[2] for r in reference.execute("SELECT company,agent,MIN(site) FROM activation_movements WHERE provider='vodafone' AND is_tr=1 AND site<>'' GROUP BY company,agent HAVING COUNT(DISTINCT site)=1")}
+            aliases = historical_site_aliases(reference)
         finally:
             reference.close()
     if args.preview:

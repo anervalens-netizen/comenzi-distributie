@@ -61,19 +61,35 @@ class SimExecutorTests(unittest.TestCase):
   with contextlib.closing(sqlite3.connect((self.digi/'current'/'activation-report.sqlite').resolve())) as db:
    self.assertEqual(db.execute("PRAGMA quick_check").fetchone()[0],'ok')
 
- def test_digi_operator_preview_and_commit_without_site_aliases(self):
-  empty=self.data/'independent-activations'
-  digi=empty/'digi';digi.mkdir(parents=True)
+ def test_digi_staged_operator_then_internal_bootstraps_site_aliases(self):
+  digi=self.digi
+  (digi/'current').unlink()
   activation_job.run_job(digi,[],self.rules)
-  job=self.source('sim_activations_digi')
-  with patch.dict(os.environ,{'MOBIUP_ACTIVATIONS_DIR':str(empty)}):
-   job['preview']=import_engine_sim.run({'job':job,'mode':'execute','action':'preview','action_id':str(uuid.uuid4())})['preview']
-   self.assertEqual(job['preview']['withoutExactInternalMatch'],1)
-   result=import_engine_sim.run({'job':job,'mode':'execute','action':'commit','action_id':str(uuid.uuid4())})
-  self.assertEqual(result['state'],'completed')
+  vodafone_before=(self.net/'current').resolve()
+  def execute(job,action):
+   return import_engine_sim.run({'job':job,'mode':'execute','action':action,'action_id':str(uuid.uuid4())})
+  official=self.source('sim_activations_digi')
+  official['preview']=execute(official,'preview')['preview']
+  self.assertEqual(official['preview']['withoutExactInternalMatch'],1)
+  self.assertEqual(execute(official,'commit')['state'],'completed')
   with contextlib.closing(sqlite3.connect(digi/'current'/'activations.sqlite')) as c:
    self.assertIsNone(c.execute("SELECT value FROM activation_meta WHERE key='digi_site_aliases'").fetchone())
    self.assertEqual(c.execute('SELECT activation_date,candidate_site FROM activation_facts').fetchone(),('2026-01-10',None))
+  internal=self.source('sim_sales_digi')
+  internal['preview']=execute(internal,'preview')['preview']
+  self.assertEqual(internal['preview']['rowsWithIssues'],0)
+  self.assertIn('referenceAliasesSha256',internal['preview'])
+  reference_digest=internal['preview']['referenceAliasesSha256']
+  internal['preview']['referenceAliasesSha256']='stale mapping digest'
+  with self.assertRaisesRegex(ValueError,'Digi site reference changed'):
+   execute(internal,'commit')
+  internal['preview']['referenceAliasesSha256']=reference_digest
+  self.assertEqual(execute(internal,'commit')['state'],'completed')
+  with contextlib.closing(sqlite3.connect(digi/'current'/'activations.sqlite')) as c:
+   saved=c.execute("SELECT value FROM activation_meta WHERE key='digi_site_aliases'").fetchone()[0]
+   self.assertEqual(json.loads(saved),[['ExampleCo','TR Example','SITE-A']])
+   self.assertEqual(c.execute('SELECT activation_date,candidate_site FROM activation_facts').fetchone(),('2026-01-10','SITE-A'))
+  self.assertEqual((self.net/'current').resolve(),vodafone_before)
 
  def test_digi_replay_before_commercial_counterpart(self):
   job=self.source('sim_activations_digi',distributor='Operator Only')

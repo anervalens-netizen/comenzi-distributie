@@ -131,6 +131,9 @@ ledger. Subsequent internal imports must match the stored mapping. Changes
 require explicit reconciliation. Operator imports use only the official report
 and its company namespace. No fuzzy person matching, company merging or current
 account activity filtering is performed. Missing aliases remain unassigned.
+The application uses the published Vodafone ledger as the read-only reference
+when the first internal Digi import needs a mapping. If the reference mapping
+changes after preview, the application requires a new preview before committing.
 
 ## Reporting revisions and atomic jobs
 
