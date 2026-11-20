@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import {build} from 'esbuild';
 import {DatabaseSync} from 'node:sqlite';
+import {mkdtempSync,mkdirSync,rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 
 const {outputFiles} = await build({
   stdin:{resolveDir:process.cwd(),contents:`
@@ -9,6 +12,7 @@ const {outputFiles} = await build({
     export * from './lib/manager-ai.ts';
     export * from './lib/manager-ai-operations.ts';
     export * from './lib/manager-ai-data.ts';
+    export * from './lib/manager-ai-billing.ts';
   `},
   bundle:true,platform:'node',format:'esm',write:false,
   plugins:[{name:'isolated-app-error',setup(build){
@@ -16,17 +20,28 @@ const {outputFiles} = await build({
     const mocks = {
       'activation-api':'activationReport',
       'commercial-focus-api':'commercialFocus',
-      'client-sales-portfolio':'clientSalesPortfolio',
       'vodafone-bonus-api':'readVodafoneBonusForManager',
       'vodafone-activation-targets':'applyVodafoneActivationTargets',
       'manager-scope':'managerFilter',
     };
-    build.onResolve({filter:/^\.\/(distribution-config|stock-server|sales-server|activation-api|commercial-focus-api|client-sales-portfolio|vodafone-bonus-api|vodafone-activation-targets|manager-scope)$/},
+    build.onResolve({filter:/^\.\/(distribution-config|stock-server|sales-server|activation-api|commercial-focus-api|client-sales-portfolio|vodafone-bonus-api|vodafone-activation-targets|manager-scope|partner-portfolio|client-sales-store)$/},
       args=>({path:args.path.slice(2),namespace:'test'}));
+    build.onLoad({filter:/^client-sales-portfolio$/,namespace:'test'},()=>({contents:`
+      export async function clientPortfolioVersion() { return globalThis.syntheticManagerAIPortfolioRevision; }
+      export async function clientSalesPortfolio() { throw Error('Unexpected dataset'); }
+    `}));
+    build.onLoad({filter:/^partner-portfolio$/,namespace:'test'},()=>({contents:`
+      export const partnerScope = user => ({sql:'c.warehouse_id=?',args:[user.warehouseId]});
+    `}));
+    build.onLoad({filter:/^client-sales-store$/,namespace:'test'},()=>({contents:`
+      export function monthEnd(month) {
+        return new Date(Date.UTC(Number(month.slice(0,4)),Number(month.slice(5,7)),0)).toISOString().slice(0,10);
+      }
+    `}));
     build.onLoad({filter:/^sales-server$/,namespace:'test'},()=>({contents:`
       export async function salesView(request,user) { return Response.json(globalThis.syntheticManagerAISales(request,user)); }
     `}));
-    build.onLoad({filter:/^(activation-api|commercial-focus-api|client-sales-portfolio|vodafone-bonus-api|vodafone-activation-targets|manager-scope)$/,namespace:'test'},
+    build.onLoad({filter:/^(activation-api|commercial-focus-api|vodafone-bonus-api|vodafone-activation-targets|manager-scope)$/,namespace:'test'},
       args=>({contents:`export function ${mocks[args.path]}() { throw Error('Unexpected dataset'); }`}));
     build.onLoad({filter:/^distribution-config$/,namespace:'test'},()=>({contents:`
       export async function readDistributionRules() { return {products:{SKU1:'vodafone_0',SKU2:'vodafone_5',SKU3:'digi'}}; }
@@ -42,7 +57,7 @@ const {outputFiles} = await build({
     `}));
   }}],
 });
-const {parseManagerAiQuery,makeManagerAiReport,managerAiMonths,runManagerAi,defaultManagerAiModel,managerAiModels,managerAiOperations,managerAiReader} =
+const {parseManagerAiQuery,makeManagerAiReport,managerAiMonths,runManagerAi,defaultManagerAiModel,managerAiModels,managerAiOperations,managerAiReader,managerAiBillingPoints} =
   await import('data:text/javascript;base64,'+Buffer.from(outputFiles[0].text).toString('base64'));
 
 const query = {dataset:'bonuses',fromMonth:'2026-06',toMonth:'2026-09',site:'',groupBy:['franchise'],
@@ -207,6 +222,98 @@ assert.deepEqual(blockedExact.rows,[]);
 assert.deepEqual(salesCalls.splice(0),['DENIED']);
 assert.ok(salesChecks.length>=salesCalls.length+8);
 delete globalThis.syntheticManagerAISales;
+const billingRoot=mkdtempSync(join(tmpdir(),'manager-ai-billing-')),priorDataDir=process.env.MOBIUP_DATA_DIR;
+const billingApp=new DatabaseSync(':memory:');
+process.env.MOBIUP_DATA_DIR=billingRoot;
+globalThis.syntheticManagerAISqlite=billingApp;
+globalThis.syntheticManagerAIPortfolioRevision='test-state-1';
+try {
+  billingApp.exec(`CREATE TABLE customers(id TEXT PRIMARY KEY,data TEXT NOT NULL,active INTEGER,warehouse_id TEXT);`);
+  const insert=billingApp.prepare('INSERT INTO customers VALUES(?,?,1,?)');
+  for (const [id,cui,franchise,warehouse] of [
+    ['OWN','RO1234567','FR-A','WH-A'],['PEER','1234567','FR-B','WH-B'],
+    ['DUP1','2222222','FR-C','WH-A'],['DUP2','2222222','FR-C','WH-B'],
+    ['GEN','CLIENT GENERIC','FR-G','WH-A'],
+  ]) insert.run(id,JSON.stringify({cui,name:'Fictional '+id,historyFranchises:[franchise],warehouseIds:[warehouse]}),warehouse);
+  const billingUser={id:'M',role:'manager',managerScope:'assigned',warehouseId:'WH-A'};
+  const points=await managerAiBillingPoints(billingUser,['WH-A']);
+  assert.deepEqual([...points.keys()],['OWN'],'a duplicate point claimed outside the selected portfolio is ambiguous');
+  assert.equal((await managerAiBillingPoints(billingUser,['WH-B'])).size,0,'a requested warehouse cannot widen the signed authority');
+
+  mkdirSync(join(billingRoot,'client-history'));
+  const billingHistory=new DatabaseSync(join(billingRoot,'client-history','client-sales-history.sqlite'));
+  try {
+    billingHistory.exec(`
+      CREATE TABLE history_meta(key TEXT,value TEXT);
+      INSERT INTO history_meta VALUES('current_reference','LIVE');
+      CREATE TABLE history_imports(id INTEGER,sha256 TEXT,state TEXT,period_start TEXT,period_end TEXT);
+      INSERT INTO history_imports VALUES(1,'active','active','2026-10-01','2026-10-18'),
+        (2,'superseded','superseded','2026-10-01','2026-10-31');
+      CREATE TABLE history_allocations(identity_id INTEGER,reference_id TEXT,status TEXT,point_key TEXT,partner_ids_json TEXT);
+      CREATE TABLE history_identities(id INTEGER,client_code TEXT,franchise_code TEXT);
+      CREATE TABLE history_rows(import_id INTEGER,date TEXT,identity_id INTEGER,site_id TEXT,sheet TEXT,source_row INTEGER,tr TEXT,document_number TEXT,
+        item_code TEXT,item_name TEXT,quantity_micros INTEGER,value_cents INTEGER,customer_name TEXT);
+    `);
+    const ident=billingHistory.prepare('INSERT INTO history_identities VALUES(?,?,?)');
+    const allocation=billingHistory.prepare('INSERT INTO history_allocations VALUES(?,?,?,?,?)');
+    const movement=billingHistory.prepare('INSERT INTO history_rows VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)');
+    for (const [id,code,point,owner,cui,status,revision] of [
+      [1,'FR-A','FR-A',['OWN'],'1234567','direct_code','LIVE'],
+      [2,'FR-B','FR-B',['PEER'],'1234567','direct_code','LIVE'],
+      [3,'FR-A','FR-A',['OWN','PEER'],'1234567','direct_code','LIVE'],
+      [4,'FR-A','FR-B',['OWN'],'1234567','direct_code','LIVE'],
+      [5,'FR-A','FR-A',['OWN'],'9999999','direct_code','LIVE'],
+      [6,'FR-A','FR-A',['OWN'],'1234567','reconcile','LIVE'],
+      [7,'FR-A','FR-A',['OWN'],'1234567','direct_code','STALE'],
+      [8,'FR-C','FR-C',['DUP1'],'2222222','direct_code','LIVE'],
+      [9,'','FR-A',['OWN'],'1234567','single_partner','LIVE'],
+    ]) {
+      ident.run(id,cui,code);
+      allocation.run(id,revision,status,'franchise:'+point,JSON.stringify(owner));
+      if (id!==1) movement.run(1,'2026-10-12',id,'ERP-1','File',id,'TR Fictional','D-10','SKU1','Fictional SIM',99_000_000,99000,'Fictional company');
+    }
+    for (const [row,day,doc,sku,qty,value,importId,customer='Fictional company'] of [
+      [11,12,'D-10','SKU1',3,300,1], [12,12,'D-10','SKU2',4,400,1],
+      [13,12,'D-10','SKU3',99,9900,1], [14,12,'D-11','SKU2',-1,-100,1],
+      [15,12,'D-12','SKU1',1,null,1], [16,12,'D-10','SKU1',99,99000,2],
+      [17,25,'D-13','SKU1',99,99000,1], [18,13,'','SKU1',1,0,1],
+      [19,13,'BON DE CONSUM D-10','SKU2',99,9900,1], [20,13,'D-10','SKU2',99,9900,1,'CLIENT GENERIC'],
+      [21,14,'D-10','SKU2',2,200,1],
+    ]) movement.run(importId,'2026-10-'+day,1,'ERP-1','File',row,'TR Fictional',doc,sku,'Fictional SIM',qty*1e6,value,customer);
+  } finally { billingHistory.close(); }
+
+  const readBilling=managerAiReader(new Request('https://example.com/api/manager-ai'),salesScope,async()=>billingUser);
+  const billingQuery={dataset:'salesByPoint',fromMonth:'2026-10',toMonth:'2026-10',site:'',groupBy:[],filters:[],orderBy:'units',descending:true,limit:500};
+  const fullSource=await readBilling(billingQuery);
+  assert.equal(fullSource.rows.length,6,'same-CUI external sales and ambiguous/stale identities stay excluded');
+  assert(fullSource.rows.every(row=>row.franchise==='FR-A'));
+  assert.equal(fullSource.coverage[0].through,'2026-10-18');
+  assert.match(fullSource.coverage[0].note,/parțială/);
+  assert.match(fullSource.coverage[0].note,/nu certifică tipul fiscal sau emitentul/);
+  const filteredQuery=parseManagerAiQuery(JSON.stringify({...billingQuery,groupBy:['franchise'],filters:[
+    {field:'date',op:'gte',value:'2026-10-12'},{field:'date',op:'lte',value:'2026-10-13'},
+    {field:'document',op:'eq',value:'D-10'},{field:'sku',op:'eq',value:'SKU1'},
+  ]}),'2026-11');
+  assert.deepEqual(makeManagerAiReport(filteredQuery,fullSource,'Bill').rows,[['FR-A',3,3,1,0]]);
+  assert.throws(()=>parseManagerAiQuery(JSON.stringify({...billingQuery,filters:[{field:'date',op:'gte',value:'2026-02-31'}]})),{status:400});
+  const documentSource=await readBilling({...billingQuery,dataset:'billingDocuments'});
+  assert.deepEqual(documentSource.rows.map(row=>[row.document,row.status,row.valueLei,row.lines]),[
+    ['D-10','pozitiv net',7,2],['D-11','retur/corecție',-1,1],['D-12','valoare necunoscută',null,1],
+    ['D-10','pozitiv net',2,1],
+  ]);
+  assert.equal((await readBilling({...billingQuery,fromMonth:'2026-09',toMonth:'2026-09'})).coverage[0].available,false);
+  globalThis.syntheticManagerAIPortfolioRevision='test-state-2';
+  await assert.rejects(()=>readBilling.checkBillingScope(),{status:409});
+} finally {
+  billingApp.close();
+  delete globalThis.syntheticManagerAISqlite;
+  delete globalThis.syntheticManagerAIPortfolioRevision;
+  if (priorDataDir===undefined) delete process.env.MOBIUP_DATA_DIR;
+  else process.env.MOBIUP_DATA_DIR=priorDataDir;
+  rmSync(billingRoot,{recursive:true,force:true});
+}
+console.log('PASS: billing intervals, exact commercial scope, document groups and invoice point safety.');
+
 console.log('PASS: products grouped and filtered by authorized SiteCode without altering sales totals.');
 
 console.log('PASS: authorized operational reads for orders, transfers, inventories and stock.');

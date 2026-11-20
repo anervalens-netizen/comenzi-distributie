@@ -5,7 +5,8 @@ import {readDistributionRules} from './distribution-config';
 import {managerFilter, type ManagerFilter} from './manager-scope';
 import {managerAiOperations} from './manager-ai-operations';
 import {managerAiSales,managerAiSalesSiteMode} from './manager-ai-sales';
-import {clientSalesPortfolio} from './client-sales-portfolio';
+import {clientSalesPortfolio,clientPortfolioVersion} from './client-sales-portfolio';
+import {managerAiBillingPoints,readManagerAiBilling,type BillingPoint} from './manager-ai-billing';
 import {salesView} from './sales-server';
 import {db, fail, isGlobalManager} from './server';
 import {readVodafoneBonusForManager} from './vodafone-bonus-api';
@@ -40,6 +41,20 @@ const focusSource = 'Focus comercial Vodafone';
 export function managerAiReader(request: Request, scope: AiScope, check: () => Promise<User>) {
   const monthlyCache = new Map<string,Promise<AiSource>>();
   let registry: Promise<VodafoneBonusReport>|undefined;
+  let billing: {version:string;points:Map<string,BillingPoint>}|undefined;
+  async function checkBillingScope() {
+    if (billing&&billing.version!==await clientPortfolioVersion()) fail(409,'Portofoliul punctelor de lucru s-a modificat. Reîncarcă analiza.');
+  }
+  async function loadBillingPoints(user:User) {
+    if (!billing) {
+      const version=await clientPortfolioVersion();
+      if (!version) fail(503,'Portofoliul punctelor de lucru nu este disponibil momentan.');
+      const points=await managerAiBillingPoints(user,scope.filter?.warehouseIds);
+      billing={version,points};
+    }
+    await checkBillingScope();
+    return billing.points;
+  }
 
   async function readMonth(query: AiReportQuery, month: string): Promise<AiSource> {
     const user = await check();
@@ -58,6 +73,12 @@ export function managerAiReader(request: Request, scope: AiScope, check: () => P
           url.search = selection.toString();
           return await (await salesView(new Request(url),current)).json() as SalesView;
         });
+      }
+      case 'salesByPoint':
+      case 'billingDocuments': {
+        const result=await readManagerAiBilling(month,query.dataset,await loadBillingPoints(user),await readDistributionRules());
+        await checkBillingScope();
+        return result;
       }
       case 'activations':
       case 'activationsPartners': {
@@ -170,7 +191,7 @@ export function managerAiReader(request: Request, scope: AiScope, check: () => P
     }
   }
 
-  return async function readSource(query: AiReportQuery): Promise<AiSource> {
+  async function readSource(query: AiReportQuery): Promise<AiSource> {
     const result: AiSource = {rows:[],coverage:[]};
     const months = (query.dataset==='partners'||query.dataset==='stock') ? [bucharestMonthKey(new Date())] : managerAiMonths(query.fromMonth,query.toMonth);
     for (const month of months) {
@@ -182,5 +203,6 @@ export function managerAiReader(request: Request, scope: AiScope, check: () => P
       result.coverage.push(...source.coverage);
     }
     return result;
-  };
+  }
+  return Object.assign(readSource,{checkBillingScope});
 }

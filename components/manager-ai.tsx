@@ -7,7 +7,7 @@ import './manager-ai.css';
 
 const modelNames: Record<ManagerAiModel,string> = {'gpt-6.1-terra':'GPT‑6.1 Terra','gpt-6.2-sol':'GPT‑6.2 Sol'};
 const datasetNames: Record<string,string> = {
-  sales:'Vânzări Vodafone',activations:'Activări Vodafone',activationsPartners:'Activări pe partener',
+  sales:'Vânzări Vodafone',salesByPoint:'Vânzări pe punct',billingDocuments:'Documente comerciale pe punct',activations:'Activări Vodafone',activationsPartners:'Activări pe partener',
   partners:'Portofoliu curent',stands:'Avize de stand',bonuses:'Registru bonusuri',settlements:'Stingeri FIFO',
   orders:'Comenzi Vodafone',stock:'Stoc Vodafone',inventories:'Inventare Vodafone',transfers:'Transferuri Vodafone',
   bonusDocuments:'Documente la preț zero',bonusUnresolved:'Activări SIM 0 de verificat',
@@ -20,6 +20,7 @@ const columnNames: Record<string,string> = {
   route:'Rută',points:'Puncte de lucru',date:'Data',document:'Document',warehouse:'Gestiune',status:'Stare',
   target:'Target',bonusSim5:'Bonus SIM 5',bonusTop:'Bonus Top Locații',amountDue:'Total de acordat',settled:'Stins confirmat',
   balance:'Rest confirmat',simulatedSettled:'Stins simulat',simulatedBalance:'Rest simulat',paymentDate:'Data documentului',
+  erpSite:'ERP SiteId',missingValueLines:'Linii cu valoare necunoscută',documentGroups:'Grupuri de document',
   destination:'Gestiune destinație',observedOn:'Dată stoc',expected:'Așteptat',counted:'Numărat',difference:'Diferență',
   paymentMonth:'Luna documentului',kind:'Tip bonus',seller:'Agent',incentiveLei:'Stimulent (lei)',
 };

@@ -62,7 +62,11 @@ export async function managerAi(req:Request,user:User) {
   activeTurns.add(user.id);
   const signal = AbortSignal.any([req.signal,AbortSignal.timeout(90_000)]);
   try {
-    const result = await runManagerAi({...input,key,signal,check,readSource:managerAiReader(req,scope,check)});
+    const readSource=managerAiReader(req,scope,check);
+    const result = await runManagerAi({...input,key,signal,readSource,check:async()=>{
+      await check();
+      await readSource.checkBillingScope();
+    }});
     return response(result);
   } catch (error) {
     if (error instanceof AppError) throw error;

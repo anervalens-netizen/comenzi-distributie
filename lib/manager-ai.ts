@@ -29,6 +29,16 @@ export const managerAiFields = {
     measures: ['lines', 'units', 'valueLei'],
     purpose: 'Vânzări nete Vodafone ale produselor clasificate exact în catalogul Prepay. Grupează sau filtrează după site pentru detalierea gestiunilor. Un SiteCode gol reprezintă o gestiune fără cod confirmat în datele detaliate.',
   },
+  salesByPoint: {
+    dimensions: ['month', 'date', 'partner', 'franchise', 'seller', 'erpSite', 'document', 'sku', 'product'],
+    measures: ['units', 'valueLei', 'lines', 'missingValueLines'],
+    purpose: 'Vânzări Vodafone din istoricul comercial cu franciză explicită și asociere unică la punctul autorizat. Poți filtra după date AAAA-LL-ZZ, număr document sau SKU. Dacă sursa lunară de vânzări există și ea, nu aduna aceleași vânzări din ambele surse.',
+  },
+  billingDocuments: {
+    dimensions: ['month', 'date', 'partner', 'franchise', 'seller', 'erpSite', 'document', 'status'],
+    measures: ['units', 'valueLei', 'lines', 'missingValueLines', 'documentGroups'],
+    purpose: 'Grupează pozițiile Vodafone pe franciză, dată, ERP SiteId și număr document. Folosește statusul pozitiv net pentru documentele comerciale cu taxare. Istoricul nu certifică emitentul sau tipul fiscal. Pentru filtru de SKU folosește salesByPoint.',
+  },
   activations: {
     dimensions: ['month', 'site'],
     measures: ['total', 'sim', 'phoneBundles', 'other', 'unassigned'],

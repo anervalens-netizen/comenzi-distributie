@@ -4,6 +4,8 @@ import { managerAiFields, type ManagerAiCell, type ManagerAiCoverage, type Manag
 
 const MAX_MONTHS = 12;
 const MAX_ROWS = 500;
+const dateFields = new Set(['date','paymentDate','observedOn']);
+const isDate = (value: string) => /^20\d{2}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(value)) && new Date(value).toISOString().slice(0,10)===value;
 export type AiSourceRow = Record<string, ManagerAiCell>;
 export type AiSource = { rows: AiSourceRow[]; coverage: ManagerAiCoverage[] };
 type AiFilter = { field: string; op: 'eq'|'contains'|'gt'|'gte'|'lt'|'lte'; value: string|number };
@@ -33,7 +35,7 @@ export const managerAiReportTool = {
       toMonth: schemaMonth,
       site: {type:'string', description:'Cod SiteCode exact pentru sales și activations; lasă gol pentru toate gestiunile autorizate.'},
       groupBy: {type:'array', items:{type:'string'}, description:'Dimensiuni pentru agregare. [] păstrează granularitatea sursei.'},
-      filters: {type:'array', items:{
+      filters: {type:'array', description:'Câmpurile de dată acceptă comparații precum gte/lte cu valori AAAA-LL-ZZ.', items:{
         type:'object', additionalProperties:false,
         properties:{field:{type:'string'},op:{type:'string',enum:['eq','contains','gt','gte','lt','lte']},value:{type:['number','string']}},
         required:['field','op','value'],
@@ -79,9 +81,10 @@ export function parseManagerAiQuery(raw: string, current = bucharestMonthKey(new
   if (!Array.isArray(filters) || filters.length > 12 || !filters.every((f:unknown)=>{
     if (!f || typeof f !== 'object' || Array.isArray(f)) return false;
     const {field,op,value} = f as AiFilter;
-    return fields.includes(field) && ['eq','contains','gt','gte','lt','lte'].includes(op) &&
-      (typeof value === 'number' ? Number.isFinite(value) : typeof value === 'string' && value.length <= 200) &&
-      (op === 'eq' || (op === 'contains' ? typeof value === 'string' && dimensions.includes(field) : typeof value === 'number' && !dimensions.includes(field)));
+    if (!fields.includes(field) || !['eq','contains','gt','gte','lt','lte'].includes(op)) return false;
+    if (typeof value==='number') return Number.isFinite(value) && !dimensions.includes(field) && op!=='contains';
+    if (typeof value!=='string'||value.length>200||!dimensions.includes(field)) return false;
+    return op==='eq'||op==='contains'||(dateFields.has(field)&&isDate(value));
   })) fail(400,'Filtru de raport invalid.');
   const orderBy = q.orderBy || managerAiFields[dataset].measures[0], limit = q.limit ?? 40;
   if (typeof orderBy !== 'string' || !(groupBy.length ? [...groupBy,...managerAiFields[dataset].measures] : fields).includes(orderBy)) fail(400,'Sortare de raport invalidă.');
@@ -94,7 +97,13 @@ const normalize = (value: string) => value.normalize('NFD').replace(/[\u0300-\u0
 export function managerAiFilterMatches(row: AiSourceRow, {field,op,value}: AiFilter) {
   const entry = row[field];
   if (typeof entry === 'string' && typeof value === 'string') {
-    return op === 'eq' ? normalize(entry) === normalize(value) : op === 'contains' && normalize(entry).includes(normalize(value));
+    if (op==='eq') return normalize(entry)===normalize(value);
+    if (op==='contains') return normalize(entry).includes(normalize(value));
+    if (!dateFields.has(field)) return false;
+    if (op==='gt') return entry>value;
+    if (op==='gte') return entry>=value;
+    if (op==='lt') return entry<value;
+    return entry<=value;
   }
   if (typeof entry !== 'number' || typeof value !== 'number') return false;
   if (op === 'gt') return entry > value;
