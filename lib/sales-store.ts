@@ -52,7 +52,7 @@ function database() {
 const aggregate = (row: Record<string, unknown>): SalesAggregate => ({ rows: Number(row.rows || 0), quantity: Number(row.quantity || 0), value: Number(row.value_cents || 0) / 100 });
 const currency = (value: number) => Math.round((value + (value >= 0 ? 1e-9 : -1e-9)) * 100) / 100;
 const safeText = (value: unknown) => typeof value === 'string' ? value : typeof value === 'number' ? String(value) : '';
-const sqlFilter = (siteCodes?: SalesScope) => {
+export const salesScopeFilter = (siteCodes?: SalesScope, sales: () => DatabaseSync = database) => {
   if (siteCodes && typeof siteCodes === 'object' && !Array.isArray(siteCodes)) {
     const { warehouseNames, excludedWarehouseNames, siteCode } = siteCodes;
     const args: string[] = [], clauses: string[] = [];
@@ -62,7 +62,7 @@ const sqlFilter = (siteCodes?: SalesScope) => {
     // no stored expression or trigger depends on the process-local JS function.
     const locations = new Map<string, string[]>();
     if (warehouseNames.length || siteCodes.warehouseSites?.length || (siteCodes.siteCodes.length && excludedWarehouseNames.length)) {
-      for (const row of database().prepare('SELECT DISTINCT location FROM sales_rows').all()) {
+      for (const row of sales().prepare('SELECT DISTINCT location FROM sales_rows').all()) {
         const raw = String(row.location), key = salesLocationKey(raw);
         const values = locations.get(key) || []; values.push(raw); locations.set(key, values);
       }
@@ -110,7 +110,7 @@ function emptySegments(): SalesSegments {
 export function salesRevision() { return Number(database().prepare("SELECT value FROM sales_meta WHERE key='revision'").get()?.value || 0); }
 
 export function salesMonths(siteCode?: SalesScope) {
-  const filter = sqlFilter(siteCode);
+  const filter = salesScopeFilter(siteCode);
   return database().prepare(`SELECT month, imported_at AS importedAt, filename, file_hash AS fileHash, revision, (SELECT COUNT(*) FROM sales_rows r WHERE r.import_id=m.import_id${filter.sql.replaceAll('site_code', 'r.site_code')}) AS rowCount FROM sales_months m ORDER BY month DESC`).all(...filter.args) as Record<string, unknown>[];
 }
 
@@ -126,7 +126,7 @@ export function orderLimitSalesVersion(from: string, to: string) {
 export function orderLimitSalesTotals(scope: SalesScope, from: string, to: string, itemCodes: readonly string[]) {
   const totals = new Map<string, number>();
   if (!itemCodes.length) return { totals, coveredMonths: 0 };
-  const filter = sqlFilter(scope);
+  const filter = salesScopeFilter(scope);
   const source = " FROM sales_rows r JOIN sales_months active ON active.import_id=r.import_id AND active.month=r.month " +
     "WHERE r.month BETWEEN ? AND ?" + filter.sql.replaceAll('site_code', 'r.site_code');
   const rows = database().prepare("SELECT UPPER(TRIM(r.item_code)) code, SUM(r.quantity) quantity" + source +
@@ -212,7 +212,7 @@ export function getSalesView(month: string, siteCode?: SalesScope, fromMonth = m
   const classifySalesProduct = createSalesProductClassifier(catalog);
   const current = currentSalesImport(month);
   const revision = salesRevision();
-  const filter = sqlFilter(siteCode);
+  const filter = salesScopeFilter(siteCode);
   const months = salesMonths(siteCode).map(item => ({ month: String(item.month), importedAt: String(item.importedAt), filename: String(item.filename), fileHash: String(item.fileHash), revision: Number(item.revision), rowCount: Number(item.rowCount || 0) }));
   const monthlyRows = database().prepare(`SELECT r.month, r.item_code itemCode, r.item_name itemName, r.category, r.sub_category subCategory, COUNT(*) rows, COALESCE(SUM(r.quantity),0) quantity, COALESCE(SUM(r.value_cents),0) value_cents FROM sales_rows r JOIN sales_months m ON m.import_id=r.import_id AND m.month=r.month WHERE r.month>=? AND r.month<=?${filter.sql.replaceAll('site_code', 'r.site_code')} GROUP BY r.month, r.item_code, r.item_name, r.category, r.sub_category ORDER BY r.month`).all(fromMonth, toMonth, ...filter.args) as Record<string, unknown>[];
   const monthlyMap = new Map<string, SalesMonthly>();

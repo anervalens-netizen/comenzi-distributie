@@ -38,6 +38,8 @@ try {
   globalThis.syntheticAiDatabase=db;
   const mocks={
     './runtime':"export const runtimeKind='node';",
+    './manager-ai-sandbox':"export const managerAiSandboxAvailable=()=>Boolean(globalThis.syntheticAnalysisTool);",
+    './manager-ai-analysis':"export const createManagerAiAnalysis=options=>globalThis.syntheticAnalysisTool(options);",
     './manager-ai-data':`
       export const managerAiScope=async (user,params)=>({params,filter:globalThis.syntheticAiPortfolio??null,signature:JSON.stringify([user.id,user.profileVersion,params.toString(),globalThis.syntheticAiPortfolio])});
       export const managerAiReader=()=>Object.assign(async query=>{
@@ -68,7 +70,7 @@ try {
     stdin:{resolveDir:process.cwd(),contents:"export * from './lib/manager-ai-conversations.ts'; export {requireUser} from './lib/server.ts';"},
     platform:'node',format:'esm',bundle:true,write:false,
     plugins:[{name:'synthetic-authority',setup(build){
-      build.onResolve({filter:/^\.\/(runtime|manager-ai-data|server)$|^\.\/lib\/server\.ts$/},args=>({path:args.path==='./lib/server.ts'?'./server':args.path,namespace:'synthetic'}));
+      build.onResolve({filter:/^\.\/(runtime|manager-ai-data|manager-ai-sandbox|manager-ai-analysis|server)$|^\.\/lib\/server\.ts$/},args=>({path:args.path==='./lib/server.ts'?'./server':args.path,namespace:'synthetic'}));
       build.onLoad({filter:/.*/,namespace:'synthetic'},args=>({contents:mocks[args.path],resolveDir:process.cwd()}));
     }}],
   });
@@ -116,6 +118,21 @@ try {
     const toolOutput=body.input.at(-1).type==='function_call_output';
     accesses.push(body.input);
     providerOptions.push({model:body.model,effort:body.reasoning.effort});
+    if(toolOutput&&body.input.at(-1).call_id==='test-analysis'){
+      assert.deepEqual(JSON.parse(body.input.at(-1).output),{units:7});
+      return Promise.resolve(answer(body,'Analiză sandbox terminată.'));
+    }
+    if(typeof text==='string'&&text.startsWith('Raport sandbox')){
+      assert(body.tools.some(tool=>tool.name==='run_analysis'));
+      return Promise.resolve(responseEvents([
+        {type:'response.created',response:{model:body.model}},
+        {type:'response.completed',response:{model:body.model,status:'completed',output:[{
+          type:'function_call',name:'run_analysis',call_id:'test-analysis',arguments:JSON.stringify({
+            language:'sql',code:'SELECT COUNT(*) FROM sales_lines',tables:[{table:'sales_lines',fromMonth:'2026-06',toMonth:'2026-06'}],files:[],
+          }),
+        }]}},
+      ]));
+    }
     if(toolOutput) {
       assert.match(body.input.at(-1).output,/FIX-42/);
       return Promise.resolve(answer(body,'Franciza FIX-42 are 3 bucăți.'));
@@ -216,6 +233,35 @@ try {
   assert.deepEqual(new Uint8Array(await reportDownload.arrayBuffer()).slice(0,2),new Uint8Array([80,75]));
   assert.equal((await (await call(reportPath,{method:'DELETE'})).json()).attachment.removed,true);
   await assert.rejects(call(reportPath),{status:410});
+
+  process.env.MOBIUP_MANAGER_AI_SANDBOX_ENABLED='1';
+  const analysisInputs=[];
+  const sandboxArtifact={
+    kind:'output',filename:'synthetic-sandbox.csv',mime_type:'text/csv',bytes:new TextEncoder().encode('units\n7\n'),
+  };
+  globalThis.syntheticAnalysisTool=options=>{
+    analysisInputs.push(options.files.map(item=>item.filename));
+    return {tables:['sales_lines'],instructions:'Synthetic SQL workspace',async run(value){
+      assert.equal(value.tables[0].table,'sales_lines');
+      assert.equal(value.language,'sql');
+      await options.check();
+      return {result:{units:7},artifacts:[sandboxArtifact]};
+    }};
+  };
+  const sandboxConversation=await (await call('conversations',{body:{effort:'low'}})).json();
+  const sandboxPath='conversations/'+sandboxConversation.id;
+  const firstSandbox=(await events(await call(sandboxPath+'/turn',{body:form('Raport sandbox inițial',undefined,[
+    new File(['units\n7'],'synthetic-data.csv',{type:'text/csv'}),
+  ])[0]}))).at(-1);
+  assert.equal(firstSandbox.type,'complete');
+  const sandboxDownload=firstSandbox.message.attachments[0].download_url.split('/api/manager-ai/')[1];
+  assert.equal(await (await call(sandboxDownload)).text(),'units\n7\n');
+  await assert.rejects(call(sandboxDownload,{token:'beta-token'}),{status:404});
+  await events(await call(sandboxPath+'/turn',{body:form('Raport sandbox repetat')[0]}));
+  await events(await call(sandboxPath+'/turn?agentId=synthetic-selection',{body:form('Raport sandbox alt portofoliu')[0]}));
+  assert.deepEqual(analysisInputs,[['synthetic-data.csv'],['synthetic-sandbox.csv','synthetic-data.csv'],[]]);
+  delete process.env.MOBIUP_MANAGER_AI_SANDBOX_ENABLED;
+  delete globalThis.syntheticAnalysisTool;
 
   const [held,heldId]=form('așteaptă sfârșitul');
   const heldResponse=await call(base+'/turn',{body:held});

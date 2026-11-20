@@ -1,0 +1,111 @@
+import type { ManagerAiCell, ManagerAiCoverage } from './manager-ai';
+
+export type ManagerAiAnalysisColumn = { name: string; type: 'text' | 'number'; nullable: boolean };
+const t = (name: string, nullable = true): ManagerAiAnalysisColumn => ({ name, type:'text', nullable });
+const n = (name: string, nullable = true): ManagerAiAnalysisColumn => ({ name, type:'number', nullable });
+const month = t('month', false), day = t('date', false), site = t('site_code'), sku = t('sku');
+const product = t('product'), franchise = t('franchise_code'), partner = t('partner'), warehouse = t('warehouse');
+const units = n('units'), count = n('activations', false), status = t('status'), doc = t('document_ref');
+const provider = t('provider', false), note = t('source', false), catalogGroup = t('product_group');
+
+export const managerAiAnalysisCatalog = {
+  sales_lines: {
+    label:'Vânzări comerciale pe linii',
+    grain:'O linie din importul lunar activ sau din istoricul cu acoperire completă, pe zi, gestiune și SKU. Sursele nu se adună pentru aceeași lună. Valoarea sursă este în bani.',
+    columns:[month,day,site,warehouse,sku,product,t('brand'),t('category'),t('subcategory'),catalogGroup,units,n('value_cents'),note],
+  },
+  sales_partner_lines: {
+    label:'Vânzări istorice legate univoc de puncte',
+    grain:'O linie din istoricul comercial cu franciză confirmată. Subset independent al istoricului, posibil suprapus cu sales_lines. Valoarea sursă este în bani.',
+    columns:[month,day,franchise,partner,t('erp_site_id'),doc,sku,product,units,n('value_cents'),catalogGroup],
+  },
+  activation_detail: {
+    label:'Activări pe zi și produs',
+    grain:'Zi × operator × gestiune × cod produs × tip × județ × sursă × conflict. Activări interne atribuite distribuției.',
+    columns:[month,day,provider,site,sku,t('item_type'),t('county'),t('activation_channel'),n('conflict',false),count,catalogGroup],
+  },
+  activation_monthly: {
+    label:'Activări pe lună și gestiune',
+    grain:'Lună × operator × gestiune, cu sursa Digi oficială când este disponibilă și autorizată.',
+    columns:[month,provider,site,note,count,n('sim'),n('phone_bundles'),n('other'),n('unassigned')],
+  },
+  activation_partners: {
+    label:'Activări pe punct de lucru',
+    grain:'Lună × operator × identitate proiectată. Același punct poate apărea în mai multe rânduri. Surse interne.',
+    columns:[month,provider,franchise,partner,t('identity'),count],
+  },
+  partners: {
+    label:'Portofoliu de puncte de lucru',
+    grain:'Un punct activ din portofoliul vizibil la data extragerii.',
+    columns:[t('point_ref',false),partner,franchise,t('county'),t('city'),t('last_visit_date'),n('points',false)],
+  },
+  orders: {
+    label:'Comenzi operaționale',
+    grain:'O poziție dintr-o comandă. Data este cea a finalizării sau a creării ciornei.',
+    columns:[month,day,doc,warehouse,sku,product,t('kind'),status,units,catalogGroup],
+  },
+  stock: {
+    label:'Stocul importat curent',
+    grain:'Ultima observație pe SKU și gestiune, cu data observării; nu reprezintă istoric.',
+    columns:[warehouse,site,sku,product,t('category'),t('observed_on'),units,catalogGroup],
+  },
+  inventories: {
+    label:'Inventare finalizate',
+    grain:'O poziție dintr-un inventar finalizat.',
+    columns:[month,day,warehouse,sku,product,n('expected'),n('counted'),n('difference'),catalogGroup],
+  },
+  transfers: {
+    label:'Transferuri finalizate',
+    grain:'O poziție dintr-un transfer cu sursa în selecția autorizată. Destinațiile din afara selecției sunt omise.',
+    columns:[month,day,doc,warehouse,t('destination'),sku,product,units,catalogGroup],
+  },
+  stands: {
+    label:'Avize de stand',
+    grain:'O poziție dintr-un aviz de stand finalizat în aplicație.',
+    columns:[month,day,doc,partner,warehouse,sku,product,units],
+  },
+  bonuses: {
+    label:'Registru Vodafone de bonusuri',
+    grain:'O franciză și o lună de activări, cu starea aprobării și soldul de bonus.',
+    columns:[month,franchise,partner,status,count,n('target'),n('bonus_sim5'),n('bonus_top'),n('total_bonus'),n('settled'),n('balance'),n('simulated_settled'),n('simulated_balance')],
+  },
+  bonus_documents: {
+    label:'Documente de bonus Vodafone',
+    grain:'Un document fiscal candidat sau confirmat, după luna emiterii.',
+    columns:[month,day,doc,site,franchise,partner,status,units],
+  },
+  bonus_unresolved: {
+    label:'Activări SIM 0 neclarificate',
+    grain:'O grupă de activări fără identitate confirmată, cu motiv și gestiune.',
+    columns:[month,site,status,count],
+  },
+  settlements: {
+    label:'Alocări de bonusuri Vodafone',
+    grain:'O alocare de bonus dintr-un document de plată, raportată la luna premiului.',
+    columns:[month,t('payment_date',false),doc,site,franchise,t('kind'),status,units],
+  },
+  focus_accessories: {
+    label:'Incentive Focus accesorii',
+    grain:'Lună × agent × produs, pe grila aplicabilă.',
+    columns:[month,t('seller'),site,sku,product,units,n('incentive_lei')],
+  },
+  focus_phones: {
+    label:'Incentive Focus telefoane',
+    grain:'Lună × agent × produs, pe grila aplicabilă.',
+    columns:[month,t('seller'),site,sku,product,units,n('incentive_lei')],
+  },
+  focus_targets: {
+    label:'Ținte Focus telefoane',
+    grain:'Lună × agent, cu ținta și realizarea grilei.',
+    columns:[month,t('seller'),site,units,n('target'),n('incentive_lei'),status],
+  },
+} as const;
+
+export type ManagerAiAnalysisDataset = keyof typeof managerAiAnalysisCatalog;
+export type ManagerAiAnalysisRequest = {table: ManagerAiAnalysisDataset; fromMonth:string; toMonth:string};
+export type ManagerAiAnalysisTable = ManagerAiAnalysisRequest & {
+  columns: readonly ManagerAiAnalysisColumn[];
+  rows: readonly (readonly ManagerAiCell[])[];
+  coverage: readonly ManagerAiCoverage[];
+};
+export const managerAiAnalysisLimits = {rows:80_000, textBytes:12*1024*1024, cellBytes:4096, sqliteBytes:24*1024*1024, tables:6, months:12} as const;

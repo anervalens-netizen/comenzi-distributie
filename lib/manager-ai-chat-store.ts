@@ -258,7 +258,32 @@ export function beginAiSubmission(db:DatabaseSync,account:AiAccount,conversation
   return {created:true,message:userMessage,status};
 }
 
-export function aiRunInputs(db:DatabaseSync,owner:string,conversationId:string,runId:string) {
+function collectSandboxFiles(db:DatabaseSync,owner:string,conversationId:string,scopeKey:string,messages:ManagerAiChatMessage[]) {
+  const {maxFiles,maxTotalBytes}=managerAiAttachmentLimits;
+  const names=new Set<string>(),files:ManagerAiPreparedArtifact[]=[];
+  let total=0;
+  for(const message of messages.toReversed()){
+    if(!message.attachments.length)continue;
+    const run=one<{scope_key:string}>(db,`
+      SELECT r.scope_key FROM manager_ai_submissions s JOIN manager_ai_runs r ON r.id=s.run_id
+      WHERE s.message_id=? AND r.conversation_id=?
+      UNION ALL
+      SELECT scope_key FROM manager_ai_runs WHERE terminal_message_id=? AND conversation_id=?
+    `,message.id,conversationId,message.id,conversationId);
+    if(run?.scope_key!==scopeKey)continue;
+    for(const entry of message.attachments){
+      if(files.length>=maxFiles)return files;
+      if(entry.removed||total+entry.size_bytes>maxTotalBytes||names.has(entry.filename))continue;
+      const file=getAiArtifact(db,owner,conversationId,entry.id);
+      files.push({...file,kind:'input'});
+      names.add(file.filename);
+      total+=file.bytes.byteLength;
+    }
+  }
+  return files;
+}
+
+export function aiRunInputs(db:DatabaseSync,owner:string,conversationId:string,runId:string,includeSandboxFiles=false) {
   const r=getRun(db,runId);
   const messages=listAiMessages(db,conversationId,24,Number.MAX_SAFE_INTEGER).items.filter(m=>m.status==='complete');
   const recent=messages.map(m=>{
@@ -279,7 +304,8 @@ export function aiRunInputs(db:DatabaseSync,owner:string,conversationId:string,r
     files.push({ordinal:m.ordinal,file:{...getAiArtifact(db,owner,conversationId,attachment.id),kind:'input'}});
   }
   const order=one<{ord:number}>(db,'SELECT MAX(order_key) ord FROM manager_ai_submissions WHERE run_id=?',runId)!.ord;
-  return {r,recent,order,files,options:getRunOptions(db,runId)};
+  const sandboxFiles=includeSandboxFiles?collectSandboxFiles(db,owner,conversationId,r.scope_key,messages):[];
+  return {r,recent,order,files,sandboxFiles,options:getRunOptions(db,runId)};
 }
 
 export function aiRunEvent(db:DatabaseSync,runId:string,order:number,event:ManagerAiChatEvent) {

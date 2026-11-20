@@ -45,7 +45,9 @@ export async function managerAi(req:Request,user:User) {
   const key = managerAiProviderKey();
   if (req.method==='GET') {
     await managerAiScope(user,params);
-    return response({available:Boolean(key),models:managerAiModels,defaultModel:defaultManagerAiModel});
+    const sandboxAvailable=Boolean(key)&&process.env.MOBIUP_MANAGER_AI_SANDBOX_ENABLED==='1'&&
+      (await import('./manager-ai-sandbox')).managerAiSandboxAvailable();
+    return response({available:Boolean(key),models:managerAiModels,defaultModel:defaultManagerAiModel,sandboxAvailable});
   }
   if (req.method!=='POST') fail(405,'Metodă indisponibilă.');
   assertOrigin(req);

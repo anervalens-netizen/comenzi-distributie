@@ -6,6 +6,8 @@ export type ActivationPartner={key:string;company:string;clientCode:string;point
 export type ActivationPartnerSummary={realPointCount:number;unassignedActivations:number;genericActivations:number;unresolvedActivations:number};
 export type ActivationDetail={id:string;date:string;itemType:string;county:string;handset:string;eligible:boolean|null;reasons:string[]};
 export type ActivationCounts = {total:number;sim:number;telsim:number;other:number;unassigned:number;eligible?:number;ineligible?:number;ownRegion?:number;otherRegion?:number;unknownRegion?:number;reasons?:Record<string,number>};
+/** Internal analytical facts. Source identifiers and personal fields are deliberately absent. */
+export type ActivationAnalysisDay = {date:string;site:string;itemType:string;sku:string;county:string;handset:string;conflict:number;count:number};
 export type ActivationProvider = 'vodafone'|'digi';
 export type ActivationProductBreakdown={zero:number;credit:number;packages:number;other:number;unknown:number};
 export type ActivationSimZero={distributed:number;activated:number;withoutReportedActivation:number};
@@ -16,6 +18,7 @@ export type ActivationReport = {
   commissionCoverage?:'complete'|'partial'|'missing'|'outside_scope'|'unavailable';
   focusWorkbook?:string;
   monthly?:ActivationMonth[];
+  analysisDays?:ActivationAnalysisDay[];
   /** Full operator count; never exposed to scoped managers or agents. */
   operatorReported?:DigiOperatorReported;
   partners?:ActivationPartnerSummary&{rows:ActivationPartner[];total:number;page:number;hasMore:boolean;asOf:string|null};

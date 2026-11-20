@@ -171,12 +171,14 @@ async function processRun(req:Request,start:AiAccount,scope:AiScope,conversation
     return result;
   }
   try {
+    const sandbox=process.env.MOBIUP_MANAGER_AI_SANDBOX_ENABLED==='1'?await import('./manager-ai-sandbox'):null;
+    const analysisModule=sandbox?.managerAiSandboxAvailable()?await import('./manager-ai-analysis'):null;
     for (;;) {
       const attempt=new AbortController();
       active.set(runId,attempt);
       const signal=AbortSignal.any([attempt.signal,timeout]);
       const {account}=await current();
-      const work=conversationTxn(account,conversationId,false,connection=>aiRunInputs(connection,account.owner,conversationId,runId));
+      const work=conversationTxn(account,conversationId,false,connection=>aiRunInputs(connection,account.owner,conversationId,runId,!!analysisModule));
       if(work.r.state!=='running')return;
       let text:string,files:ManagerAiPreparedArtifact[]=[],failed=false;
       try {
@@ -184,12 +186,14 @@ async function processRun(req:Request,start:AiAccount,scope:AiScope,conversation
         const readSource=managerAiReader(req,scope,async()=>(await current()).user);
         const authorize=async()=>{
           signal.throwIfAborted();
-          await current();
+          const {user}=await current();
           await readSource.checkBillingScope();
           signal.throwIfAborted();
+          return user;
         };
+        const analysis=analysisModule?.createManagerAiAnalysis({scope,check:authorize,signal,files:work.sandboxFiles});
         const answer=await runManagerAi({
-          key,...work.options,turns:[],signal,readSource,check:authorize,
+          key,...work.options,turns:[],signal,readSource,check:authorize,analysis,
           content:work.recent.map(turn=>{
             if(turn.role==='assistant')return {role:'assistant',content:turn.content};
             const attachments=managerAiMediaParts(work.files.filter(file=>file.ordinal===turn.ordinal).map(file=>file.file));
@@ -204,7 +208,7 @@ async function processRun(req:Request,start:AiAccount,scope:AiScope,conversation
         });
         text=answer.answer;
         const format=/\bcsv\b/i.test(work.recent.at(-1)?.content??'')?'csv':'xlsx';
-        files=answer.reports.map(report=>prepareManagerAiReport(report,format));
+        files=[...(answer.analysisArtifacts??[]),...answer.reports.map(report=>prepareManagerAiReport(report,format))];
       } catch(error) {
         failed=true;
         text=timeout.aborted?'Analiza a depășit timpul disponibil. Încearcă o cerere mai restrânsă.':
