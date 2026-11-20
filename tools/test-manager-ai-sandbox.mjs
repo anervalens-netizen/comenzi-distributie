@@ -161,7 +161,7 @@ Path("/output/grafic.png").write_bytes(png)
     assert.equal(python.artifacts[2].mime_type,'image/png');
     assert.ok(python.artifacts[1].bytes.byteLength>0);
 
-    const sendSignal=process.kill;
+    const sendSignal=Object.getOwnPropertyDescriptor(process,'kill');
     for(const refuseSignal of [false,true]) {
       let denied=0;
       if(refuseSignal) process.kill=()=>{denied++;throw Object.assign(Error('Synthetic signal refusal'),{code:'EPERM'});};
@@ -174,7 +174,7 @@ Path("/output/grafic.png").write_bytes(png)
         await assert.rejects(delayed,{name:'AbortError'});
       } finally {
         clearTimeout(alarm);
-        process.kill=sendSignal;
+        Object.defineProperty(process,'kill',sendSignal);
       }
       assert.ok(Date.now()-began<3000,'Abort should terminate the isolated process promptly.');
       if(refuseSignal)assert.equal(denied,2,'Cancellation remained bounded after both signal attempts failed.');
