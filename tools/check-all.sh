@@ -51,6 +51,7 @@ node tools/test-manager-ai-analysis-data.mjs
 node tools/test-manager-ai-chat.mjs
 node tools/test-activation-partners.mjs
 node tools/test-activation-current-window.mjs
+node tools/test-activation-membership-schema.mjs
 node tools/test-activation-portfolio.mjs
 node tools/test-activation-partners-cache.mjs
 node tools/test-activation-access.mjs

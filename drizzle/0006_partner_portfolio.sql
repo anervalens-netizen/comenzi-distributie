@@ -21,13 +21,16 @@ CREATE INDEX IF NOT EXISTS idx_partner_visits_agent_date ON partner_visits(agent
 CREATE INDEX IF NOT EXISTS idx_partner_requests_customer_confirmed ON partner_requests(customer_id,confirmed_at DESC);
 -- This protects EVERY customer update path, including imports and A -> B -> A edits.
 -- Membership/route/name-only changes intentionally preserve the saved position.
-CREATE TRIGGER IF NOT EXISTS partner_profile_address_changed
+CREATE TRIGGER IF NOT EXISTS partner_profile_address_changed_v2
 AFTER UPDATE OF data ON customers
-WHEN COALESCE(json_extract(OLD.data,'$.address'),'') IS NOT COALESCE(json_extract(NEW.data,'$.address'),'')
+WHEN CASE WHEN json_valid(OLD.data) IS NOT 1 OR json_valid(NEW.data) IS NOT 1 THEN 1
+  ELSE COALESCE(json_extract(OLD.data,'$.address'),'') IS NOT COALESCE(json_extract(NEW.data,'$.address'),'')
   OR COALESCE(json_extract(OLD.data,'$.city'),'') IS NOT COALESCE(json_extract(NEW.data,'$.city'),'')
-  OR COALESCE(json_extract(OLD.data,'$.county'),'') IS NOT COALESCE(json_extract(NEW.data,'$.county'),'')
+  OR COALESCE(json_extract(OLD.data,'$.county'),'') IS NOT COALESCE(json_extract(NEW.data,'$.county'),'') END
 BEGIN
   UPDATE partner_profiles SET latitude=NULL,longitude=NULL,position_source=NULL,position_accuracy=NULL,
     position_provider=NULL,position_metadata=NULL,address_fingerprint='',revision=revision+1,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),updated_by=NULL
   WHERE customer_id=NEW.id;
 END;
+-- Retire the older trigger that parsed malformed values before they could be repaired.
+DROP TRIGGER IF EXISTS partner_profile_address_changed;

@@ -67,8 +67,15 @@ function sqlite() {
     candidate.exec('BEGIN IMMEDIATE;');
     try{
       candidate.exec(portfolioReadModelSchema);
-      if (!candidate.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='activation_portfolio_memberships'").get()) {
+      const membershipObjects=candidate.prepare(`SELECT sql FROM sqlite_schema WHERE name IN (
+        'activation_portfolio_memberships','activation_memberships_customer','activation_customer_warehouse_rows',
+        'activation_membership_insert','activation_membership_update','activation_membership_delete')`).all();
+      // sqlite_schema keeps these CREATE statements without the final semicolon.
+      // A lost or obsolete definition can imply stale rows from past writes.
+      if (membershipObjects.length!==6 || membershipObjects.some(row=>!activationMembershipSchema.includes('\n'+row.sql+';'))) {
         candidate.exec(activationMembershipSchema);
+        // Other open workers can still hold pages from the incomplete index.
+        candidate.exec('UPDATE crm_directory_revision SET revision=revision+1 WHERE id=1');
       }
       candidate.exec('COMMIT;');
     }catch(error){candidate.exec('ROLLBACK;');throw error;}
