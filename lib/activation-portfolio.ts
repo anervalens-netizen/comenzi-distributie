@@ -3,6 +3,8 @@ import type {ActivationPartner} from './activation-types';
 import type {ActivationPortfolioPoint,ActivationQuery} from './activation-distribution';
 import type {ActivationPartnerSort,ActivationSortDirection} from './activation-partner-sort';
 
+export class ActivationPartnerProjectionChanged extends Error {}
+
 export type ActivationPortfolioScope = { selected: string[]; owned: string[] | null };
 export type CombinedPartnerRead = {
   userId: string; profileVersion: string; role: string; managerScope: string;

@@ -24,7 +24,7 @@ try {
     name:'count-provider-reads',setup(b){
       b.onResolve({filter:/^\.\/activation-store-node$/},()=>({path:'fixture',namespace:'reader'}));
       b.onLoad({filter:/.*/,namespace:'reader'},()=>({contents:`export function readActivations(){
-        globalThis.__providerReads++;return {available:true,revision:'synthetic',partners:{rows:[]}};}`}));
+        globalThis.__providerReads++;globalThis.__duringProviderRead?.();return {available:true,revision:'synthetic',partners:{rows:[]}};}`}));
     },
   }]});
   globalThis.__providerReads=0;
@@ -45,9 +45,16 @@ try {
   assert.throws(()=>readPartnerPage(input,2),/directory changed/);
   assert.equal(readPartnerPage({...input,crmRevision:2},2).partners.total,103);
   assert.equal(globalThis.__providerReads,8);
+  // A real publication change while a cold page is being assembled must
+  // invalidate that result across the same worker protocol as a CRM change.
+  globalThis.__duringProviderRead=()=>{
+    delete globalThis.__duringProviderRead;
+    writeFileSync(join(root,'digi','activations.sqlite-wal'),'rotated during computation');
+  };
+  assert.throws(()=>readPartnerPage({...input,crmRevision:2,userId:'other-manager'},0),/Activation publication changed/);
   console.log('PASS: combined pages reuse the computation and invalidate on CRM, scope and operator WAL changes.');
 }finally{
-  db.close();delete globalThis.__providerReads;
+  db.close();delete globalThis.__providerReads;delete globalThis.__duringProviderRead;
   ['MOBIUP_DATA_DIR','MOBIUP_ACTIVATIONS_DIR'].forEach((key,i)=>{if(previous[i]===undefined)delete process.env[key];else process.env[key]=previous[i];});
   rmSync(root,{recursive:true,force:true});
 }

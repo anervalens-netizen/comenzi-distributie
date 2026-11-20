@@ -1,11 +1,15 @@
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
+import {mkdtempSync,readFileSync,rmSync} from 'node:fs';
+import {join} from 'node:path';
+import {tmpdir} from 'node:os';
 import {DatabaseSync} from 'node:sqlite';
 import {build} from 'esbuild';
 
 // Exercise activationReport's actual SQL with synthetic SQLite data. Only its
 // database adapter and the unrelated activation ledger reader are substituted.
-const database=new DatabaseSync(':memory:'),queries=[];
+const initialDirectory=process.cwd(),temporary=mkdtempSync(join(tmpdir(),'activation-portfolio-'));
+const database=new DatabaseSync(join(temporary,'mobiup.sqlite')),queries=[];
+database.exec('PRAGMA journal_mode=WAL');
 const fixture={
   database,
   prepare(sql){
@@ -18,7 +22,7 @@ const fixture={
   },
 };
 globalThis.__activationPortfolioFixture=fixture;
-const environmentKeys=['MOBIUP_ACTIVATIONS_PILOT_MANAGER_ID','MOBIUP_ACTIVATIONS_PILOT_AGENT_ID','MOBIUP_ACTIVATIONS_PILOT_ADDITIONAL_MANAGER_IDS','MOBIUP_ACTIVATIONS_PILOT_ADDITIONAL_AGENT_IDS','MOBIUP_ACTIVATIONS_VODAFONE_ONLY_MANAGER_IDS'];
+const environmentKeys=['MOBIUP_DATA_DIR','MOBIUP_ACTIVATIONS_DIR','MOBIUP_ACTIVATIONS_PILOT_MANAGER_ID','MOBIUP_ACTIVATIONS_PILOT_AGENT_ID','MOBIUP_ACTIVATIONS_PILOT_ADDITIONAL_MANAGER_IDS','MOBIUP_ACTIVATIONS_PILOT_ADDITIONAL_AGENT_IDS','MOBIUP_ACTIVATIONS_VODAFONE_ONLY_MANAGER_IDS'];
 const previousEnvironment=Object.fromEntries(environmentKeys.map(key=>[key,process.env[key]]));
 try{
   const bundled=await build({entryPoints:['lib/activation-api.ts'],bundle:true,platform:'node',format:'esm',write:false,plugins:[{
@@ -30,8 +34,11 @@ try{
           export async function readDigiOverview(){return globalThis.__activationPortfolioFixture.digiOverview();}
           import {combinePartnerReports} from '${process.cwd()}/lib/combined-activation-partners.ts';
           import {portfolioSelection,portfolioPoint} from '${process.cwd()}/lib/activation-portfolio.ts';
+          import {readCombinedActivationPartners as workerRead} from '${process.cwd()}/lib/activation-partners-runtime-node.ts';
           export async function readCombinedActivationPartners(input,page){
-            const fixture=globalThis.__activationPortfolioFixture,selection=portfolioSelection(input.scope);
+            const fixture=globalThis.__activationPortfolioFixture;
+            if(fixture.worker){fixture.beforeWorker?.();return workerRead(input,page);}
+            const selection=portfolioSelection(input.scope);
             const all=combinePartnerReports(input,fixture.database.prepare(selection.sql).all(...selection.args).map(portfolioPoint),readActivations);
             const {rows}=all.partners;
             if(fixture.duringRead)fixture.duringRead();
@@ -245,9 +252,40 @@ try{
   delete fixture.duringRead;
   const revision=(await report({q:'page-'})).revision;
   await assert.rejects(()=>report({q:'page-',sort:'label',revision}),e=>e.status===409);
+  // Exercise the production worker wire. Only the two external operator
+  // ledgers are substituted; authorization, CRM snapshots and pagination are real.
+  await build({entryPoints:['lib/activation-partners-worker.ts'],outfile:join(temporary,'activation-partners-worker.mjs'),
+    bundle:true,platform:'node',format:'esm',plugins:[{name:'synthetic-operators',setup(build){
+      build.onResolve({filter:/^\.\/activation-store-node$/},()=>({path:'operators',namespace:'fixture'}));
+      build.onLoad({filter:/.*/,namespace:'fixture'},()=>({contents:
+        'export function readActivations(month,sites,provider,query){return {available:true,revision:query.portfolioRevision,partners:{rows:[]}}}'}));
+    }}]});
+  process.env.MOBIUP_DATA_DIR=temporary;process.env.MOBIUP_ACTIVATIONS_DIR=temporary;
+  process.chdir(temporary);fixture.worker=true;
+  const first=await report({});
+  assert(first.partners.hasMore,'the worker served a multi-page portfolio');
+  const touch=()=>database.exec('UPDATE crm_directory_revision SET revision=revision+1 WHERE id=1');
+  let attempts=0;
+  fixture.beforeWorker=()=>{attempts++;touch();};
+  await assert.rejects(()=>report({page:'1',revision:first.revision}),e=>e.status===409);
+  assert.equal(attempts,1,'a pinned page must not restart on a later snapshot');
+  attempts=0;
+  fixture.beforeWorker=()=>{if(++attempts===1)touch();};
+  assert.equal((await report({})).partners.total,first.partners.total);
+  assert.equal(attempts,2,'a fresh list retries one transient change');
+  attempts=0;
+  fixture.beforeWorker=()=>{attempts++;touch();};
+  await assert.rejects(()=>report({}),e=>e.status===409);
+  assert.equal(attempts,2,'constant writes cannot trigger an unbounded retry');
+  attempts=0;
+  fixture.beforeWorker=()=>{attempts++;database.exec('DROP TABLE activation_portfolio_memberships');};
+  await assert.rejects(()=>report({}),e=>e.status===503);
+  assert.equal(attempts,1,'database failures remain unavailable and are not retried');
+  console.log('PASS: queued partner page invalidation, bounded first-page retry and worker failure status.');
   console.log('PASS: recent-only for either provider, empty points, both providers, source identities, filters, summary counts, sorting, 103 points across pages, page limits and revision.');
   console.log('PASS: activation portfolio scopes, current-window merge, full-list sorting, validated inputs and manager/team-specific Digi presentation.');
 }finally{
-  database.close();delete globalThis.__activationPortfolioFixture;
+  process.chdir(initialDirectory);database.close();rmSync(temporary,{recursive:true,force:true});
+  delete globalThis.__activationPortfolioFixture;
   for(const key of environmentKeys){if(previousEnvironment[key]===undefined)delete process.env[key];else process.env[key]=previousEnvironment[key];}
 }

@@ -4,7 +4,7 @@ import {statSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {activationPublicationStamp} from './activation-publication-node';
 import {combinePartnerReports} from './combined-activation-partners';
-import {portfolioPoint,portfolioSelection,type CombinedPartnerRead,type PortfolioFields} from './activation-portfolio';
+import {ActivationPartnerProjectionChanged,portfolioPoint,portfolioSelection,type CombinedPartnerRead,type PortfolioFields} from './activation-portfolio';
 import {readActivations} from './activation-store-node';
 import type {CombinedActivationPartners} from './activation-types';
 
@@ -31,7 +31,7 @@ export function readPartnerPage(input:CombinedPartnerRead,page:number):CombinedA
   try {
     db.exec('BEGIN');
     if(Number(db.prepare('SELECT revision FROM crm_directory_revision WHERE id=1').get()?.revision)!==input.crmRevision)
-      throw new Error('Customer directory changed');
+      throw new ActivationPartnerProjectionChanged('Customer directory changed');
     const hit=source&&stored.get(key);
     if(hit){
       stored.delete(key);stored.set(key,hit);
@@ -45,7 +45,7 @@ export function readPartnerPage(input:CombinedPartnerRead,page:number):CombinedA
     const all=report.partners.rows;
     const rows=all.slice(page*pageSize,(page+1)*pageSize);
     if(source && Object.values(report.operators).every(op=>op.available)){
-      if(publicationStamp()!==source)throw new Error('Activation publication changed');
+      if(publicationStamp()!==source)throw new ActivationPartnerProjectionChanged('Activation publication changed');
       const pages:string[]=[];
       let bytes=0;
       for(let i=0;i<all.length && bytes<=byteLimit;i+=pageSize){

@@ -1,6 +1,6 @@
 import {emptyActivationCounts,type ActivationReport,type CombinedActivationPartners} from './activation-types';
 import {activationPartnerSortKeys,activationTodayWindow,type ActivationPartnerSort,type ActivationSortDirection} from './activation-partner-sort';
-import {portfolioSelection,portfolioPoint,type PortfolioFields,type CombinedPartnerRead} from './activation-portfolio';
+import {ActivationPartnerProjectionChanged,portfolioSelection,portfolioPoint,type PortfolioFields,type CombinedPartnerRead} from './activation-portfolio';
 import {canViewActivations} from './activation-access';
 import {readActivations,readDigiOverview,readVodafoneFocus,readCombinedActivationPartners} from '#mobiup-activation-store';
 import {db,fail,isGlobalManager,sha256} from './server';
@@ -89,10 +89,17 @@ export async function activationReport(user:User,params:URLSearchParams,internal
  }else if(['months','projects','view'].some(k=>params.has(k)))fail(503,'Proiecția pentru proiecte trebuie pregătită.');
  if(provider==='both'){
    if(!query)fail(503,'Proiecția pentru proiecte trebuie pregătită.');
-   const input=await partnerReadInput(user,params,month,sites,query,sort as ActivationPartnerSort,direction as ActivationSortDirection);
-   let result:CombinedActivationPartners;
-   try {result=await readCombinedActivationPartners(input,query.page||0);}
-   catch {fail(503,'Raportul partenerilor nu este disponibil momentan. Încearcă din nou mai târziu.');}
+   const readInput=()=>partnerReadInput(user,params,month,sites,query,sort as ActivationPartnerSort,direction as ActivationSortDirection);
+   let input=await readInput(),result:CombinedActivationPartners;
+   for(let attempt=0;;attempt++){
+     try {result=await readCombinedActivationPartners(input,query.page||0);break;}
+     catch(error){
+       if(!(error instanceof ActivationPartnerProjectionChanged))fail(503,'Raportul partenerilor nu este disponibil momentan. Încearcă din nou mai târziu.');
+       if(attempt>0 || query.page || params.has('revision'))fail(409,'Proiecția s-a modificat. Reîncarcă lista.');
+       // Only an unpinned first page may restart on a newer publication.
+       input=await readInput();
+     }
+   }
    // Rights and assignments can change while a report is queued off-thread.
    const current=internal?.revalidateFocus ? await internal.revalidateFocus() : user;
    if(current.id!==user.id || current.profileVersion!==user.profileVersion || current.role!==user.role ||

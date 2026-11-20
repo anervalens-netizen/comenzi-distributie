@@ -2,7 +2,7 @@ import {existsSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {Worker} from 'node:worker_threads';
 import {readPartnerPage} from './activation-partners-page-node';
-import type {CombinedPartnerRead} from './activation-portfolio';
+import {ActivationPartnerProjectionChanged,type CombinedPartnerRead} from './activation-portfolio';
 import type {CombinedActivationPartners} from './activation-types';
 
 type Pending={accept:(result:CombinedActivationPartners)=>void;reject:(error:Error)=>void;timer:ReturnType<typeof setTimeout>};
@@ -23,11 +23,13 @@ function stop(entry:Service) {
 function start(file:string):Service {
   const worker=new Worker(file,{resourceLimits:{maxOldGenerationSizeMb:384,maxYoungGenerationSizeMb:32}});
   const entry:Service={worker,pending:new Map(),stopping:false};
-  worker.on('message',({id,report}:{id:number;report?:CombinedActivationPartners})=>{
+  worker.on('message',({id,report,stale}:{id:number;report?:CombinedActivationPartners;stale?:boolean})=>{
     const waiter=entry.pending.get(id);
     if(!waiter)return;
     entry.pending.delete(id);clearTimeout(waiter.timer);
-    if(report)waiter.accept(report);else waiter.reject(new Error('Partner report unavailable'));
+    if(report)waiter.accept(report);
+    else if(stale)waiter.reject(new ActivationPartnerProjectionChanged());
+    else waiter.reject(new Error('Partner report unavailable'));
     if(!entry.pending.size)worker.unref();
   });
   worker.on('error',()=>stop(entry));
