@@ -2,33 +2,37 @@ import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateA
 import { isAiNotConfiguredError, type createAiApi } from './api';
 import { useAiApi } from './api-context';
 import type { AiChatMessage, AiConversation, AiRunStatus, AiUnavailableReason } from './types';
-import { latestSubmission, mergePersisted, runStatusFromProtocol, type MutableRef, type StopOutcomeState } from './protocolState';
+import { latestSubmission, mergePersisted, runStatusFromProtocol, type MutableRef } from './protocolState';
 const CONVERSATION_PAGE_SIZE = 30;
 async function loadPage(id: string, { listAiMessages, getAiSubmissionStatus }: ReturnType<typeof createAiApi>) {
   let page = await listAiMessages(id);
   const submission = latestSubmission(page.items);
   const state = submission ? await getAiSubmissionStatus(id, submission) : null;
   const status = runStatusFromProtocol(state);
-  if (state && status === 'idle' && !['unknown', 'unseen'].includes(state.state)) page = await listAiMessages(id);
-  return { ...page, status, items: mergePersisted(page.items, [], status, state) };
+  if (state?.terminal_message_id && !page.items.some((message) => message.id === state.terminal_message_id)) {
+    page = await listAiMessages(id);
+  }
+  return { ...page, status, submission, items: mergePersisted(page.items, [], status, state) };
 }
 /**
  * Owns conversation bootstrap/selection. A monotonically increasing selection
  * epoch makes a delayed bootstrap response unable to overwrite a newer owner
- * choice (New Conversation) made while that response was still in flight.
+ * selection or replace data from an earlier account session.
  */
 export function useConversationBootstrap(params: {
   enabled: boolean;
   conversationId: string | null;
   setConversationId: Dispatch<SetStateAction<string | null>>;
   setMessages: Dispatch<SetStateAction<AiChatMessage[]>>;
-  setRunStatus: Dispatch<SetStateAction<AiRunStatus>>;
+  setRunStatus: (status: AiRunStatus) => void;
+  setActiveSubmissionId: (id: string | undefined) => void;
   setConversations: Dispatch<SetStateAction<AiConversation[]>>;
   setHasOlderConversations: Dispatch<SetStateAction<boolean>>;
   setHasOlderMessages: Dispatch<SetStateAction<boolean>>;
   setUnavailableReason: Dispatch<SetStateAction<AiUnavailableReason | null>>;
   serverConversationCountRef: MutableRef<number>;
   retryToken: number;
+  currentConversationIdRef: MutableRef<string | null>;
 }): { initializedRef: MutableRef<boolean>; selectionEpochRef: MutableRef<number> } {
   const {
     enabled,
@@ -36,12 +40,14 @@ export function useConversationBootstrap(params: {
     setConversationId,
     setMessages,
     setRunStatus,
+    setActiveSubmissionId,
     setConversations,
     setHasOlderConversations,
     setHasOlderMessages,
     setUnavailableReason,
     serverConversationCountRef,
     retryToken,
+    currentConversationIdRef,
   } = params;
   const api = useAiApi();
   const { createAiConversation, getAiConversation, listAiConversations } = api;
@@ -54,15 +60,17 @@ export function useConversationBootstrap(params: {
   ): Promise<AiRunStatus | null> => {
     const page = await loadPage(id, api);
     if (selectionEpochRef.current !== epoch) return null;
+    currentConversationIdRef.current = id;
     setConversationId(id);
+    setActiveSubmissionId(page.submission);
     setMessages(page.items);
     setHasOlderMessages(page.hasMore);
     return page.status;
-  }, [api, selectionEpochRef, setConversationId, setHasOlderMessages, setMessages]);
+  }, [api, currentConversationIdRef, selectionEpochRef, setActiveSubmissionId, setConversationId, setHasOlderMessages, setMessages]);
 
   useEffect(() => {
     if (!enabled) {
-      if (!initializedRef.current) setRunStatus('unavailable');
+      setRunStatus('unavailable');
       return;
     }
     if (initializedRef.current) return;
@@ -118,52 +126,35 @@ export function useConversationBootstrap(params: {
   return { initializedRef, selectionEpochRef };
 }
 
-function failedNavigationStatus(
-  previousStatus: AiRunStatus,
-  conversationId: string | null,
-  stopOutcomesRef: MutableRef<Map<string, StopOutcomeState>>,
-  fallback: AiRunStatus,
-): AiRunStatus {
-  if (
-    previousStatus === 'stopping'
-    && conversationId
-    && stopOutcomesRef.current.get(conversationId)?.outcome === 'failed'
-  ) return 'running';
-  if (previousStatus === 'running' || previousStatus === 'stopping') return previousStatus;
-  return fallback;
-}
-
 export function useConversationControls(params: {
   enabled: boolean;
-  conversationId: string | null;
-  runStatus: AiRunStatus;
+  runStatusRef: MutableRef<AiRunStatus>;
   hasOlderConversations: boolean;
   setConversationId: Dispatch<SetStateAction<string | null>>;
   setConversations: Dispatch<SetStateAction<AiConversation[]>>;
   setHasOlderConversations: Dispatch<SetStateAction<boolean>>;
   setMessages: Dispatch<SetStateAction<AiChatMessage[]>>;
-  setRunStatus: Dispatch<SetStateAction<AiRunStatus>>;
+  setRunStatus: (status: AiRunStatus) => void;
+  setActiveSubmissionId: (id: string | undefined) => void;
   setHasOlderMessages: Dispatch<SetStateAction<boolean>>;
   initializedRef: MutableRef<boolean>;
   selectionEpochRef: MutableRef<number>;
   serverConversationCountRef: MutableRef<number>;
   streamAbortRef: MutableRef<AbortController | null>;
   currentConversationIdRef: MutableRef<string | null>;
-  stopOutcomesRef: MutableRef<Map<string, StopOutcomeState>>;
 }) {
   const {
-    enabled, conversationId, runStatus, hasOlderConversations,
+    enabled, runStatusRef, hasOlderConversations,
     setConversationId, setConversations, setHasOlderConversations, setMessages,
-    setRunStatus, setHasOlderMessages, initializedRef, selectionEpochRef,
-    serverConversationCountRef, streamAbortRef, currentConversationIdRef, stopOutcomesRef,
+    setRunStatus, setActiveSubmissionId, setHasOlderMessages, initializedRef, selectionEpochRef,
+    serverConversationCountRef, streamAbortRef, currentConversationIdRef,
   } = params;
   const api = useAiApi();
   const { createAiConversation, listAiConversations } = api;
   const [loadingOlderConversations, setLoadingOlderConversations] = useState(false);
 
   const newConversation = useCallback(async () => {
-    if (!enabled || runStatus === 'unavailable') return;
-    const previousStatus = runStatus;
+    if (!enabled || runStatusRef.current !== 'idle') return;
     streamAbortRef.current?.abort();
     streamAbortRef.current = null;
     const epoch = selectionEpochRef.current + 1;
@@ -176,6 +167,7 @@ export function useConversationControls(params: {
       currentConversationIdRef.current = created.id;
       setConversationId(created.id);
       setConversations((current) => [created, ...current.filter((item) => item.id !== created.id)]);
+      setActiveSubmissionId(undefined);
       setMessages([]);
       setHasOlderMessages(false);
       setRunStatus('idle');
@@ -183,18 +175,12 @@ export function useConversationControls(params: {
     } catch (error) {
       if (selectionEpochRef.current !== epoch) return;
       console.error('AI Comenzi conversation creation failed', error);
-      setRunStatus(failedNavigationStatus(
-        previousStatus,
-        conversationId,
-        stopOutcomesRef,
-        conversationId ? 'idle' : 'unavailable',
-      ));
+      setRunStatus(currentConversationIdRef.current ? 'idle' : 'unavailable');
     }
-  }, [conversationId, createAiConversation, currentConversationIdRef, enabled, initializedRef, runStatus, selectionEpochRef, serverConversationCountRef, setConversationId, setConversations, setHasOlderMessages, setMessages, setRunStatus, stopOutcomesRef, streamAbortRef]);
+  }, [createAiConversation, currentConversationIdRef, enabled, initializedRef, runStatusRef, selectionEpochRef, serverConversationCountRef, setActiveSubmissionId, setConversationId, setConversations, setHasOlderMessages, setMessages, setRunStatus, streamAbortRef]);
 
   const selectConversation = useCallback(async (id: string) => {
-    if (!enabled || id === conversationId || runStatus === 'loading' || runStatus === 'unavailable') return;
-    const previousStatus = runStatus;
+    if (!enabled || id === currentConversationIdRef.current || runStatusRef.current !== 'idle') return;
     streamAbortRef.current?.abort();
     streamAbortRef.current = null;
     const epoch = selectionEpochRef.current + 1;
@@ -205,6 +191,7 @@ export function useConversationControls(params: {
       if (selectionEpochRef.current !== epoch) return;
       currentConversationIdRef.current = id;
       setConversationId(id);
+      setActiveSubmissionId(page.submission);
       setMessages(page.items);
       setHasOlderMessages(page.hasMore);
       setRunStatus(page.status);
@@ -212,18 +199,13 @@ export function useConversationControls(params: {
     } catch (error) {
       if (selectionEpochRef.current !== epoch) return;
       console.error('AI Comenzi conversation selection failed', error);
-      setRunStatus(failedNavigationStatus(
-        previousStatus,
-        conversationId,
-        stopOutcomesRef,
-        'idle',
-      ));
+      setRunStatus('idle');
     }
-  }, [api, conversationId, currentConversationIdRef, enabled, initializedRef, runStatus, selectionEpochRef, setConversationId, setHasOlderMessages, setMessages, setRunStatus, stopOutcomesRef, streamAbortRef]);
+  }, [api, currentConversationIdRef, enabled, initializedRef, runStatusRef, selectionEpochRef, setActiveSubmissionId, setConversationId, setHasOlderMessages, setMessages, setRunStatus, streamAbortRef]);
 
   const loadOlderConversations = useCallback(async () => {
     if (!enabled || loadingOlderConversations || !hasOlderConversations) return;
-    if (runStatus !== 'idle') return;
+    if (runStatusRef.current !== 'idle') return;
     const epoch = selectionEpochRef.current;
     setLoadingOlderConversations(true);
     try {
@@ -243,7 +225,7 @@ export function useConversationControls(params: {
     } finally {
       setLoadingOlderConversations(false);
     }
-  }, [enabled, hasOlderConversations, listAiConversations, loadingOlderConversations, runStatus, selectionEpochRef, serverConversationCountRef, setConversations, setHasOlderConversations]);
+  }, [enabled, hasOlderConversations, listAiConversations, loadingOlderConversations, runStatusRef, selectionEpochRef, serverConversationCountRef, setConversations, setHasOlderConversations]);
 
   return { loadingOlderConversations, newConversation, selectConversation, loadOlderConversations };
 }

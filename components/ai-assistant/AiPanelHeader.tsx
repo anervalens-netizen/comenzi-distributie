@@ -1,6 +1,7 @@
 import { ArrowLeft, ChevronDown, History, Maximize2, MessageSquarePlus } from 'lucide-react';
 
 import { AiHaloOrb } from './AiHaloOrb';
+import { isActiveRun } from './protocolState';
 import type { AiConversation, AiRunStatus } from './types';
 
 interface AiPanelHeaderProps {
@@ -21,11 +22,12 @@ export function AiPanelHeader({
   runStatus, onSelectConversation, onLoadOlderConversations, onNewConversation,
   onResetWidth, onClose,
 }: AiPanelHeaderProps) {
+  const navigationLocked = isActiveRun(runStatus);
   return <header className="shrink-0 border-b border-slate-200/80 bg-white/95 px-3 py-2 backdrop-blur-xl dark:border-slate-800/80 dark:bg-slate-950/95">
     <div className="flex min-h-9 items-center gap-2.5">
       <AiHaloOrb
         size="xs"
-        state={runStatus === 'unavailable' ? 'unavailable' : runStatus === 'running' || runStatus === 'stopping' ? 'running' : 'idle'}
+        state={runStatus === 'unavailable' ? 'unavailable' : navigationLocked ? 'running' : 'idle'}
         className="size-7"
       />
       <div className="min-w-0 flex-1">
@@ -57,7 +59,8 @@ export function AiPanelHeader({
         <select
           aria-label="Selectează sesiunea AI"
           value={conversationId ?? ''}
-          disabled={runStatus === 'loading' || runStatus === 'unavailable'}
+          disabled={runStatus !== 'idle'}
+          aria-describedby={navigationLocked ? 'ai-conversation-lock-note' : undefined}
           onChange={(event) => onSelectConversation(event.target.value)}
           className="block h-11 w-full appearance-none truncate rounded-xl border border-slate-200 bg-slate-50 py-1.5 pl-3 pr-7 text-xs font-semibold text-slate-700 outline-none transition hover:border-indigo-200 hover:bg-white focus:ring-2 focus:ring-indigo-100 disabled:opacity-50 sm:h-9 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
         >
@@ -68,7 +71,8 @@ export function AiPanelHeader({
 
       {onNewConversation && <button
         type="button"
-        disabled={runStatus === 'loading' || runStatus === 'unavailable'}
+        disabled={runStatus !== 'idle'}
+        aria-describedby={navigationLocked ? 'ai-conversation-lock-note' : undefined}
         onClick={onNewConversation}
         className="inline-flex h-11 shrink-0 items-center gap-1.5 rounded-xl bg-indigo-600 px-3 text-xs font-bold text-white shadow-sm transition hover:bg-indigo-700 disabled:opacity-40 sm:h-9"
         aria-label="Sesiune nouă"
@@ -82,7 +86,7 @@ export function AiPanelHeader({
         aria-label="Încarcă sesiuni mai vechi"
         title="Încarcă sesiuni mai vechi"
         aria-busy={loadingOlderConversations || undefined}
-        disabled={loadingOlderConversations || runStatus === 'running' || runStatus === 'stopping'}
+        disabled={loadingOlderConversations || runStatus !== 'idle'}
         onClick={onLoadOlderConversations}
         className="inline-flex size-11 shrink-0 items-center justify-center gap-1.5 rounded-xl border border-slate-200 text-[10px] font-semibold text-indigo-600 hover:bg-indigo-50 disabled:opacity-40 sm:h-9 sm:w-auto sm:px-2.5 dark:border-slate-700 dark:text-indigo-300 dark:hover:bg-indigo-950/40"
       >
@@ -90,5 +94,8 @@ export function AiPanelHeader({
         <span className="hidden sm:inline">{loadingOlderConversations ? 'Se încarcă…' : 'Mai vechi'}</span>
       </button>}
     </div>
+    {navigationLocked && <p id="ai-conversation-lock-note" className="mt-1.5 text-[11px] text-slate-600 dark:text-slate-400">
+      Așteaptă finalizarea sau oprește analiza pentru a schimba sesiunea.
+    </p>}
   </header>;
 }

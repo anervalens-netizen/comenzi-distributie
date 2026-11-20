@@ -187,6 +187,7 @@ node tools/test-inventory.mjs
 CHROME_BIN="${CHROME_BIN:-$(command -v google-chrome || command -v chromium || true)}"
 if [ -n "$CHROME_BIN" ]; then
   CHROME_BIN="$CHROME_BIN" node tools/test-notification-center-browser.mjs
+  CHROME_BIN="$CHROME_BIN" node tools/test-manager-ai-concurrency-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-order-approval-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-order-limit-policy-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-leave-browser.mjs

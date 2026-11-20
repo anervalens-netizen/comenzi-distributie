@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import { assertManagerSession, type ImportAuthorization } from './import-write-authorization';
-import type { ManagerAiPreparedArtifact } from './manager-ai-media';
+import { managerAiInputContextLead, type ManagerAiPreparedArtifact } from './manager-ai-media';
 import { managerAiAttachmentLimits } from './manager-ai-media-contract';
 import { defaultManagerAiModel, type ManagerAiModel } from './manager-ai';
 import type {
@@ -111,11 +111,55 @@ function insertArtifacts(db:DatabaseSync,owner:string,conversationId:string,file
 
 export function getAiArtifact(db:DatabaseSync,owner:string,conversationId:string,id:string) {
   const item=one<Pick<ManagerAiPreparedArtifact,'filename'|'mime_type'|'bytes'>>(db,'SELECT filename,mime_type,bytes FROM manager_ai_artifacts WHERE id=? AND conversation_id=? AND owner=?',id,conversationId,owner);
-  if(!item) fail(404,'Fișierul nu a fost găsit.');
+  if(!item) {
+    const link=findAiArtifactLink(db,owner,conversationId,id);
+    if(link&&link.artifacts[link.position].removed)fail(410,'Fișierul a fost șters.');
+    fail(404,'Fișierul nu a fost găsit.');
+  }
   return item;
 }
 
-function addMessage(db:DatabaseSync,owner:string,conversationId:string,role:'user'|'assistant',text:string,files:readonly ManagerAiPreparedArtifact[],status:'complete'|'error'='complete',id:string=randomUUID()) {
+function findAiArtifactLink(db:DatabaseSync,owner:string,conversationId:string,id:string) {
+  const link=one<{id:string;attachments:string;position:number}>(db,`SELECT m.id,m.attachments,a.key position
+    FROM manager_ai_conversations AS c JOIN manager_ai_messages AS m ON m.conversation_id=c.id
+    JOIN json_each(m.attachments) AS a
+    WHERE c.id=? AND c.owner=? AND json_extract(a.value,'$.id')=?`,conversationId,owner,id);
+  return link&&{id:link.id,position:link.position,artifacts:JSON.parse(link.attachments) as ManagerAiArtifact[]};
+}
+
+function removeAiInputExcerpt(db:DatabaseSync,messageId:string,artifacts:ManagerAiArtifact[],id:string) {
+  const submission=one<{context:string}>(db,'SELECT context FROM manager_ai_submissions WHERE message_id=?',messageId);
+  if(!submission)return;
+  const context=submission.context,start=context.indexOf(managerAiInputContextLead+'\n');
+  if(start<0)return;
+  const inputFiles=artifacts.filter(file=>file.kind==='input'&&!file.removed&&!nativeMedia(file));
+  const excerptIndex=inputFiles.findIndex(file=>file.id===id);
+  if(excerptIndex<0)return;
+  const excerpts=context.slice(start+managerAiInputContextLead.length+1).split('\n');
+  const remaining=excerpts.length===inputFiles.length?excerpts.filter((_,index)=>index!==excerptIndex):[];
+  const inherited=context.slice(0,start).trimEnd();
+  const updated=[inherited,remaining.length&&managerAiInputContextLead+'\n'+remaining.join('\n')].filter(Boolean).join('\n\n');
+  run(db,'UPDATE manager_ai_submissions SET context=? WHERE message_id=?',updated,messageId);
+}
+
+export function removeAiArtifact(db:DatabaseSync,owner:string,conversationId:string,id:string) {
+  const link=findAiArtifactLink(db,owner,conversationId,id);
+  if(!link)fail(404,'Fișierul nu a fost găsit.');
+  const existing=link.artifacts[link.position];
+  if(existing.removed)return existing;
+  // Follow-up analysis can still use input files from earlier turns in the conversation.
+  if(existing.kind==='input'&&one(db,"SELECT 1 FROM manager_ai_runs WHERE conversation_id=? AND state='running' AND expires_at>?",conversationId,Date.now())) {
+    fail(409,'Oprește analiza din această sesiune înainte de a șterge fișierele de intrare.');
+  }
+  if(existing.kind==='input'&&!nativeMedia(existing))removeAiInputExcerpt(db,link.id,link.artifacts,id);
+  const removed={...existing,removed:true as const};
+  link.artifacts[link.position]=removed;
+  run(db,'DELETE FROM manager_ai_artifacts WHERE id=? AND conversation_id=? AND owner=?',id,conversationId,owner);
+  run(db,'UPDATE manager_ai_messages SET attachments=? WHERE id=?',JSON.stringify(link.artifacts),link.id);
+  return removed;
+}
+
+function addMessage(db:DatabaseSync,owner:string,conversationId:string,role:'user'|'assistant',text:string,files:readonly ManagerAiPreparedArtifact[],status:ManagerAiChatMessage['status']='complete',id:string=randomUUID()) {
   const ordinal=one<{ordinal:number}>(db,'SELECT COALESCE(MAX(ordinal),0)+1 ordinal FROM manager_ai_messages WHERE conversation_id=?',conversationId)!.ordinal;
   if(ordinal>maxMessages) fail(409,'Conversația a atins limita de mesaje.');
   const created_at=now(),attachments=insertArtifacts(db,owner,conversationId,files);
@@ -229,7 +273,7 @@ export function aiRunInputs(db:DatabaseSync,owner:string,conversationId:string,r
   const newestFirst=recent.toReversed();
   const ordered=[...newestFirst.filter(m=>m.ordinal>=current),...newestFirst.filter(m=>m.ordinal<current)];
   for(const m of ordered) for(const attachment of m.attachments) {
-    if(attachment.kind!=='input'||!nativeMedia(attachment)||files.length>=managerAiAttachmentLimits.maxFiles||
+    if(attachment.kind!=='input'||attachment.removed||!nativeMedia(attachment)||files.length>=managerAiAttachmentLimits.maxFiles||
       bytes+attachment.size_bytes>managerAiAttachmentLimits.maxTotalBytes)continue;
     bytes+=attachment.size_bytes;
     files.push({ordinal:m.ordinal,file:{...getAiArtifact(db,owner,conversationId,attachment.id),kind:'input'}});
@@ -268,17 +312,36 @@ export function endAiRun(db:DatabaseSync,owner:string,conversationId:string,runI
 export function stopAiRun(db:DatabaseSync,account:AiAccount,conversationId:string,runId:string,attemptId:string,controlId:string) {
   const r=getRun(db,runId);
   if(!one(db,'SELECT id FROM manager_ai_runs WHERE id=? AND conversation_id=?',runId,conversationId)||r.attempt_id!==attemptId||r.token_hash!==account.auth.tokenHash) fail(409,'Sesiunea sau analiza s-a modificat.');
-  if(r.control_id===controlId) return r.state;
+  if(r.control_id===controlId) {
+    const terminal=r.terminal_message_id&&readAiMessage(db,conversationId,r.terminal_message_id);
+    return {state:r.state,message:terminal||undefined};
+  }
   if(r.state!=='running') fail(409,'Analiza nu mai rulează.');
-  run(db,"UPDATE manager_ai_runs SET state='stopped',control_id=? WHERE id=?",controlId,runId);
-  addEvent(db,runId,{type:'stopped'});
-  return 'stopped';
+  const partial=many<{text:string}>(db,`SELECT json_extract(data,'$.text') text FROM manager_ai_events
+    WHERE run_id=? AND sequence>(SELECT COALESCE(MAX(sequence),0) FROM manager_ai_events WHERE run_id=? AND json_extract(data,'$.type')='reset')
+    AND json_extract(data,'$.type')='delta' ORDER BY sequence`,runId,runId).map(event=>event.text).join('');
+  const terminal=addMessage(db,account.owner,conversationId,'assistant',partial.trim()?partial:'Analiza a fost oprită.',[],'stopped');
+  run(db,"UPDATE manager_ai_runs SET state='stopped',control_id=?,terminal_message_id=? WHERE id=?",controlId,terminal.id,runId);
+  addEvent(db,runId,{type:'stopped',message:terminal});
+  return {state:'stopped' as const,message:terminal};
+}
+
+function readAiMessage(db:DatabaseSync,conversationId:string,id:string) {
+  const row=one<MessageRow>(db,'SELECT id,ordinal,role,text,status,created_at,attachments FROM manager_ai_messages WHERE conversation_id=? AND id=?',conversationId,id);
+  return row&&message(row);
 }
 
 export function readAiEvents(db:DatabaseSync,conversationId:string,id:string,after:number) {
   const status=aiSubmissionStatus(db,conversationId,id);
   if(!status.run_id) fail(404,'Analiza nu a fost găsită.');
-  const events=many<{sequence:number;data:string}>(db,'SELECT sequence,data FROM manager_ai_events WHERE run_id=? AND sequence>? ORDER BY sequence LIMIT 32',status.run_id,after);
-  const terminal=status.terminal_message_id?one<MessageRow>(db,'SELECT id,ordinal,role,text,status,created_at,attachments FROM manager_ai_messages WHERE id=?',status.terminal_message_id):undefined;
-  return {status,events,terminal:terminal&&message(terminal)};
+  const events=many<{sequence:number;data:string}>(db,'SELECT sequence,data FROM manager_ai_events WHERE run_id=? AND sequence>? ORDER BY sequence LIMIT 32',status.run_id,after).map(({sequence,data})=>{
+    const event=JSON.parse(data) as ManagerAiChatEvent;
+    if((event.type==='user_message'||event.type==='complete')&&event.message.attachments.length) {
+      // Historical deliveries keep their sequence and use the current file availability.
+      event.message=readAiMessage(db,conversationId,event.message.id)??event.message;
+    }
+    return {sequence,event};
+  });
+  const terminal=status.terminal_message_id?readAiMessage(db,conversationId,status.terminal_message_id):undefined;
+  return {status,events,terminal};
 }

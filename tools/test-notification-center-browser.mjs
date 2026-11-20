@@ -110,7 +110,13 @@ const css = [
   readFileSync('app/notifications.css','utf8'),
   ...bundle.outputFiles.filter(file=>file.path.endsWith('.css')).map(file=>file.text),
 ].join('\n');
+const wordmark = readFileSync('public/mobiup-logo.webp');
 const server = createServer((request,response) => {
+  if (request.url === '/mobiup-logo.webp') {
+    response.setHeader('Content-Type','image/webp');
+    response.end(wordmark);
+    return;
+  }
   const script=request.url==='/fixture.js';
   response.setHeader('Content-Type',script?'text/javascript':'text/html');
   response.end(script?js:`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>${css}</style><div id="root"></div><script src="/fixture.js" type="module"></script>`);
@@ -194,14 +200,33 @@ try {
   assert.equal(await browser.evaluate(`!!document.querySelector('.app-header button[aria-label="Agent AI"]')`),true,'Manager AI is a header action');
   const managerDestinations=await browser.evaluate(`[...document.querySelectorAll('.main-nav [role=tab]')].map(tab=>tab.textContent.trim())`);
   assert.deepEqual(managerDestinations,['Sinteză','Parteneri','Accesorii','Prepay','Focus','Echipă','Operațiuni','Concedii']);
-  await browser.send('Emulation.setDeviceMetricsOverride',{width:320,height:800,deviceScaleFactor:1,mobile:true});
-  const actions=await browser.evaluate(`[...document.querySelectorAll('.app-header .header-right button')].map(button=>{
-    const bounds=button.getBoundingClientRect();
-    const hit=document.elementFromPoint(bounds.x+bounds.width/2,bounds.y+bounds.height/2);
-    return {label:button.getAttribute('aria-label'),fits:bounds.left>=0&&bounds.right<=innerWidth&&button.contains(hit)};
-  })`);
-  assert.equal(actions.length,5);
-  assert(actions.every(action=>action.fits),JSON.stringify(actions));
+  await wait(browser,"document.querySelector('.app-header .brand img')?.naturalWidth>0",'Real Mobiup logo loads');
+  for (const width of [320,360,390]) {
+    await browser.send('Emulation.setDeviceMetricsOverride',{width,height:800,deviceScaleFactor:1,mobile:true});
+    const geometry=await browser.evaluate(`(()=>{
+      const header=document.querySelector('.app-header');
+      const brand=header.querySelector('.brand');
+      const image=brand.querySelector('img');
+      const mark=brand.getBoundingClientRect(), source=image.getBoundingClientRect();
+      const actions=[...header.querySelectorAll('.header-right button')].map(button=>{
+        const r=button.getBoundingClientRect();
+        const hit=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);
+        return {label:button.getAttribute('aria-label'),left:r.left,right:r.right,
+          fits:r.left>=mark.right&&r.right<=innerWidth&&r.width>=44&&r.height>=44&&button.contains(hit)};
+      });
+      const compact=getComputedStyle(brand).overflowX==='hidden';
+      const naturalCut=(mark.right-source.left)*image.naturalWidth/source.width;
+      return {compact,naturalCut,markWidth:mark.width,sourceWidth:source.width,sourceHeight:source.height,actions};
+    })()`);
+    assert.equal(geometry.actions.length,5);
+    assert(geometry.actions.every((action,i,all)=>action.fits&&(!i||action.left>=all[i-1].right)),JSON.stringify({width,geometry}));
+    if (width<375) {
+      // The transparent columns from 100 to 104 separate the red mark from the wordmark.
+      assert(geometry.compact&&geometry.naturalCut>=100&&geometry.naturalCut<=105&&geometry.sourceHeight>=48,JSON.stringify({width,geometry}));
+    } else {
+      assert(!geometry.compact&&geometry.sourceWidth>=90&&geometry.markWidth>=geometry.sourceWidth-0.5,JSON.stringify({width,geometry}));
+    }
+  }
   await click(browser,'.request-bell');
   await wait(browser,"document.querySelector('.notification-center')?.textContent.includes('Synthetic legacy partner')",'Manager bell opens full notification history');
   await browser.evaluate("fixture.pending.splice(0).forEach(release=>release())");

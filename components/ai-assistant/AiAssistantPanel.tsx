@@ -1,10 +1,10 @@
 import {
-  ChevronDown, FileText, Paperclip, Send, Square, X,
+  ChevronDown, FileText, Paperclip, Send, Square, Trash2, X,
 } from 'lucide-react';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
-  useEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent, type KeyboardEvent,
+  memo, useEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent, type KeyboardEvent,
 } from 'react';
 
 import { useResizablePanel } from './useResizablePanel';
@@ -14,6 +14,8 @@ import { AiPanelHeader } from './AiPanelHeader';
 import { usePersistentState } from './usePersistentState';
 import { useDialogFocus } from './useDialogFocus';
 import { cn } from '@/lib/utils';
+import { errorMessage } from '@/lib/client-api';
+import { useAiApi } from './api-context';
 import { managerAiAttachmentAccept, managerAiAttachmentLimits } from '@/lib/manager-ai-media-contract';
 import type {
   AiModel, AiArtifactAttachment, AiChatMessage, AiComposerSubmission, AiConversation, AiReasoningEffort, AiRunStatus,
@@ -66,9 +68,31 @@ function formatFileSize(sizeBytes: number): string {
   return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function AttachmentChip({ attachment, assistant }: { attachment: AiArtifactAttachment; assistant: boolean }) {
+function AttachmentChip({ attachment, assistant, conversationId, onRemoved }: {
+  attachment: AiArtifactAttachment; assistant: boolean; conversationId: string | null; onRemoved: (id: string) => void;
+}) {
+  const { removeAiArtifact } = useAiApi();
+  const [confirm, setConfirm] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  async function remove() {
+    if (!conversationId || busy) return;
+    setBusy(true);
+    setError('');
+    try {
+      await removeAiArtifact(conversationId, attachment.id);
+      onRemoved(attachment.id);
+      setConfirm(false);
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const className = cn(
-    'flex min-w-0 items-center gap-2.5 rounded-xl border px-2.5 py-2 text-xs transition',
+    'flex min-w-0 flex-1 items-center gap-2.5 rounded-xl border px-2.5 py-2 text-xs transition',
     assistant
       ? 'border-slate-200/80 bg-slate-50/90 text-slate-700 dark:border-slate-700/80 dark:bg-slate-800/80 dark:text-slate-200'
       : 'border-white/15 bg-white/10 text-white',
@@ -85,12 +109,31 @@ function AttachmentChip({ attachment, assistant }: { attachment: AiArtifactAttac
     </span>
     <span className="min-w-0 flex-1">
       <span className="block truncate font-semibold">{attachment.filename}</span>
-      <span className="mt-0.5 block text-[10px] opacity-65">{formatFileSize(attachment.sizeBytes)}</span>
+      <span className="mt-0.5 block text-[10px] opacity-65">{attachment.removed ? 'Fișier șters' : formatFileSize(attachment.sizeBytes)}</span>
     </span>
   </>;
-  return attachment.downloadUrl
-    ? <a href={attachment.downloadUrl} className={className} download={attachment.filename}>{content}</a>
-    : <div className={className}>{content}</div>;
+  return <div>
+    <div className="flex min-w-0 items-center gap-1.5">
+      {attachment.downloadUrl
+        ? <a href={attachment.downloadUrl} className={className} download={attachment.filename}>{content}</a>
+        : <div className={className}>{content}</div>}
+      {attachment.downloadUrl && conversationId && <button
+        type="button"
+        disabled={busy}
+        aria-expanded={confirm}
+        aria-label={`Șterge fișierul ${attachment.filename}`}
+        title="Șterge fișierul"
+        className="grid size-11 shrink-0 place-items-center rounded-xl border border-current/20 opacity-80 hover:opacity-100"
+        onClick={() => { setConfirm(!confirm); setError(''); }}
+      ><Trash2 size={15} aria-hidden="true" /></button>}
+    </div>
+    {confirm && <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs">
+      <span>Ștergi fișierul din conversație?</span>
+      <button type="button" className="rounded-lg border border-current/30 px-2 py-1.5 font-semibold" disabled={busy} onClick={() => void remove()}>Șterge fișierul</button>
+      <button type="button" className="rounded-lg px-2 py-1.5" disabled={busy} onClick={() => { setConfirm(false); setError(''); }}>Anulează</button>
+    </div>}
+    {error && <p role="alert" className="mt-1 text-xs">{error}</p>}
+  </div>;
 }
 
 function AssistantMarkdown({
@@ -116,7 +159,7 @@ function AssistantMarkdown({
         th: ({ children }) => <th className="border-b border-slate-300 px-3 py-2">{children}</th>,
         td: ({ children }) => <td className="border-b border-slate-200 px-3 py-2">{children}</td>,
         img: ({ alt }) => alt ? <span>{alt}</span> : null,
-        a: ({ href, children }) => <a href={href} target="_blank" rel="noreferrer">{children}</a>,
+        a: ({ href, children }) => href ? <a href={href} target="_blank" rel="noreferrer">{children}</a> : <span>{children}</span>,
       }}
     >
       {text}
@@ -124,7 +167,12 @@ function AssistantMarkdown({
   </div>;
 }
 
-function MessageBubble({ message }: { message: AiChatMessage }) {
+const MessageBubble = memo(function MessageBubble({ message, conversationId }: { message: AiChatMessage; conversationId: string | null }) {
+  const [removedIds, setRemovedIds] = useState<string[]>([]);
+  const attachments = removedIds.length === 0 ? message.attachments
+    : message.attachments?.map(attachment => removedIds.includes(attachment.id)
+      ? { ...attachment, removed: true, downloadUrl: undefined } : attachment);
+
   const assistant = message.role === 'assistant';
   const waiting = assistant && message.status === 'streaming' && !message.text.trim();
   return <div className={cn('flex min-w-0 items-start gap-2', assistant ? 'justify-start' : 'justify-end')}>
@@ -136,7 +184,7 @@ function MessageBubble({ message }: { message: AiChatMessage }) {
         : 'max-w-[88%] rounded-[20px] rounded-br-md bg-gradient-to-br from-indigo-600 to-violet-600 text-white shadow-indigo-600/20',
     )}>
       {assistant
-        ? !waiting && <AssistantMarkdown text={message.text} attachments={message.attachments} />
+        ? !waiting && <AssistantMarkdown text={message.text} attachments={attachments} />
         : <div className="whitespace-pre-wrap [overflow-wrap:anywhere]">{message.text}</div>}
       {assistant && message.status === 'streaming' && <output className={cn(
         'inline-flex items-center gap-2 text-xs font-semibold text-indigo-600 dark:text-indigo-300',
@@ -145,14 +193,16 @@ function MessageBubble({ message }: { message: AiChatMessage }) {
         <span className="size-2 shrink-0 animate-pulse rounded-full bg-current" aria-hidden="true" />
         <span>{message.activity || 'Pregătesc răspunsul…'}</span>
       </output>}
-      {message.attachments?.length ? <div className="mt-3 space-y-2">
-        {message.attachments.map((attachment) => <AttachmentChip key={attachment.id} attachment={attachment} assistant={assistant} />)}
+      {attachments?.length ? <div className="mt-3 space-y-2">
+        {attachments.map((attachment) => <AttachmentChip key={attachment.id} attachment={attachment} assistant={assistant} conversationId={conversationId}
+          onRemoved={(id) => setRemovedIds((ids) => [...ids, id])} />)}
       </div> : null}
       {message.status === 'streaming' && !waiting && <span className="ml-1 inline-block h-3 w-1 animate-pulse rounded-full bg-current align-middle" aria-label="Răspuns în curs" />}
+      {message.status === 'stopped' && <p className="mt-2 text-xs text-slate-600">Răspuns oprit</p>}
       {message.status === 'error' && <div className="mt-2 text-xs font-semibold text-red-500">Răspuns întrerupt</div>}
     </div>
   </div>;
-}
+});
 
 function AiEmptyState({
   runtimeUnavailable, unavailableReason, onRetry,
@@ -397,7 +447,7 @@ function Composer({
       const result = await onSubmit(request);
       if (result.outcome !== 'accepted') {
         if (result.outcome === 'unknown') setComposerError('Trimiterea nu a putut fi confirmată. Poți reîncerca.');
-        else if (result.outcome === 'conflict') setComposerError('Conversația s-a actualizat. Verifică ultimul mesaj și încearcă din nou.');
+        else if (result.outcome === 'conflict') setComposerError(result.message ?? 'Conversația s-a actualizat. Verifică ultimul mesaj și încearcă din nou.');
         else setComposerError(result.message ?? 'Mesajul nu a putut fi trimis.');
         onRetrySubmissionChange(
           result && result.outcome !== 'unknown'
@@ -538,7 +588,7 @@ export function AiAssistantPanel({
           }}
         >
           {hasOlderMessages && onLoadOlderMessages && <div className="mb-3 flex justify-center"><button type="button" disabled={loadingOlderMessages} onClick={onLoadOlderMessages} className="rounded-lg px-3 py-1.5 text-xs font-semibold text-indigo-600 hover:bg-indigo-50 disabled:opacity-40 dark:text-indigo-300 dark:hover:bg-indigo-950/40">{loadingOlderMessages ? 'Se încarcă…' : 'Încarcă mesaje mai vechi'}</button></div>}
-          {messageList.length === 0 ? <AiEmptyState runtimeUnavailable={runStatus === 'unavailable'} unavailableReason={unavailableReason} onRetry={onRetryBootstrap} /> : <div className="space-y-3.5">{messageList.map((message) => <MessageBubble key={message.id} message={message} />)}</div>}
+          {messageList.length === 0 ? <AiEmptyState runtimeUnavailable={runStatus === 'unavailable'} unavailableReason={unavailableReason} onRetry={onRetryBootstrap} /> : <div className="space-y-3.5">{messageList.map((message) => <MessageBubble key={message.id} message={message} conversationId={conversationId} />)}</div>}
         </div>
         <Composer
           key={draftKey}

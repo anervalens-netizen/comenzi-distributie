@@ -69,3 +69,16 @@
     white-space: nowrap;
   }
 }
+
+@media (max-width: 374px) {
+  .manager-shell .app-header .brand {
+    flex: 0 0 44px;
+    overflow: hidden;
+  }
+  .manager-shell .app-header .brand img {
+    /* The first quarter of the wordmark image contains the Mobiup mark. */
+    flex: none;
+    width: 176px;
+    max-width: none;
+  }
+}

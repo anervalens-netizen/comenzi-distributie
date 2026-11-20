@@ -8,7 +8,7 @@ export type AiReasoningEffort = 'none' | 'low' | 'medium' | 'high' | 'xhigh' | '
 
 export type AiMessageRole = 'user' | 'assistant' | 'system';
 
-export type AiMessageStatus = 'complete' | 'streaming' | 'error';
+export type AiMessageStatus = 'complete' | 'streaming' | 'stopped' | 'error';
 
 export interface AiArtifactAttachment {
   id: string;
@@ -17,6 +17,7 @@ export interface AiArtifactAttachment {
   sizeBytes: number;
   kind: 'input' | 'output';
   downloadUrl?: string;
+  removed?: boolean;
 }
 
 export interface AiChatMessage {
@@ -65,7 +66,7 @@ export type AiSubmissionResult =
   | { outcome: 'accepted' }
   | { outcome: 'unknown' }
   | { outcome: 'rejected'; message?: string }
-  | { outcome: 'conflict'; code: string };
+  | { outcome: 'conflict'; code: string; message?: string };
 
 export interface AiSubmissionStatus {
   submission_id: string;

@@ -5,7 +5,7 @@ import { defaultManagerAiModel, managerAiModels, managerAiNotConfiguredMessage, 
 import { managerAiEfforts, type ManagerAiChatEvent, type ManagerAiEffort } from './manager-ai-chat-contract';
 import {
   aiRunEvent, aiRunInputs, aiSubmissionStatus, beginAiSubmission, createAiConversation, endAiRun,
-  getAiArtifact, listAiConversations, listAiMessages, managerAiRunTimeoutMs, readAiConversation, readAiEvents, stopAiRun, withAiAccount,
+  getAiArtifact, listAiConversations, listAiMessages, managerAiRunTimeoutMs, readAiConversation, readAiEvents, removeAiArtifact, stopAiRun, withAiAccount,
   type AiAccount,
 } from './manager-ai-chat-store';
 import { managerAiReader, managerAiScope, type AiScope } from './manager-ai-data';
@@ -128,11 +128,10 @@ function stream(req:Request,original:AiAccount,conversationId:string,submissionI
           const {status,events,terminal}=conversationTxn(account,conversationId,false,connection=>readAiEvents(connection,conversationId,submissionId,cursor));
           if(cancelled||req.signal.aborted)break;
           if(events.length) {
-            for(const event of events) {
-              const update=JSON.parse(event.data) as ManagerAiChatEvent;
-              emit({...update,sequence:event.sequence});
-              cursor=event.sequence;
-              if(['complete','error','stopped'].includes(update.type))deliveredTerminal=true;
+            for(const {sequence,event} of events) {
+              emit({...event,sequence});
+              cursor=sequence;
+              if(['complete','error','stopped'].includes(event.type))deliveredTerminal=true;
             }
             heartbeat=Date.now();
             continue;
@@ -140,8 +139,8 @@ function stream(req:Request,original:AiAccount,conversationId:string,submissionI
           if(status.run_state!=='running') {
             if(deliveredTerminal)break;
             emit({type:'submission_status',...status,sequence:cursor});
-            if(terminal)emit(terminal.status==='complete'?{type:'complete',message:terminal,sequence:cursor}:{type:'error',message:terminal.text,sequence:cursor});
-            else if(status.run_state==='stopped')emit({type:'stopped',sequence:cursor});
+            if(status.run_state==='stopped')emit({type:'stopped',message:terminal,sequence:cursor});
+            else if(terminal)emit(terminal.status==='complete'?{type:'complete',message:terminal,sequence:cursor}:{type:'error',message:terminal.text,sequence:cursor});
             else emit({type:'error',message:'Analiza s-a întrerupt.',sequence:cursor});
             break;
           }
@@ -217,7 +216,10 @@ async function processRun(req:Request,start:AiAccount,scope:AiScope,conversation
         complete=conversationTxn(finalAccount,conversationId,true,connection=>endAiRun(connection,finalAccount.owner,conversationId,runId,work.order,{text,files,failed}));
       } catch(error) {
         if(!(error instanceof AppError))throw error;
-        complete=conversationTxn(finalAccount,conversationId,true,connection=>endAiRun(connection,finalAccount.owner,conversationId,runId,work.order,{text:error.message,files:[],failed:true}));
+        const noExportSpace=error.status===413&&!failed&&files.length>0;
+        const savedText=noExportSpace?text+'\n\nSpațiul pentru fișiere AI este plin. Eliberează spațiu și cere din nou exportul.':error.message;
+        complete=conversationTxn(finalAccount,conversationId,true,connection=>endAiRun(connection,finalAccount.owner,conversationId,runId,work.order,
+          {text:savedText,files:[],failed:!noExportSpace}));
       }
       if(complete!=='retry')return;
     }
@@ -234,7 +236,7 @@ export async function managerAiConversations(req:Request,user:User,path:string[]
   requireManager(user);
   if(runtimeKind!=='node')fail(503,'Asistentul AI este indisponibil pe această instanță.');
   const params=new URL(req.url).searchParams,key=managerAiProviderKey(),method=req.method;
-  if(method==='POST')assertOrigin(req);
+  if(method==='POST'||method==='DELETE')assertOrigin(req);
   const selected=new URLSearchParams([...params].filter(([field])=>filters.includes(field)));
   const {account,selectedScope}=await accountFor(req,selected);
   if(path[0]==='transcribe'&&path.length===1&&method==='POST') {
@@ -259,8 +261,9 @@ export async function managerAiConversations(req:Request,user:User,path:string[]
     const limit=boundedNumber(params,'limit',30,1,200),before=boundedNumber(params,'before_ordinal',Number.MAX_SAFE_INTEGER,1,Number.MAX_SAFE_INTEGER);
     return response(transact(false,db=>listAiMessages(db,conversationId,limit,before)));
   }
-  if(path[2]==='artifacts'&&path.length===4&&method==='GET') {
+  if(path[2]==='artifacts'&&path.length===4&&(method==='GET'||method==='DELETE')) {
     const artifactId=identity(path[3]);
+    if(method==='DELETE')return response({ok:true,attachment:transact(true,db=>removeAiArtifact(db,account.owner,conversationId,artifactId))});
     return managerAiArtifactResponse(transact(false,db=>getAiArtifact(db,account.owner,conversationId,artifactId)));
   }
   if(path.length===3&&method==='POST'&&(path[2]==='turn'||path[2]==='steer')) {
@@ -292,9 +295,9 @@ export async function managerAiConversations(req:Request,user:User,path:string[]
   if(path.length===3&&path[2]==='stop'&&method==='POST') {
     const body=await jsonBody(req),runId=identity(body.run_id),attemptId=identity(body.attempt_id),controlId=identity(body.control_id);
     const {account:validated}=await accountFor(req,undefined,account);
-    const state=conversationTxn(validated,conversationId,true,db=>stopAiRun(db,validated,conversationId,runId,attemptId,controlId));
+    const result=conversationTxn(validated,conversationId,true,db=>stopAiRun(db,validated,conversationId,runId,attemptId,controlId));
     active.get(runId)?.abort();
-    return response({ok:true,state,run_id:runId,attempt_id:attemptId,control_id:controlId});
+    return response({ok:true,...result,run_id:runId,attempt_id:attemptId,control_id:controlId});
   }
   fail(404,'Funcția AI nu a fost găsită.');
 }

@@ -6,7 +6,7 @@ export type ManagerAiChatMessage = {
   id:string;
   ordinal:number;
   role:'user'|'assistant';
-  status:'complete'|'error';
+  status:'complete'|'error'|'stopped';
   text:string;
   created_at:string;
   attachments:ManagerAiArtifact[];
@@ -34,5 +34,6 @@ export type ManagerAiChatEvent =
   | {type:'user_message'|'complete';message:ManagerAiChatMessage}
   | {type:'delta';text:string}
   | {type:'status'|'error';message:string}
-  | {type:'stopped'|'reset'};
+  | {type:'stopped';message?:ManagerAiChatMessage}
+  | {type:'reset'};
 import type { ManagerAiArtifact as MediaArtifact } from './manager-ai-media-contract';

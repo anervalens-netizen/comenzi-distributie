@@ -3,9 +3,9 @@ import { useAiConversationMetadata } from './useAiConversationMetadata';
 import { useAiMessagePaging } from './useAiMessagePaging';
 import { usePersistentState, type PersistentStateOptions } from './usePersistentState';
 import type { AiChatMessage, AiComposerSubmission, AiConversation, AiRunStatus, AiUnavailableReason, AiSubmissionResult } from './types';
-import { createSubmissionId, type StopOutcomeState } from './protocolState';
+import { createSubmissionId, isActiveRun } from './protocolState';
 import { useConversationBootstrap, useConversationControls } from './useAiConversations';
-import { useSubmissionActions, useStreamEvents } from './useAiSubmissions';
+import { useSubmissionActions } from './useAiSubmissions';
 import { usePendingRunReconciliation, useStopAction } from './useAiRecovery';
 const conversationPersistence: PersistentStateOptions<string | null> = {
   serialize: (value) => JSON.stringify(value),
@@ -23,13 +23,26 @@ const conversationPersistence: PersistentStateOptions<string | null> = {
 export function useAiAssistant(enabled: boolean, storageKey: string) {
   const [conversationId, setConversationId] = usePersistentState<string | null>(storageKey, null, conversationPersistence);
   const [messages, setMessages] = useState<AiChatMessage[]>([]);
+  const [activeSubmissionId, writeActiveSubmissionId] = useState<string>();
+  const activeSubmissionIdRef = useRef<string | undefined>(undefined);
+  const setActiveSubmissionId = useCallback((id: string | undefined) => {
+    activeSubmissionIdRef.current = id;
+    writeActiveSubmissionId(id);
+  }, []);
   const [conversations, setConversations] = useState<AiConversation[]>([]);
   const [hasOlderConversations, setHasOlderConversations] = useState(false);
   const [hasOlderMessages, setHasOlderMessages] = useState(false);
   const [bootstrapRetryToken, setBootstrapRetryToken] = useState(0);
-  const [runStatus, setRunStatus] = useState<AiRunStatus>(enabled ? 'loading' : 'unavailable');
+  const [runStatus, writeRunStatus] = useState<AiRunStatus>(enabled ? 'loading' : 'unavailable');
+  const runStatusRef = useRef(runStatus);
+  const setRunStatus = useCallback((status: AiRunStatus) => {
+    runStatusRef.current = status;
+    writeRunStatus(status);
+  }, []);
   const [unavailableReason, setUnavailableReason] = useState<AiUnavailableReason | null>(null);
   const serverConversationCountRef = useRef(0);
+  const currentConversationIdRef = useRef<string | null>(conversationId);
+  const runGenerationRef = useRef(0);
   const { sessionEpochRef, refreshConversations } = useAiConversationMetadata(enabled, setConversations);
   const { initializedRef, selectionEpochRef } = useConversationBootstrap({
     enabled,
@@ -43,19 +56,19 @@ export function useAiAssistant(enabled: boolean, storageKey: string) {
     setUnavailableReason,
     serverConversationCountRef,
     retryToken: bootstrapRetryToken,
+    currentConversationIdRef,
+    setActiveSubmissionId,
   });
   const streamAbortRef = useRef<AbortController | null>(null);
-  const currentConversationIdRef = useRef<string | null>(conversationId);
-  const stopOutcomesRef = useRef<Map<string, StopOutcomeState>>(new Map());
-  const pendingSubmissions = useRef<Map<string, string>>(new Map());
-  const handleStreamEvent = useStreamEvents(setMessages, setRunStatus);
+  const runControls = {
+    conversationId, submissionId: activeSubmissionId, runStatusRef, setRunStatus,
+    selectionEpochRef, runGenerationRef,
+  };
 
   usePendingRunReconciliation({
-    enabled, conversationId, runStatus, streamAbortRef, selectionEpochRef,
-    setMessages, setHasOlderMessages, setRunStatus, refreshConversations, pendingSubmissions,
+    ...runControls, enabled, active: isActiveRun(runStatus), streamAbortRef,
+    setMessages, setHasOlderMessages, refreshConversations, activeSubmissionIdRef,
   });
-
-  useEffect(() => { currentConversationIdRef.current = conversationId; }, [conversationId]);
 
   useEffect(() => {
     if (enabled) return;
@@ -73,54 +86,46 @@ export function useAiAssistant(enabled: boolean, storageKey: string) {
   }, [selectionEpochRef, sessionEpochRef]);
 
   const { submitSteer, submitTurn } = useSubmissionActions({
-    setMessages, setRunStatus, streamAbortRef, selectionEpochRef, sessionEpochRef,
-    handleStreamEvent, refreshConversations,
+    setMessages, setRunStatus, streamAbortRef, selectionEpochRef, runGenerationRef,
+    refreshConversations,
   });
 
-  /**
-   * Steer is accepted only while the run is genuinely `running`. Once Stop has
-   * moved the state to `stopping` the runtime rejects every control request, so
-   * submitting would persist a durable user instruction that can never be
-   * processed. The submission is dropped, never queued for a later run.
-   */
   const submit = useCallback(async (submission: AiComposerSubmission): Promise<AiSubmissionResult> => {
-    if (!enabled || !conversationId) return { outcome: 'rejected' };
+    const id = currentConversationIdRef.current;
+    if (!enabled || !id) return { outcome: 'rejected' };
     if (submission.mode === 'steer') {
-      if (runStatus !== 'running') return { outcome: 'rejected' };
+      if (runStatusRef.current !== 'running') return { outcome: 'rejected' };
       submission.submissionId ??= createSubmissionId();
-      return await submitSteer(conversationId, submission);
+      return submitSteer(id, submission);
     }
-    if (runStatus !== 'idle') return { outcome: 'rejected' };
+    if (runStatusRef.current !== 'idle') return { outcome: 'rejected' };
     submission.submissionId ??= createSubmissionId();
-    pendingSubmissions.current.set(conversationId, submission.submissionId);
-    // Keep the ID until durable reconciliation, including transport loss.
-    const result = await submitTurn(conversationId, submission);
-    if ((result.outcome === 'rejected' || result.outcome === 'conflict')
-      && pendingSubmissions.current.get(conversationId) === submission.submissionId) {
-      pendingSubmissions.current.delete(conversationId);
-    }
-    return result;
-  }, [conversationId, enabled, runStatus, submitSteer, submitTurn]);
+    // Claim the new generation before registering a delivery or releasing the old one.
+    runGenerationRef.current += 1;
+    setActiveSubmissionId(submission.submissionId);
+    setRunStatus('running');
+    return submitTurn(id, submission);
+  }, [enabled, setActiveSubmissionId, setRunStatus, submitSteer, submitTurn]);
 
-  const stop = useStopAction(conversationId, messages, pendingSubmissions, runStatus, setRunStatus, currentConversationIdRef, stopOutcomesRef, selectionEpochRef);
+  const stop = useStopAction(runControls);
 
   const {
     loadingOlderConversations, newConversation, selectConversation, loadOlderConversations,
   } = useConversationControls({
-    enabled, conversationId, runStatus, hasOlderConversations,
+    enabled, runStatusRef, hasOlderConversations,
     setConversationId, setConversations, setHasOlderConversations, setMessages, setRunStatus,
     setHasOlderMessages, initializedRef, selectionEpochRef, serverConversationCountRef,
-    streamAbortRef, currentConversationIdRef, stopOutcomesRef,
+    streamAbortRef, currentConversationIdRef, setActiveSubmissionId,
   });
 
   const { loadingOlderMessages, loadOlderMessages } = useAiMessagePaging(conversationId, messages, hasOlderMessages, selectionEpochRef, setMessages, setHasOlderMessages);
 
   const retryBootstrap = useCallback(() => {
-    if (!enabled || runStatus !== 'unavailable') return;
+    if (!enabled || runStatusRef.current !== 'unavailable') return;
     initializedRef.current = false;
     setRunStatus('loading');
     setBootstrapRetryToken((current) => current + 1);
-  }, [enabled, initializedRef, runStatus]);
+  }, [enabled, initializedRef, setRunStatus]);
 
   return {
     conversations, conversationId, hasOlderConversations, loadingOlderConversations,

@@ -21,7 +21,8 @@ type RawArtifact = {
   mime_type: string;
   size_bytes: number;
   kind: 'input' | 'output';
-  download_url: string;
+  download_url?: string | null;
+  removed?: boolean;
   created_at: string;
 };
 
@@ -54,7 +55,7 @@ export type AiStreamEvent =
   | { type: 'delta'; text: string }
   | { type: 'status'; message: string }
   | { type: 'complete'; message: AiChatMessage; previousResponseId?: string | null }
-  | { type: 'stopped' }
+  | { type: 'stopped'; message?: AiChatMessage }
   | { type: 'error'; message: string };
 
 function mapArtifact(raw: RawArtifact): AiArtifactAttachment {
@@ -64,7 +65,8 @@ function mapArtifact(raw: RawArtifact): AiArtifactAttachment {
     mimeType: raw.mime_type,
     sizeBytes: raw.size_bytes,
     kind: raw.kind,
-    downloadUrl: typeof raw.download_url === 'string' && /^\/api\/manager-ai\/conversations\/[A-Za-z0-9-]+\/artifacts\/[A-Za-z0-9-]+(?:\?[^#\\]*)?$/.test(raw.download_url) ? raw.download_url : undefined,
+    removed: raw.removed === true,
+    downloadUrl: !raw.removed && typeof raw.download_url === 'string' && /^\/api\/manager-ai\/conversations\/[A-Za-z0-9-]+\/artifacts\/[A-Za-z0-9-]+(?:\?[^#\\]*)?$/.test(raw.download_url) ? raw.download_url : undefined,
   };
 }
 
@@ -74,7 +76,7 @@ function mapMessage(raw: RawMessage): AiChatMessage {
     ordinal: raw.ordinal,
     role: raw.role,
     text: raw.text,
-    status: raw.status === 'stopped' ? 'error' : raw.status,
+    status: raw.status,
     createdAt: raw.created_at,
     attachments: raw.attachments?.map(mapArtifact),
   };
@@ -171,6 +173,11 @@ export function createAiApi(scopeQuery: string, ownerId: string) {
     }, undefined, undefined, ownerId);
   }
 
+  async function removeAiArtifact(id: string, artifactId: string) {
+    const path = endpoint(conversation(id) + '/artifacts/' + encodeURIComponent(artifactId));
+    await networkApi(path, 'DELETE', {}, undefined, undefined, ownerId);
+  }
+
   async function transcribeAiAudio(file: File, signal: AbortSignal) {
     const form = new FormData();
     form.append('file', file, file.name);
@@ -180,7 +187,7 @@ export function createAiApi(scopeQuery: string, ownerId: string) {
 
   return {
     listAiConversations, createAiConversation, getAiConversation, listAiMessages,
-    openAiTurnStream, steerAiTurn, getAiSubmissionStatus, stopAiTurn, transcribeAiAudio,
+    openAiTurnStream, steerAiTurn, getAiSubmissionStatus, stopAiTurn, transcribeAiAudio, removeAiArtifact,
   };
 }
 
@@ -211,7 +218,7 @@ function parseStreamEvent(raw: unknown): AiStreamEvent | null {
         }
         : null;
     case 'stopped':
-      return { type: 'stopped' };
+      return { type: 'stopped', message: event.message && typeof event.message === 'object' ? mapMessage(event.message as RawMessage) : undefined };
     case 'error':
       return typeof event.message === 'string' ? { type: 'error', message: event.message } : null;
     default:

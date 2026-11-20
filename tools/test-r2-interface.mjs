@@ -291,7 +291,7 @@ try {
   for(const [who,selectedAgent,chosenAgent,allowed] of [['regional','','b',['a','a-shared']],['regional','b','b',[]],['regional','a','a',['a']],['global','b','b',['b']]]){
     const bootstrap={user:user(who),users,orders:[outside,inside],products:[],warehouses:[]};
     globalThis.__r2Selection={userId:who,managerId:'',agentId:selectedAgent};
-    const html=render(DistributionApp,{},[bootstrap,false,'',false,'portfolio',false,false,'stock','2026-09','orders',null,false,'combined',chosenAgent,false,'','all','all',Date.now()]);
+    const html=render(DistributionApp,{},[bootstrap,false,'',false,'portfolio',false,null,'stock','2026-09','2026-09','2026-09','orders',null,false,'combined',chosenAgent,false,'','all','all',Date.now()]);
     const select=html.match(/<select[^>]*id="order-agent"[^>]*>([\s\S]*?)<\/select>/);
     check(select,'actual create-as-agent dialog rendered');
     equal([...select[1].matchAll(/<option[^>]*value="([^"]*)"/g)].map(match=>match[1]).sort(),allowed.sort(),'creation targets intersect authenticated writes with selected read scope');
@@ -300,7 +300,7 @@ try {
   }
   for(const who of ['regional','global']){
     globalThis.__r2Selection={userId:who,managerId:'',agentId:''};
-    const html=render(DistributionApp,{},[{user:user(who),users,orders:[outside],products:[]},false,'',false,'portfolio',false,false,'stock','2026-09','orders',null,false,null,'b',false,'','all','all',Date.now(),outside,false,'']);
+    const html=render(DistributionApp,{},[{user:user(who),users,orders:[outside],products:[]},false,'',false,'portfolio',false,null,'stock','2026-09','2026-09','2026-09','orders',null,false,null,'b',false,'','all','all',Date.now(),outside,false,'']);
     const confirm=html.match(/<button class="danger"([^>]*)>/);
     check(confirm,'actual delete confirmation rendered');
     equal(confirm[1].includes('disabled'),who==='regional','delete confirmation also fails closed outside write scope');

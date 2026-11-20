@@ -57,12 +57,18 @@ writeFileSync(providerFixture,`
  globalThis.fetch=(url,options)=>{
    if(String(url)!=='https://api.openai.com/v1/responses')return originalFetch(url,options);
    const request=JSON.parse(options.body);
-   const text='**Răspuns sintetic verificat**';
+   const paused=request.input.some(item=>item.role==='user'&&typeof item.content==='string'&&item.content.includes('Verifică oprirea'));
+   const text=paused?'**Fragment păstrat** '+'proba '.repeat(24):'**Răspuns sintetic verificat**';
    const events=[
      {type:'response.created',response:{model:request.model}},
      {type:'response.output_text.delta',delta:text},
      {type:'response.completed',response:{model:request.model,status:'completed',output:[{type:'message',role:'assistant',content:[{type:'output_text',text}]}]}},
    ];
+   if(paused)return new Response(new ReadableStream({start(controller){
+     const first=events.slice(0,2).map(event=>'data: '+JSON.stringify(event)+'\\n\\n').join('');
+     controller.enqueue(new TextEncoder().encode(first));
+     options.signal.addEventListener('abort',()=>controller.close(),{once:true});
+   }}),{headers:{'Content-Type':'text/event-stream'}});
    return new Response(events.map(event=>'data: '+JSON.stringify(event)+'\\n\\n').join(''),{headers:{'Content-Type':'text/event-stream'}});
  };
 `);
@@ -220,6 +226,11 @@ try{
    return bounds.left>=0&&bounds.right<=innerWidth&&input.bottom<=innerHeight&&input.width>250;
  })()`),'AI chat fits a 320px phone');
  await browser.evaluate(`(()=>{
+   const input=document.querySelector('aside[aria-label="AI Comenzi"] input[type="file"]');
+   const files=new DataTransfer();
+   files.items.add(new File(['model,unitati\\nSynthetic,7'],'synthetic-report.csv',{type:'text/csv'}));
+   input.files=files.files;
+   input.dispatchEvent(new Event('change',{bubbles:true}));
    const textarea=document.querySelector('[aria-label="Mesaj pentru AI Comenzi"]');
    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(textarea,'Întrebare sintetică');
    textarea.dispatchEvent(new Event('input',{bubbles:true}));
@@ -230,6 +241,10 @@ try{
  mkdirSync('work/evidence',{recursive:true});
  const aiScreenshot=await browser.send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
  writeFileSync('work/evidence/manager-ai-mobile-320.png',Buffer.from(aiScreenshot.data,'base64'));
+ await browser.evaluate(`document.querySelector('[aria-label="Șterge fișierul synthetic-report.csv"]').click()`);
+ await browser.evaluate(`[...document.querySelectorAll('aside[aria-label="AI Comenzi"] button')].find(el=>el.textContent==='Șterge fișierul').click()`);
+ await waitFor(()=>browser.evaluate(`document.querySelector('[data-ai-message-list]')?.textContent.includes('Fișier șters') && !document.querySelector('[download="synthetic-report.csv"]')`),'AI reclaims an attachment while preserving its message');
+
  await browser.evaluate(`document.querySelector('aside [aria-label="Închide AI Comenzi"]').click()`);
  await waitFor(()=>browser.evaluate(`!document.querySelector('aside[aria-label="AI Comenzi"]')`),'AI closes back to current section');
  assert.equal(await browser.evaluate(`document.querySelector(".manager-overview h1")?.textContent`),'Sinteză');
@@ -239,6 +254,16 @@ try{
  await waitFor(()=>browser.evaluate(`document.querySelector("[data-ai-message-list] strong")?.textContent==="Răspuns sintetic verificat"`),'AI history remains after reload');
  await browser.evaluate(`document.querySelector('[aria-label="Sesiune nouă"]').click()`);
  await waitFor(()=>browser.evaluate(`document.querySelector('[aria-label="Selectează sesiunea AI"]')?.options.length===2 && !document.querySelector("[data-ai-message-list] strong")`),'AI creates a fresh conversation');
+ await browser.evaluate(`(()=>{
+   const textarea=document.querySelector('[aria-label="Mesaj pentru AI Comenzi"]');
+   Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(textarea,'Verifică oprirea');
+   textarea.dispatchEvent(new Event('input',{bubbles:true}));
+ })()`);
+ await waitFor(()=>browser.evaluate(`document.querySelector('[aria-label="Trimite"]')?.disabled===false`),'AI accepts another turn');
+ await browser.evaluate(`document.querySelector('[aria-label="Trimite"]').click()`);
+ await waitFor(()=>browser.evaluate(`document.querySelector('[data-ai-message-list] strong')?.textContent==='Fragment păstrat' && document.querySelector('[aria-label="Sesiune nouă"]')?.disabled===true`),'AI streams partial text and keeps the active conversation');
+ await browser.evaluate(`document.querySelector('[aria-label="Oprește răspunsul"]').click()`);
+ await waitFor(()=>browser.evaluate(`document.querySelector('[data-ai-message-list] strong')?.textContent==='Fragment păstrat' && document.querySelector('[data-ai-message-list]').textContent.includes('Răspuns oprit')`),'AI stop leaves the partial text and a durable status');
  await browser.evaluate(`document.querySelector('aside [aria-label="Închide AI Comenzi"]').click()`);
  await browser.send('Emulation.setDeviceMetricsOverride',{width:1280,height:900,deviceScaleFactor:1,mobile:false});
  assert(!(await browser.evaluate('!!document.querySelector(".manager-overview .distribution-card")')),'summary contains no duplicated commercial reports');
