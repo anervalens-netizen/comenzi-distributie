@@ -215,19 +215,48 @@ export async function salesView(req: Request, user: User) {
   const query = new URL(req.url).searchParams;
   const month = validateMonth(query.get('month'));
   if(query.has('months')){
-    const months=[...new Set(query.getAll('months').flatMap(v=>v.split(',')).filter(Boolean))].sort();
+    const months=[...new Set(query.getAll('months').flatMap(value=>value.split(',')).filter(Boolean))].sort();
     if(months.length>36)fail(400,'Selectează maximum 36 de luni.');
     months.forEach(validateMonth);
-    const rules=await readDistributionRules();if(!rules)fail(503,'Configurația proiectelor trebuie pregătită.');
-    const historyGeneration=historicalSalesGeneration();
-    const generation=salesRevision(),identity=(await mappingSnapshot()).hash,views:SalesView[]=[];
-    // Reuse the existing authorized worker for each distinct month; a generation change rejects the union.
-    for(const selected of months){const url=new URL(req.url);url.searchParams.delete('months');url.searchParams.set('month',selected);for(const key of ['from','to','fromMonth','toMonth'])url.searchParams.delete(key);const view=await (await salesView(new Request(url),user)).json() as SalesView;views.push(withSalesVat({...view,products:view.products.map(p=>({...p,distributionGroup:productGroup(rules,p.itemCode)}))}));}
+    const rules=await readDistributionRules();
+    if(!rules)fail(503,'Configurația proiectelor trebuie pregătită.');
+    const historyGeneration=historicalSalesGeneration(), generation=salesRevision();
+    const snapshot=await mappingSnapshot();
+    const selection=new URLSearchParams(query);
+    if(!months.length)selection.set('projects','');
+    const scope=await scopedSalesSelection(selection,user,snapshot);
+    const products=await salesCatalog();
+    const views:SalesView[]=[];
+    const checkActive=()=>{if(req.signal.aborted)fail(499,'Cererea de vânzări a fost anulată.');};
+    const readMonth=async (selected:string,from:string,to:string)=>{
+      checkActive();
+      const view=await getSalesViewRuntime(selected,scope,from,to,products);
+      checkActive();
+      return decoratedView(view,snapshot);
+    };
+    for(const selected of months){
+      // Cached monthly reads can all resolve as microtasks. Let other HTTP requests
+      // and a disconnected reader's abort event run between months.
+      await new Promise<void>(resolve=>setTimeout(resolve,0));
+      const view=await readMonth(selected,selected,selected);
+      views.push(withSalesVat({...view,products:view.products.map(product=>({
+        ...product,distributionGroup:productGroup(rules,product.itemCode),
+      }))}));
+    }
     let fallback=views[0];
-    if(!fallback){const url=new URL(req.url);url.searchParams.delete('months');url.searchParams.set('projects','');fallback=await (await salesView(new Request(url),user)).json() as SalesView;}
-    if(historyGeneration!==historicalSalesGeneration()||generation!==salesRevision()||identity!==(await mappingSnapshot()).hash||JSON.stringify(rules)!==JSON.stringify(await readDistributionRules()))fail(409,'Datele s-au modificat. Reîncarcă selecția.');
+    if(!fallback){
+      const from=validateMonth(query.get('fromMonth')||query.get('from')||month);
+      const to=validateMonth(query.get('toMonth')||query.get('to')||month);
+      if(from>to)fail(400,'Intervalul lunar este invalid.');
+      fallback=await readMonth(month,from,to);
+    }
+    checkActive();
+    const current=await mappingSnapshot();
+    if(historyGeneration!==historicalSalesGeneration()||generation!==salesRevision()||snapshot.hash!==current.hash||
+        JSON.stringify(scope)!==JSON.stringify(await scopedSalesSelection(selection,user,current))||
+        JSON.stringify(rules)!==JSON.stringify(await readDistributionRules()))fail(409,'Datele s-au modificat. Reîncarcă selecția.');
     const combined=combineSalesViews(views,fallback);
-    combined.products=combined.products.map(p=>({...p,distributionGroup:productGroup(rules,p.itemCode)}));
+    combined.products=combined.products.map(product=>({...product,distributionGroup:productGroup(rules,product.itemCode)}));
     return response({...combined,distribution:distributionSales(views,rules,months)});
   }
   // The current-month view must not aggregate the complete imported history.

@@ -12,3 +12,40 @@ const axis=await build({entryPoints:['lib/monthly-axis.ts'],bundle:true,platform
 assert.equal(new Set([0,.02,.04].map(monthlyAxisNumber)).size,3,'small nonzero axis ticks remain distinct');
 assert.notEqual(monthlyAxisNumber(-.02),monthlyAxisNumber(.02),'return-driven negative values keep their sign');
 assert(monthlyAxisNumber(352075.339).length<10,'large amounts use short axis labels');
+
+// A cached multi-month read must release the event loop and stop after its reader leaves.
+const stubs={
+  './server':`
+    export const isGlobalManager=()=>true;
+    export const db=()=>({prepare(){const stmt={bind(){return stmt},all:async()=>({results:[]}),first:async()=>null};return stmt}});
+    export const fail=(status,message)=>{throw Object.assign(new Error(message),{status});};
+    export const response=Response.json, catalog=[], AppError=Error, readLimited=()=>{}, requireManager=()=>{};
+  `,
+  './catalog':'export const readCatalog=async()=>({products:[]});',
+  './manager-scope':'export const managerFilter=async()=>null;',
+  './distribution-config':"export const readDistributionRules=async()=>({assignments:[],products:{},revision:'fixture'});",
+  './sales-view-runtime':'export const getSalesViewRuntime=(...args)=>globalThis.__monthlySalesRead(...args);',
+  './sales-store':'export const salesRevision=()=>1,currentSalesImport=()=>null,importSalesRows=()=>{},latestSalesImport=()=>null,latestSalesMonth=()=>null,salesCoverageChange=()=>{},saveSalesOriginal=()=>{};',
+  './historical-sales':'export const historicalSalesGeneration=()=>1;',
+  './sales-parser-runtime':'export const parseSalesFileRuntime=()=>{};',
+  './import-write-authorization':'export const withImportAuthorization=()=>{},withCapturedImportAuthorization=()=>{};',
+};
+const apiBuild=await build({stdin:{contents:"export {salesView} from './lib/sales-server';",resolveDir:process.cwd()},bundle:true,platform:'node',format:'esm',write:false,plugins:[{
+  name:'synthetic-monthly-sales',setup(plugin){
+    plugin.onResolve({filter:/^\.\//},args=>Object.hasOwn(stubs,args.path)?{path:args.path,namespace:'sales-fixture'}:undefined);
+    plugin.onLoad({filter:/.*/,namespace:'sales-fixture'},args=>({contents:stubs[args.path]}));
+  },
+}]});
+const {salesView}=await import('data:text/javascript;base64,'+Buffer.from(apiBuild.outputFiles[0].text).toString('base64'));
+const controller=new AbortController(),readMonths=[];
+const request=new Request('http://fixture.invalid/api/sales?month=2026-03&months=2026-01,2026-02,2026-03',{signal:controller.signal});
+try{
+  globalThis.__monthlySalesRead=async month=>{
+    readMonths.push(month);
+    setTimeout(()=>controller.abort(),0);
+    return {month,sites:[],products:[]};
+  };
+  await assert.rejects(()=>salesView(request,{role:'manager',id:'synthetic'}),e=>e.status===499);
+  assert.deepEqual(readMonths,['2026-01'],'later cached months must not run after the navigation is cancelled');
+}finally{delete globalThis.__monthlySalesRead;}
+console.log('PASS: a cancelled multi-month Sales request stops between cached monthly reads.');
