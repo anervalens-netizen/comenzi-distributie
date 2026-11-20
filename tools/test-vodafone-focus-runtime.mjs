@@ -22,6 +22,7 @@ try {
     const {month,query} = workerData;
     const focus = !!query.focusSummaries?.length;
     appendFileSync('started', month+(focus ? ':focus' : ':ordinary')+'\\n');
+    if (!focus && month.startsWith('slow-')) await new Promise(resolve=>setTimeout(resolve,350));
     if (focus) parentPort.postMessage({
       type:'overviewBase',report:{month, totals:{total:50}, commissionCoverage:'unavailable'},
     });

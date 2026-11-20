@@ -5,10 +5,15 @@ import {readActivations} from './activation-store-node';
 import type {ActivationQuery} from './activation-distribution';
 import type {ActivationReport} from './activation-types';
 
-type Queue = {tail: Promise<void>; pending: number; limit: number};
-const detailQueue: Queue = {tail: Promise.resolve(), pending: 0, limit: 12};
-const overviewQueue: Queue = {tail: Promise.resolve(), pending: 0, limit: 6};
-const baseOverviewQueue: Queue = {tail: Promise.resolve(), pending: 0, limit: 24};
+type Lane = {tail: Promise<void>; pending: number};
+type Queue = {lanes: Lane[]; limit: number};
+const createQueue = (workers: number, limit: number): Queue => ({
+  lanes: Array.from({length: workers}, () => ({tail: Promise.resolve(), pending: 0})), limit,
+});
+const pendingCount = (queue: Queue) => queue.lanes.reduce((total, lane) => total + lane.pending, 0);
+const detailQueue = createQueue(1, 12);
+const overviewQueue = createQueue(1, 6);
+const baseOverviewQueue = createQueue(3, 24);
 const inFlightOverviews = new Map<string, Promise<ActivationReport>>();
 const focusDeadlineMs = 17_000;
 type WorkerMessage = {type: 'overviewBase' | 'report'; report: ActivationReport} | null;
@@ -20,13 +25,14 @@ async function runFocus(queue: Queue, month: string, sites: string[] | null, que
     try { return readActivations(month, sites, 'vodafone', query, base => { partial = base; }); }
     catch (error) { if (partial) return partial; throw error; }
   }
-  if (!script || queue.pending >= queue.limit) throw new Error('Focus worker unavailable');
-  queue.pending++;
+  if (!script || pendingCount(queue) >= queue.limit) throw new Error('Focus worker unavailable');
+  const lane = queue.lanes.reduce((shortest, item) => item.pending < shortest.pending ? item : shortest);
+  lane.pending++;
   let expired = false;
   let base: ActivationReport | undefined;
   let abortCalculation: (() => void) | undefined;
   const timeoutError = new Error('Focus calculation timed out');
-  const result = queue.tail.then(() => new Promise<ActivationReport>((accept, reject) => {
+  const result = lane.tail.then(() => new Promise<ActivationReport>((accept, reject) => {
     if (expired) { reject(timeoutError); return; }
     const worker = new Worker(script, {
       workerData: {month, sites, query}, resourceLimits: {maxOldGenerationSizeMb: 224},
@@ -46,8 +52,8 @@ async function runFocus(queue: Queue, month: string, sites: string[] | null, que
     worker.once('error', finish);
     worker.once('exit', code => finish(new Error('Focus worker exited with code ' + code)));
   }));
-  const release = () => { queue.pending--; };
-  queue.tail = result.then(release, release);
+  const release = () => { lane.pending--; };
+  lane.tail = result.then(release, release);
   // The HTTP deadline includes time spent waiting to start. A native SQLite
   // call can delay worker termination, so keep its slot until the real exit.
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -73,7 +79,7 @@ function readBusyOverview(month: string, sites: string[] | null, query: Activati
   // until Focus expires would leave no budget for a fallback.
   const ordinary = runFocus(baseOverviewQueue, month, sites, {...query, focusSummaries: []})
     .then((report): ActivationReport => ({...report, commissionCoverage: 'unavailable'}));
-  if (overviewQueue.pending >= overviewQueue.limit) return ordinary;
+  if (pendingCount(overviewQueue) >= overviewQueue.limit) return ordinary;
   const fallback = ordinary.catch(() => undefined);
   return runFocus(overviewQueue, month, sites, query).catch(async error => {
     const report = await fallback;
@@ -91,7 +97,7 @@ export async function readVodafoneFocus(month: string, sites: string[] | null, q
   if (pending) return pending;
   const result = !query.focusSummaries.length
     ? runFocus(baseOverviewQueue, month, sites, query)
-    : overviewQueue.pending
+    : pendingCount(overviewQueue)
       ? readBusyOverview(month, sites, query)
       : runFocus(overviewQueue, month, sites, query);
   inFlightOverviews.set(key, result);
