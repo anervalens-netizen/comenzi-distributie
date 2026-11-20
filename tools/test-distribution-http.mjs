@@ -208,7 +208,7 @@ try{
    const shell=document.querySelector('.manager-shell');
    return getComputedStyle(panel.parentElement).position==='sticky' &&
      panel.getBoundingClientRect().width>460 && panel.getBoundingClientRect().width<=innerWidth*0.44 &&
-     shell.getBoundingClientRect().width>=innerWidth*0.55;
+     shell.getBoundingClientRect().width>=document.documentElement.clientWidth*0.55;
  })()`),'desktop AI can resize while keeping the main shell and dock visible');
  await browser.evaluate(`document.querySelector('[aria-label="Resetează lățimea panoului"]').click()`);
  await browser.send('Emulation.setDeviceMetricsOverride',{width:320,height:800,deviceScaleFactor:1,mobile:true});
