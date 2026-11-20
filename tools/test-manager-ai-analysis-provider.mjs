@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { build } from 'esbuild';
 import { read, utils, write } from 'xlsx';
 
@@ -13,18 +16,21 @@ const bundle=await build({
   plugins:[{name:'synthetic-errors',setup(plugin){
     plugin.onResolve({filter:/^\.\/server$/},()=>({path:'server',namespace:'fixture'}));
     plugin.onLoad({filter:/^server$/,namespace:'fixture'},()=>({contents:`
+      import {createHash} from 'node:crypto';
       export class AppError extends Error {
         constructor(status,message){super(message);this.status=status;}
       }
       export function fail(status,message){throw new AppError(status,message);}
+      export function sha256(value){return createHash('sha256').update(value).digest('hex');}
+      export const db=()=>({prepare:()=>({bind:()=>({all:async()=>({results:[]})})})});
       export async function readLimited(){throw Error('Unexpected request body read');}
     `}));
     plugin.onResolve({filter:/^\.\/(manager-ai-sandbox|manager-ai-analysis-data|manager-ai-analysis-database)$/},
       args=>({path:args.path.slice(2),namespace:'fixture'}));
     const mocks={
       'manager-ai-sandbox':'export const runManagerAiSandbox=request=>globalThis.syntheticAnalysisSandbox(request);',
-      'manager-ai-analysis-data':'export async function readManagerAiAnalysisTable(){throw Error("Unexpected table");}',
-      'manager-ai-analysis-database':'export async function materializeManagerAiDatabase(){throw Error("Unexpected database");}',
+      'manager-ai-analysis-data':'export const readManagerAiAnalysisTable=(...args)=>globalThis.syntheticAnalysisTable(...args);',
+      'manager-ai-analysis-database':'export const materializeManagerAiDatabase=()=>Uint8Array.of(1);',
     };
     plugin.onLoad({filter:/^manager-ai-/,namespace:'fixture'},args=>({contents:mocks[args.path]}));
   }}],
@@ -140,5 +146,33 @@ try{
   assert.deepEqual(files.map(file=>file.filename),['daily.csv','daily.csv','daily (2).csv']);
 }finally{
   delete globalThis.syntheticAnalysisSandbox;
+}
+const activationRoot=mkdtempSync(join(tmpdir(),'comenzi-analysis-revision-'));
+const priorActivationRoot=process.env.MOBIUP_ACTIVATIONS_DIR;
+try{
+  process.env.MOBIUP_ACTIVATIONS_DIR=activationRoot;
+  const projection=join(activationRoot,'activation-report.sqlite');
+  writeFileSync(projection,'synthetic version one');
+  let executions=0;
+  globalThis.syntheticAnalysisSandbox=()=>{
+    executions++;
+    return {exitCode:0,stdout:'',stderr:'',artifacts:[]};
+  };
+  const capability=createManagerAiAnalysis({scope:{},check:async()=>{},signal:new AbortController().signal,files:[]});
+  const activationRequest={...request,files:[],tables:[{table:'activation_detail',fromMonth:'2026-07',toMonth:'2026-08'}]};
+  globalThis.syntheticAnalysisTable=async()=>({table:'activation_detail',rows:[],coverage:[]});
+  await capability.run(activationRequest);
+  globalThis.syntheticAnalysisTable=async()=>{
+    writeFileSync(projection,'synthetic version two with different size');
+    return {table:'activation_detail',rows:[],coverage:[]};
+  };
+  await assert.rejects(capability.run(activationRequest),{status:409});
+  assert.equal(executions,1,'a changed analytical source must never reach the sandbox');
+}finally{
+  if(priorActivationRoot===undefined)delete process.env.MOBIUP_ACTIVATIONS_DIR;
+  else process.env.MOBIUP_ACTIVATIONS_DIR=priorActivationRoot;
+  delete globalThis.syntheticAnalysisTable;
+  delete globalThis.syntheticAnalysisSandbox;
+  rmSync(activationRoot,{recursive:true,force:true});
 }
 console.log('PASS: scoped SQL/Python tool contract, provider fencing, CSV formula protection and Excel values-only downloads.');

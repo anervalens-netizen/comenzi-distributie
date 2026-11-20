@@ -36,6 +36,15 @@ export function partnerScope(user: User): { sql: string; args: string[] } {
     args: [user.id],
   };
 }
+/** Uses the same live customer membership for read models and direct extracts. */
+export function partnerScopeForWarehouses(user:User,warehouseIds?:string[]) {
+  const scope=partnerScope(user);
+  if(!warehouseIds)return scope;
+  return {
+    sql:`${scope.sql} AND EXISTS (${membership} WHERE w.value IN (SELECT value FROM json_each(?)))`,
+    args:[...scope.args,JSON.stringify(warehouseIds)],
+  };
+}
 function fingerprint(c: Client) {
   return sha256(
     JSON.stringify([c.address || '', c.city || '', c.county || '']),

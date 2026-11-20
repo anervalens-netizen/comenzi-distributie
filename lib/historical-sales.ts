@@ -22,6 +22,7 @@ export function historicalScopeMatch(scope:SalesScope|undefined,location:string,
   ||(!!site&&scope.siteCodes.some(s=>salesSiteKey(s)===site)&&!scope.excludedWarehouseNames.some(n=>salesLocationKey(n)===key));
 }
 const zero=():SalesAggregate=>({rows:0,quantity:0,value:0});
+export class HistoricalSalesChangedError extends Error {}
 export type HistoricalSalesLine = {
  date:string;site:string;location:string;erpSite:string;sku:string;product:string;brand:string;category:string;
  quantity:number;valueCents:number|null;
@@ -58,7 +59,7 @@ export function* iterateHistoricalSalesMonth(
    valueCents:row.value_cents===null?null:Number(row.value_cents)};
  }
  c.exec('COMMIT;');
- if(before!==historicalSalesGeneration())throw new Error('Istoricul s-a modificat. Reîncarcă raportul.');
+ if(before!==historicalSalesGeneration())throw new HistoricalSalesChangedError('Istoricul s-a modificat. Reîncarcă raportul.');
  return {importedAt:imports.map(r=>String(r.imported_at)).sort().at(-1)||null,through:new Date(Date.parse(next)-86400000).toISOString().slice(0,10)};
  }finally{c.close();}
 }

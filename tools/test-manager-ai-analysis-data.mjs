@@ -30,6 +30,8 @@ try {
       export * from './lib/manager-ai-analysis-database';
       export {managerAiScope} from './lib/manager-ai-data';
       export {importSalesRows} from './lib/sales-store';
+      export {scanManagerAiAnalysisSales} from './lib/manager-ai-analysis-sales';
+      export {selectedSql} from './lib/portfolio-read-model';
     `},
     bundle:true,platform:'node',format:'esm',outfile:modulePath,
     alias:{
@@ -59,6 +61,10 @@ try {
     ALTER TABLE users ADD COLUMN manager_scope TEXT;
     CREATE TABLE manager_agents(manager_id TEXT,agent_id TEXT);
     CREATE TABLE partner_visits(customer_id TEXT,visited_at TEXT);
+    CREATE TABLE portfolio_revision(id INTEGER,data_revision INTEGER,scope_revision INTEGER);
+    INSERT INTO portfolio_revision VALUES(1,1,1);
+    CREATE TABLE portfolio_read_rows(id TEXT PRIMARY KEY);
+    INSERT INTO portfolio_read_rows VALUES('private-point-id-a'),('private-point-id-b');
     INSERT INTO manager_agents VALUES('regional','agent-a');`);
   const insertUser=sql.prepare(`INSERT INTO users
     (id,username,name,role,warehouse_id,warehouse_name,site_code,manager_scope,password_hash)
@@ -70,10 +76,16 @@ try {
     assignments:[{userId:'agent-a',siteCode:'SITE-A',projectId:'non_exclusiv',territoryId:null,counties:[]},
       {userId:'agent-b',siteCode:'SITE-B',projectId:'non_exclusiv',territoryId:null,counties:[]}]};
   sql.prepare('INSERT INTO settings VALUES(?,?)').run('distribution-rules-v1',JSON.stringify(rules));
+  sql.prepare('INSERT INTO settings VALUES (?,?)').run('agent-stock-v1',JSON.stringify({warehouses:{
+    'warehouse-a':{warehouseId:'warehouse-a',importedAt:'2026-08-20T08:00:00Z',rows:[
+      {code:'UNKNOWN-STOCK',name:'Unclassified stock',quantity:8},
+      {code:'SIM-B',name:'Digi stock',quantity:2},
+    ]},
+  },mappings:{},history:[]}));
   const insertPartner=sql.prepare('INSERT INTO customers(id,warehouse_id,data) VALUES (?,?,?)');
   insertPartner.run('private-point-id-a','warehouse-a',JSON.stringify({
-    name:'Synthetic Partner A secret@example.invalid',historyCatalog:{franchiseCode:'F-01'},county:'Iași',city:'Iași',
-    address:'Private address marker',cui:'Synthetic tax marker',contact:'Private contact marker',phone:'0700000000',email:'secret@example.invalid',
+    name:'Synthetic Partner A secret@example.invalid',historyCatalog:{franchiseCode:' f-01 '},historyFranchises:['f-old'],county:'Iași',city:'Iași',
+    address:'Private address marker',cui:'9876543210000',contact:'Private contact marker',phone:'0700000000',email:'secret@example.invalid',
   }));
   insertPartner.run('private-point-id-b','warehouse-b',JSON.stringify({name:'Outside Partner',historyCatalog:{franchiseCode:'F-02'}}));
   sql.prepare('INSERT INTO partner_visits VALUES (?,?)').run('private-point-id-a','2026-07-21T12:00:00Z');
@@ -88,6 +100,10 @@ try {
   }));
   addOrder.run('order-b','opaque-source-document-b','agent-b','warehouse-b','accessories',JSON.stringify({
     warehouseName:'TR Example B',items:[{code:'ACCESSORY',name:'Outside Product',quantity:99}],
+  }));
+
+  addOrder.run('order-stand','opaque-source-stand','agent-a','warehouse-a','stand_client',JSON.stringify({
+    warehouseName:'TR Example A',items:[{code:'STAND',name:'Synthetic stand',quantity:3}],client:{name:'Synthetic Partner A'},
   }));
 
   const current={rowNumber:1,date:'2026-08-14',month:'2026-08',siteCode:'SITE-A',itemCode:'ACCESSORY',itemName:'Synthetic cable',
@@ -106,7 +122,21 @@ try {
       (1,'2026-07-05','TR Example A','ERP-A','ACCESSORY','Synthetic cable','Example','Cabluri','Accesorii',1000000,NULL,1),
       (1,'2026-07-06','TR Example A','ERP-A','ACCESSORY','Synthetic cable','Example','Cabluri','Accesorii',-1000000,-12050,2),
       (1,'2026-07-07','TR Example B','ERP-B','ACCESSORY','Outside Product','Example','Cabluri','Accesorii',1000000,888888,3),
-      (1,'2026-08-05','TR Example A','ERP-A','ACCESSORY','Overlapping history','Example','Cabluri','Accesorii',1000000,777777,4);`);
+      (1,'2026-08-05','TR Example A','ERP-A','ACCESSORY','Overlapping history','Example','Cabluri','Accesorii',1000000,777777,4);
+    ALTER TABLE history_imports ADD COLUMN sha256 TEXT DEFAULT 'synthetic';
+    ALTER TABLE history_rows ADD COLUMN identity_id INTEGER;
+    ALTER TABLE history_rows ADD COLUMN document_number TEXT DEFAULT 'synthetic billing document';
+    ALTER TABLE history_rows ADD COLUMN customer_name TEXT DEFAULT 'Synthetic fiscal label';
+    ALTER TABLE history_rows ADD COLUMN sheet TEXT DEFAULT 'Sheet';
+    UPDATE history_rows SET identity_id=CASE source_row WHEN 3 THEN 2 ELSE 1 END;
+    CREATE TABLE history_meta(key TEXT,value TEXT);
+    INSERT INTO history_meta VALUES('current_reference','reference');
+    CREATE TABLE history_identities(id INTEGER,client_code TEXT,franchise_code TEXT);
+    INSERT INTO history_identities VALUES(1,'9876543210000','F-OLD'),(2,'1234567890000','F-02');
+    CREATE TABLE history_allocations(reference_id TEXT,identity_id INTEGER,status TEXT,point_key TEXT,partner_ids_json TEXT);
+    INSERT INTO history_allocations VALUES
+      ('reference',1,'direct_code','franchise:F-OLD','["private-point-id-a"]'),
+      ('reference',2,'direct_code','franchise:F-02','["private-point-id-b"]');`);
   history.close();
 
   for(const provider of ['vodafone','digi']){
@@ -124,7 +154,7 @@ try {
       CREATE TABLE dimension_monthly(provider TEXT,month TEXT,site TEXT,item_type TEXT,county TEXT,handset TEXT,
         contradictory INTEGER,is_tr INTEGER,count INTEGER,last_date TEXT);
       CREATE TABLE details(provider TEXT,month TEXT,site TEXT,activation_date TEXT,item_code TEXT,item_type TEXT,county TEXT,
-        handset TEXT,contradictory INTEGER,is_tr INTEGER,serial TEXT,client_code TEXT);
+        handset TEXT,contradictory INTEGER,is_tr INTEGER,serial TEXT,client_code TEXT,company TEXT,point_key TEXT,point_code TEXT,label TEXT);
       CREATE TABLE cohorts(provider TEXT,site TEXT,distribution_month TEXT,item_code TEXT,activated INTEGER);
       INSERT INTO sites VALUES('SITE-A','Synthetic TR A'),('SITE-B','Synthetic TR B');`);
     const meta=projected.prepare('INSERT INTO report_meta VALUES (?,?)');
@@ -134,8 +164,10 @@ try {
     for(const site of ['SITE-A','SITE-B']){
       projected.prepare('INSERT INTO dimension_monthly VALUES (?,?,?,?,?,?,?,?,?,?)').run(
         provider,'2026-08',site,'SIM','Iași','synthetic channel',0,1,1,'2026-08-20');
-      projected.prepare('INSERT INTO details VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').run(provider,'2026-08',site,'2026-08-20',
-        provider==='digi'?'SIM-B':'SIM-A','SIM','Iași','synthetic channel',0,1,'000000000000000003','activation-tax-marker');
+      projected.prepare('INSERT INTO details VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(provider,'2026-08',site,'2026-08-20',
+        provider==='digi'?'SIM-B':'SIM-A','SIM','Iași','synthetic channel',0,1,'000000000000000003',
+        site==='SITE-A'?'9876543210000':'activation-tax-marker','synthetic source',
+        site==='SITE-A'?'franchise:F-OLD':'',site==='SITE-A'?'F-OLD':'','Synthetic activation label');
     }
     projected.close();
   }
@@ -154,10 +186,19 @@ try {
   const partners=await read('partners');
   assert.deepEqual(data(partners).map(row=>[row.partner,row.franchise_code,row.last_visit_date]),
     [['Synthetic Partner A [contact]','F-01','2026-07-21']]);
-  const orders=await read('orders');
-  assert.deepEqual(data(orders).map(row=>[row.kind,row.units,row.product_group]),[
-    ['sim',2,'vodafone_0'],['accessories',4,'accessories'],
+  const membership=m.selectedSql(manager,new URLSearchParams(),scope.filter.warehouseIds);
+  assert.deepEqual(sql.prepare(`SELECT m.id FROM ${membership.from} WHERE ${membership.where}`).all(...membership.args).map(row=>row.id),['private-point-id-a']);
+  const orders=await read('orders'), stands=await read('stands'), stock=await read('stock');
+  assert.deepEqual(data(orders).map(row=>[row.kind,row.units,row.sim_zero_units,row.product_group]),[
+    ['sim',null,2,'vodafone_0'],['accessories',4,null,'accessories'],
   ]);
+  assert.deepEqual(data(stands).map(row=>[row.sku,row.units]),[['STAND',3]]);
+  assert.deepEqual(data(stock).map(row=>[row.sku,row.product_group]),[['UNKNOWN-STOCK','unmapped'],['SIM-B','digi']]);
+  assert.match(stock.coverage[0].note,/toate categoriile/);
+  const billing=await read('sales_partner_lines','2026-07'), activationPartners=await read('activation_partners');
+  const point=data(partners)[0].point_ref;
+  assert.deepEqual(data(billing).map(row=>[row.point_ref,row.franchise_code]),[[point,'F-OLD'],[point,'F-OLD']]);
+  assert.deepEqual(data(activationPartners).map(row=>[row.point_ref,row.franchise_code]),[[point,'F-OLD'],[point,'F-OLD']]);
   const activations=await read('activation_detail');
   assert.deepEqual(data(activations).map(row=>[row.provider,row.site_code,row.sku,row.activations]),[
     ['vodafone','SITE-A','SIM-A',1],['digi','SITE-A','SIM-B',1],
@@ -174,19 +215,21 @@ try {
   await assert.rejects(()=>read('sales_lines','2025-06','2026-08'),{status:400});
 
   const file=join(root,'export.sqlite');
-  const bytes=await m.materializeManagerAiDatabase([sales,partners,orders,activations]);
+  const bytes=await m.materializeManagerAiDatabase([sales,partners,orders,activations,billing,activationPartners]);
   const text=Buffer.from(bytes).toString();
   for(const privateValue of ['secret@example.invalid','0700000000','Private address marker','Private contact marker','synthetic-auth-marker',
     'Private raw company','Private order tax marker','Private ERP reference','opaque-source-document-a','000000000000000001','000000000000000003',
-    'private-point-id-a','Outside Product','Outside Partner','activation-tax-marker',root])assert(!text.includes(privateValue),privateValue);
+    'private-point-id-a','Outside Product','Outside Partner','activation-tax-marker','9876543210000',root])assert(!text.includes(privateValue),privateValue);
   writeFileSync(file,bytes);
   const extract=new DatabaseSync(file,{readOnly:true});
   try{
     assert.equal(extract.prepare("SELECT SUM(value_cents) cents FROM sales_lines WHERE sku='ACCESSORY'").get().cents,12049);
     assert.equal(extract.prepare("SELECT COUNT(*) rows FROM _coverage WHERE available=0").get().rows,1);
     assert.equal(extract.prepare("SELECT row_count FROM _datasets WHERE table_name='activation_detail'").get().row_count,2);
+    assert.equal(extract.prepare(`SELECT COUNT(*) n FROM sales_partner_lines b JOIN partners p USING(point_ref)
+      JOIN activation_partners a USING(point_ref) WHERE a.provider='vodafone' AND p.franchise_code='F-01' AND b.franchise_code='F-OLD'`).get().n,2);
     assert.deepEqual(extract.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all().map(item=>item.name),
-      ['_coverage','_datasets','activation_detail','orders','partners','sales_lines']);
+      ['_coverage','_datasets','activation_detail','activation_partners','orders','partners','sales_lines','sales_partner_lines']);
   }finally{extract.close();}
 
   const bulk={...partners,rows:Array(m.managerAiAnalysisLimits.rows+1).fill(partners.rows[0])};
@@ -195,6 +238,17 @@ try {
   const building=m.materializeManagerAiDatabase([{...partners,rows:Array(3_000).fill(partners.rows[0])}],abort.signal);
   abort.abort();
   await assert.rejects(building,{name:'AbortError'});
+  const replacement=new DatabaseSync(join(root,'client-history','client-sales-history.sqlite'));
+  try {
+    replacement.exec('PRAGMA journal_mode=WAL');
+    let changed=false;
+    await assert.rejects(()=>m.scanManagerAiAnalysisSales('2026-07',undefined,()=>{
+      if(changed)return;
+      changed=true;
+      replacement.exec('UPDATE history_rows SET value_cents=12 WHERE source_row=1');
+    }),{status:409,message:'Sursele vânzărilor s-au modificat. Reia analiza.'});
+    assert(changed,'the source changed during the pinned read');
+  } finally {replacement.close();}
   console.log('PASS: manager analytical sales precedence, historical nulls/returns, scope, Digi permissions, SIM counts, private-field omission and bounded SQLite materialization.');
 }finally{
   sql.close();

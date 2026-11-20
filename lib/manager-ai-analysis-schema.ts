@@ -6,18 +6,20 @@ const n = (name: string, nullable = true): ManagerAiAnalysisColumn => ({ name, t
 const month = t('month', false), day = t('date', false), site = t('site_code'), sku = t('sku');
 const product = t('product'), franchise = t('franchise_code'), partner = t('partner'), warehouse = t('warehouse');
 const units = n('units'), count = n('activations', false), status = t('status'), doc = t('document_ref');
+const pointRef = t('point_ref');
+const allCategories = 'Include toate categoriile din sursă. product_group=unmapped indică un cod fără clasificare în catalog.';
 const provider = t('provider', false), note = t('source', false), catalogGroup = t('product_group');
 
 export const managerAiAnalysisCatalog = {
   sales_lines: {
     label:'Vânzări comerciale pe linii',
-    grain:'O linie din importul lunar activ sau din istoricul cu acoperire completă, pe zi, gestiune și SKU. Sursele nu se adună pentru aceeași lună. Valoarea sursă este în bani.',
+    grain:'O linie din importul lunar activ sau din istoricul cu acoperire completă, pe zi, gestiune și SKU. Sursele nu se adună pentru aceeași lună. Valoarea sursă este în bani. '+allCategories,
     columns:[month,day,site,warehouse,sku,product,t('brand'),t('category'),t('subcategory'),catalogGroup,units,n('value_cents'),note],
   },
   sales_partner_lines: {
     label:'Vânzări istorice legate univoc de puncte',
-    grain:'O linie din istoricul comercial cu franciză confirmată. Subset independent al istoricului, posibil suprapus cu sales_lines. Valoarea sursă este în bani.',
-    columns:[month,day,franchise,partner,t('erp_site_id'),doc,sku,product,units,n('value_cents'),catalogGroup],
+    grain:'O linie din istoricul comercial cu franciză confirmată. Subset independent al istoricului, posibil suprapus cu sales_lines. Valoarea sursă este în bani. Leagă punctele prin point_ref pentru a include codurile alternative confirmate. '+allCategories,
+    columns:[month,day,t('point_ref',false),franchise,partner,t('erp_site_id'),doc,sku,product,units,n('value_cents'),catalogGroup],
   },
   activation_detail: {
     label:'Activări pe zi și produs',
@@ -31,37 +33,37 @@ export const managerAiAnalysisCatalog = {
   },
   activation_partners: {
     label:'Activări pe punct de lucru',
-    grain:'Lună × operator × identitate proiectată. Același punct poate apărea în mai multe rânduri. Surse interne.',
-    columns:[month,provider,franchise,partner,t('identity'),count],
+    grain:'Lună × operator × identitate proiectată. Același punct poate apărea în mai multe rânduri. point_ref este prezent pentru corespondențe univoce în portofoliul autorizat. Surse interne.',
+    columns:[month,provider,pointRef,franchise,partner,t('identity'),count],
   },
   partners: {
     label:'Portofoliu de puncte de lucru',
-    grain:'Un punct activ din portofoliul vizibil la data extragerii.',
+    grain:'Un punct activ din portofoliul vizibil la data extragerii. franchise_code este codul principal. Folosește point_ref pentru legarea codurilor alternative confirmate.',
     columns:[t('point_ref',false),partner,franchise,t('county'),t('city'),t('last_visit_date'),n('points',false)],
   },
   orders: {
     label:'Comenzi operaționale',
-    grain:'O poziție dintr-o comandă. Data este cea a finalizării sau a creării ciornei.',
-    columns:[month,day,doc,warehouse,sku,product,t('kind'),status,units,catalogGroup],
+    grain:'O poziție de produs sau un rând cu totalul sim_zero_units pe document. units măsoară doar pozițiile de produs. Avizele pentru standuri la client sunt în stands. Data indică finalizarea sau crearea ciornei. '+allCategories,
+    columns:[month,day,doc,warehouse,sku,product,t('kind'),status,units,n('sim_zero_units'),catalogGroup],
   },
   stock: {
     label:'Stocul importat curent',
-    grain:'Ultima observație pe SKU și gestiune, cu data observării; nu reprezintă istoric.',
+    grain:'Ultima observație pe SKU și gestiune, cu data observării. Situația este curentă. '+allCategories,
     columns:[warehouse,site,sku,product,t('category'),t('observed_on'),units,catalogGroup],
   },
   inventories: {
     label:'Inventare finalizate',
-    grain:'O poziție dintr-un inventar finalizat.',
+    grain:'O poziție dintr-un inventar finalizat. '+allCategories,
     columns:[month,day,warehouse,sku,product,n('expected'),n('counted'),n('difference'),catalogGroup],
   },
   transfers: {
     label:'Transferuri finalizate',
-    grain:'O poziție dintr-un transfer cu sursa în selecția autorizată. Destinațiile din afara selecției sunt omise.',
+    grain:'O poziție dintr-un transfer cu sursa în selecția autorizată. Destinațiile din afara selecției sunt omise. '+allCategories,
     columns:[month,day,doc,warehouse,t('destination'),sku,product,units,catalogGroup],
   },
   stands: {
     label:'Avize de stand',
-    grain:'O poziție dintr-un aviz de stand finalizat în aplicație.',
+    grain:'O poziție dintr-un aviz de stand la client finalizat în aplicație. Comenzile de standuri pentru stoc sunt în orders.',
     columns:[month,day,doc,partner,warehouse,sku,product,units],
   },
   bonuses: {

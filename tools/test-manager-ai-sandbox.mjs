@@ -12,6 +12,8 @@ try {
     stdin:{resolveDir:process.cwd(),contents:"export * from './lib/manager-ai-sandbox.ts'; export * from './lib/manager-ai-sandbox-artifacts.ts';"},
     platform:'node',format:'esm',bundle:true,write:false,
     plugins:[{name:'synthetic-sandbox-runner',setup(b){
+      b.onResolve({filter:/^\.\.\/tools\/run-manager-ai-sandbox\.py\?raw$/},()=>({path:'sandbox-worker',namespace:'test'}));
+      b.onLoad({filter:/^sandbox-worker$/,namespace:'test'},()=>({contents:readFileSync('tools/run-manager-ai-sandbox.py','utf8'),loader:'text'}));
       b.onResolve({filter:/^\.\/server$/},()=>({path:'server',namespace:'test'}));
       b.onLoad({filter:/.*/,namespace:'test'},()=>({contents:`
         export class AppError extends Error{constructor(status,message){super(message);this.status=status;}}
@@ -54,7 +56,15 @@ try {
     assert.notEqual(process.env.MOBIUP_MANAGER_AI_SANDBOX_TEST_REQUIRED,'1','The configured isolated worker must be available.');
     console.log('PASS: disabled sandbox fails closed. Native exercise requires the provisioned HP analysis runtime.');
   } else {
-    const sql=await runManagerAiSandbox(request);
+    const originalEntry=process.argv[1];
+    let sql;
+    try {
+      process.argv[1]=join(directory,'other-entry.js');
+      writeFileSync(join(directory,'run-manager-ai-sandbox.py'),'raise RuntimeError("Unexpected worker fixture")\n');
+      sql=await runManagerAiSandbox(request);
+    } finally {
+      process.argv[1]=originalEntry;
+    }
     assert.equal(sql.exitCode,0);
     assert.deepEqual(sql.rows,{columns:['sku','units'],rows:[['FIXTURE-A',5],['FIXTURE-B',1]],truncated:false,exportTruncated:false,exportedRows:2});
     assert.deepEqual(sql.artifacts.map(file=>file.filename),['rezultat-sql.csv']);
@@ -151,13 +161,24 @@ Path("/output/grafic.png").write_bytes(png)
     assert.equal(python.artifacts[2].mime_type,'image/png');
     assert.ok(python.artifacts[1].bytes.byteLength>0);
 
-    const abort=new AbortController();
-    const delayed=runManagerAiSandbox({...request,language:'python',code:'import time; time.sleep(8)',signal:abort.signal});
-    await assert.rejects(runManagerAiSandbox(request),{status:429});
-    const began=Date.now();
-    const alarm=setTimeout(()=>abort.abort(),250);
-    try{await assert.rejects(delayed,{name:'AbortError'});}finally{clearTimeout(alarm);}
-    assert.ok(Date.now()-began<3000,'Abort should terminate the isolated process promptly.');
+    const sendSignal=process.kill;
+    for(const refuseSignal of [false,true]) {
+      let denied=0;
+      if(refuseSignal) process.kill=()=>{denied++;throw Object.assign(Error('Synthetic signal refusal'),{code:'EPERM'});};
+      const abort=new AbortController();
+      const delayed=runManagerAiSandbox({...request,language:'python',code:'import time; time.sleep(8)',signal:abort.signal});
+      const began=Date.now();
+      const alarm=setTimeout(()=>abort.abort(),350);
+      try {
+        await assert.rejects(runManagerAiSandbox(request),{status:429});
+        await assert.rejects(delayed,{name:'AbortError'});
+      } finally {
+        clearTimeout(alarm);
+        process.kill=sendSignal;
+      }
+      assert.ok(Date.now()-began<3000,'Abort should terminate the isolated process promptly.');
+      if(refuseSignal)assert.equal(denied,2,'Cancellation remained bounded after both signal attempts failed.');
+    }
     const next=await runManagerAiSandbox(request);
     assert.equal(next.exitCode,0);
     console.log('PASS: live isolated SQL/Python, scoped read-only inputs, pandas/XLSX/PNG, bounded formats, network denial, quota and cancellation.');

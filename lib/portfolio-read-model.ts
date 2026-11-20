@@ -1,7 +1,7 @@
 import {paginationRevision,paginationClock} from './pagination-revision';
 import {countyLabel, countySearch, routeTokens} from './portfolio-facets';
 import {db,fail,sha256} from './server';
-import {partnerScope,portfolioRowView} from './partner-portfolio';
+import {partnerScopeForWarehouses,portfolioRowView} from './partner-portfolio';
 import {createReadProjectionCache} from './read-projection-cache';
 import type {User} from './types';
 import type {PartnerSummary} from './partner-map-types';
@@ -50,8 +50,7 @@ export async function readyReadModel(){
  scheduleMaintenance();
 }
 export function selectedSql(user:User,params:URLSearchParams,warehouseIds?:string[],bbox?:[number,number,number,number],cutoff?:number){
- const scope=partnerScope(user),args:(string|number)[]=[...scope.args],where=['c.active=1',scope.sql];
- if(warehouseIds){where.push("EXISTS (SELECT 1 FROM json_each(COALESCE(json_extract(c.data,'$.warehouseIds'),json_array(c.warehouse_id))) w WHERE w.value IN (SELECT value FROM json_each(?)))");args.push(JSON.stringify(warehouseIds));}
+ const scope=partnerScopeForWarehouses(user,warehouseIds),args:(string|number)[]=[...scope.args],where=['c.active=1',scope.sql];
  for(const key of ['q','county','city','route'])if((params.get(key)?.length||0)>300)fail(400,'Filtrul este prea lung.');
  const q=params.get('q')||'',city=(params.get('city')||'').trim(),county=params.get('county')||'',route=params.get('route')||'',position=params.get('position')||'',days=params.get('days')||'';
  if(!['','yes','no'].includes(position)||!['','never','7','14','30','60','90'].includes(days))fail(400,'Filtrul este invalid.');
