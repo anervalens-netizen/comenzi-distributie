@@ -1,6 +1,6 @@
 import {vodafoneFocusWorkbook} from './vodafone-focus-export';
 import {readFocusSlips} from './vodafone-focus-documents-node';
-import {vodafoneFocusReport} from './vodafone-focus-node';
+import {selectFocusSource, vodafoneFocusReport} from './vodafone-focus-node';
 import {applyVodafoneFocusOverview} from './vodafone-focus-overview';
 import {distributionReport} from './activation-distribution-node';
 import {digiOperatorReported} from './digi-operator-source';
@@ -67,9 +67,9 @@ export function readActivations(month:string,sites:string[]|null,provider:Activa
         if(schema!=='3') return {...scoped,commissionCoverage:'missing'};
         // Ordinary totals leave the worker before commercial attribution begins.
         if(!query.focusCardsOnly)onOverviewBase?.({...scoped,commissionCoverage:'unavailable'});
-        const labels=focusLabels(),slips=readFocusSlips();
+        const labels=focusLabels(),slips=readFocusSlips(),sourceFacts=selectFocusSource(source,query.months);
         const summaries=query.focusSummaries.flatMap(focus=>{
-          const summary=vodafoneFocusReport(source!,labels,sites,{...query,focus},focusGeneration,slips);
+          const summary=vodafoneFocusReport(source!,labels,sites,{...query,focus},focusGeneration,slips,sourceFacts);
           return summary?[summary]:[];
         });
         if(query.returnFocusCards)scoped.focusCards=summaries;

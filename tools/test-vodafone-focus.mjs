@@ -162,6 +162,16 @@ try {
   assert.equal(exported.length, 7);
   assert.equal(exported.find(row => row.ICCID === serial(1))['Referință document'], '=EXAMPLE');
   assert.equal(read(vodafoneFocusWorkbook(agent), {type: 'base64'}).Sheets['Detaliu activări'].F1.v, 'CIF');
+  // Span two batches and make one ERP row match different SIMs by its two identities.
+  for (let n=1000; n<1300; n++) {
+    observe(2, n, 'AG', credit, 'SIM5', 0);
+    addSale(n, n, 'S', 1, '2026-10-10');
+  }
+  ledger.prepare('UPDATE activation_effective_movements SET imei=? WHERE movement_id=?').run(serial(1000)+'7',1299);
+  const bulk=result(null,{detail:'regional',exportAll:true});
+  assert.equal(bulk.regional.total,manager.regional.total+300);
+  assert.equal(bulk.attributed,manager.attributed+298);
+  for (const n of [1000,1299]) assert.equal(bulk.detail.rows.find(row=>row.serial===serial(n)).kind,'unassigned');
   console.log('Vodafone Focus source precedence, commercial attribution, history, scope and workbook passed.');
 } finally {
   ledger.close();
