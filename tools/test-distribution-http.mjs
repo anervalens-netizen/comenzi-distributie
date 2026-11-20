@@ -427,9 +427,12 @@ try{
   await waitFor(()=>browser.evaluate('document.querySelector(".activation-primary strong")?.textContent==='+JSON.stringify(String(october))),'agent activation policy '+id);
   assert.equal(await browser.evaluate('document.querySelectorAll(".agent-commerce .report-period").length'),1,'agent activation and sales share one period');
   assert(!(await browser.evaluate('!!document.querySelector(".activation-workspace input[type=month]")')),'shared agent period replaces the separate activation month');
-  await browser.evaluate(`document.querySelector('[aria-label="septembrie 2026"]').click()`);
-  await waitFor(()=>browser.evaluate('document.querySelector(".activation-primary strong")?.textContent==='+JSON.stringify(String(union))),'agent multi-month activation union '+id);
-  assert.equal(await browser.evaluate('document.querySelectorAll(".agent-report-scope .report-month-grid button[aria-pressed=true]").length'),2);
+  const control='.agent-report-scope [aria-label="septembrie 2026"]';
+  await waitFor(()=>browser.evaluate(`document.querySelector(${JSON.stringify(control)})?.getAttribute('aria-pressed')==='false'`),'agent restored October-only selection '+id);
+  await browser.evaluate(`document.querySelector(${JSON.stringify(control)}).click()`);
+  await waitFor(()=>browser.evaluate('document.querySelectorAll(".agent-report-scope .report-month-grid button[aria-pressed=true]").length===2'),'agent selects both report months '+id);
+  await waitFor(()=>browser.evaluate(`window.agentRequests.some(path=>path.startsWith('/api/activations?')&&new URL(path,location.origin).searchParams.get('months')==='2026-09,2026-10')`),'agent requests both activation months '+id);
+  await waitFor(()=>browser.evaluate('document.querySelector(".agent-commerce .activation-primary strong")?.textContent==='+JSON.stringify(String(union))),'agent multi-month activation union '+id);
   await browser.evaluate('[...document.querySelectorAll(".main-nav [role=tab]")].find(button=>button.textContent==="Accesorii").click()');
   await waitFor(()=>browser.evaluate('!!document.querySelector(".agent-commerce .commerce-tabs")&&!document.querySelector(".prepay-workspace")'),'return to agent accessory reports');
   await browser.evaluate('[...document.querySelectorAll(".agent-commerce .commerce-tabs button")].find(button=>button.textContent==="Pe clienți").click()');
@@ -449,6 +452,26 @@ try{
   await browser.send('Input.dispatchMouseEvent',{type:'mousePressed',button:'left',clickCount:1,x:stockTarget.x,y:stockTarget.y});await browser.send('Input.dispatchMouseEvent',{type:'mouseReleased',button:'left',clickCount:1,x:stockTarget.x,y:stockTarget.y});
   await waitFor(()=>browser.evaluate('[...document.querySelectorAll(".main-nav [role=tab]")].some(button=>button.textContent==="Stocul meu"&&button.getAttribute("aria-selected")==="true")'),'agent stock navigation '+id);
  }
+ db.prepare("DELETE FROM settings WHERE key='distribution-rules-v1'").run();
+ await browser.send('Emulation.setDeviceMetricsOverride',{width:1280,height:900,deviceScaleFactor:1,mobile:false});
+ await browser.send('Network.setCookie',{name:'mobiup_session',value:cookies.manager,url:origin});
+ await browser.evaluate('location.reload()');
+ await waitFor(()=>browser.evaluate('!!document.querySelector(".manager-ai-trigger")'),'legacy Prepay manager');
+ await browser.evaluate('[...document.querySelectorAll(".main-nav [role=tab]")].find(button=>button.textContent==="Prepay").click()');
+ await waitFor(()=>browser.evaluate(`!!document.querySelector('[aria-label="Luna activării"]')`),'legacy Prepay activation month control');
+ await browser.evaluate(`(()=>{
+   const input=document.querySelector('[aria-label="Luna activării"]');
+   Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'2026-09');
+   input.dispatchEvent(new Event('input',{bubbles:true}));
+   input.dispatchEvent(new Event('change',{bubbles:true}));
+ })()`);
+ await browser.evaluate('document.querySelector(".manager-ai-trigger").click()');
+ await waitFor(()=>browser.evaluate(`[...document.querySelectorAll('aside[aria-label="AI Comenzi"] [title]')].some(el=>el.title.endsWith('Prepay › Activări · 2026-09'))`),'AI uses the legacy Prepay activation month');
+ await browser.evaluate('[...document.querySelectorAll(".prepay-workspace nav button")].find(button=>button.textContent==="Vânzări").click()');
+ await waitFor(()=>browser.evaluate(`!!document.querySelector('.prepay-workspace [aria-label="august 2026"]')`),'legacy Prepay sales month control');
+ await browser.evaluate(`document.querySelector('.prepay-workspace [aria-label="august 2026"]').click()`);
+ await waitFor(()=>browser.evaluate(`[...document.querySelectorAll('aside[aria-label="AI Comenzi"] [title]')].some(el=>el.title.endsWith('Prepay › Vânzări · 2026-08'))`),'AI uses the legacy Prepay sales month');
+ db.prepare('INSERT INTO settings VALUES(?,?)').run('distribution-rules-v1',readFileSync(join(root,'rules.json'),'utf8'));
  const source=new DatabaseSync(root+'/activations.sqlite');source.prepare("UPDATE activation_meta SET value=CAST(value AS INTEGER)+1 WHERE key='generation'").run();source.close();
  assert.equal((await request('activations?month=2026-10','north')).status,503,'generation mismatch fails closed');
  db.close();console.log('PASS: authenticated North/South/nonexclusive policies, forged filters, detail/export, combined partners, weighted months, responsive UI and generation staleness.');
