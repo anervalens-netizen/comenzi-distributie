@@ -9,7 +9,8 @@ export type ActivationCounts = {total:number;sim:number;telsim:number;other:numb
 export type ActivationProvider = 'vodafone'|'digi';
 export type ActivationProductBreakdown={zero:number;credit:number;packages:number;other:number;unknown:number};
 export type ActivationSimZero={distributed:number;activated:number;withoutReportedActivation:number};
-export type ActivationMonth={month:string;reported:boolean;counts:ActivationCounts;productBreakdown?:ActivationProductBreakdown;simZero?:ActivationSimZero};
+export type DigiActivationSource='internal'|'operator';
+export type ActivationMonth={month:string;reported:boolean;counts:ActivationCounts;source?:DigiActivationSource;productBreakdown?:ActivationProductBreakdown;simZero?:ActivationSimZero};
 export type ActivationReport = {
   focus?:FocusReport;
   commissionCoverage?:'complete'|'partial'|'missing'|'outside_scope'|'unavailable';
@@ -26,7 +27,7 @@ export type ActivationReport = {
   month:string;provider:ActivationProvider;available:boolean;scoped:boolean;importedAt:string;latestDate:string|null;
   months:{month:string;total:number}[];totals:ActivationCounts;
   sites:({site:string;label:string}&ActivationCounts)[];
-  history:({month:string}&ActivationCounts)[];
+  history:({month:string;source?:DigiActivationSource}&ActivationCounts)[];
 };
 export const emptyActivationCounts=():ActivationCounts=>({total:0,sim:0,telsim:0,other:0,unassigned:0});
 
