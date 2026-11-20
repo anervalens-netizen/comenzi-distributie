@@ -34,7 +34,7 @@ async function activationScope(user:User,params:URLSearchParams,rules:Distributi
  return {sites,policy};
 }
 
-export async function activationReport(user:User,params:URLSearchParams,internal?:{allPartners?:boolean;analysisLimit?:number;omitFocus?:boolean;todayWindow?:{from:string;to:string};revalidateFocus?:()=>Promise<User>}):Promise<ActivationReport|CombinedActivationPartners>{
+export async function activationReport(user:User,params:URLSearchParams,internal?:{overviewPhase?:'totals'|'panels'|'cards';returnFocusCards?:boolean;allPartners?:boolean;analysisLimit?:number;omitFocus?:boolean;todayWindow?:{from:string;to:string};revalidateFocus?:()=>Promise<User>}):Promise<ActivationReport|CombinedActivationPartners>{
  if(!canViewActivations(user))fail(403,'Secțiunea Activări nu este disponibilă pentru acest cont.');
  for(const key of params.keys())if(!['provider','month','months','projects','managerId','agentId','siteCode','view','point','company','q','page','revision','sort','direction','focusKind','focusSite','focusTerritory'].includes(key))fail(400,'Filtru necunoscut.');
  const sort=params.get('sort')||'total',direction=params.get('direction')||'desc';
@@ -89,6 +89,9 @@ export async function activationReport(user:User,params:URLSearchParams,internal
        query.focus=await vodafoneFocusQuery(rules,territory,params,sites,user.role==='manager');
      }else return {month,provider,available:false,scoped:sites!==null,importedAt:'',latestDate:null,months:[],totals:emptyActivationCounts(),sites:[],history:[]};
    }else if(!internal?.omitFocus&&isVodafoneOverview(params)){
+     query.returnFocusCards=internal?.returnFocusCards;
+     query.progressiveTotals=internal?.overviewPhase==='totals'||internal?.overviewPhase==='panels'||undefined;
+     query.focusCardsOnly=internal?.overviewPhase==='cards'||undefined;
      const territories=focusTerritories.filter(territory=>query!.projects.includes(focusProjects[territory])&&
        (policy==='manager'||rules.assignments.some(a=>a.userId===user.id&&a.territoryId===territory)));
      const summaries=await Promise.all(territories.map(territory=>vodafoneFocusQuery(rules,territory,params,sites,user.role==='manager')));
@@ -116,7 +119,7 @@ export async function activationReport(user:User,params:URLSearchParams,internal
  const focusQueries=query?.focus?[query.focus]:query?.focusSummaries??[];
  try{
    if(digiOverview)result=await readDigiOverview(month,sites,query);
-   else if(query&&(query.focus||query.focusSummaries))result=await readVodafoneFocus(month,sites,query);
+   else if(query&&(query.focus||query.focusSummaries))result=await readVodafoneFocus(month,sites,query,internal?.overviewPhase==='totals');
    else result=readActivations(month,sites,provider,query);
  }catch{
    fail(503,'Activările nu sunt disponibile momentan. Încearcă din nou mai târziu.');

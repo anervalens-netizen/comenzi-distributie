@@ -1,7 +1,7 @@
 'use client';
 import {lazy,Suspense,useEffect,useId,useState} from 'react';
 import {RefreshCw} from 'lucide-react';
-import {api,errorMessage} from '@/lib/client-api';
+import {api,ApiError,errorMessage} from '@/lib/client-api';
 import {bucharestMonthKey} from '@/lib/bucharest-month';
 import type {ActivationReport,ActivationProvider} from '@/lib/activation-types';
 import {activationDateLabel} from '@/lib/activation-labels';
@@ -9,6 +9,7 @@ import {OperatorLogo} from './distribution-cards';
 import {MonthlyActivationsDialog} from './monthly-activations';
 import {activationMonthlyPoints,type ActivationTrendMetric} from '@/lib/activation-monthly';
 import {ActivationPartners} from './activation-partners';
+import type {FocusReport} from '@/lib/vodafone-focus';
 import {VodafoneFocusPanel} from './vodafone-focus';
 import './activations.css';
 const VodafoneBonus=lazy(()=>import('./vodafone-bonus').then(module=>({default:module.VodafoneBonus})));
@@ -18,10 +19,51 @@ export function ActivationOperatorCard({userId,query,provider,reload}:{userId:st
  const [trend,setTrend]=useState<{label:string;metric:ActivationTrendMetric}|null>(null),countId=useId(),network=provider==='vodafone'?'Vodafone':'Digi';
  const openTrend=(label:string,metric:ActivationTrendMetric)=>setTrend({label,metric});
  const params=new URLSearchParams(query);params.set('provider',provider);const search=params.toString(),key=userId+'|'+search+'|'+reload;
- const [result,setResult]=useState<{key:string;data:ActivationReport}|null>(null),[error,setError]=useState<{key:string;text:string}|null>(null);
- useEffect(()=>{const c=new AbortController();api<ActivationReport>('activations?'+search,'GET',undefined,c.signal).then(data=>{if(!c.signal.aborted){setResult({key,data});setError(null);}}).catch(e=>{if(!c.signal.aborted)setError({key,text:errorMessage(e)});});return()=>c.abort();},[key,search]);
- const data=result?.key===key?result.data:null,message=error?.key===key?error.text:'';
- const commissionMessage=data?.commissionCoverage==='unavailable'?'calcul indisponibil temporar'
+ const [read,setRead]=useState<{
+   key:string; data?:ActivationReport; complete?:boolean; error?:string;
+   focus?:FocusReport[]; focusError?:string;
+ }>();
+ useEffect(()=>{
+   const controller=new AbortController();
+   const path='activations?'+search;
+   const fetchReport=(phase?:string)=>api<ActivationReport>(path+(phase?'&overviewPhase='+phase:''),'GET',undefined,controller.signal);
+   const update=(fields:Partial<NonNullable<typeof read>>)=>{
+     if(!controller.signal.aborted)setRead(old=>({...(old?.key===key?old:{}),key,...fields}));
+   };
+   let final=false, separateStarted=false, panelError='';
+   function scopeFailure(error:unknown) {
+     if(!(error instanceof ApiError)||![401,403,404,409].includes(error.status))return false;
+     update({error:errorMessage(error),data:undefined,focus:undefined});
+     controller.abort();
+     return true;
+   }
+   function accept(data:ActivationReport,complete:boolean){
+     if(controller.signal.aborted||final)return;
+     final=complete;
+     update({data,complete:complete||!!panelError,error:panelError||undefined,...(data.focusCards&&!data.separateFocusScope?{focus:data.focusCards}:{})});
+     if(data.separateFocusScope&&!separateStarted){
+       separateStarted=true;
+       void fetchReport('cards').then(cards=>update({focus:cards.focusCards??[]}),error=>{
+         // The restricted Focus request has its own permission scope.
+         update({focus:undefined,focusError:errorMessage(error)});
+       });
+     }
+   }
+   if(provider==='vodafone'){
+     void fetchReport('totals').then(data=>accept(data,false),error=>{if(!controller.signal.aborted)scopeFailure(error);});
+     void fetchReport('panels').then(data=>accept(data,true),error=>{
+       if(!controller.signal.aborted&&!scopeFailure(error)){
+         panelError=errorMessage(error);
+         update({error:panelError,complete:true});
+       }
+     });
+   }else{
+     void fetchReport().then(data=>accept(data,true),error=>update({error:errorMessage(error)}));
+   }
+   return()=>controller.abort();
+ },[key,search,provider]);
+ const current=read?.key===key?read:undefined,data=current?.data,message=!data?current?.error:'';
+ const commissionMessage=!current?.complete&&!current?.error?'se calculează…':current?.error||data?.commissionCoverage==='unavailable'?'calcul indisponibil temporar'
    :data?.commissionCoverage==='outside_scope'?'fără gestiuni eligibile în selecție':'fără sursă Vodafone pentru selecție';
  return <article className="panel distribution-card activation-operator" aria-label={'Activări '+provider}>
   <OperatorLogo provider={provider}/>
@@ -43,7 +85,8 @@ export function ActivationOperatorCard({userId,query,provider,reload}:{userId:st
    </div></details>
    {trend&&<MonthlyActivationsDialog key={trend.metric} title={trend.label+' · '+network} cohort={trend.metric.startsWith('cohort:')} points={activationMonthlyPoints(data,data.selectedMonths||params.get('months')?.split(',').filter(Boolean)||[data.month],trend.metric)} onClose={()=>setTrend(null)}/>}
   </>}
-  {provider==='vodafone'&&<VodafoneFocusPanel userId={userId} query={search} reload={reload}/>}
+  {provider==='vodafone'&&current?.focusError&&<p role="alert">Focus Vodafone · {current.focusError}</p>}
+  {provider==='vodafone'&&current?.focus&&<VodafoneFocusPanel key={key} query={search} reports={current.focus}/>}
  </article>;
 }
 export function ActivationsPanel({userId,scopeQuery='',scopeLabel='Activările mele',compact=false,embedded=false,distributionConfigured=false,refreshVersion=0,manager=false,onContextChange}:{userId:string;scopeQuery?:string;scopeLabel?:string;compact?:boolean;embedded?:boolean;distributionConfigured?:boolean;refreshVersion?:number;manager?:boolean;onContextChange?:(context:{section:string;period:string})=>void}){

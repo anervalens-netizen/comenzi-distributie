@@ -26,6 +26,7 @@ try {
     if (focus) parentPort.postMessage({
       type:'overviewBase',report:{month, totals:{total:50}, commissionCoverage:'unavailable'},
     });
+    if (month === 'staged') await new Promise(resolve=>setTimeout(resolve,180));
     if (provider==='digi') {
       await new Promise(resolve=>setTimeout(resolve,100));
       parentPort.postMessage({type:'report',report:{month,provider,sites,totals:{total:6}}});
@@ -43,6 +44,15 @@ try {
   assert.equal(readFileSync('started','utf8').split('digi-month:ordinary').length-1,1,'identical Digi requests share work');
   const overview = {focusSummaries: [{}]};
   assert.equal((await readVodafoneFocus('success', null, overview)).totals.eligible, 20);
+  const phasedTotals = readVodafoneFocus('staged', null, overview, true);
+  let panelsReady = false;
+  const phasedPanels = readVodafoneFocus('staged', null, overview).then(report => { panelsReady=true; return report; });
+  const first = await phasedTotals;
+  assert.equal(first.totals.total, 50);
+  assert.equal(first.totals.eligible, undefined);
+  assert.equal(panelsReady, false);
+  assert.equal((await phasedPanels).totals.eligible, 20);
+  assert.equal(readFileSync('started','utf8').split('\n').filter(line=>line==='staged:focus').length, 1);
   const fallback = await readVodafoneFocus('failure', null, overview);
   assert.equal(fallback.commissionCoverage, 'unavailable');
   assert.equal(fallback.totals.total, 50);

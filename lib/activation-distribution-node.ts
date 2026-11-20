@@ -15,7 +15,7 @@ function add(t:ActivationCounts,r:Dimension,rules:DistributionRules,countLegacyE
  else{t.ineligible=(t.ineligible||0)+r.count;for(const reason of e.reasons){t.reasons??={};t.reasons[reason]=(t.reasons[reason]||0)+r.count;}}
 }
 /** Every read, including month discovery and drill-down, uses this same SQL scope. */
-export function distributionReport(report:DatabaseSync,base:ActivationReport,meta:Record<string,string>,sites:string[]|null,query:ActivationQuery):ActivationReport{
+export function distributionReport(report:DatabaseSync,base:ActivationReport,meta:Record<string,string>,sites:string[]|null,query:ActivationQuery,onTotals?:(report:ActivationReport)=>void):ActivationReport{
  let rules:DistributionRules;
  try{
   const projectedRules=parseDistributionRules(meta.rules);rules=parseDistributionRules(query.rules);
@@ -49,6 +49,13 @@ export function distributionReport(report:DatabaseSync,base:ActivationReport,met
    if(!query.months.includes(row.month))continue;
    add(result.totals,row,rules,countLegacyEligibility);const a=agents.get(row.site)||newCounts();add(a,row,rules,countLegacyEligibility);agents.set(row.site,a);
  }
+ result.history=[...history].map(([month,counts])=>({month,...counts}));result.months=result.history.map(({month,total})=>({month,total}));
+ result.sites=[...agents].map(([site,counts])=>({site,label:site?(labels.get(site)||site):'Agent de verificat',...counts})).sort((a,b)=>b.total-a.total||a.site.localeCompare(b.site));
+ result.coveredMonths=query.months.filter(m=>result.months.some(r=>r.month===m));
+ result.sourcePeriods=JSON.parse(meta.sourcePeriods||'[]');
+ // The main card and its history are complete at this point. Products, cohorts
+ // and official attribution can continue on the same pinned generation.
+ if(onTotals)onTotals({...result,commissionCoverage:'unavailable'});
  const monthlyProducts=new Map<string,ActivationProductBreakdown>(),monthlyCohorts=new Map<string,ActivationSimZero>();
  const blankProducts=():ActivationProductBreakdown=>({zero:0,credit:0,packages:0,other:0,unknown:0});
  // Use the same authorized scope and selected activation months; raw product codes
@@ -69,10 +76,6 @@ export function distributionReport(report:DatabaseSync,base:ActivationReport,met
    result.productBreakdown=products;
    if(countLegacyEligibility&&query.policy!=='south')result.ineligibleSourceTypes=sources;
  }
- result.history=[...history].map(([month,counts])=>({month,...counts}));result.months=result.history.map(({month,total})=>({month,total}));
- result.sites=[...agents].map(([site,counts])=>({site,label:site?(labels.get(site)||site):'Agent de verificat',...counts})).sort((a,b)=>b.total-a.total||a.site.localeCompare(b.site));
- result.coveredMonths=query.months.filter(m=>result.months.some(r=>r.month===m));
- result.sourcePeriods=JSON.parse(meta.sourcePeriods||'[]');
  // Distribution cohort is independent of activation month. Apply only the authorized seller/project scope.
  const cohortClauses=['provider=?'],cohortArgs:(string|number)[]=[provider];
  const allowedSites=rules.assignments.filter(a=>query.projects.includes(a.projectId)&&(sites===null||sites.some(s=>s.toUpperCase()===a.siteCode.toUpperCase()))).map(a=>a.siteCode.toUpperCase());

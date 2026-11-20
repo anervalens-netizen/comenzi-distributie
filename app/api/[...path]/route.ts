@@ -364,13 +364,25 @@ async function dispatch(req: Request) {
   if(path.join('/')==='activations'&&req.method==='GET'){
     const params=new URL(req.url).searchParams,view=params.get('view');
     const focus=isVodafoneFocusView(view);
-    const overview=isVodafoneOverview(params)||(params.get('provider')==='digi'&&!view);
-    const report=await activationReport(focus?user:readUser,params,focus||overview?{
+    const overview=isVodafoneOverview(params);
+    const digiOverview=params.get('provider')==='digi'&&!view;
+    const phase=params.get('overviewPhase');
+    if(phase!==null&&(!overview||!['totals','panels','cards'].includes(phase)))fail(400,'Selecția raportului este invalidă.');
+    params.delete('overviewPhase');
+    const overviewPhase=phase as 'totals'|'panels'|'cards'|null;
+    // National read access to ordinary totals does not grant regional Focus details.
+    const sharesFocusScope=(viewer:User)=>viewer.role!=='manager'||isGlobalManager(viewer)||params.get('managerId')===viewer.id;
+    const nativeScope=focus||overviewPhase==='cards';
+    const returnFocusCards=!!overviewPhase&&(nativeScope||sharesFocusScope(user));
+    const report=await activationReport(nativeScope?user:readUser,params,focus||overview||digiOverview?{
+      overviewPhase:overviewPhase||undefined,returnFocusCards,
       revalidateFocus:async()=>{
         const current=await requireUser(req);
-        return focus?current:nationalReadScope(current);
+        if(returnFocusCards&&!nativeScope&&!sharesFocusScope(current))fail(409,'Accesul la raport s-a modificat.');
+        return nativeScope?current:nationalReadScope(current);
       },
     }:undefined);
+    if(overviewPhase&&report.provider==='vodafone'&&!returnFocusCards)report.separateFocusScope=true;
     if(view==='focus-export'){
       if(report.provider!=='vodafone'||!report.focusWorkbook)fail(404,'Raportul Focus nu este disponibil în această selecție.');
       return response({workbook:report.focusWorkbook});

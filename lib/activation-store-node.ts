@@ -59,18 +59,21 @@ export function readActivations(month:string,sites:string[]|null,provider:Activa
         }
         return {...result,available,focus};
       }
-      const scoped=distributionReport(report,result,meta,sites,query);
+      const scoped=query.focusCardsOnly?result:distributionReport(report,result,meta,sites,query,
+        query.progressiveTotals ? onOverviewBase : undefined);
       if(provider==='vodafone'&&query.focusSummaries){
+        if(query.returnFocusCards)scoped.focusCards=[];
         if(!query.focusSummaries.length) return applyVodafoneFocusOverview(scoped,[]);
         if(schema!=='3') return {...scoped,commissionCoverage:'missing'};
-        // The ordinary totals are ready before matching the official Focus source.
-        onOverviewBase?.({...scoped,commissionCoverage:'unavailable'});
+        // Ordinary totals leave the worker before commercial attribution begins.
+        if(!query.focusCardsOnly)onOverviewBase?.({...scoped,commissionCoverage:'unavailable'});
         const labels=focusLabels(),slips=readFocusSlips();
         const summaries=query.focusSummaries.flatMap(focus=>{
           const summary=vodafoneFocusReport(source!,labels,sites,{...query,focus},focusGeneration,slips);
           return summary?[summary]:[];
         });
-        return applyVodafoneFocusOverview(scoped,summaries);
+        if(query.returnFocusCards)scoped.focusCards=summaries;
+        return query.focusCardsOnly?scoped:applyVodafoneFocusOverview(scoped,summaries);
       }
       if(provider==='digi'){
         for(const entry of scoped.monthly||[])if(entry.reported)entry.source='internal';

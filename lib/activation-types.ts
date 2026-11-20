@@ -15,6 +15,8 @@ export type DigiActivationSource='internal'|'operator';
 export type ActivationMonth={month:string;reported:boolean;counts:ActivationCounts;source?:DigiActivationSource;productBreakdown?:ActivationProductBreakdown;simZero?:ActivationSimZero};
 export type ActivationReport = {
   focus?:FocusReport;
+  focusCards?:FocusReport[];
+  separateFocusScope?:boolean;
   commissionCoverage?:'complete'|'partial'|'missing'|'outside_scope'|'unavailable';
   focusWorkbook?:string;
   monthly?:ActivationMonth[];
