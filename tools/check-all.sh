@@ -51,7 +51,9 @@ node tools/test-manager-ai-analysis-data.mjs
 node tools/test-manager-ai-chat.mjs
 node tools/test-activation-partners.mjs
 node tools/test-activation-current-window.mjs
+node tools/test-activation-membership-schema.mjs
 node tools/test-activation-portfolio.mjs
+node tools/test-activation-partners-cache.mjs
 node tools/test-activation-access.mjs
 node tools/test-activation-presentation.mjs
 python3 -W error::ResourceWarning tools/test_activations.py
@@ -218,6 +220,7 @@ if [ -n "$CHROME_BIN" ]; then
   CHROME_BIN="$CHROME_BIN" node tools/test-order-pagination-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-stock-coverage-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-imports-journal-browser.mjs
+  CHROME_BIN="$CHROME_BIN" node tools/test-activation-publication-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-client-sales-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-report-error-recovery-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-client-history-import-browser.mjs

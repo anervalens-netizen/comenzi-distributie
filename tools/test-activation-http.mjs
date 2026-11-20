@@ -29,6 +29,13 @@ try{
  assert.equal((await request('activations?agentId=other-agent',tokens['pilot-agent'])).status,403);
  assert.equal((await request('activations?month=invalid',tokens['pilot-manager'])).status,400);
  assert.equal((await request('activations?provider=other',tokens['pilot-manager'])).status,400);
+ for(const phase of ['totals','panels']) {
+   const early=await request('activations?month='+current+'&overviewPhase='+phase,tokens['pilot-agent']);
+   assert.equal(early.status,200);assert.deepEqual(early.body.totals,agent.body.totals);
+   assert.equal((await request('activations?overviewPhase='+phase,tokens['other-manager'])).status,403);
+ }
+ assert.equal((await request('activations?overviewPhase=unknown',tokens['pilot-manager'])).status,400);
+ assert.equal((await request('activations?provider=digi&overviewPhase=panels',tokens['pilot-manager'])).status,400);
  const digi=await request('activations?provider=digi',tokens['pilot-manager']);assert.equal(digi.status,200);assert.equal(digi.body.available,false);assert.equal(digi.body.totals.total,0);
  assert.equal((await request('activations?provider=digi&agentId=other-agent',tokens['pilot-agent'])).status,403);
  assert.equal((await request('activations?month='+current+'&agentId=other-agent',tokens['pilot-manager'])).body.totals.total,20);

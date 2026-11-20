@@ -135,6 +135,27 @@ try{
  assert.equal((await request(octoberOverview+'&projects=vodafone_nord')).data.totals.eligible,2);
  assert.equal((await request(octoberOverview,'south')).data.totals.eligible,southFocus.attributed);
  assert.equal((await request(octoberOverview,'north')).data.totals.eligible,northA.attributed);
+ const [first, panels]=await Promise.all(['totals','panels'].map(phase=>request(octoberOverview+'&overviewPhase='+phase)));
+ assert.match(first.data.publication,/^[a-f0-9]{64}$/);
+ assert.equal(panels.data.publication,first.data.publication);
+ assert.equal(first.data.totals.total,overview.totals.total);
+ assert.equal(panels.data.totals.eligible,overview.totals.eligible);
+ assert.deepEqual(panels.data.focusCards.map(card=>card.territory),['sud','nord_a','nord_b']);
+ assert.deepEqual(panels.data.focusCards.find(card=>card.territory==='nord_a'),northA);
+ const teamOverview=(await request(octoberOverview+'&overviewPhase=panels','regional')).data;
+ assert.equal(teamOverview.totals.eligible,3);
+ assert.equal(teamOverview.separateFocusScope,true);
+ assert.equal(teamOverview.focusCards,undefined);
+ const regionalCards=(await request(octoberOverview+'&overviewPhase=cards','regional')).data;
+ assert.equal(regionalCards.publication,teamOverview.publication);
+ const teamCards=regionalCards.focusCards;
+ assert.deepEqual(teamCards.map(card=>card.territory),['sud']);
+ assert.equal(teamCards[0].regionalDetails,false);
+ const ownTeam=(await request(octoberOverview+'&managerId=regional&overviewPhase=panels','regional')).data;
+ assert.deepEqual(ownTeam.focusCards,teamCards);
+ const agentCards=(await request(octoberOverview+'&overviewPhase=panels','south')).data.focusCards;
+ assert.deepEqual(agentCards,[(await request(focusPath,'south')).data.focus]);
+ assert.equal((await request(octoberOverview+'&overviewPhase=cards&managerId=manager','south')).status,403);
  const simultaneous = await Promise.all(Array.from({length:16},()=>request(octoberOverview)));
  assert(simultaneous.every(r=>r.status===200&&r.data.totals.eligible===3),'simultaneous overview readers share a complete certified result');
  const multipleSelections = await Promise.all(Array.from({length:10},(_,index)=>

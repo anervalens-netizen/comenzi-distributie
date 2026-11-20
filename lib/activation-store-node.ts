@@ -1,7 +1,8 @@
 import {vodafoneFocusWorkbook} from './vodafone-focus-export';
 import {readFocusSlips} from './vodafone-focus-documents-node';
-import {vodafoneFocusReport} from './vodafone-focus-node';
-import {applyVodafoneFocusOverview} from './vodafone-focus-overview';
+import {selectFocusSource, vodafoneFocusReport} from './vodafone-focus-node';
+import {applyVodafoneFocusOverview,readFocusSummaries} from './vodafone-focus-overview';
+import {activationPublicationVersion} from './activation-publication-node';
 import {distributionReport} from './activation-distribution-node';
 import {digiOperatorReported} from './digi-operator-source';
 import {activationFactsVersion} from './activation-semantics';
@@ -11,6 +12,8 @@ import {resolve,dirname} from 'node:path';
 import {existsSync,lstatSync,realpathSync} from 'node:fs';
 import {emptyActivationCounts,type ActivationCounts,type ActivationReport,type ActivationProvider} from './activation-types';
 
+// Concurrent read-only opens can briefly contend during native SQLite WAL recovery.
+const readerOptions={readOnly:true,timeout:500};
 type Row={month:string;item_type:string;site:string;count:number;last_date:string|null};
 function add(totals:ActivationCounts,row:Pick<Row,'count'|'item_type'|'site'>){
   totals.total+=row.count;
@@ -27,14 +30,15 @@ export function readActivations(month:string,sites:string[]|null,provider:Activa
   const pointer=resolve(network,'current');
   const pointerInfo=lstatSync(pointer,{throwIfNoEntry:false});
   if(pointerInfo){if(!pointerInfo.isSymbolicLink())throw new Error('Invalid generation pointer');directory=realpathSync(pointer);if(dirname(directory)!==resolve(network,'generations'))throw new Error('Invalid generation location');}
+  if(onOverviewBase||query?.focus||query?.focusSummaries)result.publication=activationPublicationVersion(provider,directory);
   const path=resolve(directory,'activation-report.sqlite');
   if(!existsSync(path))return result;
-  const report=new DatabaseSync(path,{readOnly:true});
+  const report=new DatabaseSync(path,readerOptions);
   let source:DatabaseSync|undefined;
   try{
     const meta=Object.fromEntries(report.prepare('SELECT key,value FROM report_meta').all().map(r=>[String(r.key),String(r.value)]));
     if(!['1','2','3','4'].includes(meta.version))throw new Error('Unsupported activation report');
-    source=new DatabaseSync(resolve(directory,'activations.sqlite'),{readOnly:true});
+    source=new DatabaseSync(resolve(directory,'activations.sqlite'),readerOptions);
     if(query?.focus||query?.focusSummaries?.length)source.exec('BEGIN');
     const schema=String(source.prepare("SELECT value FROM activation_meta WHERE key='schema_version'").get()?.value);
     if(!['2','3'].includes(schema))throw new Error('Unsupported activation ledger');
@@ -59,18 +63,18 @@ export function readActivations(month:string,sites:string[]|null,provider:Activa
         }
         return {...result,available,focus};
       }
-      const scoped=distributionReport(report,result,meta,sites,query);
+      const scoped=query.focusCardsOnly?result:distributionReport(report,result,meta,sites,query,
+        query.progressiveTotals ? onOverviewBase : undefined);
       if(provider==='vodafone'&&query.focusSummaries){
+        if(query.returnFocusCards)scoped.focusCards=[];
         if(!query.focusSummaries.length) return applyVodafoneFocusOverview(scoped,[]);
         if(schema!=='3') return {...scoped,commissionCoverage:'missing'};
-        // The ordinary totals are ready before matching the official Focus source.
-        onOverviewBase?.({...scoped,commissionCoverage:'unavailable'});
-        const labels=focusLabels(),slips=readFocusSlips();
-        const summaries=query.focusSummaries.flatMap(focus=>{
-          const summary=vodafoneFocusReport(source!,labels,sites,{...query,focus},focusGeneration,slips);
-          return summary?[summary]:[];
-        });
-        return applyVodafoneFocusOverview(scoped,summaries);
+        // Ordinary totals leave the worker before commercial attribution begins.
+        if(!query.focusCardsOnly)onOverviewBase?.({...scoped,commissionCoverage:'unavailable'});
+        const labels=focusLabels(),slips=readFocusSlips(),sourceFacts=selectFocusSource(source,query.months);
+        return readFocusSummaries(scoped,query.focusSummaries,
+          focus=>vodafoneFocusReport(source!,labels,sites,{...query,focus},focusGeneration,slips,sourceFacts),
+          !!query.returnFocusCards,!!query.focusCardsOnly);
       }
       if(provider==='digi'){
         for(const entry of scoped.monthly||[])if(entry.reported)entry.source='internal';
@@ -153,8 +157,11 @@ export function readActivations(month:string,sites:string[]|null,provider:Activa
   }finally{source?.close();report.close();}
 }
 
+export {activationPublicationVersion};
 export {verifySim} from './sim-verification-node';
 
-export {readVodafoneFocus} from './vodafone-focus-runtime-node';
+export {readDigiOverview,readVodafoneFocus} from './vodafone-focus-runtime-node';
 
 export {readVodafoneBonusAsync} from './vodafone-bonus-runtime-node';
+
+export {readCombinedActivationPartners} from './activation-partners-runtime-node';

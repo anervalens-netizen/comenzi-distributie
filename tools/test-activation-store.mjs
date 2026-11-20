@@ -4,6 +4,8 @@ import {DatabaseSync} from 'node:sqlite';
 import {mkdtempSync,mkdirSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
+import {once} from 'node:events';
+import {Worker} from 'node:worker_threads';
 async function load(path){const r=await build({entryPoints:[path],bundle:true,platform:'node',format:'esm',write:false});return import('data:text/javascript;base64,'+Buffer.from(r.outputFiles[0].text).toString('base64'));}
 const folder=mkdtempSync(join(tmpdir(),'activations-test-'));process.env.MOBIUP_ACTIVATIONS_DIR=folder;
 const {readActivations}=await load('lib/activation-store-node.ts'),{canViewActivations}=await load('lib/activation-access.ts');
@@ -16,6 +18,27 @@ try{
  const source=new DatabaseSync(folder+'/activations.sqlite');source.exec("CREATE TABLE activation_meta(key,value); INSERT INTO activation_meta VALUES('schema_version','2');CREATE TABLE activation_imports(sha256,operator,row_count,parser_version,status);INSERT INTO activation_imports VALUES('hash','example',5,2,'complete');");
  const report=new DatabaseSync(folder+'/activation-report.sqlite');report.exec("CREATE TABLE report_meta(key,value);CREATE TABLE monthly(month,item_type,site,count,last_date);CREATE TABLE sites(site,label);INSERT INTO report_meta VALUES('version','1'),('importedAt','2026-10-16');INSERT INTO sites VALUES('A','Example A'),('B','Example B');INSERT INTO monthly VALUES('2026-10','SIM','A',10,'2026-10-13'),('2026-10','TELSIM','A',2,'2026-10-12'),('2026-10','SIM','B',20,'2026-10-13'),('2026-10','SIM','',3,'2026-10-13'),('2024-01','SIM','A',7,'2024-01-31');");report.prepare('INSERT INTO report_meta VALUES(?,?)').run('sourceImports',JSON.stringify([['hash','example',5,2]]));
  const all=readActivations('2026-10',null);assert.equal(all.totals.total,35);assert.equal(all.totals.unassigned,3);assert.equal(all.sites.reduce((n,r)=>n+r.total,0),35);
+ // A separate connection holds a real SQLite lock across the start of the read.
+ // Transient contention must preserve the report; a persistent lock must still fail.
+ for(const file of ['activation-report.sqlite','activations.sqlite']){
+   const locker=new Worker(`
+     const {parentPort,workerData}=require('node:worker_threads');
+     const {DatabaseSync}=require('node:sqlite');
+     const db=new DatabaseSync(workerData);
+     db.exec('BEGIN EXCLUSIVE');
+     parentPort.postMessage('locked');
+     parentPort.once('message',()=>setTimeout(()=>{db.exec('ROLLBACK');db.close();},100));
+   `,{eval:true,workerData:join(folder,file)});
+   try{
+     assert.deepEqual(await once(locker,'message'),['locked']);
+     locker.postMessage('release shortly');
+     assert.deepEqual(readActivations('2026-10',null),all);
+   }finally{await locker.terminate();}
+ }
+ source.exec('BEGIN EXCLUSIVE');
+ try{
+   assert.throws(()=>readActivations('2026-10',null),error=>(error.errcode&255)===5,'persistent contention remains an error');
+ }finally{source.exec('ROLLBACK');}
  const own=readActivations('2026-10',['A']);assert.equal(own.totals.total,12);assert.equal(own.totals.unassigned,0);assert.equal(own.sites.length,1);assert.equal(own.history.length,2);assert(!JSON.stringify(own).includes('Example B'));
  assert.equal(readActivations('2026-10',[]).totals.total,0);assert.equal(readActivations('2024-01',['A']).totals.total,7);
  assert.equal(readActivations('2026-10',null,'digi').available,false,'Digi has a separate database');

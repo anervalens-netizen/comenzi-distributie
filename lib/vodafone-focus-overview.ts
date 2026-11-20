@@ -1,5 +1,5 @@
 import {emptyActivationCounts, type ActivationReport} from './activation-types';
-import type {FocusReport} from './vodafone-focus';
+import type {FocusQuery,FocusReport} from './vodafone-focus';
 
 /** Apply the same certified attribution to the general card and its monthly and TR views. */
 export function applyVodafoneFocusOverview(report: ActivationReport, reports: FocusReport[]) {
@@ -30,4 +30,25 @@ export function applyVodafoneFocusOverview(report: ActivationReport, reports: Fo
   report.history = [...history.values()].sort((a, b) => b.month.localeCompare(a.month));
   for (const month of report.monthly ?? []) month.counts.eligible = monthly.get(month.month);
   return report;
+}
+
+/** A source error in one territory must not erase the independently valid cards. */
+export function readFocusSummaries(
+  report:ActivationReport, queries:FocusQuery[], read:(focus:FocusQuery)=>FocusReport|undefined,
+  includeCards:boolean, cardsOnly:boolean,
+):ActivationReport {
+  const summaries:FocusReport[]=[], failed:FocusReport['territory'][]=[];
+  for(const focus of queries){
+    try{
+      const summary=read(focus);
+      if(summary)summaries.push(summary);
+    }catch{failed.push(focus.territory);}
+  }
+  const result=cardsOnly?report:applyVodafoneFocusOverview(report,summaries);
+  if(failed.length){
+    result.commissionCoverage=summaries.some(summary=>summary.months.some(month=>month.coveredThrough))?'partial':'unavailable';
+    if(includeCards)result.focusUnavailable=failed;
+  }
+  if(includeCards)result.focusCards=summaries;
+  return result;
 }

@@ -3,9 +3,10 @@ import type {ActivationPartner} from './activation-types';
 export const activationPartnerSortKeys=['label','vodafone','digi','total','recentToday','lastDate'] as const;
 export type ActivationPartnerSort=typeof activationPartnerSortKeys[number];
 export type ActivationSortDirection='asc'|'desc';
+const romanianLabels = new Intl.Collator('ro',{sensitivity:'base'});
 export function compareActivationPartners(a:ActivationPartner&{vodafone?:number;digi?:number},b:ActivationPartner&{vodafone?:number;digi?:number},key:ActivationPartnerSort,direction:ActivationSortDirection){
  const sign=direction==='asc'?1:-1;
- const value=key==='label'?a.label.localeCompare(b.label,'ro',{sensitivity:'base'}):key==='lastDate'?(a.lastDate||'').localeCompare(b.lastDate||''):Number(a[key]||0)-Number(b[key]||0);
+ const value=key==='label'?romanianLabels.compare(a.label,b.label):key==='lastDate'?(a.lastDate||'').localeCompare(b.lastDate||''):Number(a[key]||0)-Number(b[key]||0);
  return sign*value||a.key.localeCompare(b.key);
 }
 

@@ -1,10 +1,15 @@
 import assert from 'node:assert/strict';
+import {mkdirSync,mkdtempSync,readFileSync,renameSync,rmSync,symlinkSync,writeFileSync} from 'node:fs';
+import {join} from 'node:path';
+import {tmpdir} from 'node:os';
 import {DatabaseSync} from 'node:sqlite';
 import {build} from 'esbuild';
 
 // Exercise activationReport's actual SQL with synthetic SQLite data. Only its
 // database adapter and the unrelated activation ledger reader are substituted.
-const database=new DatabaseSync(':memory:'),queries=[];
+const initialDirectory=process.cwd(),temporary=mkdtempSync(join(tmpdir(),'activation-portfolio-'));
+const database=new DatabaseSync(join(temporary,'mobiup.sqlite')),queries=[];
+database.exec('PRAGMA journal_mode=WAL');
 const fixture={
   database,
   prepare(sql){
@@ -17,7 +22,7 @@ const fixture={
   },
 };
 globalThis.__activationPortfolioFixture=fixture;
-const environmentKeys=['MOBIUP_ACTIVATIONS_PILOT_MANAGER_ID','MOBIUP_ACTIVATIONS_PILOT_AGENT_ID','MOBIUP_ACTIVATIONS_PILOT_ADDITIONAL_MANAGER_IDS','MOBIUP_ACTIVATIONS_PILOT_ADDITIONAL_AGENT_IDS','MOBIUP_ACTIVATIONS_VODAFONE_ONLY_MANAGER_IDS'];
+const environmentKeys=['MOBIUP_DATA_DIR','MOBIUP_ACTIVATIONS_DIR','MOBIUP_ACTIVATIONS_PILOT_MANAGER_ID','MOBIUP_ACTIVATIONS_PILOT_AGENT_ID','MOBIUP_ACTIVATIONS_PILOT_ADDITIONAL_MANAGER_IDS','MOBIUP_ACTIVATIONS_PILOT_ADDITIONAL_AGENT_IDS','MOBIUP_ACTIVATIONS_VODAFONE_ONLY_MANAGER_IDS'];
 const previousEnvironment=Object.fromEntries(environmentKeys.map(key=>[key,process.env[key]]));
 try{
   const bundled=await build({entryPoints:['lib/activation-api.ts'],bundle:true,platform:'node',format:'esm',write:false,plugins:[{
@@ -26,7 +31,22 @@ try{
       build.onResolve({filter:/^(?:\.\/server|#mobiup-activation-store)$/},({path})=>({path,namespace:'synthetic-activation'}));
       build.onLoad({filter:/.*/,namespace:'synthetic-activation'},({path})=>({contents:path==='#mobiup-activation-store'
         ?`import {activationPartnerView} from '${process.cwd()}/lib/activation-partners-node.ts';
-          export async function readVodafoneFocus(){return globalThis.__activationPortfolioFixture.focusRead();}
+          import {activationPublicationVersion} from '${process.cwd()}/lib/activation-publication-node.ts';
+          export {activationPublicationVersion};
+          export async function readDigiOverview(){return {publication:activationPublicationVersion('digi'),...await globalThis.__activationPortfolioFixture.digiOverview()};}
+          import {combinePartnerReports} from '${process.cwd()}/lib/combined-activation-partners.ts';
+          import {portfolioSelection,portfolioPoint} from '${process.cwd()}/lib/activation-portfolio.ts';
+          import {readCombinedActivationPartners as workerRead} from '${process.cwd()}/lib/activation-partners-runtime-node.ts';
+          export async function readCombinedActivationPartners(input,page){
+            const fixture=globalThis.__activationPortfolioFixture;
+            if(fixture.worker){fixture.beforeWorker?.();return workerRead(input,page);}
+            const selection=portfolioSelection(input.scope);
+            const all=combinePartnerReports(input,fixture.database.prepare(selection.sql).all(...selection.args).map(portfolioPoint),readActivations);
+            const {rows}=all.partners;
+            if(fixture.duringRead)fixture.duringRead();
+            return {...all,partners:{...all.partners,rows:rows.slice(page*50,(page+1)*50),page,hasMore:(page+1)*50<rows.length}};
+          }
+          export async function readVodafoneFocus(){return {publication:activationPublicationVersion('vodafone'),...await globalThis.__activationPortfolioFixture.focusRead()};}
           export function readActivations(month,sites,provider,query){const fixture=globalThis.__activationPortfolioFixture;
             if(fixture.ledger){
               const report={provider,latestDate:query.todayWindow.to};
@@ -37,6 +57,7 @@ try{
             return {month,sites,provider,portfolio:query?.portfolio,portfolioRevision:query?.portfolioRevision,partners:{rows:fixture.partnerRows?.[provider]||[]}};}`
         :`import {createHash} from 'node:crypto';
           export const db=()=>globalThis.__activationPortfolioFixture;
+          export class AppError extends Error {constructor(status,message,currentRevision){super(message);Object.assign(this,{status,currentRevision});}}
           export function fail(status,message){throw Object.assign(new Error(message),{status});}
           export const isGlobalManager=user=>user.role==='manager'&&user.managerScope==='global';
           export const sha256=value=>createHash('sha256').update(value).digest('hex');
@@ -73,17 +94,54 @@ try{
   customer('unknown','WU',['WU']);customer('manager-site','WM',['WM']);
   customer('numeric-json','42',[42]);customer('numeric-text','42',['42']);
   customer('unassigned','missing',['missing']);
+  database.exec(readFileSync('drizzle/0015_activation_portfolio_memberships.sql','utf8'));
+  database.exec('CREATE TABLE crm_directory_revision(id INTEGER PRIMARY KEY, revision INTEGER);INSERT INTO crm_directory_revision VALUES(1,1);');
+  customer('replaced','WN',['WN']);
+  database.prepare('INSERT OR REPLACE INTO customers VALUES(?,?,?,1)').run('replaced','WS',JSON.stringify({warehouseIds:['WS']}));
+  assert.deepEqual(database.prepare("SELECT warehouse_id FROM activation_portfolio_memberships WHERE customer_id='replaced'").all().map(r=>r.warehouse_id),['WS']);
+  database.prepare("UPDATE customers SET active=0 WHERE id='replaced'").run();
+  assert.equal(database.prepare("SELECT COUNT(*) n FROM activation_portfolio_memberships WHERE customer_id='replaced'").get().n,0);
+  database.exec("DELETE FROM customers WHERE id='replaced'");
   process.env.MOBIUP_ACTIVATIONS_PILOT_MANAGER_ID='global';
   process.env.MOBIUP_ACTIVATIONS_PILOT_ADDITIONAL_MANAGER_IDS='regional';
   process.env.MOBIUP_ACTIVATIONS_PILOT_AGENT_ID='north';
   process.env.MOBIUP_ACTIVATIONS_PILOT_ADDITIONAL_AGENT_IDS='south,nonexclusive,unknown,numeric';
   const user=id=>{const row=database.prepare('SELECT * FROM users WHERE id=?').get(id);return {id,role:row.role,active:row.active,warehouseId:row.warehouse_id,siteCode:row.site_code,managerScope:row.manager_scope};};
+  const digiParams=new URLSearchParams({provider:'digi',month:'2026-10'});
+  fixture.digiOverview=async()=>({provider:'digi',available:true});
+  assert.equal((await activationReport(user('regional'),digiParams,{revalidateFocus:async()=>user('regional')})).provider,'digi');
+  await assert.rejects(()=>activationReport(user('regional'),digiParams,{
+    revalidateFocus:async()=>user('global'),
+  }),error=>error.status===409);
   const focusParams=new URLSearchParams({month:'2026-10',view:'focus'});
   fixture.focusRead=async()=>({provider:'vodafone',focus:{revision:'synthetic'}});
   assert.equal((await activationReport(user('south'),focusParams,{revalidateFocus:async()=>user('south')})).focus.revision,'synthetic');
   await assert.rejects(()=>activationReport(user('south'),focusParams,{revalidateFocus:async()=>{
     throw Object.assign(new Error('Synthetic expired session'),{status:401});
   }}), error=>error.status===401);
+  // Publish between the worker result and the final session/scope check. Each phase must
+  // reject the old source even when the user, permissions and selection remain identical.
+  const sourceRoot=join(temporary,'publication');
+  process.env.MOBIUP_ACTIVATIONS_DIR=sourceRoot;
+  for(const provider of ['vodafone','digi']){
+    const store=provider==='vodafone'?sourceRoot:join(sourceRoot,'digi');
+    for(const version of ['one','two']){
+      const dir=join(store,'generations',version);mkdirSync(dir,{recursive:true});
+      for(const file of ['activation-report.sqlite','activations.sqlite'])writeFileSync(join(dir,file),version);
+    }
+    const publish=version=>{symlinkSync('generations/'+version,join(store,'next'));renameSync(join(store,'next'),join(store,'current'));};
+    const params=new URLSearchParams({provider,month:'2026-10'});
+    for(const phase of provider==='vodafone'?['totals','panels','cards']:[undefined]){
+      publish('one');
+      const opts={overviewPhase:phase,returnFocusCards:provider==='vodafone',revalidateFocus:async()=>user('global')};
+      const first=await activationReport(user('global'),params,opts);
+      await assert.rejects(()=>activationReport(user('global'),params,{...opts,revalidateFocus:async()=>{
+        publish('two');return user('global');
+      }}),error=>error.status===409&&/^[a-f0-9]{64}$/.test(error.currentRevision));
+      const latest=await activationReport(user('global'),params,opts);
+      assert.notEqual(latest.publication,first.publication);
+    }
+  }
   const northFocus=new URLSearchParams({month:'2026-10',view:'focus',focusTerritory:'nord_a'});
   fixture.focusRead=async()=>{
     database.exec("DELETE FROM manager_agents WHERE manager_id='regional' AND agent_id='north'");
@@ -92,16 +150,17 @@ try{
   await assert.rejects(()=>activationReport(user('regional'),northFocus,{revalidateFocus:async()=>user('regional')}),error=>error.status===409);
   database.exec("INSERT INTO manager_agents VALUES('regional','north')");
   delete fixture.focusRead;
-  const baseline=`EXISTS(SELECT 1 FROM users u JOIN json_each(COALESCE(json_extract(c.data,'$.warehouseIds'),json_array(c.warehouse_id))) w ON w.value=u.warehouse_id WHERE u.role='agent' AND u.active=1 AND UPPER(TRIM(u.site_code)) IN (SELECT value FROM json_each(?)))`;
   async function read(id,filters,expected){
     queries.length=0;
     const report=await activationReport(user(id),new URLSearchParams({month:'2026-10',view:'partners',...filters}));
     assert.deepEqual(report.portfolio.map(row=>row.id),[...expected].sort((a,b)=>a<b?-1:a>b?1:0),id+' '+JSON.stringify(filters));
-    const query=queries.find(query=>query.sql.startsWith('SELECT c.id,c.data FROM customers c'));
-    assert(query,'the real portfolio query executed');
-    const where=query.sql.lastIndexOf(' AND EXISTS(');
-    const original=query.sql.slice(0,where)+' AND '+baseline+' ORDER BY c.id';
-    assert.deepEqual(database.prepare(query.sql).all(...query.args),database.prepare(original).all(...query.args),'complete source-row parity with the previous membership semantics');
+    const query=queries.find(query=>query.sql.includes('FROM activation_portfolio_memberships'));
+    assert(query,'the real indexed portfolio query executed');
+    const [selected,owned]=query.args.map(JSON.parse);
+    const byWarehouse="SELECT 1 FROM json_each(COALESCE(json_extract(c.data,'$.warehouseIds'),json_array(c.warehouse_id))) w WHERE w.value IN (SELECT value FROM json_each(?))";
+    const oldRows=database.prepare('SELECT c.id FROM customers c WHERE c.active=1 AND EXISTS('+byWarehouse+')'+(owned?' AND EXISTS('+byWarehouse+')':'')+' ORDER BY c.id')
+      .all(JSON.stringify(selected),...(owned?[JSON.stringify(owned)]:[])).map(r=>r.id);
+    assert.deepEqual(report.portfolio.map(r=>r.id),oldRows,'indexed lookup retains JSON membership semantics');
     return {report,query};
   }
   const north=['north','shared','fallback','null'];
@@ -135,12 +194,9 @@ try{
   // Bound the query shape rather than a hardware-dependent millisecond limit:
   // the roster scan must belong to an uncorrelated list computed once per read.
   const {query}=await read('global',{},all);
-  const plan=database.prepare('EXPLAIN QUERY PLAN '+query.sql).all(...query.args),byId=new Map(plan.map(row=>[row.id,row]));
-  const roster=plan.filter(row=>row.detail==='SCAN u');
-  assert.equal(roster.length,1,'one permitted-warehouse roster scan');
-  const ancestors=[];for(let row=byId.get(roster[0].parent);row;row=byId.get(row.parent))ancestors.push(row.detail);
-  assert(ancestors.some(detail=>detail.startsWith('LIST SUBQUERY')),'roster is materialized as an uncorrelated membership list: '+JSON.stringify(plan));
-  assert(!ancestors.some(detail=>detail.includes('CORRELATED')),'roster is not scanned again for each customer');
+  const plan=database.prepare('EXPLAIN QUERY PLAN '+query.sql).all(...query.args).map(row=>row.detail);
+  assert(plan.some(detail=>detail.includes('SEARCH activation_portfolio_memberships USING PRIMARY KEY (warehouse_id=?)')),JSON.stringify(plan));
+  assert(!plan.some(detail=>detail.startsWith('SCAN c')),JSON.stringify(plan));
   process.env.MOBIUP_ACTIVATIONS_VODAFONE_ONLY_MANAGER_IDS='regional';
   const combined=id=>activationReport(user(id),new URLSearchParams({provider:'both',view:'partners',month:'2026-10'}));
   assert.equal((await combined('regional')).showDigi,false);
@@ -217,11 +273,45 @@ try{
     assert.equal(result.partners.total,103);assert.equal(result.partners.rows.length,0);assert.equal(result.partners.hasMore,false);
   }
   for(const page of ['-1','1.5','1000000','abc'])await assert.rejects(()=>report({page}),e=>e.status===400);
+  fixture.duringRead=()=>database.prepare('UPDATE crm_directory_revision SET revision=revision+1 WHERE id=1').run();
+  await assert.rejects(()=>report({q:'page-'}),error=>error.status===409,'a concurrent change invalidates an in-flight result');
+  delete fixture.duringRead;
   const revision=(await report({q:'page-'})).revision;
   await assert.rejects(()=>report({q:'page-',sort:'label',revision}),e=>e.status===409);
+  // Exercise the production worker wire. Only the two external operator
+  // ledgers are substituted; authorization, CRM snapshots and pagination are real.
+  await build({entryPoints:['lib/activation-partners-worker.ts'],outfile:join(temporary,'activation-partners-worker.mjs'),
+    bundle:true,platform:'node',format:'esm',plugins:[{name:'synthetic-operators',setup(build){
+      build.onResolve({filter:/^\.\/activation-store-node$/},()=>({path:'operators',namespace:'fixture'}));
+      build.onLoad({filter:/.*/,namespace:'fixture'},()=>({contents:
+        'export function readActivations(month,sites,provider,query){return {available:true,revision:query.portfolioRevision,partners:{rows:[]}}}'}));
+    }}]});
+  process.env.MOBIUP_DATA_DIR=temporary;process.env.MOBIUP_ACTIVATIONS_DIR=temporary;
+  process.chdir(temporary);fixture.worker=true;
+  const first=await report({});
+  assert(first.partners.hasMore,'the worker served a multi-page portfolio');
+  const touch=()=>database.exec('UPDATE crm_directory_revision SET revision=revision+1 WHERE id=1');
+  let attempts=0;
+  fixture.beforeWorker=()=>{attempts++;touch();};
+  await assert.rejects(()=>report({page:'1',revision:first.revision}),e=>e.status===409);
+  assert.equal(attempts,1,'a pinned page must not restart on a later snapshot');
+  attempts=0;
+  fixture.beforeWorker=()=>{if(++attempts===1)touch();};
+  assert.equal((await report({})).partners.total,first.partners.total);
+  assert.equal(attempts,2,'a fresh list retries one transient change');
+  attempts=0;
+  fixture.beforeWorker=()=>{attempts++;touch();};
+  await assert.rejects(()=>report({}),e=>e.status===409);
+  assert.equal(attempts,2,'constant writes cannot trigger an unbounded retry');
+  attempts=0;
+  fixture.beforeWorker=()=>{attempts++;database.exec('DROP TABLE activation_portfolio_memberships');};
+  await assert.rejects(()=>report({}),e=>e.status===503);
+  assert.equal(attempts,1,'database failures remain unavailable and are not retried');
+  console.log('PASS: queued partner page invalidation, bounded first-page retry and worker failure status.');
   console.log('PASS: recent-only for either provider, empty points, both providers, source identities, filters, summary counts, sorting, 103 points across pages, page limits and revision.');
   console.log('PASS: activation portfolio scopes, current-window merge, full-list sorting, validated inputs and manager/team-specific Digi presentation.');
 }finally{
-  database.close();delete globalThis.__activationPortfolioFixture;
+  process.chdir(initialDirectory);database.close();rmSync(temporary,{recursive:true,force:true});
+  delete globalThis.__activationPortfolioFixture;
   for(const key of environmentKeys){if(previousEnvironment[key]===undefined)delete process.env[key];else process.env[key]=previousEnvironment[key];}
 }

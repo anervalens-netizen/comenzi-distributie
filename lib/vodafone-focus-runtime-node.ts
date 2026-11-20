@@ -1,9 +1,11 @@
 import {existsSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {Worker} from 'node:worker_threads';
+import {activationPublicationStamp} from './activation-publication-node';
+import {historyFileGeneration} from './history-source-generation';
 import {readActivations} from './activation-store-node';
 import type {ActivationQuery} from './activation-distribution';
-import type {ActivationReport} from './activation-types';
+import type {ActivationProvider, ActivationReport} from './activation-types';
 
 type Lane = {tail: Promise<void>; pending: number};
 type Queue = {lanes: Lane[]; limit: number};
@@ -14,15 +16,17 @@ const pendingCount = (queue: Queue) => queue.lanes.reduce((total, lane) => total
 const detailQueue = createQueue(1, 12);
 const overviewQueue = createQueue(1, 6);
 const baseOverviewQueue = createQueue(3, 24);
-const inFlightOverviews = new Map<string, Promise<ActivationReport>>();
+const digiOverviewQueue = createQueue(2, 12);
+const inFlightDigi = new Map<string, Promise<ActivationReport>>();
+const inFlightOverviews = new Map<string, {totals: Promise<ActivationReport>; complete: Promise<ActivationReport>}>();
 const focusDeadlineMs = 17_000;
 type WorkerMessage = {type: 'overviewBase' | 'report'; report: ActivationReport} | null;
 
-async function runFocus(queue: Queue, month: string, sites: string[] | null, query: ActivationQuery): Promise<ActivationReport> {
+async function runFocus(queue: Queue, month: string, sites: string[] | null, query: ActivationQuery | undefined, onBase?: (report: ActivationReport) => void, provider: ActivationProvider = 'vodafone'): Promise<ActivationReport> {
   const script = ['vodafone-focus-worker.mjs', 'dist/standalone/vodafone-focus-worker.mjs'].map(file => resolve(file)).find(existsSync);
   if (!script && process.env.NODE_ENV === 'development') {
     let partial: ActivationReport | undefined;
-    try { return readActivations(month, sites, 'vodafone', query, base => { partial = base; }); }
+    try { return readActivations(month, sites, provider, query, base => { partial = base; onBase?.(base); }); }
     catch (error) { if (partial) return partial; throw error; }
   }
   if (!script || pendingCount(queue) >= queue.limit) throw new Error('Focus worker unavailable');
@@ -35,7 +39,7 @@ async function runFocus(queue: Queue, month: string, sites: string[] | null, que
   const result = lane.tail.then(() => new Promise<ActivationReport>((accept, reject) => {
     if (expired) { reject(timeoutError); return; }
     const worker = new Worker(script, {
-      workerData: {month, sites, query}, resourceLimits: {maxOldGenerationSizeMb: 224},
+      workerData: {month, sites, query, provider}, resourceLimits: {maxOldGenerationSizeMb: 224},
     });
     let settled = false;
     const finish = (error?: Error, report?: ActivationReport) => {
@@ -45,7 +49,7 @@ async function runFocus(queue: Queue, month: string, sites: string[] | null, que
     };
     abortCalculation = () => finish(timeoutError);
     worker.on('message', (message: WorkerMessage) => {
-      if (message?.type === 'overviewBase') base = message.report;
+      if (message?.type === 'overviewBase') { base = message.report; onBase?.(base); }
       else if (message?.type === 'report') finish(undefined, message.report);
       else finish(new Error('Focus calculation failed'));
     });
@@ -74,36 +78,53 @@ async function runFocus(queue: Queue, month: string, sites: string[] | null, que
   }
 }
 
-function readBusyOverview(month: string, sites: string[] | null, query: ActivationQuery): Promise<ActivationReport> {
+function readBusyOverview(month: string, sites: string[] | null, query: ActivationQuery, onBase: (report: ActivationReport) => void): Promise<ActivationReport> {
   // Start ordinary totals while this selection still has time left. Waiting
   // until Focus expires would leave no budget for a fallback.
-  const ordinary = runFocus(baseOverviewQueue, month, sites, {...query, focusSummaries: []})
+  const ordinary = runFocus(baseOverviewQueue, month, sites, {...query, focusSummaries: []}, onBase)
     .then((report): ActivationReport => ({...report, commissionCoverage: 'unavailable'}));
+  void ordinary.then(onBase, () => {});
   if (pendingCount(overviewQueue) >= overviewQueue.limit) return ordinary;
   const fallback = ordinary.catch(() => undefined);
-  return runFocus(overviewQueue, month, sites, query).catch(async error => {
+  return runFocus(overviewQueue, month, sites, query, onBase).catch(async error => {
     const report = await fallback;
     if (report) return report;
     throw error;
   });
 }
 
-export async function readVodafoneFocus(month: string, sites: string[] | null, query: ActivationQuery): Promise<ActivationReport> {
-  if (!query.focusSummaries) return runFocus(detailQueue, month, sites, query);
-  // Share identical in-flight overview reads only. Each waiter still rechecks
-  // its own session and current scope in activationReport before responding.
-  const key = JSON.stringify([month, sites, query]);
+export async function readVodafoneFocus(month: string, sites: string[] | null, query: ActivationQuery, earlyTotals=false): Promise<ActivationReport> {
+  if (!query.focusSummaries || query.focusCardsOnly) return runFocus(detailQueue, month, sites, query);
+  // Both subscribers share the pinned worker. Each HTTP request revalidates
+  // its own session and authorized scope before releasing either response.
+  const slips = query.focusSummaries.length
+    ? historyFileGeneration(resolve(process.env.MOBIUP_DATA_DIR||'./work/server-data','mobiup.sqlite')) : null;
+  const key = JSON.stringify([month,sites,query,activationPublicationStamp('vodafone'),slips]);
   const pending = inFlightOverviews.get(key);
-  if (pending) return pending;
-  const result = !query.focusSummaries.length
-    ? runFocus(baseOverviewQueue, month, sites, query)
+  if (pending) return earlyTotals ? pending.totals : pending.complete;
+  let publishBase!: (report: ActivationReport) => void;
+  const base = new Promise<ActivationReport>(resolve => { publishBase = resolve; });
+  const complete = (!query.focusSummaries.length
+    ? runFocus(baseOverviewQueue, month, sites, query, publishBase)
     : pendingCount(overviewQueue)
-      ? readBusyOverview(month, sites, query)
-      : runFocus(overviewQueue, month, sites, query);
-  inFlightOverviews.set(key, result);
-  try {
-    return await result;
-  } finally {
-    inFlightOverviews.delete(key);
-  }
+      ? readBusyOverview(month, sites, query, publishBase)
+      : runFocus(overviewQueue, month, sites, query, publishBase))
+    .then(report=>query.returnFocusCards&&report.commissionCoverage==='unavailable'&&!report.focusUnavailable
+      ? {...report,focusUnavailable:query.focusSummaries!.map(focus=>focus.territory)} : report)
+    .finally(() => inFlightOverviews.delete(key));
+  const totals = Promise.race([base, complete]);
+  // A caller may subscribe only to the complete report.
+  void totals.catch(() => {});
+  inFlightOverviews.set(key, {totals, complete});
+  return earlyTotals ? totals : complete;
+}
+
+export function readDigiOverview(month: string, sites: string[] | null, query?: ActivationQuery): Promise<ActivationReport> {
+  const key = JSON.stringify([month,sites,query,activationPublicationStamp('digi')]);
+  const pending = inFlightDigi.get(key);
+  if (pending) return pending;
+  const report = runFocus(digiOverviewQueue, month, sites, query, undefined, 'digi')
+    .finally(() => inFlightDigi.delete(key));
+  inFlightDigi.set(key, report);
+  return report;
 }

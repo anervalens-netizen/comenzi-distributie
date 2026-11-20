@@ -1,7 +1,7 @@
 'use client';
 import {lazy,Suspense,useEffect,useId,useState} from 'react';
 import {RefreshCw} from 'lucide-react';
-import {api,errorMessage} from '@/lib/client-api';
+import {api,ApiError,errorMessage} from '@/lib/client-api';
 import {bucharestMonthKey} from '@/lib/bucharest-month';
 import type {ActivationReport,ActivationProvider} from '@/lib/activation-types';
 import {activationDateLabel} from '@/lib/activation-labels';
@@ -9,6 +9,8 @@ import {OperatorLogo} from './distribution-cards';
 import {MonthlyActivationsDialog} from './monthly-activations';
 import {activationMonthlyPoints,type ActivationTrendMetric} from '@/lib/activation-monthly';
 import {ActivationPartners} from './activation-partners';
+import {focusTerritoryLabels} from '@/lib/vodafone-focus-labels';
+import type {FocusReport} from '@/lib/vodafone-focus';
 import {VodafoneFocusPanel} from './vodafone-focus';
 import './activations.css';
 const VodafoneBonus=lazy(()=>import('./vodafone-bonus').then(module=>({default:module.VodafoneBonus})));
@@ -18,10 +20,80 @@ export function ActivationOperatorCard({userId,query,provider,reload}:{userId:st
  const [trend,setTrend]=useState<{label:string;metric:ActivationTrendMetric}|null>(null),countId=useId(),network=provider==='vodafone'?'Vodafone':'Digi';
  const openTrend=(label:string,metric:ActivationTrendMetric)=>setTrend({label,metric});
  const params=new URLSearchParams(query);params.set('provider',provider);const search=params.toString(),key=userId+'|'+search+'|'+reload;
- const [result,setResult]=useState<{key:string;data:ActivationReport}|null>(null),[error,setError]=useState<{key:string;text:string}|null>(null);
- useEffect(()=>{const c=new AbortController();api<ActivationReport>('activations?'+search,'GET',undefined,c.signal).then(data=>{if(!c.signal.aborted){setResult({key,data});setError(null);}}).catch(e=>{if(!c.signal.aborted)setError({key,text:errorMessage(e)});});return()=>c.abort();},[key,search]);
- const data=result?.key===key?result.data:null,message=error?.key===key?error.text:'';
- const commissionMessage=data?.commissionCoverage==='unavailable'?'calcul indisponibil temporar'
+ const [read,setRead]=useState<{
+   key:string; data?:ActivationReport; complete?:boolean; error?:string;
+   focus?:FocusReport[]; focusError?:string; focusUnavailable?:ActivationReport['focusUnavailable'];
+ }>();
+ useEffect(()=>{
+   let active:AbortController;
+   function load(retried:boolean){
+     const controller=new AbortController();
+     active=controller;
+     const path='activations?'+search;
+     const fetchReport=(phase?:string)=>api<ActivationReport>(path+(phase?'&overviewPhase='+phase:''),'GET',undefined,controller.signal);
+     const update=(fields:Partial<NonNullable<typeof read>>)=>{
+       if(!controller.signal.aborted)setRead(old=>({...(old?.key===key?old:{}),key,...fields}));
+     };
+     let final=false, separateStarted=false, panelError='';
+     let publication:string|null|undefined;
+     function restartPublication() {
+       if(controller.signal.aborted)return;
+       controller.abort();
+       setRead({key,...(retried?{error:'Sursa activărilor s-a actualizat din nou. Reîncarcă activările.'}:{})});
+       if(!retried)load(true);
+     }
+     function samePublication(report:ActivationReport) {
+       if(controller.signal.aborted)return false;
+       const next=report.publication??null;
+       if(publication!==undefined&&publication!==next){restartPublication();return false;}
+       publication=next;
+       return true;
+     }
+     function publicationConflict(error:unknown) {
+       if(error instanceof ApiError&&error.status===409&&typeof error.data==='object'&&error.data!==null&&'currentRevision' in error.data){
+         restartPublication();return true;
+       }
+       return false;
+     }
+     function scopeFailure(error:unknown) {
+       if(publicationConflict(error))return true;
+       if(!(error instanceof ApiError)||![401,403,404,409].includes(error.status))return false;
+       update({error:errorMessage(error),data:undefined,focus:undefined,focusError:undefined,focusUnavailable:undefined});
+       controller.abort();
+       return true;
+     }
+     function accept(data:ActivationReport,complete:boolean){
+       if(final||!samePublication(data))return;
+       final=complete;
+       update({data,complete:complete||!!panelError,error:panelError||undefined,...(!data.separateFocusScope?{focus:data.focusCards,focusUnavailable:data.focusUnavailable}:{})});
+       if(data.separateFocusScope&&!separateStarted){
+         separateStarted=true;
+         void fetchReport('cards').then(cards=>{
+           if(samePublication(cards))update({focus:cards.focusCards,focusUnavailable:cards.focusUnavailable});
+         },error=>{
+           // The restricted Focus request has its own permission scope.
+           if(publicationConflict(error))return;
+           update({focus:undefined,focusUnavailable:undefined,focusError:errorMessage(error)});
+         });
+       }
+     }
+     if(provider==='vodafone'){
+       void fetchReport('totals').then(data=>accept(data,false),error=>{if(!controller.signal.aborted)scopeFailure(error);});
+       void fetchReport('panels').then(data=>accept(data,true),error=>{
+         if(!controller.signal.aborted&&!scopeFailure(error)){
+           panelError=errorMessage(error);
+           update({error:panelError,complete:true});
+         }
+       });
+     }else{
+       void fetchReport().then(data=>accept(data,true),error=>{if(!publicationConflict(error))update({error:errorMessage(error)});});
+     }
+   }
+   load(false);
+   return()=>active.abort();
+ },[key,search,provider]);
+ const current=read?.key===key?read:undefined,data=current?.data,message=!data?current?.error:'';
+ const commissionMessage=!current?.complete&&!current?.error?'se calculează…':current?.error||data?.commissionCoverage==='unavailable'?'calcul indisponibil temporar'
    :data?.commissionCoverage==='outside_scope'?'fără gestiuni eligibile în selecție':'fără sursă Vodafone pentru selecție';
  return <article className="panel distribution-card activation-operator" aria-label={'Activări '+provider}>
   <OperatorLogo provider={provider}/>
@@ -34,7 +106,7 @@ export function ActivationOperatorCard({userId,query,provider,reload}:{userId:st
      <dl className="activation-eligibility"><ActivationMetric network={network} label="Comisionabile" value={data.totals.eligible} onClick={()=>openTrend('Comisionabile','eligible')}/></dl>
      :<p className="activation-source-date">Comisionabile · {commissionMessage}</p>)}
    {data.commissionCoverage==='partial'&&
-     <p className="activation-coverage-warning">Comisionabile · total pentru perioada acoperită de sursa Vodafone. Verifică acoperirea în istoricul lunar.</p>}
+     <p className="activation-coverage-warning">Comisionabile · total parțial pentru datele Vodafone disponibile. Verifică acoperirea pe teritorii și luni.</p>}
    {data.simZero&&<section className="activation-sim-zero"><h3>SIM 0 · distribuite în selecție</h3><dl>{(['distributed','activated','withoutReportedActivation'] as const).map(key=><ActivationMetric key={key} network={network} label={{distributed:'Distribuite',activated:'Activate dintre aceleași SIM-uri',withoutReportedActivation:'Fără activare raportată'}[key]} value={data.simZero![key]} onClick={()=>openTrend({distributed:'Distribuite',activated:'Activate dintre aceleași SIM-uri',withoutReportedActivation:'Fără activare raportată'}[key],`cohort:${key}`)}/>)}</dl><small>La data sursei; nu reprezintă stocul fizic.</small></section>}
    <details className="commerce-details"><summary>Detalii despre sursă</summary><p>Ultima activare: {activationDateLabel(data.latestDate)}. Import: {data.importedAt?new Date(data.importedAt).toLocaleString('ro-RO',{timeZone:'Europe/Bucharest'}):'—'}.</p>{!!data.totals.unassigned&&<p>Agent de verificat: {number(data.totals.unassigned)}. Incluse o singură dată în total.</p>}{!data.operatorReported&&data.reconciliation!==undefined&&data.reconciliation>0&&<p>În afara distribuției TR: {number(data.reconciliation)}. Excluse din totalul distribuției.</p>}</details>
    <details className="commerce-details"><summary>Pe agent și istoric lunar</summary><div className="distribution-table-scroll">
@@ -43,7 +115,9 @@ export function ActivationOperatorCard({userId,query,provider,reload}:{userId:st
    </div></details>
    {trend&&<MonthlyActivationsDialog key={trend.metric} title={trend.label+' · '+network} cohort={trend.metric.startsWith('cohort:')} points={activationMonthlyPoints(data,data.selectedMonths||params.get('months')?.split(',').filter(Boolean)||[data.month],trend.metric)} onClose={()=>setTrend(null)}/>}
   </>}
-  {provider==='vodafone'&&<VodafoneFocusPanel userId={userId} query={search} reload={reload}/>}
+  {provider==='vodafone'&&current?.focusUnavailable?.map(territory=><p key={territory} role="alert">Focus Vodafone {focusTerritoryLabels[territory]} · date indisponibile temporar.</p>)}
+  {provider==='vodafone'&&current?.focusError&&<p role="alert">Focus Vodafone · {current.focusError}</p>}
+  {provider==='vodafone'&&current?.focus&&<VodafoneFocusPanel key={key} query={search} reports={current.focus}/>}
  </article>;
 }
 export function ActivationsPanel({userId,scopeQuery='',scopeLabel='Activările mele',compact=false,embedded=false,distributionConfigured=false,refreshVersion=0,manager=false,onContextChange}:{userId:string;scopeQuery?:string;scopeLabel?:string;compact?:boolean;embedded?:boolean;distributionConfigured?:boolean;refreshVersion?:number;manager?:boolean;onContextChange?:(context:{section:string;period:string})=>void}){

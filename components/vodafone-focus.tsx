@@ -4,28 +4,24 @@ import {useEffect, useRef, useState} from 'react';
 import {api, errorMessage} from '@/lib/client-api';
 import {activationDateLabel} from '@/lib/activation-labels';
 import {focusCategoryLabel, focusCountyLabel, focusKindLabels, focusTerritoryLabels} from '@/lib/vodafone-focus-labels';
-import {focusProjects, focusTerritories, type FocusKind, type FocusReport} from '@/lib/vodafone-focus';
-import type {Territory} from '@/lib/distribution-rules';
+import {type FocusKind, type FocusReport} from '@/lib/vodafone-focus';
 import type {ActivationReport} from '@/lib/activation-types';
 
 const number = (value: number) => value.toLocaleString('ro-RO');
 type Selection = {kind: FocusKind; site?: string; title: string};
 type Read = {key: string; report?: FocusReport; error?: string};
 
-export function VodafoneFocusPanel({query, userId, reload}: {query: string; userId: string; reload: number}) {
-  const params = new URLSearchParams(query);
-  const projects = params.has('projects') ? params.getAll('projects').flatMap(value => value.split(',')) : Object.values(focusProjects);
-  return <>{focusTerritories.filter(territory => projects.includes(focusProjects[territory])).map(territory => {
-    const scoped = new URLSearchParams(params);
-    scoped.set('focusTerritory', territory);
-    const key = JSON.stringify([userId, scoped.toString(), reload]);
-    return <VodafoneFocusSelection key={key} query={scoped.toString()} territory={territory}/>;
+export function VodafoneFocusPanel({query, reports}: {query: string; reports: FocusReport[]}) {
+  return <>{reports.map(report => {
+    const params = new URLSearchParams(query);
+    params.set('focusTerritory', report.territory);
+    return <VodafoneFocusSelection key={report.territory+'|'+report.revision} query={params.toString()} visible={report}/>;
   })}</>;
 }
 
-function VodafoneFocusSelection({query, territory}: {query: string; territory: Territory}) {
+function VodafoneFocusSelection({query, visible}: {query: string; visible: FocusReport}) {
+  const territory = visible.territory;
   const name = focusTerritoryLabels[territory];
-  const [read, setRead] = useState<Read>();
   const [detail, setDetail] = useState<Read>();
   const [selection, setSelection] = useState<Selection>();
   const [page, setPage] = useState(0);
@@ -33,18 +29,6 @@ function VodafoneFocusSelection({query, territory}: {query: string; territory: T
   const [exportError, setExportError] = useState('');
   const exportController = useRef<AbortController | null>(null);
   const heading = useRef<HTMLHeadingElement>(null);
-  const visible = read?.report;
-
-  useEffect(() => {
-    const controller = new AbortController();
-    const params = new URLSearchParams(query);
-    params.set('view', 'focus');
-    void api<ActivationReport>('activations?' + params, 'GET', undefined, controller.signal)
-      .then(result => {if (!controller.signal.aborted) setRead({key: query, report: result.focus});})
-      .catch(error => {if (!controller.signal.aborted) setRead({key: query, error: errorMessage(error)});});
-    return () => controller.abort();
-  }, [query]);
-
   const selectedParams = new URLSearchParams(query);
   selectedParams.set('view', 'focus');
   if (selection) {
@@ -100,8 +84,6 @@ function VodafoneFocusSelection({query, territory}: {query: string; territory: T
     }
   }
 
-  if (read?.error) return <p role="alert">Focus {name} · {read.error}</p>;
-  if (!visible) return null;
   const region = visible.regional;
   const currentDetail = detail?.key === detailKey ? detail : undefined;
   const selectedRows = currentDetail?.report?.detail;
