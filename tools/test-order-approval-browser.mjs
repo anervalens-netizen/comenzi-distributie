@@ -139,6 +139,9 @@ try {
   await evaluate('fixture.failLimits=true');
   await button('TEST-LEGACY','.orders-table');
   await wait("document.querySelector('.cart .order-limit-controls [role=alert]')?.textContent==='Synthetic limits error'",'starting limits failure is visible');
+  assert.equal(await evaluate("document.querySelector('.request-bell').disabled"),true,'Order draft guards notification navigation');
+  await click('.request-bell');
+  assert.equal(await evaluate("!!document.querySelector('.editor-top')&&!document.querySelector('.notification-center')"),true,'Bell leaves the draft editor open');
   await button('Verifică comanda','.cart');
   await wait(finalizedDisabled,'review fails closed before a valid limits response');
   assert.equal(await evaluate("document.querySelector('.review-dialog .order-limit-title')?.textContent.includes('Comanda este în limite')"),false);
@@ -170,8 +173,8 @@ try {
   await evaluate("fixture.switch('manager')");
   await wait("document.querySelector('.profile strong')?.textContent==='Synthetic manager'&&!!document.querySelector('.request-count')",'manager receives approval notice');
   await click('.request-bell');
-  await wait("document.querySelector('.notification-dialog .notification-row strong')?.textContent==='Synthetic order confirmation'",'manager notification is actionable');
-  await button('Deschide','.notification-dialog');
+  await wait("document.querySelector('.notification-center .notification-row strong')?.textContent==='Synthetic order confirmation'",'manager notification is actionable');
+  await button('Deschide','.notification-center');
   await wait("document.querySelector('.order-approvals h1')?.textContent==='Confirmare comandă'&&document.querySelector('.order-limit-violations')?.textContent.includes('11 solicitate')",'notification deep-links to exact snapshot');
   await button('Aprobă versiunea solicitată','.order-approvals');
   await wait("document.querySelector('.order-approval-state')?.textContent==='Confirmare aprobată'",'manager approval reflected');
@@ -184,8 +187,8 @@ try {
   await evaluate("fixture.switch('agent')");
   await wait("document.querySelector('.profile strong')?.textContent==='Synthetic agent'&&!!document.querySelector('.request-count')",'agent receives result');
   await click('.request-bell');
-  await wait("document.querySelector('.notification-dialog .notification-row strong')?.textContent==='Synthetic order confirmation'",'agent sees approval result notification');
-  await button('Deschide','.notification-dialog');
+  await wait("document.querySelector('.notification-center .notification-row strong')?.textContent==='Synthetic order confirmation'",'agent sees approval result notification');
+  await button('Deschide','.notification-center');
   await wait("document.querySelector('.order-approval-state')?.textContent==='Confirmare aprobată'",'agent reads confirmed version');
   assert.equal(await evaluate("[...document.querySelectorAll('.order-approvals button')].some(b=>b.textContent.includes('Aprobă'))"),false,'agent detail has no decision action');
   await button('Deschide comanda','.order-approvals');

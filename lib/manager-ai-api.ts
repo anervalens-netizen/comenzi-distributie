@@ -1,5 +1,5 @@
 import { managerAiReader, managerAiScope } from './manager-ai-data';
-import { defaultManagerAiModel, managerAiModels, type ManagerAiModel, type ManagerAiTurn } from './manager-ai';
+import { defaultManagerAiModel, managerAiModels, managerAiNotConfiguredMessage, type ManagerAiModel, type ManagerAiTurn } from './manager-ai';
 import { runManagerAi } from './manager-ai-provider';
 import { AppError, assertOrigin, fail, readLimited, requireManager, requireUser, response } from './server';
 import { runtimeKind } from './runtime';
@@ -8,9 +8,9 @@ import type {User} from './types';
 const activeTurns = new Set<string>();
 const maxConcurrentTurns = 4;
 
-function credentials() {
+export function managerAiProviderKey() {
   if (runtimeKind !== 'node') return '';
-  return process.env.MOBIUP_MANAGER_AI_OPENAI_API_KEY?.trim() || process.env.OPENAI_API_KEY?.trim() || '';
+  return process.env.MOBIUP_MANAGER_AI_OPENAI_API_KEY?.trim() || '';
 }
 
 function parseInput(body: Record<string,unknown>) {
@@ -42,14 +42,14 @@ export async function managerAi(req:Request,user:User) {
   requireManager(user);
   const params = new URL(req.url).searchParams;
   for (const field of params.keys()) if (!['managerId','agentId'].includes(field)) fail(400,'Filtru necunoscut.');
-  const key = credentials();
+  const key = managerAiProviderKey();
   if (req.method==='GET') {
     await managerAiScope(user,params);
     return response({available:Boolean(key),models:managerAiModels,defaultModel:defaultManagerAiModel});
   }
   if (req.method!=='POST') fail(405,'Metodă indisponibilă.');
   assertOrigin(req);
-  if (!key) fail(503,'Furnizorul OpenAI trebuie configurat pentru această instanță.');
+  if (!key) fail(503,managerAiNotConfiguredMessage);
   const input = await requestData(req), scope = await managerAiScope(user,params);
   if (activeTurns.has(user.id)) fail(409,'O analiză este deja în curs pentru contul tău.');
   if (activeTurns.size>=maxConcurrentTurns) fail(503,'Toate sesiunile de analiză sunt ocupate. Încearcă din nou.');

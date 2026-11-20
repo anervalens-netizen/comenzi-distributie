@@ -33,7 +33,7 @@ const items = {
 };
 const fixture = window.fixture = {
   user:location.search.includes('manager')?manager:agent, requests:[], hold:false, pending:[],
-  badBell:location.search.includes('manager')?null:{}, badCenter:null, badRead:null,
+  badBell:location.search.includes('manager')?null:{}, badCenter:location.search.includes('manager')?null:{}, badRead:null,
   switchToManager() {
     this.user=manager;
     setLocalWorkUserId(manager.id);
@@ -61,7 +61,7 @@ window.fetch = async (input,init={}) => {
   const path=url.pathname.replace('/api/','');
   const owner=new Headers(init.headers).get('X-Operation-User')||fixture.user.id;
   const body=init.body?JSON.parse(init.body):null;
-  fixture.requests.push({path,owner,body});
+  fixture.requests.push({path,owner,body,query:url.search});
   switch (path) {
     case 'auth/session': return json({user:fixture.user});
     case 'bootstrap': return json({user:fixture.user,users:[agent,manager],warehouses:[{id:'w',name:'Synthetic warehouse'}],orders:[],products:[],weekKey:'2026-11-16'});
@@ -125,31 +125,29 @@ try {
   const origin='http://127.0.0.1:'+server.address().port;
   browser=await browserFixture(origin);
   await wait(browser,"!!document.querySelector('.request-bell')",'agent shell renders despite a malformed initial bell response');
+  assert.equal(await browser.evaluate(`[...document.querySelectorAll('.main-nav [role=tab]')].map(tab=>tab.textContent.trim())`).then(tabs=>tabs.includes('Notificări')),false,'Agent notifications are accessed from the header');
+  assert.equal(await browser.evaluate("!!document.querySelector('.manager-ai-trigger')"),false,'Agent has no AI shortcut');
   await click(browser,'.request-bell');
-  await wait(browser,"document.querySelector('.notification-dialog [role=alert]')?.textContent.includes('format invalid')",'malformed bell feed displays a recoverable error');
-  await browser.evaluate("fixture.badBell=null");
-  await button(browser,'Reîncarcă','.notification-dialog');
-  await wait(browser,"document.querySelector('.request-bell')?.getAttribute('aria-label')==='Notificări necitite 2'",'agent bell count recovers after a valid reply');
-  await wait(browser,"document.querySelector('.notification-dialog')?.textContent.includes('Synthetic approved leave')",'recent leave in agent bell');
-  await browser.evaluate("fixture.badBell={items:[null],unread:99,categoryUnread:99,total:1,hasMore:false};window.dispatchEvent(new Event('focus'))");
-  await wait(browser,"document.querySelector('.notification-dialog [role=alert]')?.textContent.includes('format invalid')",'invalid item is rejected');
+  await wait(browser,"document.querySelector('.notification-center h1')?.textContent==='Notificări'",'Agent bell opens full notifications directly');
+  assert.equal(await browser.evaluate("!!document.querySelector('.notification-dialog')"),false,'No intermediate preview');
+  await wait(browser,"document.activeElement?.id==='notification-heading'",'Opening the center moves keyboard focus to its title');
+  await wait(browser,"document.querySelector('.notification-center [role=alert]')?.textContent.includes('format invalid')",'Notification center shows a recoverable error for a malformed feed');
+  await browser.evaluate("fixture.badBell=null;fixture.badCenter=null;window.dispatchEvent(new Event('focus'))");
+  await button(browser,'Reîncarcă','.notification-center .notification-panel');
+  await wait(browser,"document.querySelector('.request-bell')?.getAttribute('aria-label')==='Notificări necitite 2'",'Agent badge recovers after a valid reply');
+  await wait(browser,"document.querySelector('.notification-list strong')?.textContent==='Synthetic approved leave'",'Leave history appears in the full center');
+  await browser.evaluate("fixture.badBell={items:[null],unread:99,categoryUnread:99,total:1,hasMore:false};fixture.badRefreshAfter=fixture.requests.length;window.dispatchEvent(new Event('focus'))");
+  await wait(browser,"fixture.requests.slice(fixture.badRefreshAfter).some(request=>request.query==='?limit=5')",'Malformed badge refresh occurs');
   assert.equal(await browser.evaluate("document.querySelector('.request-count')?.textContent"),'2','Bad refresh keeps the last valid badge');
-  assert.equal(await browser.evaluate("document.querySelector('.notification-dialog .notification-row strong')?.textContent"),'Synthetic approved leave','Bad refresh keeps the last valid recent items');
+  assert.equal(await browser.evaluate("document.querySelector('.notification-list strong')?.textContent"),'Synthetic approved leave','Bad badge refresh leaves the full list alone');
   await browser.evaluate("fixture.badBell=null;fixture.badRead={items:'invalid',unread:0,categoryUnread:0,total:1,hasMore:false}");
-  await button(browser,'Reîncarcă','.notification-dialog');
-  await wait(browser,"!document.querySelector('.notification-dialog [role=alert]')",'valid recent reply clears the error');
   await click(browser,'button[aria-label="Marchează ca citită: Synthetic approved leave"]');
-  await wait(browser,"document.querySelector('.notification-dialog [role=alert]')?.textContent.includes('format invalid')",'bad mark-read response is handled in the bell');
+  await wait(browser,"document.querySelector('.notification-center [role=alert]')?.textContent.includes('format invalid')",'Bad mark-read response is handled in the full center');
   assert.equal(await browser.evaluate("document.querySelector('.request-count')?.textContent"),'2','Bad mark-read reply keeps the previous count');
   await browser.evaluate("fixture.badRead=null");
   await click(browser,'button[aria-label="Marchează ca citită: Synthetic approved leave"]');
-  await wait(browser,"document.querySelector('.request-count')?.textContent==='1'",'mark read in recent list updates agent badge');
-  await browser.evaluate("fixture.badCenter={items:[{title:{invalid:true}}],unread:1,categoryUnread:1,total:1,hasMore:false}");
-  await button(browser,'Vezi toate notificările','.notification-dialog');
-  await wait(browser,"document.querySelector('.notification-center [role=alert]')?.textContent.includes('format invalid')",'all notifications handles a malformed page');
-  await browser.evaluate("fixture.badCenter=null");
-  await button(browser,'Reîncarcă','.notification-center .notification-panel');
-  await wait(browser,"document.querySelector('.notification-center .notification-list')?.children.length===30",'all notifications recovers its paginated history');
+  await wait(browser,"document.querySelector('.request-count')?.textContent==='1'",'Marking a row read updates the agent badge');
+  await wait(browser,"document.querySelector('.notification-center .notification-list')?.children.length===30",'Full center displays its paginated history');
   assert.equal(await browser.evaluate("document.querySelector('.notification-center .notification-list .notification-row-unread strong')?.textContent"),'Synthetic pending leave');
   await button(browser,'Înainte','.notification-pagination');
   await wait(browser,"document.querySelector('.notification-pagination span')?.textContent==='2 / 2'",'history pagination');
@@ -193,18 +191,31 @@ try {
   await wait(browser,'fixture.pending.length>0','old agent response is held before switching accounts');
   await browser.evaluate("fixture.switchToManager()");
   await wait(browser,"document.querySelector('.profile strong')?.textContent==='Synthetic manager'&&document.querySelector('.request-count')?.textContent==='1'",'manager replaces agent account');
+  assert.equal(await browser.evaluate(`!!document.querySelector('.app-header button[aria-label="Agent AI"]')`),true,'Manager AI is a header action');
+  const managerDestinations=await browser.evaluate(`[...document.querySelectorAll('.main-nav [role=tab]')].map(tab=>tab.textContent.trim())`);
+  assert.deepEqual(managerDestinations,['Sinteză','Parteneri','Accesorii','Prepay','Focus','Echipă','Operațiuni','Concedii']);
+  await browser.send('Emulation.setDeviceMetricsOverride',{width:320,height:800,deviceScaleFactor:1,mobile:true});
+  const actions=await browser.evaluate(`[...document.querySelectorAll('.app-header .header-right button')].map(button=>{
+    const bounds=button.getBoundingClientRect();
+    const hit=document.elementFromPoint(bounds.x+bounds.width/2,bounds.y+bounds.height/2);
+    return {label:button.getAttribute('aria-label'),fits:bounds.left>=0&&bounds.right<=innerWidth&&button.contains(hit)};
+  })`);
+  assert.equal(actions.length,5);
+  assert(actions.every(action=>action.fits),JSON.stringify(actions));
   await click(browser,'.request-bell');
-  await wait(browser,"document.querySelector('.notification-dialog')?.textContent.includes('Synthetic legacy partner')",'legacy partner notification is visible to manager');
+  await wait(browser,"document.querySelector('.notification-center')?.textContent.includes('Synthetic legacy partner')",'Manager bell opens full notification history');
   await browser.evaluate("fixture.pending.splice(0).forEach(release=>release())");
   await delay(100);
   assert.equal(await browser.evaluate("document.body.textContent.includes('Synthetic stale account notification')"),false,'late old-account feed cannot overwrite new manager content');
   assert.equal(await browser.evaluate("document.querySelector('.request-count')?.textContent"),'1','old account badge is not restored');
-  await button(browser,'Deschide','.notification-dialog');
+  await button(browser,'Deschide','.notification-center');
   await wait(browser,"fixture.requests.some(request=>request.path==='partner/requests/20000000-0000-0000-0000-000000000001'&&request.owner==='synthetic-manager')",'manager opens exact legacy partner request');
 
   const deepLinkTab=await browser.newTab(origin+'/?notifications=1&manager=1');
   await wait(deepLinkTab,"document.querySelector('.notification-center .notification-list')?.textContent.includes('Synthetic legacy partner')",'device link opens authenticated notification center');
-  console.log('PASS: agent and manager notification navigation, badge, read history, category, pagination, device link, tablet layout, malformed-response recovery and late-response isolation');
+  const partnerLinkTab=await browser.newTab(origin+'/?request=20000000-0000-0000-0000-000000000001&manager=1');
+  await wait(partnerLinkTab,"fixture.requests.some(request=>request.path==='partner/requests/20000000-0000-0000-0000-000000000001')",'Existing direct partner request links still open their matching record');
+  console.log('PASS: agent and manager notification navigation, badge, read history, category, pagination, direct links, tablet layout, malformed-response recovery and late-response isolation');
 } finally {
   await browser?.close();
   server.closeAllConnections();

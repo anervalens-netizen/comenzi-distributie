@@ -9,6 +9,14 @@ export function importAuthorization(req:Request,user:User) {
 }
 export type ImportAuthorization=ReturnType<typeof importAuthorization>;
 
+export function assertManagerSession(connection:DatabaseSync,auth:ImportAuthorization) {
+  const valid=connection.prepare(`SELECT 1 FROM users u JOIN sessions s ON s.user_id=u.id
+    WHERE u.id=? AND u.role='manager' AND u.active=1 AND u.must_change_password=0
+    AND u.profile_revision=? AND u.manager_scope=? AND s.token_hash=? AND s.expires_at>?`)
+    .get(auth.userId,auth.profileVersion,auth.managerScope,auth.tokenHash,Date.now());
+  if(!valid)fail(401,'Sesiunea sau drepturile managerului s-au schimbat. Autentifică-te din nou.');
+}
+
 /** Hold the application writer lock until the separate ledger has committed. */
 export function withImportAuthorization<T>(req:Request,user:User,write:(check:()=>void,connection:DatabaseSync)=>T):T {
   return withCapturedImportAuthorization(importAuthorization(req,user),write);
@@ -19,13 +27,7 @@ export function withCapturedImportAuthorization<T>(auth:ImportAuthorization,writ
   const connection=new DatabaseSync(path,{open:true});
   try {
     connection.exec('PRAGMA busy_timeout=5000; BEGIN IMMEDIATE;');
-    const check=()=>{
-      const valid=connection.prepare(`SELECT 1 FROM users u JOIN sessions s ON s.user_id=u.id
-        WHERE u.id=? AND u.role='manager' AND u.active=1 AND u.must_change_password=0
-        AND u.profile_revision=? AND u.manager_scope=? AND s.token_hash=? AND s.expires_at>?`)
-        .get(auth.userId,auth.profileVersion,auth.managerScope,auth.tokenHash,Date.now());
-      if(!valid)fail(401,'Sesiunea sau drepturile managerului s-au schimbat. Autentifică-te din nou.');
-    };
+    const check=()=>assertManagerSession(connection,auth);
     check();
     return write(check,connection);
   } finally {

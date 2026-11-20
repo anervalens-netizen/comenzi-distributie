@@ -12,6 +12,7 @@ import {vodafoneBonusResponse} from '@/lib/vodafone-bonus-api';
 import {commercialFocus} from '@/lib/commercial-focus-api';
 import {partnerStands} from '@/lib/partner-stands-api';
 import {managerAi} from '@/lib/manager-ai-api';
+import {managerAiConversations} from '@/lib/manager-ai-conversations';
 import {isVodafoneFocusView,isVodafoneOverview} from '@/lib/vodafone-focus-api';
 import {timedResponse} from '@/lib/request-timing';
 import {usageAuth,usagePulse,usageReport} from '@/lib/usage-api';
@@ -359,6 +360,7 @@ async function dispatch(req: Request) {
     requireManager(user);
     return managerAi(req,user);
   }
+  if(path[0]==='manager-ai')return managerAiConversations(req,user,path.slice(1));
   if(path.join('/')==='activations'&&req.method==='GET'){
     const params=new URL(req.url).searchParams,view=params.get('view');
     const focus=isVodafoneFocusView(view);

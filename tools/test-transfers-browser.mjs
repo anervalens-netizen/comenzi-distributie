@@ -48,6 +48,9 @@ export async function testTransferBrowser(origin,cookies){
   await wait(()=>evaluate("document.querySelector('.transfer-start button')&&!document.querySelector('.transfer-start button').disabled"),'Transfer list loaded');await button('Transfer nou');
   await wait(()=>evaluate("document.querySelectorAll('.transfer-product').length>0"),'Product catalog');
   await fill('[aria-label="Gestiunea destinație"]','tb');
+  await wait(()=>evaluate("document.querySelector('.request-bell')?.disabled===true"),'Unsaved transfer guards notification navigation');
+  await click('.request-bell');
+  check(await evaluate("!!document.querySelector('.transfer-editor')&&!document.querySelector('.notification-center')"),'Bell leaves the transfer editor open');
   await click('.transfer-product');await button('Telefoane');await click('.transfer-product');
   const imeiSelector='input[aria-label^="Scanează IMEI1"]';await wait(()=>evaluate(`!!document.querySelector(${JSON.stringify(imeiSelector)})`),'IMEI input');await fill(imeiSelector,'012345678901234');
   await evaluate(`document.querySelector(${JSON.stringify(imeiSelector)}).dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));true`);

@@ -113,6 +113,19 @@ if(typeof window!=='undefined'){
  window.addEventListener(OFFLINE_CACHE_INVALIDATED_EVENT,event=>{const detail=(event as CustomEvent<{prefixes?:string[]}>).detail;for(const prefix of detail?.prefixes||[])invalidateApiReadCache(prefix);});
 }
 
+export async function authenticatedMultipart(path:string,body:FormData,signal:AbortSignal,operationUser:string){
+ const owner=currentLocalWorkUserId(),generation=currentLocalWorkGeneration(),epoch=sessionEpoch;
+ const requestFetch=fetch;
+ const fence=await privateAuthority(owner,generation,epoch);
+ if(owner!==operationUser)throw scopeError();
+ const res=await requestFetch('/api/'+path,{method:'POST',credentials:'same-origin',cache:'no-store',body,signal,headers:{'X-Operation-User':owner}});
+ if(res.status===401&&epoch===sessionEpoch&&owner===currentLocalWorkUserId()&&generation===currentLocalWorkGeneration()){
+  await rejectSession(fence);
+  if(typeof window!=='undefined')window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
+ }
+ await privateAuthority(owner,generation,epoch,fence);
+ return res;
+}
 export async function networkApi<T=Record<string,unknown>>(path: string,method='GET',body?: unknown, signal?: AbortSignal, operationId?:string, operationUser?:string): Promise<T> {
   const requestEpoch=sessionEpoch;
   const fencePromise=sessionFence();
