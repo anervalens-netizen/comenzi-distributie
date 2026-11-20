@@ -38,10 +38,18 @@ export function distributionReport(report:DatabaseSync,base:ActivationReport,met
  // aggregates covering, while retaining every seller/project restriction above.
  if(query.policy!=='manager')clauses.push('activation_visible(county,handset,contradictory)=1');
  const where=clauses.join(' AND '),monthWhere=query.months.length?`month IN (${query.months.map(()=>'?').join(',')})`:'0';
- const dimensions=report.prepare(`SELECT COALESCE(month,'') month,site,item_type,county,handset,contradictory,count,last_date FROM dimension_monthly WHERE ${where} ORDER BY month DESC,site`).all(...args) as Dimension[];
  const newCounts=():ActivationCounts=>({...emptyActivationCounts(),...(countLegacyEligibility?{eligible:0,ownRegion:0,otherRegion:0,unknownRegion:0,...(query.policy==='south'?{}:{ineligible:0,reasons:{}})}:{})});
- const labels=new Map(report.prepare('SELECT site,label FROM sites').all().map(r=>[String(r.site),String(r.label)])),history=new Map<string,ActivationCounts>(),agents=new Map<string,ActivationCounts>();
  const result={...base,available:JSON.parse(meta.sourceImports).some((i:unknown[])=>i[1]===provider),importedAt:meta.importedAt,latestDate:meta.latestDate||null,revision,rulesRevision:rules.revision,selectedMonths:query.months,builtAt:meta.builtAt,totals:newCounts(),history:[],months:[],sites:[]} as ActivationReport;
+ if(query.view==='partners' && query.combinedPartnerRows){
+   // Combined pages use only the authorized detail rows and operator metadata.
+   // Preserve the reference date for older stores lacking a global latest date.
+   const projected=report.prepare(`SELECT MAX(last_date) latest FROM dimension_monthly WHERE ${where} AND month<>''`).get(...args)?.latest;
+   if(projected && (!result.latestDate || String(projected)>result.latestDate))result.latestDate=String(projected);
+   activationPartnerView(report,result,where,args,query);
+   return result;
+ }
+ const dimensions=report.prepare(`SELECT COALESCE(month,'') month,site,item_type,county,handset,contradictory,count,last_date FROM dimension_monthly WHERE ${where} ORDER BY month DESC,site`).all(...args) as Dimension[];
+ const labels=new Map(report.prepare('SELECT site,label FROM sites').all().map(r=>[String(r.site),String(r.label)])),history=new Map<string,ActivationCounts>(),agents=new Map<string,ActivationCounts>();
  for(const row of dimensions){
    if(!row.month)continue;
    const h=history.get(row.month)||newCounts();add(h,row,rules,countLegacyEligibility);history.set(row.month,h);

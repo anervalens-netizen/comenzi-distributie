@@ -1,3 +1,4 @@
+import activationMembershipSchema from '@/drizzle/0015_activation_portfolio_memberships.sql?raw';
 import orderLimitApprovalsSchema from '@/drizzle/0013_order_limit_approvals.sql?raw';
 import managerAiSchema from '@/drizzle/0014_manager_ai_conversations.sql?raw';
 import leaveNotificationsSchema from '@/drizzle/0012_leave_notifications.sql?raw';
@@ -64,7 +65,13 @@ function sqlite() {
     candidate.exec(partnerMapIndex);
     candidate.exec(orderListRevisionSchema);
     candidate.exec('BEGIN IMMEDIATE;');
-    try{candidate.exec(portfolioReadModelSchema);candidate.exec('COMMIT;');}catch(error){candidate.exec('ROLLBACK;');throw error;}
+    try{
+      candidate.exec(portfolioReadModelSchema);
+      if (!candidate.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='activation_portfolio_memberships'").get()) {
+        candidate.exec(activationMembershipSchema);
+      }
+      candidate.exec('COMMIT;');
+    }catch(error){candidate.exec('ROLLBACK;');throw error;}
     verifyDatabase(candidate);
     connection=candidate;
     return candidate;

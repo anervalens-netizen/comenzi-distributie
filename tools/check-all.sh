@@ -52,6 +52,7 @@ node tools/test-manager-ai-chat.mjs
 node tools/test-activation-partners.mjs
 node tools/test-activation-current-window.mjs
 node tools/test-activation-portfolio.mjs
+node tools/test-activation-partners-cache.mjs
 node tools/test-activation-access.mjs
 node tools/test-activation-presentation.mjs
 python3 -W error::ResourceWarning tools/test_activations.py

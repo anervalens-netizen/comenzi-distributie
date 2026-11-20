@@ -3,6 +3,7 @@ import {vodafoneEligibility} from './distribution-rules';
 import type {ActivationQuery} from './activation-distribution';
 import type {ActivationReport,ActivationPartner} from './activation-types';
 import {activationPartnerSummary} from './activation-partner-summary';
+import {portfolioPlaceholder} from './activation-portfolio';
 import {activationTodayWindow} from './activation-partner-sort';
 const start=(asOf:string,days:number)=>new Date(Date.parse(asOf+'T12:00:00Z')-(days-1)*86400000).toISOString().slice(0,10);
 /** Source keys reuse client-sales CIF/franchise conventions; names never join points. */
@@ -39,15 +40,22 @@ export function activationPartnerView(db:DatabaseSync,result:ActivationReport,wh
      points.set(String(r.key),{key:String(r.key),company:String(r.company),clientCode:String(r.clientCode),pointCode:String(r.pointCode),label:kind==='generic'?'Persoane fizice / CLIENTGEN':kind==='unresolved'?'Activări fără punct identificat':p?.name||String(r.label),siteCode:kind==='point'?undefined:String(r.siteCode),portfolioId:p?.id,total:Number(r.total),lastDate:r.lastDate?String(r.lastDate):null,recent:{'7':Number(recent?.r0||0),'14':Number(recent?.r1||0),'30':Number(recent?.r2||0)},kind});
    }
    // Current authorized portfolio points with no selected activations remain visible at the end.
-   for(const p of query.portfolio||[]){
+   const placeholders=query.combinedPartnerRows && !query.q ? [] : query.portfolio||[];
+   for(const p of placeholders){
      if(represented.has(p.id))continue;
-     const key='portfolio:'+p.id;
      if(p.client==='CLIENTGEN')continue;
-     points.set(key,{key,company:'',clientCode:p.client,pointCode:p.codes.length===1?p.codes[0]:'',label:p.name,portfolioId:p.id,total:0,lastDate:null,recent:{'7':0,'14':0,'30':0},kind:'point'});
+     const placeholder=portfolioPlaceholder(p);
+     points.set(placeholder.key,placeholder);
    }
    for(const p of points.values())p.recentToday=todayByKey.get(p.key)||0;
    const q=(query.q||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase();
-   const all=[...points.values()].filter(p=>!q||[p.label,p.clientCode,p.pointCode].join(' ').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().includes(q)).sort((a,b)=>b.total-a.total||a.key.localeCompare(b.key));
+   const all=[...points.values()].filter(p=>!q||[p.label,p.clientCode,p.pointCode].join(' ').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().includes(q));
+   if(query.combinedPartnerRows){
+     // The combined reader sorts after merging operators.
+     result.partners={...activationPartnerSummary(all),rows:all,total:all.length,page:0,hasMore:false,asOf};
+     return;
+   }
+   all.sort((a,b)=>b.total-a.total||a.key.localeCompare(b.key));
    const page=query.page||0;result.partners={...activationPartnerSummary(all),rows:query.allPartners?all:all.slice(page*50,(page+1)*50),total:all.length,page,hasMore:(page+1)*50<all.length,asOf};
    return;
  }

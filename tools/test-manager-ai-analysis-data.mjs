@@ -56,6 +56,7 @@ try {
   });
   const m=await import(pathToFileURL(modulePath));
   sql.exec(readFileSync('drizzle/0000_rare_hardball.sql','utf8'));
+  sql.exec(readFileSync('drizzle/0015_activation_portfolio_memberships.sql','utf8'));
   sql.exec(`ALTER TABLE users ADD COLUMN site_code TEXT;
     ALTER TABLE users ADD COLUMN warehouse_name TEXT;
     ALTER TABLE users ADD COLUMN manager_scope TEXT;

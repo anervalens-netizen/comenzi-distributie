@@ -374,7 +374,7 @@ async function dispatch(req: Request) {
     const sharesFocusScope=(viewer:User)=>viewer.role!=='manager'||isGlobalManager(viewer)||params.get('managerId')===viewer.id;
     const nativeScope=focus||overviewPhase==='cards';
     const returnFocusCards=!!overviewPhase&&(nativeScope||sharesFocusScope(user));
-    const report=await activationReport(nativeScope?user:readUser,params,focus||overview||digiOverview?{
+    const report=await activationReport(nativeScope?user:readUser,params,focus||overview||digiOverview||params.get('provider')==='both'?{
       overviewPhase:overviewPhase||undefined,returnFocusCards,
       revalidateFocus:async()=>{
         const current=await requireUser(req);
