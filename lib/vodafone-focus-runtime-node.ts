@@ -81,7 +81,7 @@ async function runFocus(queue: Queue, month: string, sites: string[] | null, que
 function readBusyOverview(month: string, sites: string[] | null, query: ActivationQuery, onBase: (report: ActivationReport) => void): Promise<ActivationReport> {
   // Start ordinary totals while this selection still has time left. Waiting
   // until Focus expires would leave no budget for a fallback.
-  const ordinary = runFocus(baseOverviewQueue, month, sites, {...query, focusSummaries: []})
+  const ordinary = runFocus(baseOverviewQueue, month, sites, {...query, focusSummaries: []}, onBase)
     .then((report): ActivationReport => ({...report, commissionCoverage: 'unavailable'}));
   void ordinary.then(onBase, () => {});
   if (pendingCount(overviewQueue) >= overviewQueue.limit) return ordinary;
@@ -105,7 +105,7 @@ export async function readVodafoneFocus(month: string, sites: string[] | null, q
   let publishBase!: (report: ActivationReport) => void;
   const base = new Promise<ActivationReport>(resolve => { publishBase = resolve; });
   const complete = (!query.focusSummaries.length
-    ? runFocus(baseOverviewQueue, month, sites, query)
+    ? runFocus(baseOverviewQueue, month, sites, query, publishBase)
     : pendingCount(overviewQueue)
       ? readBusyOverview(month, sites, query, publishBase)
       : runFocus(overviewQueue, month, sites, query, publishBase))

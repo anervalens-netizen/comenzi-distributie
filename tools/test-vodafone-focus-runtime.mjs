@@ -28,10 +28,20 @@ try {
   }
   writeFileSync(join(root, 'vodafone-focus-worker.mjs'), `
     import {parentPort,workerData} from 'node:worker_threads';
-    import {appendFileSync,readFileSync} from 'node:fs';
+    import {appendFileSync,existsSync,readFileSync} from 'node:fs';
     import {join} from 'node:path';
     const {month,query,provider,sites} = workerData;
-    if(month==='publish-generation'){
+    if(month.startsWith('ordinary-phase-')){
+      const waitForRelease=async name=>{
+        while(!existsSync('release-'+name))await new Promise(resolve=>setTimeout(resolve,10));
+      };
+      const core={month,available:true,selectedMonths:['2026-01'],coveredMonths:['2026-01'],
+        totals:{total:50},history:[{month:'2026-01',total:50}],sites:[{site:'TEST',total:50}]};
+      if(query.progressiveTotals)parentPort.postMessage({type:'overviewBase',report:{...core,commissionCoverage:'unavailable'}});
+      await waitForRelease(month);
+      parentPort.postMessage({type:'report',report:{...core,productBreakdown:{zero:10},
+        commissionCoverage:query.focusSummaries.length?'complete':'outside_scope'}});
+    } else if(month==='publish-generation'){
       const store=join(process.env.MOBIUP_ACTIVATIONS_DIR,provider==='digi'?'digi':'');
       const generation=readFileSync(join(store,'current','activation-report.sqlite'),'utf8');
       appendFileSync('opened-'+provider,generation+'\\n');
@@ -85,6 +95,37 @@ try {
   assert.equal(panelsReady, false);
   assert.equal((await phasedPanels).totals.eligible, 20);
   assert.equal(readFileSync('started','utf8').split('\n').filter(line=>line==='staged:focus').length, 1);
+  // Both ordinary lanes must publish authorized totals before optional product work finishes.
+  const hold='ordinary-phase-hold';
+  const occupied=readVodafoneFocus(hold,null,{...overview,progressiveTotals:true});
+  try{
+    for(const [month,focused] of [['ordinary-phase-busy',true],['ordinary-phase-alone',false]]){
+      const query={focusSummaries:focused?[{}]:[],progressiveTotals:true};
+      const totals=readVodafoneFocus(month,null,query,true);
+      const panels=readVodafoneFocus(month,null,query);
+      let completed=false;
+      void panels.then(()=>{completed=true;});
+      const first=await Promise.race([totals,wait(2_000,null)]);
+      assert.ok(first,'ordinary worker should deliver totals before the product query can finish');
+      assert.equal(first.available,true);
+      assert.equal(first.totals.total,50);
+      assert.equal(first.totals.eligible,undefined);
+      assert.equal(first.sites[0].total,50);
+      assert.equal(first.history[0].total,50);
+      assert.deepEqual(first.coveredMonths,first.selectedMonths);
+      assert.equal(first.productBreakdown,undefined);
+      assert.equal(completed,false);
+      writeFileSync('release-'+month,'');
+      if(focused)writeFileSync('release-'+hold,'');
+      const full=await panels;
+      assert.deepEqual(full.totals,first.totals);
+      assert.equal(full.productBreakdown.zero,10);
+      assert.equal(full.commissionCoverage,focused?'complete':'outside_scope');
+    }
+  }finally{
+    for(const month of [hold,'ordinary-phase-busy','ordinary-phase-alone'])writeFileSync('release-'+month,'');
+    await occupied;
+  }
   const fallback = await readVodafoneFocus('failure', null, overview);
   assert.equal(fallback.commissionCoverage, 'unavailable');
   assert.equal(fallback.totals.total, 50);
