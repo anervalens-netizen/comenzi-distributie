@@ -143,17 +143,26 @@ explicit verified `source_at` date. Activation-only changes do not create extra
 quantities. Equal-revision commercial contradictions remain quarantined. Source
 file names and import order never establish precedence. Unknown activation fields
 cannot erase known values; independent operator observations take precedence over
-internal observations for valid supplied fields. The exact Excel leading apostrophe
-text marker is accepted for an 18-digit operator serial and retained in raw evidence.
-Other prefixes and numeric serial cells are refused.
+internal observations for valid supplied fields. Numeric serial cells are refused.
 
 `source_kind=operator` requires an explicit company namespace for Vodafone or
-Digi. Supported inputs are the named Detailed SIM XLSX sheet and a private
-JSON.gz extraction with the same named fields. An optional extracted `serial` must exactly agree with
-SerieText after the explicit text-marker decoding. Operator rows without verified
-TR distribution stay in the manager reconciliation queue. An explicit operator
-serial/date can update retained pre-existing SIM movements through the validated
-19/18-digit relationship; IMEI alone never creates an activation.
+Digi. Each workbook uses its provider's activation sheet and columns.
+
+- Vodafone uses the `Detailed SIM` sheet with `SerieText`, `DATE_OF_ACTIVATION`,
+  `COUNTY_OF_ACTIVATION` and `Paid SIM Category`. `SerieText` is an 18-digit
+  serial. A leading Excel apostrophe is accepted as a text marker and retained
+  in raw evidence. An optional extracted `serial` must agree with the decoded
+  `SerieText`. Attribution uses the validated 19/18-digit commercial relationship.
+- Digi uses the `activari` sheet with `Distribuitor`, `Seria SIM (iccid)` and
+  `Data activare`. The distributor must match the declared company ignoring case.
+  The serial is a 19-digit ICCID stored as text and the date uses ISO format.
+  Attribution uses the exact ICCID and the validated equality between the
+  19-digit `Activat` and `IMEI` values when both appear in a commercial record.
+
+The application also accepts private Vodafone `.json.gz` extracts. The
+low-level importer accepts `.json.gz` extracts using the respective provider's
+fields. Operator rows without verified TR distribution stay in reconciliation.
+An activation requires a reported date in addition to the SIM identifier.
 
 Use `tools/activation_job.py --data-dir /private/network --manifest
 /private/batches.json --rules /private/rules.json` for a complete import/rebuild.
