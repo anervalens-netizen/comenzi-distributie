@@ -8,7 +8,7 @@ import type {ActivationReport} from './activation-types';
 type Queue = {tail: Promise<void>; pending: number; limit: number};
 const detailQueue: Queue = {tail: Promise.resolve(), pending: 0, limit: 12};
 const overviewQueue: Queue = {tail: Promise.resolve(), pending: 0, limit: 6};
-const baseOverviewQueue: Queue = {tail: Promise.resolve(), pending: 0, limit: 12};
+const baseOverviewQueue: Queue = {tail: Promise.resolve(), pending: 0, limit: 24};
 const inFlightOverviews = new Map<string, Promise<ActivationReport>>();
 const focusDeadlineMs = 17_000;
 type WorkerMessage = {type: 'overviewBase' | 'report'; report: ActivationReport} | null;
@@ -68,6 +68,20 @@ async function runFocus(queue: Queue, month: string, sites: string[] | null, que
   }
 }
 
+function readBusyOverview(month: string, sites: string[] | null, query: ActivationQuery): Promise<ActivationReport> {
+  // Start ordinary totals while this selection still has time left. Waiting
+  // until Focus expires would leave no budget for a fallback.
+  const ordinary = runFocus(baseOverviewQueue, month, sites, {...query, focusSummaries: []})
+    .then((report): ActivationReport => ({...report, commissionCoverage: 'unavailable'}));
+  if (overviewQueue.pending >= overviewQueue.limit) return ordinary;
+  const fallback = ordinary.catch(() => undefined);
+  return runFocus(overviewQueue, month, sites, query).catch(async error => {
+    const report = await fallback;
+    if (report) return report;
+    throw error;
+  });
+}
+
 export async function readVodafoneFocus(month: string, sites: string[] | null, query: ActivationQuery): Promise<ActivationReport> {
   if (!query.focusSummaries) return runFocus(detailQueue, month, sites, query);
   // Share identical in-flight overview reads only. Each waiter still rechecks
@@ -75,14 +89,11 @@ export async function readVodafoneFocus(month: string, sites: string[] | null, q
   const key = JSON.stringify([month, sites, query]);
   const pending = inFlightOverviews.get(key);
   if (pending) return pending;
-  const requiresFocus = query.focusSummaries.length > 0;
-  const focusBusy = requiresFocus && overviewQueue.pending >= overviewQueue.limit;
-  // Keep ordinary totals available if the certified calculation queue is full.
-  // This separate lane stays bounded and also runs off the request thread.
-  const result = focusBusy
-    ? runFocus(baseOverviewQueue, month, sites, {...query, focusSummaries: []})
-       .then((report): ActivationReport => ({...report, commissionCoverage: 'unavailable'}))
-    : runFocus(requiresFocus ? overviewQueue : baseOverviewQueue, month, sites, query);
+  const result = !query.focusSummaries.length
+    ? runFocus(baseOverviewQueue, month, sites, query)
+    : overviewQueue.pending
+      ? readBusyOverview(month, sites, query)
+      : runFocus(overviewQueue, month, sites, query);
   inFlightOverviews.set(key, result);
   try {
     return await result;

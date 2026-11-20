@@ -20,13 +20,14 @@ try {
     import {parentPort,workerData} from 'node:worker_threads';
     import {appendFileSync} from 'node:fs';
     const {month,query} = workerData;
-    appendFileSync('started', month+'\\n');
-    if (query.focusSummaries?.length) parentPort.postMessage({
+    const focus = !!query.focusSummaries?.length;
+    appendFileSync('started', month+(focus ? ':focus' : ':ordinary')+'\\n');
+    if (focus) parentPort.postMessage({
       type:'overviewBase',report:{month, totals:{total:50}, commissionCoverage:'unavailable'},
     });
     if (month === 'failure') parentPort.postMessage(null);
-    else if (!month.startsWith('slow') && month !== 'detail') parentPort.postMessage({
-      type:'report',report:{month, totals:{total:50,...(query.focusSummaries?.length ? {eligible:20} : {})}},
+    else if (!(focus && month.startsWith('slow')) && month !== 'detail') parentPort.postMessage({
+      type:'report',report:{month, totals:{total:50,...(focus ? {eligible:20} : {})}},
     });
     else await new Promise(resolve=>setTimeout(resolve,20_000));
   `);
@@ -41,22 +42,24 @@ try {
   const slow = readVodafoneFocus('slow', null, overview);
   const detail = readVodafoneFocus('detail', null, {});
   const rejected = assert.rejects(detail, /timed out/);
-  testDeadlineMs = 100;
-  const queued = assert.rejects(readVodafoneFocus('obsolete', null, overview), /timed out/);
+  testDeadlineMs = 500;
+  const queued = readVodafoneFocus('obsolete', null, overview);
   testDeadlineMs = 1_500;
   // Independently scheduled application work remains responsive during report calculation.
   assert.equal(await Promise.race([wait(25, 'responsive'), slow]), 'responsive');
   assert.equal((await slow).commissionCoverage, 'unavailable');
-  await Promise.all([queued, rejected]);
+  await rejected;
+  assert.equal((await queued).commissionCoverage, 'unavailable');
   assert.equal((await readVodafoneFocus('recovered', null, overview)).totals.eligible, 20);
-  assert.ok(!readFileSync('started', 'utf8').split('\n').includes('obsolete'));
+  assert.ok(!readFileSync('started', 'utf8').split('\n').includes('obsolete:focus'));
 
-  const saturated = Promise.allSettled(Array.from({length:6}, (_, i) => readVodafoneFocus('slow-'+i,null,overview)));
-  const ordinary = await readVodafoneFocus('ordinary', null, overview);
-  assert.equal(ordinary.totals.total, 50);
-  assert.equal(ordinary.totals.eligible, undefined);
-  assert.equal(ordinary.commissionCoverage, 'unavailable');
-  await saturated;
+  testDeadlineMs = 4_000;
+  const saturated = await Promise.all(Array.from({length:20}, (_, i) => readVodafoneFocus('slow-'+i,null,overview)));
+  for (const ordinary of saturated) {
+    assert.equal(ordinary.totals.total, 50);
+    assert.equal(ordinary.totals.eligible, undefined);
+    assert.equal(ordinary.commissionCoverage, 'unavailable');
+  }
   console.log('Vodafone worker returns certified results or the ordinary totals by its deadline and recovers for the next request.');
 } finally {
   globalThis.setTimeout = realTimeout;
