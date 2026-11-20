@@ -30,10 +30,10 @@ export function createSubmissionId(): string {
 }
 
 
-/** Durable execution and local delivery are independent. Absence is never rejection. */
+/** A failed execution may still have durably admitted the user message and its files. */
 export function submissionResult(status: AiSubmissionStatus): AiSubmissionResult {
   if (['unseen', 'unknown'].includes(status.state)) return { outcome: 'unknown' };
-  if (['rejected', 'error', 'interrupted'].includes(status.state)) return { outcome: 'rejected' };
+  if (status.state === 'rejected') return { outcome: 'rejected' };
   return { outcome: 'accepted' };
 }
 

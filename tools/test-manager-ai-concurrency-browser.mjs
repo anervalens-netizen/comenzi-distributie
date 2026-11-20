@@ -22,24 +22,36 @@ const finalA = message('answer-a', 'assistant', 'Final A', 2);
 const userB = message('b', 'user', 'Question B', 3);
 const stoppedB = message('answer-b', 'assistant', 'Partial B saved', 4, 'stopped');
 const status = (id, state, terminal_message_id = null) => ({submission_id:id, state, run_state:state, terminal_message_id});
+const persisted = [];
 const fixture = window.fixture = {reads:[], probes:[], streams:{}, stops:[], newCount:0, settledB:false, chat:null, releaseA:null};
 const api = {
   listAiConversations: async () => existing,
   createAiConversation: async () => { fixture.newCount += 1; return existing[1]; },
   listAiMessages: async (id) => {
     fixture.reads.push(id);
-    return {items:fixture.settledB ? [userA, finalA, userB, stoppedB] : [], hasMore:false};
+    return {items:fixture.settledB ? [userA, finalA, userB, stoppedB, ...persisted] : [], hasMore:false};
   },
   getAiSubmissionStatus: async (id, submissionId) => {
     fixture.probes.push(submissionId);
     if (submissionId === 'a') return new Promise(resolve => {
       fixture.releaseA = () => resolve(status('a', 'complete', 'answer-a'));
     });
-    return fixture.settledB ? status('b', 'stopped', 'answer-b') : status('b', 'running');
+    if (submissionId === 'b') return fixture.settledB ? status('b', 'stopped', 'answer-b') : status('b', 'running');
+    return status(submissionId, submissionId, submissionId === 'error' ? 'provider-error' : null);
   },
   openAiTurnStream: async (id, submission, signal) => new Response(new ReadableStream({
     start(controller) {
-      fixture.streams[submission.submissionId] = {controller, signal};
+      const submissionId = submission.submissionId;
+      fixture.streams[submissionId] = {controller, signal};
+      if (submissionId === 'a' || submissionId === 'b') return;
+      if (submissionId !== 'rejected') {
+        const file = submission.files[0];
+        persisted.push({...message(submissionId, 'user', submission.text, 5 + persisted.length),
+          attachments:[{id:'artifact-'+submissionId, kind:'input', filename:file.name, mimeType:file.type, sizeBytes:file.size}]});
+        if (submissionId === 'error') persisted.push(message('provider-error', 'assistant', 'Provider failed', 5 + persisted.length, 'error'));
+      }
+      // The server stored the message and its attachments before delivery was lost.
+      controller.close();
     },
   })),
   stopAiTurn: async (id, submissionId) => { fixture.stops.push(submissionId); },
@@ -48,9 +60,9 @@ const encoder = new TextEncoder();
 function emit(id, event) {
   fixture.streams[id].controller.enqueue(encoder.encode(JSON.stringify(event)+'\n'));
 }
-fixture.ask = (id) => {
+fixture.ask = (id, files=[]) => {
   const result = fixture.chat.submit({
-    submissionId:id, mode:'send', text:'Question '+id, effort:'high', files:[],
+    submissionId:id, mode:'send', text:'Question '+id, effort:'high', files,
     includeCurrentView:false, currentView:null,
   });
   fixture.admission = result;
@@ -120,7 +132,15 @@ try {
   await delay(150);
   assert.equal(await evaluate(locked), false, 'session controls unlock after durable terminal state');
   assert.deepEqual(await evaluate('[fixture.reads.length, fixture.streams.b.signal.aborted, fixture.chat.messages.at(-1).text]'), [2, true, 'Partial B saved']);
-  console.log('Manager AI turn generation, navigation lock and status-only polling passed.');
+  for (const state of ['error', 'interrupted', 'rejected']) {
+    await evaluate(`fixture.ask('${state}', [new File(['synthetic file'], 'evidence.txt', {type:'text/plain'})])`);
+    const expectedOutcome = state === 'rejected' ? 'rejected' : 'accepted';
+    assert.deepEqual(await evaluate('fixture.admission'), {outcome:expectedOutcome}, `admission after lost delivery with durable ${state} status`);
+    await wait("fixture.chat.runStatus === 'idle'", `recovered ${state} status`);
+    const savedAttachments = await evaluate(`fixture.chat.messages.filter(message => message.id === '${state}').flatMap(message => message.attachments ?? []).length`);
+    assert.equal(savedAttachments, state === 'rejected' ? 0 : 1);
+  }
+  console.log('Manager AI admission recovery, turn generation, navigation lock and status-only polling passed.');
 } finally {
   await browser?.close();
   await new Promise(resolve => server.close(resolve));
