@@ -9,7 +9,7 @@ import {exportBackendMaps,addBackendDebugIdentity} from './private-backend-sourc
 const root=fs.mkdtempSync(path.join(tmpdir(),'private-backend-maps-')),release='a'.repeat(40);
 try {
  const scripts=['dist/server/index.js','dist/server/ssr/index.js',
-  'sales-parser-worker.mjs','sales-view-worker.mjs','stock-parser-worker.mjs','client-history-import-worker.mjs','vodafone-focus-worker.mjs','import-engine-sales.mjs','import-engine-refresh.mjs'];
+  'sales-parser-worker.mjs','sales-view-worker.mjs','stock-parser-worker.mjs','client-history-import-worker.mjs','vodafone-focus-worker.mjs','commercial-focus-worker.mjs','vodafone-bonus-worker.mjs','import-engine-sales.mjs','import-engine-refresh.mjs'];
  const originals=new Map();
  for(const relative of scripts) {
   const target=path.join(root,relative);fs.mkdirSync(path.dirname(target),{recursive:true});

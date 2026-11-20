@@ -39,7 +39,11 @@ node tools/test-manager-commerce.mjs
 node tools/test-distribution-store.mjs
 node tools/test-digi-operator-source.mjs
 node tools/test-vodafone-focus.mjs
+node tools/test-commercial-focus.mjs
 node tools/test-vodafone-focus-runtime.mjs
+node tools/test-vodafone-top-locations.mjs
+node tools/test-vodafone-bonus.mjs
+node tools/test-manager-ai.mjs
 node tools/test-activation-partners.mjs
 node tools/test-activation-current-window.mjs
 node tools/test-activation-portfolio.mjs

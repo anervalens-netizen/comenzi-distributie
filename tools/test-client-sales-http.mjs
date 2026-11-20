@@ -32,7 +32,29 @@ try{
  const filtered=await call('qa-agent1','filter=repeat');assert.equal(filtered.total,2);assert.deepEqual(filtered.totals,first.totals,'chip leaves selection totals unchanged');
  const geography=await call('qa-agent1','county=Unknown');assert.equal(geography.total,0);assert.equal(geography.totals.valueCents,0);assert.equal(geography.totals.perClient,null,'zero billed denominator is not a division result');
  const detail=await fetch('http://127.0.0.1:3000/api/partner/portfolio/monthly-a/sales?from=2026-09-01&to=2026-09-28',{headers:{Cookie:sessions['qa-agent1']}});assert.equal(detail.status,200);const sales=await detail.json();assert.equal(sales.scope,'company');assert.equal(sales.totals.valueCents,3200);assert.equal(sales.sellers[0].seller,'Vânzător sursă sintetic');assert.equal(sales.documents.count,1);
- const exact=await fetch('http://127.0.0.1:3000/api/partner/portfolio/monthly-a/sales?scope=point&from=2026-09-01&to=2026-09-28',{headers:{Cookie:sessions['qa-agent1']}});assert.equal(exact.status,200);assert.equal((await exact.json()).totals.valueCents,1200);
+ const exact=await fetch('http://127.0.0.1:3000/api/partner/portfolio/monthly-a/sales?scope=point&from=2026-09-01&to=2026-09-28',{headers:{Cookie:sessions['qa-agent1']}});assert.equal(exact.status,200);
+ const pointSales=await exact.json();assert.equal(pointSales.totals.valueCents,1200);
+ const sameDay=pointSales.billingLifetime.firstBilling;
+ const later=new Date(Date.parse(sameDay+'T00:00:00Z')+86400000).toISOString().slice(0,10);
+ const slip=app.prepare("INSERT INTO orders(id,number,user_id,warehouse_id,kind,status,payload,created_at,finalized_at) VALUES(?,?,'qa-agent1','g-5',?, ?,?,?,?)");
+ const addSlip=(id,point,type,day,status='finalized',kind='stand_client')=>{
+   const stamp=day+'T09:15:00.000Z';
+   slip.run('stands-test-'+id,'stand-ref-'+id,kind,status,JSON.stringify({client:{id:point,cui:'RO100'},
+     items:[{code:'QA-STAND',name:type,quantity:2}]}),stamp,status==='finalized'?stamp:null);
+ };
+ addSlip('a','monthly-a','Stand variant A',sameDay);
+ addSlip('b','monthly-a','Stand variant B',later);
+ addSlip('sibling','monthly-sibling','Al doilea punct',later);
+ addSlip('draft','monthly-a','Ciornă',later,'draft');
+ addSlip('stock','monthly-a','Aprovizionare',later,'finalized','stands');
+ const standsUrl='http://127.0.0.1:3000/api/partner/portfolio/monthly-a/stands';
+ const standResponse=await fetch(standsUrl,{headers:{Cookie:sessions['qa-agent1']}});assert.equal(standResponse.status,200);
+ const stands=await standResponse.json();assert.equal(stands.firstBilling,sameDay);
+ assert.deepEqual(stands.stands.map(({type,code,quantity,timing})=>[type,code,quantity,timing]),[
+   ['Stand variant B','QA-STAND',2,'later'],['Stand variant A','QA-STAND',2,'same-day'],
+ ]);
+ assert.equal((await fetch(standsUrl,{headers:{Cookie:sessions['qa-agent2']}})).status,404,'shared CUI does not authorize stand history');
+ assert.equal((await fetch(standsUrl)).status,401);
  assert.equal((await fetch('http://127.0.0.1:3000/api/partner/portfolio/monthly-a/sales',{headers:{Cookie:sessions['qa-agent2']}})).status,404,'company history does not authorize an unrelated exact point URL');
  // UTC August 31 at 21:00 is September 1 in Bucharest. The preceding second is August.
  const visit=app.prepare("INSERT INTO partner_visits(id,customer_id,agent_id,agent_name,visited_at,notes,created_at) VALUES(?,?,?,'Synthetic agent',?,'',?)");
@@ -85,5 +107,5 @@ try{
  const c=new DatabaseSync(join(historyDir,'client-sales-history.sqlite'));c.exec("UPDATE history_imports SET sha256='changed'");c.close();assert.equal((await call()).state,'unavailable');
  console.log('PASS: monthly HTTP auth, shared/legal dedup, source sellers independent of owner, live membership, sort/page/nulls, counts, validation Bucharest actor-scoped visits, canonical counties, national cents bridge, live CRM exceptions and protected CSV.');
 }finally{
- app.exec("DELETE FROM partner_visits WHERE id LIKE 'monthly-visit-%'; DELETE FROM customers WHERE id LIKE 'monthly-%'");for(const hash of hashes)app.prepare('DELETE FROM sessions WHERE token_hash=?').run(hash);app.close();rmSync(historyDir,{recursive:true,force:true});rmSync(temp,{recursive:true,force:true});
+ app.exec("DELETE FROM orders WHERE id LIKE 'stands-test-%'; DELETE FROM partner_visits WHERE id LIKE 'monthly-visit-%'; DELETE FROM customers WHERE id LIKE 'monthly-%'");for(const hash of hashes)app.prepare('DELETE FROM sessions WHERE token_hash=?').run(hash);app.close();rmSync(historyDir,{recursive:true,force:true});rmSync(temp,{recursive:true,force:true});
 }

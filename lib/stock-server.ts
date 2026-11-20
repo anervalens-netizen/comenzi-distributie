@@ -36,12 +36,19 @@ export async function stockImportStatus() {
   return latest?{filename:latest.filename,importedAt:latest.importedAt,rows:latest.rows,warehouses:latest.warehouses}:null;
 }
 export async function stockForWarehouse(warehouseId:string):Promise<StockView> {
+  return (await stockForWarehouses([warehouseId])).get(warehouseId)!;
+}
+/** Callers have already checked all warehouse IDs against the authenticated scope. */
+export async function stockForWarehouses(warehouseIds:readonly string[]):Promise<Map<string,StockView>> {
+  if(!warehouseIds.length)return new Map();
   const [{state},catalog]=await Promise.all([readState(),readCatalog()]);
   const categories=new Map<string,Set<string>>();
   for(const product of catalog.products){const code=stockCode(product.code),names=categories.get(code)||new Set<string>();names.add(product.category.trim()||'Necategorizate');categories.set(code,names);}
-  const view=state.warehouses[warehouseId]||{warehouseId,importedAt:null,filename:null,rows:[]};
-  const rows=view.rows.map(row=>{const names=categories.get(stockCode(row.code));return {...row,category:names?.size===1?[...names][0]:'Necategorizate'};});
-  return {...view,rows,depot:state.depot||{},depotImportedAt:state.depotCoverage?state.depotCoverage.fullSnapshotAt:state.depotImportedAt||null,depotCoverage:state.depotCoverage,depotObservedAt:state.depotObservedAt};
+  return new Map(warehouseIds.map(warehouseId=>{
+    const view=state.warehouses[warehouseId]||{warehouseId,importedAt:null,filename:null,rows:[]};
+    const rows=view.rows.map(row=>{const names=categories.get(stockCode(row.code));return {...row,category:names?.size===1?[...names][0]:'Necategorizate'};});
+    return [warehouseId,{...view,rows,depot:state.depot||{},depotImportedAt:state.depotCoverage?state.depotCoverage.fullSnapshotAt:state.depotImportedAt||null,depotCoverage:state.depotCoverage,depotObservedAt:state.depotObservedAt}];
+  }));
 }
 export async function stockUpload(req:Request,user:User,apply:boolean,internal?:{authorization:ImportAuthorization;action:{id:string;actor:unknown;period:unknown};onMutationStart?:()=>void}) {
   requireManager(user);

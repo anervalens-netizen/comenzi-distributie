@@ -6,6 +6,7 @@ import {countyLabel} from '@/lib/portfolio-facets';
 import {PartnerBillingPeriod} from './partner-billing-period';
 import { PartnerActivity } from './partner-activity';
 import { PartnerSales } from './partner-sales';
+import { PartnerStands } from './partner-stands';
 import {
   lazy,
   Suspense,
@@ -748,6 +749,7 @@ export function PartnerSheet({
           )}
           {(detail?.partner.contact||detail?.partner.phone)&&<p className="partner-contact-summary">{detail.partner.contact}{detail.partner.contact&&detail.partner.phone?' · ':''}{detail.partner.phone&&<a href={'tel:'+detail.partner.phone}>{detail.partner.phone}</a>}</p>}
           <PartnerSales key={id} id={id} initialRange={salesRange}/>
+          <PartnerStands key={'stands-' + id} id={id}/>
           <details ref={contactEditor} className="partner-contact-edit">
             <summary>Date de contact și poziția magazinului</summary>
           <form

@@ -33,7 +33,7 @@ export function exportBackendMaps(root,release) {
   if(fs.existsSync(target))throw new Error('Backend map output already exists');
   fs.mkdirSync(target,{recursive:true,mode:0o700});
  }
- const workerNames=new Set(['sales-parser-worker.mjs','sales-view-worker.mjs','stock-parser-worker.mjs','client-history-import-worker.mjs','vodafone-focus-worker.mjs','import-engine-sales.mjs','import-engine-refresh.mjs']);
+ const workerNames=new Set(['sales-parser-worker.mjs','sales-view-worker.mjs','stock-parser-worker.mjs','client-history-import-worker.mjs','vodafone-focus-worker.mjs','commercial-focus-worker.mjs','vodafone-bonus-worker.mjs','import-engine-sales.mjs','import-engine-refresh.mjs']);
  const backendFiles={},workerFiles={};
  for(const map of fs.globSync('**/*.{js,mjs}.map',{cwd:root,exclude:['node_modules/**','public/**','dist/client/**','.private-source-maps/**']})) {
   const relative=map.slice(0,-4), worker=workerNames.has(relative);

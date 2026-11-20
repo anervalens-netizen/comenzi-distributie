@@ -156,3 +156,5 @@ export function readActivations(month:string,sites:string[]|null,provider:Activa
 export {verifySim} from './sim-verification-node';
 
 export {readVodafoneFocus} from './vodafone-focus-runtime-node';
+
+export {readVodafoneBonusAsync} from './vodafone-bonus-runtime-node';
