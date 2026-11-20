@@ -1,6 +1,8 @@
 import {existsSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {Worker} from 'node:worker_threads';
+import {activationPublicationStamp} from './activation-publication-node';
+import {historyFileGeneration} from './history-source-generation';
 import {readActivations} from './activation-store-node';
 import type {ActivationQuery} from './activation-distribution';
 import type {ActivationProvider, ActivationReport} from './activation-types';
@@ -95,7 +97,9 @@ export async function readVodafoneFocus(month: string, sites: string[] | null, q
   if (!query.focusSummaries || query.focusCardsOnly) return runFocus(detailQueue, month, sites, query);
   // Both subscribers share the pinned worker. Each HTTP request revalidates
   // its own session and authorized scope before releasing either response.
-  const key = JSON.stringify([month, sites, query]);
+  const slips = query.focusSummaries.length
+    ? historyFileGeneration(resolve(process.env.MOBIUP_DATA_DIR||'./work/server-data','mobiup.sqlite')) : null;
+  const key = JSON.stringify([month,sites,query,activationPublicationStamp('vodafone'),slips]);
   const pending = inFlightOverviews.get(key);
   if (pending) return earlyTotals ? pending.totals : pending.complete;
   let publishBase!: (report: ActivationReport) => void;
@@ -114,7 +118,7 @@ export async function readVodafoneFocus(month: string, sites: string[] | null, q
 }
 
 export function readDigiOverview(month: string, sites: string[] | null, query?: ActivationQuery): Promise<ActivationReport> {
-  const key = JSON.stringify([month, sites, query]);
+  const key = JSON.stringify([month,sites,query,activationPublicationStamp('digi')]);
   const pending = inFlightDigi.get(key);
   if (pending) return pending;
   const report = runFocus(digiOverviewQueue, month, sites, query, undefined, 'digi')

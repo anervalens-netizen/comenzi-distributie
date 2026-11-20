@@ -1,7 +1,8 @@
 import {DatabaseSync} from 'node:sqlite';
 import {createHash} from 'node:crypto';
-import {lstatSync,realpathSync,statSync} from 'node:fs';
-import {dirname,resolve} from 'node:path';
+import {statSync} from 'node:fs';
+import {resolve} from 'node:path';
+import {activationPublicationStamp} from './activation-publication-node';
 import {combinePartnerReports} from './combined-activation-partners';
 import {portfolioPoint,portfolioSelection,type CombinedPartnerRead,type PortfolioFields} from './activation-portfolio';
 import {readActivations} from './activation-store-node';
@@ -13,26 +14,9 @@ const byteLimit=32*1024*1024;
 let storedBytes=0;
 const pageSize=50;
 
-function fileStamp(path:string) {
-  const s=statSync(path,{bigint:true,throwIfNoEntry:false});
-  return s ? [s.dev,s.ino,s.size,s.mtimeNs,s.ctimeNs].join(':') : null;
-}
-// Include both the published directory and the base/WAL files for older,
-// mutable stores. Never reuse an operator failure or an incomplete generation.
 function publicationStamp() {
-  const root=resolve(process.env.MOBIUP_ACTIVATIONS_DIR||process.env.MOBIUP_DATA_DIR||'./work/server-data');
-  try {
-    return JSON.stringify([root,resolve(root,'digi')].map(base=>{
-      const link=resolve(base,'current'),info=lstatSync(link,{throwIfNoEntry:false});
-      const directory=info?realpathSync(link):base;
-      if(info&&(!info.isSymbolicLink()||dirname(directory)!==resolve(base,'generations')))throw new Error('Invalid generation');
-      return [directory,...['activation-report.sqlite','activations.sqlite'].flatMap(name=>{
-        const path=resolve(directory,name),stamp=fileStamp(path);
-        if(!stamp)throw new Error('Missing source');
-        return [stamp,fileStamp(path+'-wal')];
-      })];
-    }));
-  }catch{return null;}
+  const vodafone=activationPublicationStamp('vodafone'),digi=activationPublicationStamp('digi');
+  return vodafone&&digi?JSON.stringify([vodafone,digi]):null;
 }
 function pageFrom(set:PageSet,page:number):CombinedActivationPartners {
   const p=set.report.partners;

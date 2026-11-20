@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
+import {mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {setTimeout as wait} from 'node:timers/promises';
@@ -16,10 +16,28 @@ const realTimeout = globalThis.setTimeout;
 let testDeadlineMs = 1_500;
 try {
   process.chdir(root);
+  const stores=join(root,'sources');
+  process.env.MOBIUP_ACTIVATIONS_DIR=stores;
+  for(const store of [stores,join(stores,'digi')]){
+    for(const generation of ['one','two']){
+      const destination=join(store,'generations',generation);
+      mkdirSync(destination,{recursive:true});
+      for(const file of ['activation-report.sqlite','activations.sqlite'])writeFileSync(join(destination,file),generation);
+    }
+    symlinkSync('generations/one',join(store,'current'));
+  }
   writeFileSync(join(root, 'vodafone-focus-worker.mjs'), `
     import {parentPort,workerData} from 'node:worker_threads';
-    import {appendFileSync} from 'node:fs';
+    import {appendFileSync,readFileSync} from 'node:fs';
+    import {join} from 'node:path';
     const {month,query,provider,sites} = workerData;
+    if(month==='publish-generation'){
+      const store=join(process.env.MOBIUP_ACTIVATIONS_DIR,provider==='digi'?'digi':'');
+      const generation=readFileSync(join(store,'current','activation-report.sqlite'),'utf8');
+      appendFileSync('opened-'+provider,generation+'\\n');
+      await new Promise(resolve=>setTimeout(resolve,250));
+      parentPort.postMessage({type:'report',report:{generation}});
+    } else {
     const focus = !!query?.focusSummaries?.length;
     appendFileSync('started', month+(focus ? ':focus' : ':ordinary')+'\\n');
     if (!focus && month.startsWith('slow-')) await new Promise(resolve=>setTimeout(resolve,350));
@@ -35,7 +53,21 @@ try {
       type:'report',report:{month, totals:{total:50,...(focus ? {eligible:20} : {})}},
     });
     else await new Promise(resolve=>setTimeout(resolve,20_000));
+    }
   `);
+  for(const provider of ['digi','vodafone']){
+    const store=provider==='digi'?join(stores,'digi'):stores;
+    const read=()=>provider==='digi'?readDigiOverview('publish-generation',null):readVodafoneFocus('publish-generation',null,{focusSummaries:[]});
+    const earlier=read();
+    let opened=false;
+    for(let i=0;i<100&&!opened;i++){await wait(10);try{opened=readFileSync('opened-'+provider,'utf8').includes('one');}catch{}}
+    assert(opened,'first worker pinned the earlier publication');
+    symlinkSync('generations/two',join(store,'next'));
+    renameSync(join(store,'next'),join(store,'current'));
+    const later=read();
+    assert.equal((await earlier).generation,'one');
+    assert.equal((await later).generation,'two',provider+' read after publication must not share previous-generation work');
+  }
   const readDigi=()=>readDigiOverview('digi-month',['synthetic-site']);
   const digi=readDigi(),otherWaiter=readDigi();
   assert.equal(await Promise.race([wait(10,'responsive'),digi]),'responsive');
