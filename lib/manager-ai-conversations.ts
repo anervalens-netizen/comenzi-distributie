@@ -74,7 +74,7 @@ function pageContext(value:FormDataEntryValue|null) {
   return Object.keys(context).length?JSON.stringify(context):'';
 }
 
-async function parseTurn(req:Request) {
+async function parseTurn(req:Request,mode:'turn'|'steer') {
   const contentType=req.headers.get('content-type')||'';
   if(!/^multipart\/form-data\s*;/i.test(contentType))fail(415,'Este necesară o cerere multipart.');
   const data=await readLimited(req,4*1024*1024);
@@ -88,10 +88,10 @@ async function parseTurn(req:Request) {
   const text=form.get('text')??'', uploads=form.getAll('files');
   if(typeof text!=='string'||text.length>4000||!text.trim()&&!uploads.length)fail(400,'Scrie un mesaj de maximum 4.000 de caractere sau atașează un fișier.');
   if(uploads.some(file=>typeof file==='string'))fail(400,'Atașamentele sunt invalide.');
-  const selected=(form.get('model')??defaultManagerAiModel) as ManagerAiModel;
-  if(!managerAiModels.includes(selected))fail(400,'Alege un model AI disponibil.');
-  const reasoning=effort(form.get('effort'));
-  if(selected==='gpt-6.2-sol'&&reasoning==='none')fail(400,'Sol 6.2 necesită un nivel de analiză de cel puțin low.');
+  const requestedModel=form.get('model'),requestedEffort=form.get('effort');
+  const selected=(requestedModel??(mode==='turn'?defaultManagerAiModel:null)) as ManagerAiModel|null;
+  if(selected!==null&&!managerAiModels.includes(selected))fail(400,'Alege un model AI disponibil.');
+  const reasoning=mode==='steer'&&requestedEffort===null?null:effort(requestedEffort);
   return {text:text.trim(),fileUploads:uploads as File[],view:pageContext(form.get('current_view')),
     id:identity(form.get('submission_id')),model:selected,effort:reasoning};
 }
@@ -163,7 +163,7 @@ function stream(req:Request,original:AiAccount,conversationId:string,submissionI
 }
 
 async function processRun(req:Request,start:AiAccount,scope:AiScope,conversationId:string,runId:string,
-  input:Awaited<ReturnType<typeof parseTurn>>,key:string) {
+  key:string) {
   const timeout=AbortSignal.timeout(managerAiRunTimeoutMs);
   const scopeKey=sha256(JSON.stringify([scope.signature,scope.params.toString()]));
   async function current() {
@@ -181,6 +181,7 @@ async function processRun(req:Request,start:AiAccount,scope:AiScope,conversation
       if(work.r.state!=='running')return;
       let text:string,files:ManagerAiPreparedArtifact[]=[],failed=false;
       try {
+        if(!work.options)fail(409,'Setările analizei nu mai sunt disponibile. Trimite o analiză nouă.');
         const readSource=managerAiReader(req,scope,async()=>(await current()).user);
         const authorize=async()=>{
           signal.throwIfAborted();
@@ -189,7 +190,7 @@ async function processRun(req:Request,start:AiAccount,scope:AiScope,conversation
           signal.throwIfAborted();
         };
         const answer=await runManagerAi({
-          key,model:input.model,effort:input.effort,turns:[],signal,readSource,check:authorize,
+          key,...work.options,turns:[],signal,readSource,check:authorize,
           content:work.recent.map(turn=>{
             if(turn.role==='assistant')return {role:'assistant',content:turn.content};
             const attachments=managerAiMediaParts(work.files.filter(file=>file.ordinal===turn.ordinal).map(file=>file.file));
@@ -265,21 +266,21 @@ export async function managerAiConversations(req:Request,user:User,path:string[]
   if(path.length===3&&method==='POST'&&(path[2]==='turn'||path[2]==='steer')) {
     if(!key)fail(503,managerAiNotConfiguredMessage);
     transact(false,()=>true);
-    const input=await parseTurn(req);
+    const mode=path[2];
+    const input=await parseTurn(req,mode);
     const prepared=await prepareManagerAiInputs(input.fileUploads);
     const {account:validated,selectedScope:scope}=await accountFor(req,selected,account);
     if(scope.signature!==selectedScope.signature)fail(409,'Accesul la selecție s-a modificat.');
     const scopeKey=sha256(JSON.stringify([scope.signature,scope.params.toString()]));
     const context=[input.view&&'Pagina din Comenzi la trimiterea mesajului: '+input.view,prepared.context].filter(Boolean).join('\n\n');
-    const mode=path[2];
     const result=conversationTxn(validated,conversationId,true,db=>beginAiSubmission(db,validated,conversationId,mode,{
-      id:input.id,digest:signature(input,prepared.files,scope),text:input.text,context,scopeKey,files:prepared.files,effort:input.effort,
+      id:input.id,digest:signature(input,prepared.files,scope),text:input.text,context,scopeKey,files:prepared.files,model:input.model,effort:input.effort,
     }));
     if(mode==='steer'){
       if(result.created)active.get(result.status.run_id!)?.abort();
       return response({accepted:true,message:result.message,state:result.status.state});
     }
-    if(result.created)void processRun(req,validated,scope,conversationId,result.status.run_id!,input,key);
+    if(result.created)void processRun(req,validated,scope,conversationId,result.status.run_id!,key);
     return stream(req,validated,conversationId,input.id,0);
   }
   if(path[2]==='submissions'&&(path.length===4||path.length===5&&path[4]==='events')&&method==='GET') {

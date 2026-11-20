@@ -7,6 +7,11 @@ function subscribeViewport(onChange: () => void) {
 }
 const viewportWidth = () => window.innerWidth;
 
+function clampWidth(width: number, viewport: number, minWidth: number) {
+  const upper = Math.min(680, Math.floor(viewport * 0.44));
+  return Math.min(upper, Math.max(minWidth, width));
+}
+
 export function useResizablePanel(key: string, initialWidth: number, minWidth = 360) {
   const [storedWidth, setStoredWidth] = usePersistentState<number>(key, initialWidth, {
     deserialize: (raw, fallback) => {
@@ -18,11 +23,10 @@ export function useResizablePanel(key: string, initialWidth: number, minWidth = 
   });
   const viewport = useSyncExternalStore(subscribeViewport, viewportWidth, () => initialWidth);
   const dragging = useRef(false);
-  const clamp = (value: number) => Math.min(viewport, Math.max(Math.min(minWidth, viewport), value));
-  const width = clamp(storedWidth);
+  const width = clampWidth(storedWidth, viewport, minWidth);
   useEffect(() => {
     const move = (event: PointerEvent) => {
-      if (dragging.current) setStoredWidth(Math.min(window.innerWidth, Math.max(minWidth, window.innerWidth - event.clientX)));
+      if (dragging.current) setStoredWidth(clampWidth(window.innerWidth - event.clientX, window.innerWidth, minWidth));
     };
     const stop = () => { dragging.current = false; };
     window.addEventListener('pointermove', move);
@@ -45,7 +49,7 @@ export function useResizablePanel(key: string, initialWidth: number, minWidth = 
     const steps: Record<string, number> = { ArrowLeft: 40, ArrowRight: -40 };
     if (!(event.key in steps)) return;
     event.preventDefault();
-    setStoredWidth(clamp(width + steps[event.key]!));
+    setStoredWidth(clampWidth(width + steps[event.key]!, viewport, minWidth));
   }
   return { width, setWidth: setStoredWidth, startResize, onResizeKeyDown };
 }

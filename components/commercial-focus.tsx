@@ -26,9 +26,16 @@ function IncentiveItems({items}: {items: FocusItem[]}) {
   </table></div>;
 }
 
-export function CommercialFocus({userId, scopeQuery = ''}: {userId: string; scopeQuery?: string}) {
+export function CommercialFocus({userId, scopeQuery = '', month: selectedMonth, onMonthChange}: {
+  userId: string; scopeQuery?: string; month?: string; onMonthChange?: (next: string) => void;
+}) {
   const [tab, setTab] = useState<Tab>('accessories');
-  const [month, setMonth] = useState(() => bucharestMonthKey(new Date()));
+  const [localMonth, setLocalMonth] = useState(() => bucharestMonthKey(new Date()));
+  const month=selectedMonth??localMonth;
+  function selectMonth(next:string){
+    if(selectedMonth===undefined)setLocalMonth(next);
+    onMonthChange?.(next);
+  }
   const [retry, setRetry] = useState(0);
   const [read, setRead] = useState<{key: string; data?: CommercialFocusReport; error?: string}>();
   const salesTab = tab === 'accessories' || tab === 'phones';
@@ -48,7 +55,7 @@ export function CommercialFocus({userId, scopeQuery = ''}: {userId: string; scop
   return <section className="commercial-focus">
     <header className="page-heading">
       <h1>Focus Vodafone</h1>
-      {salesTab && <label>Luna <input type="month" value={month} max={bucharestMonthKey(new Date())} onChange={event => setMonth(event.currentTarget.value)}/></label>}
+      {salesTab && <label>Luna <input type="month" value={month} max={bucharestMonthKey(new Date())} onChange={event => selectMonth(event.currentTarget.value)}/></label>}
     </header>
     <nav aria-label="Secțiuni Focus Vodafone" className="commercial-focus-tabs">
       {tabs.map(item => <button type="button" key={item.id} className={tab === item.id ? 'primary' : 'secondary'}

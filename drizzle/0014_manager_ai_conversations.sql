@@ -36,6 +36,12 @@ CREATE TABLE IF NOT EXISTS manager_ai_runs (
 CREATE UNIQUE INDEX IF NOT EXISTS manager_ai_run_active_conversation ON manager_ai_runs(conversation_id) WHERE state='running';
 CREATE UNIQUE INDEX IF NOT EXISTS manager_ai_run_active_account ON manager_ai_runs(account_id) WHERE state='running';
 
+CREATE TABLE IF NOT EXISTS manager_ai_run_options (
+  run_id TEXT PRIMARY KEY NOT NULL REFERENCES manager_ai_runs(id),
+  model TEXT NOT NULL,
+  effort TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS manager_ai_submissions (
   id TEXT NOT NULL,
   conversation_id TEXT NOT NULL REFERENCES manager_ai_conversations(id),

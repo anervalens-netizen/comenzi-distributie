@@ -196,6 +196,21 @@ try{
  await browser.evaluate(`document.querySelector(".manager-ai-trigger").click()`);
  await waitFor(()=>browser.evaluate(`!document.querySelector('[aria-label="Mesaj pentru AI Comenzi"]')?.disabled && !!document.querySelector('[role=complementary][aria-label="AI Comenzi"]')`),'AI opens and loads desktop session');
  assert.equal(await browser.evaluate(`document.querySelector('[aria-label="Model AI"]')?.value ?? document.querySelector('[aria-label="AI Comenzi"] select option[value="gpt-6.1-terra"]')?.parentElement.value`),'gpt-6.1-terra');
+ await browser.evaluate(`(async()=>{
+   const handle=document.querySelector('[aria-label="Redimensionează panoul AI"]');
+   for(let i=0;i<24;i++){
+     handle.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowLeft',bubbles:true}));
+     await new Promise(requestAnimationFrame);
+   }
+ })()`);
+ assert(await browser.evaluate(`(()=>{
+   const panel=document.querySelector('aside[aria-label="AI Comenzi"]');
+   const shell=document.querySelector('.manager-shell');
+   return getComputedStyle(panel.parentElement).position==='sticky' &&
+     panel.getBoundingClientRect().width>460 && panel.getBoundingClientRect().width<=innerWidth*0.44 &&
+     shell.getBoundingClientRect().width>=innerWidth*0.55;
+ })()`),'desktop AI can resize while keeping the main shell and dock visible');
+ await browser.evaluate(`document.querySelector('[aria-label="Resetează lățimea panoului"]').click()`);
  await browser.send('Emulation.setDeviceMetricsOverride',{width:320,height:800,deviceScaleFactor:1,mobile:true});
  await waitFor(()=>browser.evaluate(`!!document.querySelector('[role=dialog][aria-label="AI Comenzi"]')`),'AI becomes a phone dialog');
  assert(await browser.evaluate(`(()=>{
@@ -212,6 +227,9 @@ try{
  await waitFor(()=>browser.evaluate(`document.querySelector('[aria-label="Trimite"]')?.disabled===false`),'AI accepts a message');
  await browser.evaluate(`document.querySelector('[aria-label="Trimite"]').click()`);
  await waitFor(()=>browser.evaluate(`document.querySelector("[data-ai-message-list] strong")?.textContent==="Răspuns sintetic verificat"`),'AI renders streamed Markdown');
+ mkdirSync('work/evidence',{recursive:true});
+ const aiScreenshot=await browser.send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+ writeFileSync('work/evidence/manager-ai-mobile-320.png',Buffer.from(aiScreenshot.data,'base64'));
  await browser.evaluate(`document.querySelector('aside [aria-label="Închide AI Comenzi"]').click()`);
  await waitFor(()=>browser.evaluate(`!document.querySelector('aside[aria-label="AI Comenzi"]')`),'AI closes back to current section');
  assert.equal(await browser.evaluate(`document.querySelector(".manager-overview h1")?.textContent`),'Sinteză');
@@ -346,6 +364,10 @@ try{
  await waitFor(()=>browser.evaluate('!!document.querySelector(".client-sales")'),'customer report contextual month');
  assert(!(await browser.evaluate('!!document.querySelector(".distribution-filters")')),'customer monthly report has no conflicting global multi-month control');
  assert.equal(await browser.evaluate('document.querySelectorAll(".report-period").length'),1,'one customer report monthly control');
+ await browser.evaluate(`document.querySelector('.client-sales [aria-label="septembrie 2026"]').click()`);
+ await browser.evaluate('document.querySelector(".manager-ai-trigger").click()');
+ await waitFor(()=>browser.evaluate(`[...document.querySelectorAll('aside[aria-label="AI Comenzi"] [title]')].some(el=>el.title.endsWith('Accesorii › Pe clienți · 2026-09'))`),'AI shows the selected customer-report month');
+ await browser.evaluate(`document.querySelector('aside [aria-label="Închide AI Comenzi"]').click()`);
  await browser.evaluate('[...document.querySelectorAll(".main-nav [role=tab]")].find(button=>button.textContent==="Prepay").click()');
  // Base UI keeps the outgoing inert panel mounted until its exit completes.
  // Wait for that transition before checking that the new view has one period.

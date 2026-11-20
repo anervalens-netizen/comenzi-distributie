@@ -27,7 +27,14 @@ try {
   for(const [token,id] of [['alpha-token','alpha'],['other-alpha-token','alpha'],['beta-token','beta'],['agent-token','agent']]) {
     createToken.run(digest(token),id,Date.now()+60_000);
   }
-  db.exec(readFileSync('drizzle/0014_manager_ai_conversations.sql','utf8'));
+  const schema=readFileSync('drizzle/0014_manager_ai_conversations.sql','utf8');
+  const runOptionsSchema=/CREATE TABLE IF NOT EXISTS manager_ai_run_options \([\s\S]*?\n\);/;
+  assert.match(schema,runOptionsSchema);
+  db.exec(schema.replace(runOptionsSchema,''));
+  const savedConversation=randomUUID(),olderTimestamp='2026-06-01T08:00:00.000Z';
+  db.prepare('INSERT INTO manager_ai_conversations VALUES(?,?,?,?,?,?)').run(
+    savedConversation,digest(JSON.stringify(['beta','assigned',null])),'Conversație salvată','medium',olderTimestamp,olderTimestamp);
+  db.exec(schema);
   globalThis.syntheticAiDatabase=db;
   const mocks={
     './runtime':"export const runtimeKind='node';",
@@ -85,6 +92,7 @@ try {
 
   const pending=[];
   const accesses=[];
+  const providerOptions=[];
   const responseEvents=events=>new Response(events.map(event=>'data: '+JSON.stringify(event)+'\n\n').join(''),{headers:{'Content-Type':'text/event-stream'}});
   function answer(body,text) {
     const events=[
@@ -105,6 +113,7 @@ try {
     const text=body.input.at(-1).content;
     const toolOutput=body.input.at(-1).type==='function_call_output';
     accesses.push(body.input);
+    providerOptions.push({model:body.model,effort:body.reasoning.effort});
     if(toolOutput) {
       assert.match(body.input.at(-1).output,/FIX-42/);
       return Promise.resolve(answer(body,'Franciza FIX-42 are 3 bucăți.'));
@@ -134,7 +143,9 @@ try {
   await assert.rejects(call(base,{token:'beta-token'}),{status:404});
   await assert.rejects(call(base+'/messages',{token:'beta-token'}),{status:404});
   assert.equal((await (await call(base+'/submissions/'+randomUUID())).json()).state,'unseen');
-  assert.deepEqual(await (await call('conversations',{token:'beta-token'})).json(),{items:[]});
+  const saved=await (await call('conversations',{token:'beta-token'})).json();
+  assert.deepEqual(saved.items.map(item=>item.id),[savedConversation]);
+  assert.equal(saved.items[0].effort,'medium');
 
   const [data,id]=form('Situația lunii',undefined,[new File(['sku,bucati\nA,3'],'rânduri.csv',{type:'text/csv'})]);
   const page=JSON.stringify({tab:'Prepay',period:'2026-09, 2026-10',owner:'neautorizat'});
@@ -196,21 +207,38 @@ try {
   pending.shift()();
 
   const [steered,steeredId]=form('așteaptă indicația următoare');
+  steered.set('model','gpt-6.2-sol');
   const active=await call(base+'/turn',{body:steered});
   await waitFor(()=>pending.length===1);
-  const [steer,steerId]=form('Calculează pentru ultima lună.');
+  assert.deepEqual(providerOptions.at(-1),{model:'gpt-6.2-sol',effort:'low'});
+  await assert.rejects(call(base+'/steer',{body:form('Schimbă modelul')[0]}),{status:409});
+  const [unsupported]=form('Nu analiza');
+  unsupported.delete('model');
+  unsupported.set('effort','none');
+  await assert.rejects(call(base+'/steer',{body:unsupported}),{status:400});
+  const [steer,steerId]=form('așteaptă a doua indicație');
+  steer.set('model','gpt-6.2-sol');
+  steer.set('effort','high');
   const added=await (await call(base+'/steer',{body:steer})).json();
   assert.equal(added.message.id,steerId);
-  const replayedSteer=await (await call(base+'/steer',{body:form('Calculează pentru ultima lună.',steerId)[0]})).json();
+  const replayedSteer=await (await call(base+'/steer',{body:steer})).json();
   assert.equal(replayedSteer.message.id,steerId);
+  await waitFor(()=>pending.length===2);
+  assert.deepEqual(providerOptions.at(-1),{model:'gpt-6.2-sol',effort:'high'});
+  const [keepEffort,lastSteerId]=form('Calculează pentru ultima lună.');
+  keepEffort.delete('model');
+  keepEffort.delete('effort');
+  const lastSteer=await (await call(base+'/steer',{body:keepEffort})).json();
+  assert.equal(lastSteer.message.id,lastSteerId);
   const joined=await events(active);
-  assert.ok(joined.some(e=>e.type==='reset'));
+  assert.equal(joined.filter(e=>e.type==='reset').length,2);
   assert.equal(joined.at(-1).type,'complete');
   assert.equal(accesses.at(-1).at(-1).content,'Calculează pentru ultima lună.');
+  assert.deepEqual(providerOptions.at(-1),{model:'gpt-6.2-sol',effort:'high'});
   const state=await (await call(base+'/submissions/'+steeredId)).json();
   assert.equal(state.state,'complete');
-  assert.equal(state.processed_order_key,added.message.ordinal);
-  pending.shift()();
+  assert.equal(state.processed_order_key,lastSteer.message.ordinal);
+  for(const resolve of pending.splice(0))resolve();
 
   const [lost,lostId]=form('așteaptă revocarea');
   const revoked=await call(base+'/turn',{body:lost});
