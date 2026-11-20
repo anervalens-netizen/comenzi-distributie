@@ -52,6 +52,18 @@ try {
     writeFileSync(join(root,'digi','activations.sqlite-wal'),'rotated during computation');
   };
   assert.throws(()=>readPartnerPage({...input,crmRevision:2,userId:'other-manager'},0),/Activation publication changed/);
+  // Hosts without local operator files still return the normal unavailable page contract.
+  const cloudBuild=await build({entryPoints:['lib/activation-store-cloudflare.ts'],bundle:true,platform:'node',format:'esm',write:false});
+  const cloud=await import('data:text/javascript;base64,'+Buffer.from(cloudBuild.outputFiles[0].text).toString('base64'));
+  const unavailable=await cloud.readCombinedActivationPartners(input,2);
+  assert.deepEqual(unavailable.operators,{
+    vodafone:{available:false,error:'Datele operatorului nu sunt disponibile.'},
+    digi:{available:false,error:'Datele operatorului nu sunt disponibile.'},
+  });
+  assert.deepEqual(unavailable.partners,{rows:[],total:0,page:2,hasMore:false,realPointCount:0,unassignedActivations:0,genericActivations:0,unresolvedActivations:0});
+  assert.equal(unavailable.showDigi,true);assert.deepEqual(unavailable.recentWindow,input.query.todayWindow);
+  assert.equal(unavailable.revision,(await cloud.readCombinedActivationPartners(input,0)).revision);
+  assert.notEqual(unavailable.revision,(await cloud.readCombinedActivationPartners({...input,userId:'other'},0)).revision);
   console.log('PASS: combined pages reuse the computation and invalidate on CRM, scope and operator WAL changes.');
 }finally{
   db.close();delete globalThis.__providerReads;delete globalThis.__duringProviderRead;
