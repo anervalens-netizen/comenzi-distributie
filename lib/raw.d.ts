@@ -1,4 +1,5 @@
 declare module '*.sql?raw' { const sql: string; export default sql; }
+declare module '*.py?raw' { const source: string; export default source; }
 declare module '#mobiup-runtime' {
   export const env: { DB: D1Database; FILES: R2Bucket };
   export const runtimeKind: 'node' | 'cloudflare';

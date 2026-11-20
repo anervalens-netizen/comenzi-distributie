@@ -137,6 +137,7 @@ export async function readManagerAiBilling(
           if (dataset==='salesByPoint') {
             if (options&&rows.length>=options.maxRows) fail(413,'Istoricul pe punct depășește limita. Restrânge perioada sau portofoliul.');
             rows.push({month,date:row.date,franchise,partner:point.name,seller:row.seller,erpSite:row.erpSite,document:row.document,
+              ...(options?{pointId:row.owner}:{}),
               sku:row.sku,product:row.product,units,valueLei:row.value===null?null:row.value/100,lines:1,
               missingValueLines:row.value===null?1:0});
           } else if (row.document.trim()) {

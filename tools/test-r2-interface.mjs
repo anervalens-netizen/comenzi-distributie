@@ -26,6 +26,8 @@ const stubs={
   catalog:'export const readCatalog=async()=>({products:[]});'+unused(['changeProduct','readProductPhoto']),
   'stock-server':`export const stockForWarehouse=async()=>({importedAt:'2026-09-01T00:00:00Z',filename:'synthetic.xlsx',rows:[{code:'SYNTHETIC',name:'Synthetic product',quantity:10}]});${unused(['stockForWarehouses','stockImportStatus','stockView','stockUpload'])}`,
   'sales-server':unused(['salesActorIdentities','salesImportStatus','salesView','salesUpload','orderLimitSalesScope']),
+  'manager-ai-sandbox':'export const managerAiSandboxAvailable=()=>false;',
+  'manager-ai-analysis':unused(['createManagerAiAnalysis']),
   exports:unused(['templateExport','combinedExport','repairOrderExport','simExport','mailFor','emlFor']),
   'push-notifications':unused(['managerRequestInbox','readPartnerNotifications','pushPublicConfig','removePushSubscription','upsertPushSubscription','sendPartnerRequestPush','sendNotificationPush']),
   'partner-mail':unused(['partnerMail']),

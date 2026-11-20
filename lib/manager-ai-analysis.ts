@@ -2,6 +2,7 @@ import { extname } from 'node:path';
 import { managerAiAnalysisCatalog, managerAiAnalysisLimits, type ManagerAiAnalysisDataset, type ManagerAiAnalysisTable } from './manager-ai-analysis-schema';
 import { materializeManagerAiDatabase } from './manager-ai-analysis-database';
 import { readManagerAiAnalysisTable } from './manager-ai-analysis-data';
+import { managerAiAnalysisRevision } from './manager-ai-analysis-revision';
 import { runManagerAiSandbox } from './manager-ai-sandbox';
 import type { ManagerAiAnalysisCapability } from './manager-ai-analysis-tool';
 import type { AiScope } from './manager-ai-data';
@@ -75,6 +76,9 @@ export function createManagerAiAnalysis({
         if(selected.reduce((sum,file)=>sum+file.bytes.byteLength,0)>managerAiAttachmentLimits.maxTotalBytes){
           fail(413,'Alege fișiere de maximum 3 MiB în total.');
         }
+        await check();
+        const requestedTables=request.tables.map(selection=>selection.table);
+        const sourceRevision=await managerAiAnalysisRevision(requestedTables);
         let totalRows=0;
         const tables:ManagerAiAnalysisTable[]=[];
         for(const selection of request.tables){
@@ -89,6 +93,9 @@ export function createManagerAiAnalysis({
         await check();
         signal.throwIfAborted();
         const database=tables.length?await materializeManagerAiDatabase(tables,signal):undefined;
+        if(sourceRevision!==await managerAiAnalysisRevision(requestedTables)){
+          fail(409,'Sursele de date s-au actualizat în timpul selecției. Reia analiza.');
+        }
         const outcome=await runManagerAiSandbox({language:request.language,code:request.code,database,inputs:selected,signal});
         await check();
         signal.throwIfAborted();

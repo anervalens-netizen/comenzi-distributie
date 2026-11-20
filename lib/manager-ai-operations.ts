@@ -12,7 +12,7 @@ const date = (timestamp:string) => day.format(new Date(timestamp));
 const selected = (ids:string[]|undefined) => ids===undefined?null:JSON.stringify(ids);
 type Operation = 'orders'|'stock'|'inventories'|'transfers';
 type Line = {sku:string|null;product:string|null;units:number|null};
-type OrdersLine = Line & {document:string;at:string;warehouse:string|null;phase:string;kind:string};
+type OrdersLine = Line & {document:string;at:string;warehouse:string|null;phase:string;kind:string;simZeroUnits:number|null};
 type TransferLine = Line & {document:string;at:string;warehouse:string|null;target:string|null};
 type InventoryLine = {at:string;warehouseId:string;sku:string|null;product:string|null;expected:number|null;counted:number|null};
 type Warehouse = {id:string;name:string|null;site:string|null};
@@ -43,7 +43,8 @@ async function stockRows(scope:AiScope, include:(sku:string|null)=>boolean, max:
         category:item.category||null,observedOn:item.observedAt?date(item.observedAt):stock.importedAt?date(stock.importedAt):null,units:item.quantity});
     }
     coverage.push({source:warehouse.name?'Stoc importat · '+warehouse.name:allProducts?'Stoc importat':'Stoc importat · '+warehouse.id,available:Boolean(stock.importedAt),
-      through:stock.importedAt?date(stock.importedAt):null,note:'Ultimul stoc disponibil. Actualizarea poate fi parțială.'});
+      through:stock.importedAt?date(stock.importedAt):null,
+      note:(allProducts?'Sunt incluse toate categoriile din sursă. ':'')+'Ultimul stoc disponibil. Actualizarea poate fi parțială.'});
   }
   if (!warehouses.length) coverage.push({source:'Stoc importat',available:true,note:'Selecția nu conține gestiuni active.'});
   return {rows,coverage};
@@ -65,31 +66,31 @@ export async function managerAiOperations(
   if (dataset==='orders') {
     const result = await db().prepare(`SELECT o.number document,COALESCE(o.finalized_at,o.created_at) at,o.status phase,o.kind,
       json_extract(o.payload,'$.warehouseName') warehouse,json_extract(line.value,'$.code') sku,
-      json_extract(line.value,'$.name') product,json_extract(line.value,'$.quantity') units
+      json_extract(line.value,'$.name') product,json_extract(line.value,'$.quantity') units,NULL simZeroUnits
       FROM orders o JOIN json_each(o.payload, '$.items') line
-      WHERE (o.kind IN ('accessories','stands','combined') OR (? AND o.kind='stand_client')) AND o.status IN ('draft','finalized')
+      WHERE o.kind IN ('accessories','stands','combined') AND o.status IN ('draft','finalized')
       AND COALESCE(o.finalized_at,o.created_at)>=? AND COALESCE(o.finalized_at,o.created_at)<?
       AND (? IS NULL OR o.user_id IN (SELECT value FROM json_each(?)))
       UNION ALL
       SELECT o.number,COALESCE(o.finalized_at,o.created_at),o.status,o.kind,
       json_extract(o.payload,'$.warehouseName'),json_extract(line.value,'$.code'),
-      json_extract(line.value,'$.name'),json_extract(line.value,'$.quantity')
+      json_extract(line.value,'$.name'),json_extract(line.value,'$.quantity'),NULL
       FROM orders o JOIN json_each(o.payload, '$.standItems') line
       WHERE o.kind='combined' AND o.status IN ('draft','finalized')
       AND COALESCE(o.finalized_at,o.created_at)>=? AND COALESCE(o.finalized_at,o.created_at)<?
       AND (? IS NULL OR o.user_id IN (SELECT value FROM json_each(?)))
       UNION ALL
       SELECT o.number,COALESCE(o.finalized_at,o.created_at),o.status,o.kind,
-      json_extract(o.payload,'$.warehouseName'),NULL,'SIM 0 Vodafone',COALESCE(json_array_length(o.payload,'$.serials'),0)
+      json_extract(o.payload,'$.warehouseName'),NULL,'SIM 0 Vodafone',NULL,COALESCE(json_array_length(o.payload,'$.serials'),0)
       FROM orders o WHERE ? AND o.kind IN ('sim','combined') AND o.status IN ('draft','finalized')
       AND COALESCE(o.finalized_at,o.created_at)>=? AND COALESCE(o.finalized_at,o.created_at)<?
       AND (? IS NULL OR o.user_id IN (SELECT value FROM json_each(?)))
       AND (o.kind='sim' OR json_array_length(o.payload,'$.serials')>0) ORDER BY at,document LIMIT ?`)
-      .bind(Number(!!options),start,end,agents,agents,start,end,agents,agents,Number(!!options),start,end,agents,agents,limit).all<OrdersLine>();
+      .bind(start,end,agents,agents,start,end,agents,agents,Number(!!options),start,end,agents,agents,limit).all<OrdersLine>();
     assertOperationBudget(result.results.length,max);
     rows=result.results.filter(row=>include(row.sku)).map(row=>({month,date:date(row.at),document:row.document,
-      warehouse:row.warehouse,sku:row.sku,product:row.product,status:row.phase,units:row.units,lines:1,...(options?{kind:row.kind}:{}),
-      ...(options&&row.sku===null&&row.product==='SIM 0 Vodafone'?{group:'vodafone_0'}:{})}));
+      warehouse:row.warehouse,sku:row.sku,product:row.product,status:row.phase,units:row.units,lines:1,...(options?{kind:row.kind,simZeroUnits:row.simZeroUnits}:{}),
+      ...(row.simZeroUnits!==null?{group:'vodafone_0'}:{})}));
   } else if (dataset==='transfers') {
     const warehouses=selected(scope.filter?.warehouseIds);
     const result = await db().prepare(`SELECT json_extract(s.value,'$.number') document,json_extract(s.value,'$.finalizedAt') at,
@@ -128,5 +129,5 @@ export async function managerAiOperations(
   };
   return {rows,coverage:[{source:sources[dataset],month,available:true,
     through:typeof rows.at(-1)?.date==='string'?String(rows.at(-1)?.date):null,
-    note:(options?'Sunt incluse produsele tuturor categoriilor. ':'Sunt incluse codurile atribuite explicit Vodafone în catalog. ')+limits[dataset]}]};
+    note:(options?'Sunt incluse toate categoriile din sursă. ':'Sunt incluse codurile atribuite explicit Vodafone în catalog. ')+limits[dataset]}]};
 }

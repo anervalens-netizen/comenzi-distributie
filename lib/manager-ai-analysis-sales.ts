@@ -1,9 +1,10 @@
 import { DatabaseSync } from 'node:sqlite';
 import { salesYield } from './client-sales-cooperative';
 import { historyFileGeneration } from './history-source-generation';
-import { iterateHistoricalSalesMonth } from './historical-sales';
+import { HistoricalSalesChangedError, iterateHistoricalSalesMonth } from './historical-sales';
 import { salesDatabasePath, salesScopeFilter } from './sales-store';
 import { salesLocationKey, salesSiteKey, type SalesScope } from './sales-location';
+import { fail } from './server';
 
 export type AnalysisSalesLine = {
   date:string;site:string;warehouse:string;sku:string;product:string;brand:string;category:string;subcategory:string;
@@ -59,6 +60,9 @@ export async function scanManagerAiAnalysisSales(
           signal?.throwIfAborted();
         }
       }
+    } catch(error) {
+      if(error instanceof HistoricalSalesChangedError)fail(409,'Sursele vânzărilor s-au modificat. Reia analiza.');
+      throw error;
     } finally { lines.return(null); }
     return {source:'Vânzări',month,available:false,note:'Lipsește importul lunar sau acoperirea integrală a istoricului.'};
   } finally { connection?.close(); }

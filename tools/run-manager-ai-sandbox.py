@@ -11,11 +11,13 @@ import math
 import os
 from pathlib import Path
 import resource
+import runpy
 import sqlite3
 import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import unicodedata
 
 
@@ -79,12 +81,11 @@ def restricted_child():
 def run_python():
     with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
         script = subprocess.Popen(
-            [sys.executable, "-IB", "/input/program.py"],
+            [sys.executable, "-IB", "/worker.py", "payload"],
             stdin=subprocess.DEVNULL,
             stdout=stdout,
             stderr=stderr,
             close_fds=True,
-            preexec_fn=restricted_child,
         )
         try:
             code = script.wait(timeout=14)
@@ -246,8 +247,21 @@ def harvest():
 
 
 def main():
-    constrain()
     mode = sys.argv[1]
+    if mode == "payload":
+        restricted_child()
+        sys.argv = ["/input/program.py"]
+        runpy.run_path(sys.argv[0], run_name="__main__")
+        return
+    constrain()
+
+    def wait_for_launcher():
+        # The Node process holds this pipe open until cancellation or exit.
+        # Exiting namespace PID 1 reaps the workload even if host signaling failed.
+        os.read(0, 1)
+        os._exit(130)
+
+    threading.Thread(target=wait_for_launcher, daemon=True).start()
     if mode == "python":
         result = run_python()
     elif mode == "sql":

@@ -3,7 +3,8 @@ import { once } from 'node:events';
 import { accessSync, constants, realpathSync, statSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { basename, dirname, extname, join, resolve } from 'node:path';
+import { basename, dirname, extname, join } from 'node:path';
+import workerSource from '../tools/run-manager-ai-sandbox.py?raw';
 import type { ManagerAiCell } from './manager-ai';
 import type { ManagerAiPreparedArtifact } from './manager-ai-media-contract';
 import { normalizeManagerAiSandboxArtifact } from './manager-ai-sandbox-artifacts';
@@ -31,8 +32,6 @@ export type ManagerAiSandboxResult = {
   artifacts:ManagerAiPreparedArtifact[];
   skippedArtifacts:number;
 };
-type WorkerPaths = {base:string; script:string};
-
 const bubblewrap='/usr/bin/bwrap';
 const runtime='/opt/mobiup-analysis-runtime';
 const python=runtime+'/bin/python';
@@ -61,7 +60,7 @@ function rootManaged(path:string,directory=false) {
   return info.uid===0&&(info.mode&0o022)===0&&(directory?info.isDirectory():info.isFile());
 }
 
-function workerPaths():WorkerPaths|null {
+function workerBase():string|null {
   if(process.env.MOBIUP_MANAGER_AI_SANDBOX_ENABLED!=='1'||process.platform!=='linux'||process.arch!=='x64')return null;
   try {
     const base=dirname(dirname(realpathSync(python)));
@@ -70,27 +69,26 @@ function workerPaths():WorkerPaths|null {
       !rootManaged(base,true)||!rootManaged(bubblewrap)||!rootManaged(libraryDirectory+'/libseccomp.so.2'))return null;
     accessSync(python,constants.X_OK);
     accessSync(bubblewrap,constants.X_OK);
-    const script=join(dirname(resolve(process.argv[1]??'.')),'run-manager-ai-sandbox.py');
-    if(statSync(script).isFile())return {base,script};
+    return base;
   } catch { /* A missing or writable sandbox dependency disables the feature. */ }
   return null;
 }
 
 export function managerAiSandboxAvailable():boolean {
-  return workerPaths()!==null;
+  return workerBase()!==null;
 }
 
-function sandboxArguments(paths:WorkerPaths,dir:string,language:ManagerAiSandboxRequest['language']) {
+function sandboxArguments(base:string,dir:string,language:ManagerAiSandboxRequest['language']) {
   return [
     '--unshare-all','--unshare-user','--disable-userns','--as-pid-1',
     '--die-with-parent','--cap-drop','ALL',
     '--clearenv','--setenv','LC_ALL','C.UTF-8','--setenv','TMPDIR','/tmp',
     '--setenv','OPENBLAS_NUM_THREADS','1','--setenv','OMP_NUM_THREADS','1',
     '--setenv','MKL_NUM_THREADS','1','--setenv','NUMEXPR_NUM_THREADS','1','--setenv','MPLBACKEND','Agg',
-    '--ro-bind',runtime,runtime,'--ro-bind',paths.base,paths.base,
+    '--ro-bind',runtime,runtime,'--ro-bind',base,base,
     '--ro-bind',libraryDirectory,libraryDirectory,'--ro-bind','/usr/lib64','/usr/lib64',
     '--symlink','usr/lib','/lib','--symlink','usr/lib64','/lib64',
-    '--ro-bind',dir,'/input','--ro-bind',paths.script,'/worker.py',
+    '--ro-bind',dir,'/input','--ro-bind-data','3','/worker.py',
     '--proc','/proc','--remount-ro','/proc','--dev','/dev',
     '--size',String(16*1024*1024),'--tmpfs','/tmp',
     '--size',String(8*1024*1024),'--tmpfs','/output',
@@ -118,35 +116,46 @@ async function stageInputs(dir:string,request:ManagerAiSandboxRequest) {
 
 function killGroup(pid:number|undefined) {
   if(!pid)return;
-  try{process.kill(-pid,'SIGKILL');}catch(error) {
-    if((error as NodeJS.ErrnoException).code!=='ESRCH')throw error;
+  try{process.kill(-pid,'SIGKILL');}catch {
+    try{process.kill(pid,'SIGKILL');}catch { /* Closing stdin independently stops the namespace worker. */ }
   }
 }
 
-async function execute(paths:WorkerPaths,directory:string,language:ManagerAiSandboxRequest['language'],external:AbortSignal) {
+async function execute(base:string,directory:string,language:ManagerAiSandboxRequest['language'],external:AbortSignal) {
   const timer=AbortSignal.timeout(shellTimeoutMs);
   const signal=AbortSignal.any([external,timer]);
   signal.throwIfAborted();
-  const child=spawn(bubblewrap,sandboxArguments(paths,directory,language),{
+  const child=spawn(bubblewrap,sandboxArguments(base,directory,language),{
     // A detached launcher has no controlling terminal and retains one killable group.
-    cwd:directory,env:{LC_ALL:'C.UTF-8',NODE_ENV:'production',APP_NAME:'Mobiup'},detached:true,stdio:['ignore','pipe','pipe'],
+    cwd:directory,env:{LC_ALL:'C.UTF-8',NODE_ENV:'production',APP_NAME:'Mobiup'},detached:true,stdio:['pipe','pipe','pipe','pipe'],
   });
-  const abort=()=>killGroup(child.pid);
+  const closed=once(child,'close');
+  const abort=()=>{
+    child.stdin?.destroy();
+    if(child.exitCode===null&&child.signalCode===null)killGroup(child.pid);
+  };
+  const source=child.stdio[3];
+  // The reviewed supervisor arrives via an anonymous FD from this exact build.
+  // Its path cannot be replaced by the caller or a stale installation file.
+  if(source&&'end' in source) {
+    source.on('error',abort);
+    source.end(workerSource,'utf8');
+  } else abort();
   signal.addEventListener('abort',abort,{once:true});
   if(signal.aborted)abort();
   let written=0,diagnostics=0,overflow=false;
   const stdout:Buffer[]=[];
-  child.stdout.on('data',(part:Buffer)=>{
+  child.stdout?.on('data',(part:Buffer)=>{
     written+=part.length;
     if(written>maxWorkerBytes){overflow=true;abort();return;}
     stdout.push(part);
   });
-  child.stderr.on('data',(part:Buffer)=>{
+  child.stderr?.on('data',(part:Buffer)=>{
     diagnostics+=part.length;
     if(diagnostics>maxStderrBytes){overflow=true;abort();}
   });
   try {
-    const [code]=await once(child,'close');
+    const [code]=await closed;
     external.throwIfAborted();
     if(timer.aborted)fail(504,'Execuția izolată a depășit timpul disponibil.');
     if(overflow)fail(413,'Rezultatul execuției izolate depășește limita.');
@@ -231,15 +240,15 @@ function parseResult(raw:string):ManagerAiSandboxResult {
 
 export async function runManagerAiSandbox(request:ManagerAiSandboxRequest):Promise<ManagerAiSandboxResult> {
   request.signal.throwIfAborted();
-  const paths=workerPaths();
-  if(!paths)fail(503,'Execuția SQL/Python izolată nu este configurată pentru această instanță.');
+  const base=workerBase();
+  if(!base)fail(503,'Execuția SQL/Python izolată nu este configurată pentru această instanță.');
   if(occupied)fail(429,'O analiză SQL/Python rulează deja. Încearcă din nou după terminarea ei.');
   occupied=true;
   let directory:string|undefined;
   try {
     directory=await mkdtemp(join(tmpdir(),'manager-ai-analysis-'));
     await stageInputs(directory,request);
-    const raw=await execute(paths,directory,request.language,request.signal);
+    const raw=await execute(base,directory,request.language,request.signal);
     request.signal.throwIfAborted();
     return parseResult(raw);
   } finally {
