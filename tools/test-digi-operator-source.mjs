@@ -51,5 +51,32 @@ try{
  assert.equal(data?.matchedTR,3,'cross-company TR must not be assigned to Exampleco');
  assert.equal(data?.otherChannels,3);
  assert.equal(data?.noCommercialMatch,0);
+ sales.run('ExampleCo',iccid(1),'TR01',1);
+ sales.run('ExampleCo',iccid(2),'TR03',1);
+ sales.run('ExampleCo',iccid(3),'',1);
+ data=digiOperatorReported(db,['2026-11']);
+ assert.equal(data.matchedTR,3);
+ assert.equal(data.unattributedTR,2,'competing sites and unknown TR site remain unattributed');
+ assert.deepEqual(data.sites,[{site:'TR01',total:1}],'duplicate movements at one site are counted once');
+ // A second spelling in the commercial ledger makes both commercial owners
+ // ambiguous, including where only one of the spellings sold a given SIM.
+ sales.run('EXAMPLECO',iccid(8),'TR01',1);
+ assert.equal(digiOperatorReported(db,['2026-11']).matchedTR,0);
+ const commercialReads=()=>{
+  let calls=0;
+  const reader={prepare(sql){
+   const statement=db.prepare(sql);
+   return {all(...args){
+    if(sql.includes('activation_effective_movements'))calls++;
+    return statement.all(...args);
+   }};
+  }};
+  return {result:digiOperatorReported(reader,['2026-11']),calls};
+ };
+ const small=commercialReads();
+ for(let i=100;i<2100;i++)obs.run(2,i,iccid(i),'2026-11-10');
+ const large=commercialReads();
+ assert.equal(large.result.total,small.result.total+2000);
+ assert.equal(large.calls,small.calls,'commercial SQL reads scale with companies, not SIMs');
  console.log('PASS: latest cumulative Digi operator total, exact ICCID TR site attribution, company safety, other/unmatched, month scoping and no duplicates.');
 } finally{db.close();}

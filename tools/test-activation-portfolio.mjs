@@ -26,6 +26,7 @@ try{
       build.onResolve({filter:/^(?:\.\/server|#mobiup-activation-store)$/},({path})=>({path,namespace:'synthetic-activation'}));
       build.onLoad({filter:/.*/,namespace:'synthetic-activation'},({path})=>({contents:path==='#mobiup-activation-store'
         ?`import {activationPartnerView} from '${process.cwd()}/lib/activation-partners-node.ts';
+          export async function readDigiOverview(){return globalThis.__activationPortfolioFixture.digiOverview();}
           export async function readVodafoneFocus(){return globalThis.__activationPortfolioFixture.focusRead();}
           export function readActivations(month,sites,provider,query){const fixture=globalThis.__activationPortfolioFixture;
             if(fixture.ledger){
@@ -78,6 +79,12 @@ try{
   process.env.MOBIUP_ACTIVATIONS_PILOT_AGENT_ID='north';
   process.env.MOBIUP_ACTIVATIONS_PILOT_ADDITIONAL_AGENT_IDS='south,nonexclusive,unknown,numeric';
   const user=id=>{const row=database.prepare('SELECT * FROM users WHERE id=?').get(id);return {id,role:row.role,active:row.active,warehouseId:row.warehouse_id,siteCode:row.site_code,managerScope:row.manager_scope};};
+  const digiParams=new URLSearchParams({provider:'digi',month:'2026-10'});
+  fixture.digiOverview=async()=>({provider:'digi',available:true});
+  assert.equal((await activationReport(user('regional'),digiParams,{revalidateFocus:async()=>user('regional')})).provider,'digi');
+  await assert.rejects(()=>activationReport(user('regional'),digiParams,{
+    revalidateFocus:async()=>user('global'),
+  }),error=>error.status===409);
   const focusParams=new URLSearchParams({month:'2026-10',view:'focus'});
   fixture.focusRead=async()=>({provider:'vodafone',focus:{revision:'synthetic'}});
   assert.equal((await activationReport(user('south'),focusParams,{revalidateFocus:async()=>user('south')})).focus.revision,'synthetic');

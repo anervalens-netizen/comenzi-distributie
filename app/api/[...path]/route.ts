@@ -364,7 +364,7 @@ async function dispatch(req: Request) {
   if(path.join('/')==='activations'&&req.method==='GET'){
     const params=new URL(req.url).searchParams,view=params.get('view');
     const focus=isVodafoneFocusView(view);
-    const overview=isVodafoneOverview(params);
+    const overview=isVodafoneOverview(params)||(params.get('provider')==='digi'&&!view);
     const report=await activationReport(focus?user:readUser,params,focus||overview?{
       revalidateFocus:async()=>{
         const current=await requireUser(req);

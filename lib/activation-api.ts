@@ -4,7 +4,7 @@ import {activationPartnerSortKeys,compareActivationPartners,activationTodayWindo
 import {partnerScope} from './partner-portfolio';
 import {normalizedCui} from './partner-company-identity';
 import {canViewActivations} from './activation-access';
-import {readActivations,readVodafoneFocus} from '#mobiup-activation-store';
+import {readActivations,readDigiOverview,readVodafoneFocus} from '#mobiup-activation-store';
 import {db,fail,isGlobalManager,sha256} from './server';
 import {managerFilter} from './manager-scope';
 import {bucharestMonthKey} from './bucharest-month';
@@ -109,18 +109,21 @@ export async function activationReport(user:User,params:URLSearchParams,internal
      query.portfolioRevision=sha256(JSON.stringify(query.portfolio));
    }
  }else if(['months','projects','view'].some(k=>params.has(k)))fail(503,'Proiecția pentru proiecte trebuie pregătită.');
+ // Only the HTTP overview supplies a session recheck. Internal analysis reads
+ // retain their existing reader and authorization boundary.
+ const digiOverview=provider==='digi'&&!params.get('view')&&!!internal?.revalidateFocus;
  let result:ActivationReport;
  const focusQueries=query?.focus?[query.focus]:query?.focusSummaries??[];
  try{
-   result=query&&(query.focus||query.focusSummaries)
-     ?await readVodafoneFocus(month,sites,query)
-     :readActivations(month,sites,provider,query);
+   if(digiOverview)result=await readDigiOverview(month,sites,query);
+   else if(query&&(query.focus||query.focusSummaries))result=await readVodafoneFocus(month,sites,query);
+   else result=readActivations(month,sites,provider,query);
  }catch{
    fail(503,'Activările nu sunt disponibile momentan. Încearcă din nou mai târziu.');
  }
- // Focus calculations can wait for a worker and yield while reading commerce.
+ // Report calculations can wait for a worker while assignments change.
  // Recheck the exact session and reproduce its authorized scope before publishing.
- if(query&&(query.focus||query.focusSummaries)&&internal?.revalidateFocus){
+ if((digiOverview||query?.focus||query?.focusSummaries)&&internal?.revalidateFocus){
    const current=await internal.revalidateFocus();
    if(!canViewActivations(current))fail(403,'Secțiunea Activări nu este disponibilă pentru acest cont.');
    const currentRules=await readDistributionRules();

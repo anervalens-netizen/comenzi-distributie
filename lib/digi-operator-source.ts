@@ -13,7 +13,7 @@ export type DigiOperatorReported={
 };
 type ImportRow={id:number;company:string;source_at:string;period_start:string;period_end:string};
 type Observation={serial:string;activation_date:string};
-type Movement={site:string;is_tr:number};
+type Movement={serial:string;site:string;is_tr:number};
 type Company={company:string};
 const MONTH=/^20[0-9]{2}-(0[1-9]|1[0-2])$/;
 const canonical=(name:string)=>name.normalize('NFKC').trim().toLowerCase();
@@ -59,13 +59,19 @@ export function digiOperatorReported(
  const companies=(source.prepare(
   "SELECT DISTINCT company FROM activation_effective_movements WHERE provider='digi'"
  ).all() as unknown as Company[]).map(row=>row.company);
+ const uniqueCompanies=new Map<string,string|null>();
+ for(const company of companies){
+  const key=canonical(company);
+  uniqueCompanies.set(key,uniqueCompanies.has(key)?null:company);
+ }
  const observed=source.prepare(
   "SELECT DISTINCT serial,activation_date FROM activation_observations "+
   "WHERE import_id=? AND activation_date>=? AND activation_date<? AND serial<>''"
  );
  const commercial=source.prepare(
-  "SELECT site,is_tr FROM activation_effective_movements INDEXED BY effective_imei "+
-  "WHERE company=? AND provider='digi' AND imei=?"
+  "SELECT m.imei AS serial,m.site,m.is_tr FROM json_each(?) wanted "+
+  "CROSS JOIN activation_effective_movements m INDEXED BY effective_imei "+
+  "WHERE m.company=? AND m.provider='digi' AND m.imei=wanted.value"
  );
  const seen=new Set<string>(),sites=new Map<string,number>();
  const monthly:DigiOperatorReported['monthly']=[];
@@ -99,32 +105,37 @@ export function digiOperatorReported(
    }
   }
   let monthTR=0,monthOther=0,monthMissing=0;
-  for(const [serial,owners] of serialOwners){
+  // The company/provider/IMEI index is probed in one statement per company.
+  // A month is also the unit of deduplication and reporting.
+  const serials=JSON.stringify([...serialOwners.keys()]);
+  const matched=new Map<string,{sites:Set<string>;missingSite:boolean}>();
+  for(const company of companies){
+   const owner=canonical(company);
+   const unique=uniqueCompanies.get(owner)===company;
+   for(const row of commercial.all(serials,company) as unknown as Movement[]){
+    let match=matched.get(row.serial);
+    if(!match){
+     match={sites:new Set(),missingSite:false};
+     matched.set(row.serial,match);
+    }
+    if(row.is_tr===1&&unique&&serialOwners.get(row.serial)?.has(owner)){
+     if(row.site)match.sites.add(row.site);
+     else match.missingSite=true;
+    }
+   }
+  }
+  for(const serial of serialOwners.keys()){
    if(seen.has(serial))throw new Error('Digi ICCID reported in multiple activation months');
    seen.add(serial);
    if(!/^[0-9]{19}$/.test(serial))throw new Error('Invalid Digi ICCID in certified operator observations');
-   const permitted=new Set<string>();
-   for(const owner of owners){
-    const exact=companies.filter(company=>canonical(company)===owner);
-    if(exact.length===1)permitted.add(exact[0]);
-   }
-   const siteCandidates=new Set<string>();
-   let trWithoutSite=false,hasOtherCommercial=false;
-   for(const company of companies){
-    for(const row of commercial.all(company,serial) as unknown as Movement[]){
-     if(row.is_tr===1&&permitted.has(company)){
-      if(row.site)siteCandidates.add(row.site);
-      else trWithoutSite=true;
-     }else hasOtherCommercial=true;
-    }
-   }
-   if(siteCandidates.size||trWithoutSite){
+   const match=matched.get(serial);
+   if(match&&(match.sites.size||match.missingSite)){
     monthTR++;matchedTR++;
-    if(siteCandidates.size===1&&!trWithoutSite){
-     const site=[...siteCandidates][0];
+    if(match.sites.size===1&&!match.missingSite){
+     const site=[...match.sites][0];
      sites.set(site,(sites.get(site)||0)+1);
     }else unattributedTR++;
-   }else if(hasOtherCommercial){monthOther++;otherChannels++;}
+   }else if(match){monthOther++;otherChannels++;}
    else{monthMissing++;noCommercialMatch++;}
   }
   total+=serialOwners.size;

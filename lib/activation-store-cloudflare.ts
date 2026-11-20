@@ -7,3 +7,5 @@ export function verifySim(_serial:string,_provider:'vodafone'|'digi'='vodafone')
 export async function readVodafoneFocus(_month:string,_sites:string[]|null,_query:ActivationQuery):Promise<ActivationReport>{throw new Error('Focus report requires the Node host');}
 
 export async function readVodafoneBonusAsync(_input:import('./vodafone-bonus-node').VodafoneBonusRead):Promise<import('./vodafone-bonus-types').VodafoneBonusReport>{throw new Error('Vodafone bonus report requires the Node host');}
+
+export async function readDigiOverview(_month:string,_sites:string[]|null,_query?:ActivationQuery):Promise<ActivationReport>{throw new Error('Digi report requires the Node host');}

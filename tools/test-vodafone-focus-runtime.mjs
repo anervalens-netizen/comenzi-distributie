@@ -9,7 +9,7 @@ const {outputFiles} = await build({
   entryPoints: ['lib/vodafone-focus-runtime-node.ts'],
   bundle: true, platform: 'node', format: 'esm', write: false,
 });
-const {readVodafoneFocus} = await import('data:text/javascript;base64,' + Buffer.from(outputFiles[0].text).toString('base64'));
+const {readDigiOverview,readVodafoneFocus} = await import('data:text/javascript;base64,' + Buffer.from(outputFiles[0].text).toString('base64'));
 const cwd = process.cwd();
 const root = mkdtempSync(join(tmpdir(), 'focus-worker-deadline-'));
 const realTimeout = globalThis.setTimeout;
@@ -19,19 +19,28 @@ try {
   writeFileSync(join(root, 'vodafone-focus-worker.mjs'), `
     import {parentPort,workerData} from 'node:worker_threads';
     import {appendFileSync} from 'node:fs';
-    const {month,query} = workerData;
-    const focus = !!query.focusSummaries?.length;
+    const {month,query,provider,sites} = workerData;
+    const focus = !!query?.focusSummaries?.length;
     appendFileSync('started', month+(focus ? ':focus' : ':ordinary')+'\\n');
     if (!focus && month.startsWith('slow-')) await new Promise(resolve=>setTimeout(resolve,350));
     if (focus) parentPort.postMessage({
       type:'overviewBase',report:{month, totals:{total:50}, commissionCoverage:'unavailable'},
     });
-    if (month === 'failure') parentPort.postMessage(null);
+    if (provider==='digi') {
+      await new Promise(resolve=>setTimeout(resolve,100));
+      parentPort.postMessage({type:'report',report:{month,provider,sites,totals:{total:6}}});
+    } else if (month === 'failure') parentPort.postMessage(null);
     else if (!(focus && month.startsWith('slow')) && month !== 'detail') parentPort.postMessage({
       type:'report',report:{month, totals:{total:50,...(focus ? {eligible:20} : {})}},
     });
     else await new Promise(resolve=>setTimeout(resolve,20_000));
   `);
+  const readDigi=()=>readDigiOverview('digi-month',['synthetic-site']);
+  const digi=readDigi(),otherWaiter=readDigi();
+  assert.equal(await Promise.race([wait(10,'responsive'),digi]),'responsive');
+  assert.deepEqual(await digi,{month:'digi-month',provider:'digi',sites:['synthetic-site'],totals:{total:6}});
+  assert.deepEqual(await otherWaiter,await digi);
+  assert.equal(readFileSync('started','utf8').split('digi-month:ordinary').length-1,1,'identical Digi requests share work');
   const overview = {focusSummaries: [{}]};
   assert.equal((await readVodafoneFocus('success', null, overview)).totals.eligible, 20);
   const fallback = await readVodafoneFocus('failure', null, overview);
