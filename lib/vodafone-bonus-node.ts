@@ -6,7 +6,7 @@ import {salesLocationKey,salesSiteKey} from './sales-location';
 import {normalizedCui} from './partner-company-identity';
 import type {DistributionRules} from './distribution-rules';
 import {activationFactsVersion} from './activation-semantics';
-import {firstVodafoneBonusMonth, type VodafoneBonusReason, type VodafoneBonusDocument, type VodafoneBonusReport, type VodafoneBonusScope, type VodafoneTopLocation} from './vodafone-bonus-types';
+import {firstVodafoneBonusMonth, type VodafoneBonusReason, type VodafoneBonusReport, type VodafoneBonusScope, type VodafoneTopLocation} from './vodafone-bonus-types';
 import {bonusDate,bonusEvidenceIdentity,type VodafoneBonusEvidence} from './vodafone-bonus-evidence';
 import {isVodafoneGenericPartner,vodafoneDocumentKind} from './vodafone-bonus-rules';
 import {vodafoneBonusLedger,type BonusActivation,type BonusLedgerInput} from './vodafone-bonus-ledger';
@@ -438,7 +438,7 @@ export function readVodafoneBonus(input: VodafoneBonusRead): VodafoneBonusReport
     resolve(generation,'activations.sqlite'),resolve(generation,'activation-report.sqlite'),
   ];
   const before = paths.slice(1).map(fingerprint);
-  const use = (snapshot: BonusLedgerInput) => {
+  const reportForScope = (snapshot: BonusLedgerInput) => {
     const revision = createHash('sha256').update(JSON.stringify([snapshot.revision,input.scope])).digest('hex');
     return vodafoneBonusLedger({...snapshot,revision},input.scope,input.month);
   };
@@ -453,7 +453,7 @@ export function readVodafoneBonus(input: VodafoneBonusRead): VodafoneBonusReport
     const app = open(paths[0]);
     const appIdentity = applicationIdentity(app,paths[0]);
     const key = JSON.stringify([appIdentity,before,generation,input.today,input.rules,input.evidence,input.targets]);
-    if (cached?.key===key) return use(cached.snapshot);
+    if (cached?.key===key) return reportForScope(cached.snapshot);
     const [history,sales,source,report] = paths.slice(1).map(open);
     const meta = Object.fromEntries(report.prepare('SELECT key,value FROM report_meta').all().map(row=>[row.key,row.value]));
     const sourceMeta = Object.fromEntries(source.prepare("SELECT key,value FROM activation_meta WHERE key IN ('schema_version','facts_version','generation')").all().map(row=>[row.key,row.value]));
@@ -482,7 +482,7 @@ export function readVodafoneBonus(input: VodafoneBonusRead): VodafoneBonusReport
     const revision = createHash('sha256').update(key).digest('hex');
     const snapshot = {activation,documents,coverage,targets:input.targets,portfolios:identity.portfolios,revision};
     cached={key,snapshot};
-    return use(snapshot);
+    return reportForScope(snapshot);
   } finally {
     for (const database of databases.reverse()) database.close();
   }
