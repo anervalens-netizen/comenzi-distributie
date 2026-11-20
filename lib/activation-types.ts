@@ -16,6 +16,7 @@ export type ActivationMonth={month:string;reported:boolean;counts:ActivationCoun
 export type ActivationReport = {
   focus?:FocusReport;
   focusCards?:FocusReport[];
+  focusUnavailable?:FocusReport['territory'][];
   separateFocusScope?:boolean;
   commissionCoverage?:'complete'|'partial'|'missing'|'outside_scope'|'unavailable';
   focusWorkbook?:string;

@@ -7,7 +7,7 @@ const {outputFiles} = await build({
   stdin: {resolveDir: process.cwd(), contents: "export * from './lib/vodafone-focus-node.ts'; export * from './lib/vodafone-focus.ts'; export * from './lib/vodafone-focus-export.ts'; export * from './lib/vodafone-focus-overview.ts';"},
   bundle: true, platform: 'node', format: 'esm', write: false,
 });
-const {vodafoneFocusReport, focusCategory, focusAttribution, vodafoneFocusWorkbook, applyVodafoneFocusOverview} =
+const {vodafoneFocusReport, focusCategory, focusAttribution, vodafoneFocusWorkbook, applyVodafoneFocusOverview, readFocusSummaries} =
   await import('data:text/javascript;base64,' + Buffer.from(outputFiles[0].text).toString('base64'));
 
 const ledger = new DatabaseSync(':memory:');
@@ -28,6 +28,16 @@ const sharedHistory = ['sud','nord_a','nord_b'].map((territory,index) => {
 });
 const overview = applyVodafoneFocusOverview({sites: [], totals: {}, history: []}, sharedHistory);
 assert.deepEqual([overview.totals.eligible,overview.sites[0].eligible,overview.history[0].eligible],[5,5,5]);
+const partial=()=>({sites:[],history:[],totals:{total:55}});
+const territories=[{territory:'sud'},{territory:'nord_a'}];
+const broken=focus=>{if(focus.territory==='sud')throw Error('Temporarily unavailable');return sharedHistory[1];};
+const mixed=readFocusSummaries(partial(),territories,broken,true,false);
+assert.deepEqual([mixed.totals.total,mixed.totals.eligible,mixed.commissionCoverage],[55,3,'partial']);
+assert.deepEqual(mixed.focusCards.map(card=>card.territory),['nord_a']);assert.deepEqual(mixed.focusUnavailable,['sud']);
+const national=readFocusSummaries(partial(),territories,broken,false,false);
+assert.equal(national.commissionCoverage,'partial');assert.equal(national.focusCards,undefined);assert.equal(national.focusUnavailable,undefined);
+const missing=readFocusSummaries(partial(),[territories[0]],broken,true,false);
+assert.deepEqual([missing.totals.total,missing.totals.eligible,missing.commissionCoverage],[55,undefined,'unavailable']);
 const later = document('S', '2026-10-25');
 const prior = document('S', '2026-10-12');
 assert.equal(focusCategory('sud', 'AG', '', 'FREE_SIM', '3,00'), 'zero3');

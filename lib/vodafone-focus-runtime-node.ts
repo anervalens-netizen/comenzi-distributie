@@ -109,6 +109,8 @@ export async function readVodafoneFocus(month: string, sites: string[] | null, q
     : pendingCount(overviewQueue)
       ? readBusyOverview(month, sites, query, publishBase)
       : runFocus(overviewQueue, month, sites, query, publishBase))
+    .then(report=>query.returnFocusCards&&report.commissionCoverage==='unavailable'&&!report.focusUnavailable
+      ? {...report,focusUnavailable:query.focusSummaries!.map(focus=>focus.territory)} : report)
     .finally(() => inFlightOverviews.delete(key));
   const totals = Promise.race([base, complete]);
   // A caller may subscribe only to the complete report.

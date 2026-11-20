@@ -1,7 +1,7 @@
 import {vodafoneFocusWorkbook} from './vodafone-focus-export';
 import {readFocusSlips} from './vodafone-focus-documents-node';
 import {selectFocusSource, vodafoneFocusReport} from './vodafone-focus-node';
-import {applyVodafoneFocusOverview} from './vodafone-focus-overview';
+import {applyVodafoneFocusOverview,readFocusSummaries} from './vodafone-focus-overview';
 import {distributionReport} from './activation-distribution-node';
 import {digiOperatorReported} from './digi-operator-source';
 import {activationFactsVersion} from './activation-semantics';
@@ -68,12 +68,9 @@ export function readActivations(month:string,sites:string[]|null,provider:Activa
         // Ordinary totals leave the worker before commercial attribution begins.
         if(!query.focusCardsOnly)onOverviewBase?.({...scoped,commissionCoverage:'unavailable'});
         const labels=focusLabels(),slips=readFocusSlips(),sourceFacts=selectFocusSource(source,query.months);
-        const summaries=query.focusSummaries.flatMap(focus=>{
-          const summary=vodafoneFocusReport(source!,labels,sites,{...query,focus},focusGeneration,slips,sourceFacts);
-          return summary?[summary]:[];
-        });
-        if(query.returnFocusCards)scoped.focusCards=summaries;
-        return query.focusCardsOnly?scoped:applyVodafoneFocusOverview(scoped,summaries);
+        return readFocusSummaries(scoped,query.focusSummaries,
+          focus=>vodafoneFocusReport(source!,labels,sites,{...query,focus},focusGeneration,slips,sourceFacts),
+          !!query.returnFocusCards,!!query.focusCardsOnly);
       }
       if(provider==='digi'){
         for(const entry of scoped.monthly||[])if(entry.reported)entry.source='internal';

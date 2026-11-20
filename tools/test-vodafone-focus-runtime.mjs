@@ -89,6 +89,9 @@ try {
   assert.equal(fallback.commissionCoverage, 'unavailable');
   assert.equal(fallback.totals.total, 50);
   assert.equal(fallback.totals.eligible, undefined);
+  const missingCards=await readVodafoneFocus('failure',null,{focusSummaries:[{territory:'sud'}],returnFocusCards:true});
+  assert.deepEqual(missingCards.focusUnavailable,['sud']);
+  assert.equal(missingCards.totals.eligible,undefined);
 
   globalThis.setTimeout = (run, ms, ...args) => realTimeout(run, ms === 17_000 ? testDeadlineMs : ms, ...args);
   const slow = readVodafoneFocus('slow', null, overview);
