@@ -138,6 +138,7 @@ try{
    ['2026-03','internal',1],['2026-10','operator',2],
  ]);
  assert.equal(digiAnnual.data.totals.total,digiAnnual.data.history.reduce((total,m)=>total+m.total,0));
+ assert.equal(digiAnnual.data.totals.total,digiAnnual.data.sites.reduce((total,site)=>total+site.total,0));
  assert.equal((await request('activations?provider=digi&months=2026-03')).data.totals.total,1);
  assert.equal((await request('activations?provider=digi&months=2026-10')).data.totals.total,2);
  const digiAgent=(await request(digiMonths,'north')).data;
@@ -222,11 +223,12 @@ try{
  }
  await browser.evaluate(`document.querySelector('[aria-label="martie 2026"]').click()`);
  await waitFor(()=>browser.evaluate(`document.querySelector('[aria-label="Evoluție lunară · Activări Digi"] strong')?.textContent==="3"`),'Digi card sums both sources for the selected months');
- assert(await browser.evaluate(`document.querySelector('[aria-label="Activări digi"]').textContent.includes("Raport oficial Digi · 2 SIM-uri distincte")`));
+ assert(!(await browser.evaluate(`document.querySelector('[aria-label="Activări digi"]').textContent.includes("Raport oficial Digi")`)));
  await browser.evaluate(`document.querySelector('[aria-label="Evoluție lunară · Activări Digi"]').click()`);
- await waitFor(()=>browser.evaluate(`document.querySelector('[role="dialog"] [data-month="2026-03"]')?.textContent.includes("Evidență internă TR")`),'Digi historic activation month in the chart');
- const digiLegend=await browser.evaluate(`[...document.querySelectorAll('[role="dialog"] .monthly-trend-legend li')].map(node=>node.textContent)`);
- assert.deepEqual(digiLegend,['Evidență internă TR','Raport oficial Digi']);
+ await waitFor(()=>browser.evaluate(`document.querySelector('[role="dialog"] [data-month="2026-03"] td')?.textContent==="1"`),'Digi historic activation month in the chart');
+ assert.equal(await browser.evaluate(`document.querySelectorAll('[role="dialog"] .monthly-trend-plot path').length`),1);
+ assert(!(await browser.evaluate(`document.querySelector('[role="dialog"]').textContent.includes('Evidență internă TR')`)));
+ assert(!(await browser.evaluate(`document.querySelector('[role="dialog"]').textContent.includes('Raport oficial Digi')`)));
  assert.equal(await browser.evaluate(`document.querySelectorAll('[role="dialog"] .monthly-trend-plot circle').length`),2);
  assert.equal(await browser.evaluate(`[...document.querySelectorAll('[role="dialog"] [data-month] td')]
    .reduce((total,cell)=>total+Number(cell.textContent.replace(/[^0-9]/g,'')),0)`),3);

@@ -12,7 +12,7 @@ import {existsSync,lstatSync,realpathSync} from 'node:fs';
 import {emptyActivationCounts,type ActivationCounts,type ActivationReport,type ActivationProvider} from './activation-types';
 
 type Row={month:string;item_type:string;site:string;count:number;last_date:string|null};
-function add(totals:ActivationCounts,row:Row){
+function add(totals:ActivationCounts,row:Pick<Row,'count'|'item_type'|'site'>){
   totals.total+=row.count;
   if(row.item_type==='SIM')totals.sim+=row.count;
   else if(row.item_type==='TELSIM')totals.telsim+=row.count;
@@ -83,10 +83,8 @@ export function readActivations(month:string,sites:string[]|null,provider:Activa
           scoped.operatorReported=certified;
           const other=certified.otherChannels+certified.noCommercialMatch+certified.unattributedTR;
           const counts=(total:number,unassigned:number)=>({...emptyActivationCounts(),total,sim:total,unassigned});
-          const labels=new Map(report.prepare('SELECT site,label FROM sites').all().map(r=>[String(r.site),String(r.label)]));
-          scoped.sites=certified.sites.map(row=>({site:row.site,label:labels.get(row.site)||row.site,
-            ...counts(row.total,0)}));
-          if(other)scoped.sites.push({site:'',label:'Alte canale / fără vânzare TR identificată',...counts(other,other)});
+          const bySite=new Map(certified.sites.map(row=>[row.site,counts(row.total,0)]));
+          if(other)bySite.set('',counts(other,other));
           const certifiedByMonth=new Map(certified.monthly.map(entry=>[entry.month,entry]));
           scoped.monthly=scoped.monthly?.map(internal=>{
             const official=certifiedByMonth.get(internal.month);
@@ -95,11 +93,12 @@ export function readActivations(month:string,sites:string[]|null,provider:Activa
           });
           scoped.history=(scoped.monthly||[]).filter(entry=>entry.reported)
             .map(({month,source,counts})=>({month,source,...counts}));
-          // Use the same months as the chart for the selection total. The
-          // operator subtotal and its exact TR reconciliation stay in operatorReported.
+          // Use the same months for the selection total, chart and per-site rows.
           const totals=counts(certified.total,other);
+          const internalMonths:string[]=[];
           for(const entry of scoped.history){
             if(entry.source!=='internal')continue;
+            internalMonths.push(entry.month);
             totals.total+=entry.total;
             totals.sim+=entry.sim;
             totals.telsim+=entry.telsim;
@@ -107,6 +106,21 @@ export function readActivations(month:string,sites:string[]|null,provider:Activa
             totals.unassigned+=entry.unassigned;
           }
           scoped.totals=totals;
+          if(internalMonths.length){
+            const internalSites=report.prepare(`SELECT site,item_type,SUM(count) count
+              FROM dimension_monthly WHERE provider='digi' AND is_tr=1
+              AND month IN (SELECT value FROM json_each(?)) GROUP BY site,item_type`
+            ).all(JSON.stringify(internalMonths)) as Pick<Row,'site'|'item_type'|'count'>[];
+            for(const row of internalSites){
+              const site=bySite.get(row.site)||emptyActivationCounts();
+              add(site,row);
+              bySite.set(row.site,site);
+            }
+          }
+          const labels=new Map(report.prepare('SELECT site,label FROM sites').all().map(r=>[String(r.site),String(r.label)]));
+          scoped.sites=[...bySite].map(([site,total])=>({
+            site,label:site?(labels.get(site)||site):'Fără gestiune TR atribuită',...total,
+          })).sort((a,b)=>b.total-a.total||a.site.localeCompare(b.site));
           scoped.months=scoped.history.map(({month,total})=>({month,total}));
           scoped.coveredMonths=scoped.history.map(entry=>entry.month);
           // The old reconciliation value sums obsolete overlapping operator
