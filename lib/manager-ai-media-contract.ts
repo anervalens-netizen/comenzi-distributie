@@ -24,4 +24,5 @@ export type ManagerAiArtifact = {
   size_bytes:number;
   kind:'input'|'output';
   download_url:string;
+  removed?:true;
 };

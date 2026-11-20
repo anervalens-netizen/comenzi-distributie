@@ -17,7 +17,7 @@ type ManagerAiProps = {
 };
 
 function ManagerAiConversation({ open, onClose, ownerId, scopeQuery, scopeLabel, currentSection, period }: ManagerAiProps) {
-  const chat = useAiAssistant(open, `comenzi_ai_conversation:${ownerId}:${scopeQuery}`);
+  const chat = useAiAssistant(true, `comenzi_ai_conversation:${ownerId}:${scopeQuery}`);
 
   return <AiAssistantPanel
     canAccess

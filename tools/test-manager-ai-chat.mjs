@@ -76,10 +76,10 @@ try {
   writeFileSync(modulePath,bundle.outputFiles[0].text);
   const {managerAiConversations,requireUser}=await import(pathToFileURL(modulePath));
 
-  function call(path,{body,token='alpha-token',origin='https://synthetic.invalid'}={}) {
+  function call(path,{body,token='alpha-token',origin='https://synthetic.invalid',method='GET'}={}) {
     const headers={cookie:'mobiup_session='+token,Origin:origin};
     if(body!==undefined&&!(body instanceof FormData)){headers['Content-Type']='application/json';body=JSON.stringify(body);}
-    const req=new Request('https://synthetic.invalid/api/manager-ai/'+path,body===undefined?{headers}:{method:'POST',headers,body});
+    const req=new Request('https://synthetic.invalid/api/manager-ai/'+path,body===undefined?{headers,method}:{method:'POST',headers,body});
     return requireUser(req).then(user=>managerAiConversations(req,user,new URL(req.url).pathname.split('/').slice(3)));
   }
   /** @returns {[FormData, string]} */
@@ -93,6 +93,8 @@ try {
   const pending=[];
   const accesses=[];
   const providerOptions=[];
+  const oldPartial='Prima redactare, înainte de schimbarea instrucțiunii. '.repeat(4);
+  const newPartial='Redactarea după schimbare, deja transmisă clientului. '.repeat(4);
   const responseEvents=events=>new Response(events.map(event=>'data: '+JSON.stringify(event)+'\n\n').join(''),{headers:{'Content-Type':'text/event-stream'}});
   function answer(body,text) {
     const events=[
@@ -118,6 +120,16 @@ try {
       assert.match(body.input.at(-1).output,/FIX-42/);
       return Promise.resolve(answer(body,'Franciza FIX-42 are 3 bucăți.'));
     }
+    if(typeof text==='string'&&text.startsWith('flux parțial')) {
+      const output=new ReadableStream({start(controller){
+        const delta=text.endsWith('nou')?newPartial:oldPartial;
+        for(const event of [{type:'response.created',response:{model:body.model}},{type:'response.output_text.delta',delta}]) {
+          controller.enqueue(new TextEncoder().encode('data: '+JSON.stringify(event)+'\n\n'));
+        }
+        options.signal.addEventListener('abort',()=>controller.error(options.signal.reason),{once:true});
+      }});
+      return Promise.resolve(new Response(output,{headers:{'Content-Type':'text/event-stream'}}));
+    }
     if(text==='Raport franciză')return Promise.resolve(responseEvents([
       {type:'response.created',response:{model:body.model}},
       {type:'response.completed',response:{model:body.model,status:'completed',output:[{
@@ -133,6 +145,14 @@ try {
     return Promise.resolve(answer(body,'Răspuns verificat'));
   };
   const events=async response=>(await response.text()).trim().split('\n').map(item=>JSON.parse(item));
+  async function nextEvent(reader,type) {
+    for(;;) {
+      const item=await reader.read();
+      assert.ok(!item.done,'Missing event '+type);
+      const event=JSON.parse(new TextDecoder().decode(item.value));
+      if(event.type===type)return event;
+    }
+  }
   const waitFor=async predicate=>{for(let i=0;i<100&&!predicate();i++)await new Promise(done=>setTimeout(done,10));assert.ok(predicate());};
 
   assert.deepEqual(await (await call('conversations')).json(),{items:[]});
@@ -147,7 +167,12 @@ try {
   assert.deepEqual(saved.items.map(item=>item.id),[savedConversation]);
   assert.equal(saved.items[0].effort,'medium');
 
-  const [data,id]=form('Situația lunii',undefined,[new File(['sku,bucati\nA,3'],'rânduri.csv',{type:'text/csv'})]);
+  const firstFiles=()=>[
+    new File(['sku,bucati\nA,3'],'rânduri.csv',{type:'text/csv'}),
+    new File(['fragment-sterge'],'notite.txt',{type:'text/plain'}),
+    new File(['fragment-pastreaza'],'notite.txt',{type:'text/plain'}),
+  ];
+  const [data,id]=form('Situația lunii',undefined,firstFiles());
   const page=JSON.stringify({tab:'Prepay',period:'2026-09, 2026-10',owner:'neautorizat'});
   data.set('current_view',page);
   const result=await events(await call(base+'/turn',{body:data}));
@@ -160,13 +185,15 @@ try {
   assert.ok(result.some(e=>e.type==='delta'&&e.text==='Răspuns verificat'));
   const attachment=result[1].message.attachments[0];
   const artifactPath=attachment.download_url.split('/api/manager-ai/')[1];
+  const removable=result[1].message.attachments[1];
+  const removablePath=removable.download_url.split('/api/manager-ai/')[1];
   const downloaded=await call(artifactPath);
   assert.equal(await downloaded.text(),'sku,bucati\nA,3');
   assert.equal(downloaded.headers.get('cache-control'),'private, no-store');
   await assert.rejects(call(artifactPath,{token:'beta-token'}),{status:404});
   await assert.rejects(call(artifactPath.replace(base,other)),{status:404});
 
-  const [replay]=form('Situația lunii',id,[new File(['sku,bucati\nA,3'],'rânduri.csv',{type:'text/csv'})]);
+  const [replay]=form('Situația lunii',id,firstFiles());
   replay.set('current_view',page);
   assert.equal((await events(await call(base+'/turn',{body:replay}))).at(-1).type,'complete');
   assert.equal(accesses.length,1);
@@ -184,8 +211,11 @@ try {
   assert.ok(report.some(e=>e.type==='status'&&e.message.includes('Vodafone')));
   const reportFile=report.at(-1).message.attachments[0];
   assert.equal(reportFile.kind,'output');
-  const reportDownload=await call(reportFile.download_url.split('/api/manager-ai/')[1]);
+  const reportPath=reportFile.download_url.split('/api/manager-ai/')[1];
+  const reportDownload=await call(reportPath);
   assert.deepEqual(new Uint8Array(await reportDownload.arrayBuffer()).slice(0,2),new Uint8Array([80,75]));
+  assert.equal((await (await call(reportPath,{method:'DELETE'})).json()).attachment.removed,true);
+  await assert.rejects(call(reportPath),{status:410});
 
   const [held,heldId]=form('așteaptă sfârșitul');
   const heldResponse=await call(base+'/turn',{body:held});
@@ -194,17 +224,66 @@ try {
   assert.equal(part.type,'submission_status');
   const controls={run_id:part.run_id,attempt_id:part.attempt_id,control_id:randomUUID()};
   await waitFor(()=>pending.length===1);
+  await assert.rejects(call(removablePath,{method:'DELETE'}),{status:409});
   const [concurrent]=form('Concurent');
   await assert.rejects(call(other+'/turn',{body:concurrent}),{status:409});
   await assert.rejects(call(other+'/stop',{body:controls}),{status:409});
   await assert.rejects(call(base+'/stop',{body:controls,token:'other-alpha-token'}),{status:409});
   await assert.rejects(call(base+'/stop',{body:{...controls,attempt_id:randomUUID()}}),{status:409});
   const resumed=await call(base+'/submissions/'+heldId+'/events?after='+part.sequence);
-  assert.equal((await (await call(base+'/stop',{body:controls})).json()).state,'stopped');
-  assert.equal((await (await call(base+'/stop',{body:controls})).json()).state,'stopped');
-  assert.equal((await events(resumed)).at(-1).type,'stopped');
-  assert.equal((await (await call(base+'/submissions/'+heldId)).json()).state,'stopped');
+  const stopped=await (await call(base+'/stop',{body:controls})).json();
+  assert.equal(stopped.state,'stopped');
+  assert.equal(stopped.message.text,'Analiza a fost oprită.');
+  assert.equal((await (await call(base+'/stop',{body:controls})).json()).message.id,stopped.message.id);
+  const stoppedEvent=(await events(resumed)).at(-1);
+  assert.equal(stoppedEvent.type,'stopped');
+  assert.equal(stoppedEvent.message.id,stopped.message.id);
+  const stoppedStatus=await (await call(base+'/submissions/'+heldId)).json();
+  assert.equal(stoppedStatus.state,'stopped');
+  assert.equal(stoppedStatus.terminal_message_id,stopped.message.id);
   pending.shift()();
+
+  const [partInput,partId]=form('flux parțial vechi');
+  const partStream=(await call(base+'/turn',{body:partInput})).body.getReader();
+  const partRun=await nextEvent(partStream,'submission_status');
+  assert.equal((await nextEvent(partStream,'delta')).text,oldPartial);
+  await call(base+'/steer',{body:form('flux parțial nou')[0]});
+  await nextEvent(partStream,'reset');
+  assert.equal((await nextEvent(partStream,'delta')).text,newPartial);
+  const partControls={run_id:partRun.run_id,attempt_id:partRun.attempt_id,control_id:randomUUID()};
+  const stoppedPartial=await (await call(base+'/stop',{body:partControls})).json();
+  assert.equal(stoppedPartial.message.status,'stopped');
+  assert.equal(stoppedPartial.message.text,newPartial);
+  assert.equal((await nextEvent(partStream,'stopped')).message.id,stoppedPartial.message.id);
+  assert.equal((await partStream.read()).done,true);
+  const reloaded=(await (await call(base+'/messages?limit=1')).json()).items[0];
+  assert.deepEqual(reloaded,stoppedPartial.message);
+  const partStatus=await (await call(base+'/submissions/'+partId)).json();
+  assert.equal(partStatus.terminal_message_id,reloaded.id);
+
+  await assert.rejects(call(removablePath,{method:'DELETE',token:'beta-token'}),{status:404});
+  await assert.rejects(call(removablePath.replace(base,other),{method:'DELETE'}),{status:404});
+  await assert.rejects(call(removablePath,{method:'DELETE',origin:'https://other.invalid'}),{status:403});
+  // Exercise storage accounting without writing a real 100 MiB fixture.
+  db.prepare('UPDATE manager_ai_artifacts SET size_bytes=? WHERE id=?').run(100*1024*1024,removable.id);
+  const quotaInput=form('Atașament după eliberarea cotei',undefined,[new File(['date'],'nou.txt',{type:'text/plain'})])[0];
+  await assert.rejects(call(base+'/turn',{body:quotaInput}),{status:413});
+  const quotaReport=(await events(await call(other+'/turn',{body:form('Raport franciză')[0]}))).at(-1);
+  assert.equal(quotaReport.type,'complete');
+  assert.match(quotaReport.message.text,/Franciza FIX-42 are 3 bucăți.*Spațiul pentru fișiere AI este plin/s);
+  assert.deepEqual(quotaReport.message.attachments,[]);
+  const removal=await (await call(removablePath,{method:'DELETE'})).json();
+  assert.deepEqual(removal,{ok:true,attachment:{...removable,removed:true}});
+  assert.deepEqual(await (await call(removablePath,{method:'DELETE'})).json(),removal);
+  assert.deepEqual(db.prepare('SELECT id FROM manager_ai_artifacts WHERE id=?').all(removable.id),[]);
+  await assert.rejects(call(removablePath),{status:410});
+  const replayedFiles=(await events(await call(base+'/submissions/'+id+'/events'))).find(event=>event.type==='user_message').message.attachments;
+  assert.equal(replayedFiles[1].removed,true);
+  assert.equal(replayedFiles[2].removed,undefined);
+  assert.equal((await events(await call(base+'/turn',{body:quotaInput}))).at(-1).type,'complete');
+  assert.match(JSON.stringify(accesses.at(-1)),/fragment-pastreaza/);
+  assert.doesNotMatch(JSON.stringify(accesses.at(-1)),/fragment-sterge/);
+  assert.doesNotMatch(JSON.stringify(accesses.at(-1)),/Redactarea după schimbare/);
 
   const [steered,steeredId]=form('așteaptă indicația următoare');
   steered.set('model','gpt-6.2-sol');

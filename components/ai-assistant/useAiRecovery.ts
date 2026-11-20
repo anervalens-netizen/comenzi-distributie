@@ -1,85 +1,102 @@
 import { useCallback, useEffect, type Dispatch, type SetStateAction } from 'react';
 import { useAiApi } from './api-context';
 import type { AiChatMessage, AiRunStatus } from './types';
-import { createSubmissionId, delay, latestSubmission, mergePersisted, runStatusFromProtocol, type MutableRef, type StopOutcomeState } from './protocolState';
+import { captureRunGuard, createSubmissionId, delay, isActiveRun, mergePersisted, runStatusFromProtocol, type MutableRef } from './protocolState';
 
 type Setter<T> = Dispatch<SetStateAction<T>>;
-export function usePendingRunReconciliation(params: {
-  enabled: boolean; conversationId: string | null; runStatus: AiRunStatus;
-  streamAbortRef: MutableRef<AbortController | null>; selectionEpochRef: MutableRef<number>;
-  setMessages: Setter<AiChatMessage[]>; setHasOlderMessages: Setter<boolean>; setRunStatus: Setter<AiRunStatus>;
-  refreshConversations: () => Promise<void>; pendingSubmissions: MutableRef<Map<string, string>>;
+type RunControls = {
+  conversationId: string | null;
+  submissionId?: string;
+  runStatusRef: MutableRef<AiRunStatus>;
+  runGenerationRef: MutableRef<number>;
+  selectionEpochRef: MutableRef<number>;
+  setRunStatus: (status: AiRunStatus) => void;
+};
+
+export function usePendingRunReconciliation(params: RunControls & {
+  enabled: boolean; active: boolean;
+  streamAbortRef: MutableRef<AbortController | null>;
+  setMessages: Setter<AiChatMessage[]>; setHasOlderMessages: Setter<boolean>;
+  refreshConversations: () => Promise<void>; activeSubmissionIdRef: MutableRef<string | undefined>;
 }) {
-  const { enabled, conversationId, runStatus, streamAbortRef, selectionEpochRef,
-    setMessages, setHasOlderMessages, setRunStatus, refreshConversations, pendingSubmissions } = params;
+  const { enabled, active, conversationId, submissionId, runStatusRef, streamAbortRef,
+    selectionEpochRef, runGenerationRef, setMessages, setHasOlderMessages, setRunStatus,
+    refreshConversations, activeSubmissionIdRef } = params;
   const { getAiSubmissionStatus, listAiMessages } = useAiApi();
   useEffect(() => {
-    if (!enabled || !conversationId || runStatus === 'loading' || runStatus === 'unavailable') return;
-    const epoch = selectionEpochRef.current;
+    if (!enabled || !active || !conversationId || !submissionId) return;
+    const isCurrent = captureRunGuard(selectionEpochRef, runGenerationRef);
     let cancelled = false;
-    const valid = () => !cancelled && selectionEpochRef.current === epoch;
+    let syncedDetachedRun = false;
+    let detachedUnseenCount = 0;
+    const valid = () => !cancelled && isCurrent() && isActiveRun(runStatusRef.current)
+      && activeSubmissionIdRef.current === submissionId;
     void (async () => {
       while (valid()) {
         await delay(2_000);
         if (!valid()) return;
         try {
-          let page = await listAiMessages(conversationId);
-          const id = pendingSubmissions.current.get(conversationId) ?? latestSubmission(page.items);
-          if (!id) return;
-          const state = await getAiSubmissionStatus(conversationId, id);
+          const state = await getAiSubmissionStatus(conversationId, submissionId);
           if (!valid()) return;
-          if (state.state === 'unseen' && !pendingSubmissions.current.has(conversationId)) return;
-          const status = runStatusFromProtocol(state);
-          const terminal = status === 'idle' && !['unknown', 'unseen'].includes(state.state);
-          // Reconcile durable completion even if the delivery connection never closes.
-          // Preserve live deltas until the server confirms a terminal state.
-          if (streamAbortRef.current && !terminal) continue;
-          if (terminal) { streamAbortRef.current?.abort(); streamAbortRef.current = null; }
-          if (status === 'idle' && !['unknown', 'unseen'].includes(state.state)) page = await listAiMessages(conversationId);
-          if (!valid()) return;
-          setMessages((current) => mergePersisted(page.items, current, status, state));
-          setHasOlderMessages(page.hasMore);
-          setRunStatus(status);
-          if (!['unknown', 'unseen'].includes(state.state) && status === 'idle') {
-            pendingSubmissions.current.delete(conversationId);
-            await refreshConversations().catch(() => undefined);
+          if (state.state === 'unknown') continue;
+          if (state.state === 'unseen') {
+            // A detached request may not have reached the server. Allow the same ID to be retried
+            // after two durable misses, while an open upload continues to own admission.
+            if (streamAbortRef.current || ++detachedUnseenCount < 2) continue;
+            setRunStatus('idle');
             return;
           }
+          detachedUnseenCount = 0;
+          const status = runStatusFromProtocol(state);
+          const terminal = status === 'idle';
+          // An active stream supplies message content. The recovery loop only checks status
+          // until delivery is lost or a durable terminal state needs to be shown.
+          if (!terminal && (streamAbortRef.current || syncedDetachedRun)) continue;
+          const page = await listAiMessages(conversationId);
+          if (!valid()) return;
+          if (!terminal && streamAbortRef.current) continue;
+          const reconciled = terminal || runStatusRef.current !== 'stopping' ? status : 'stopping';
+          setMessages((current) => mergePersisted(page.items, current, reconciled, state));
+          setHasOlderMessages(page.hasMore);
+          if (terminal) {
+            const delivery = streamAbortRef.current;
+            streamAbortRef.current = null;
+            delivery?.abort();
+          }
+          setRunStatus(reconciled);
+          if (terminal) {
+            void refreshConversations().catch(() => undefined);
+            return;
+          }
+          syncedDetachedRun = true;
         } catch { /* A read failure does not fabricate a terminal outcome. */ }
       }
     })();
     return () => { cancelled = true; };
-  }, [conversationId, enabled, getAiSubmissionStatus, listAiMessages, pendingSubmissions, refreshConversations, runStatus, selectionEpochRef, setHasOlderMessages, setMessages, setRunStatus, streamAbortRef]);
+  }, [active, activeSubmissionIdRef, conversationId, enabled, getAiSubmissionStatus, listAiMessages,
+    refreshConversations, runGenerationRef, runStatusRef, selectionEpochRef, setHasOlderMessages,
+    setMessages, setRunStatus, streamAbortRef, submissionId]);
 }
 
-export function useStopAction(
-  conversationId: string | null, messages: AiChatMessage[], pendingSubmissions: MutableRef<Map<string, string>>,
-  runStatus: AiRunStatus, setRunStatus: Setter<AiRunStatus>, currentConversationIdRef: MutableRef<string | null>,
-  stopOutcomesRef: MutableRef<Map<string, StopOutcomeState>>, selectionEpochRef: MutableRef<number>,
-) {
+export function useStopAction({
+  conversationId, submissionId, runStatusRef, setRunStatus, selectionEpochRef, runGenerationRef,
+}: RunControls) {
   const { getAiSubmissionStatus, stopAiTurn } = useAiApi();
   return useCallback(async () => {
-    if (!conversationId || runStatus !== 'running') return;
-    const id = pendingSubmissions.current.get(conversationId) ?? latestSubmission(messages);
-    if (!id) return;
-    const epoch = selectionEpochRef.current;
-    const generation = (stopOutcomesRef.current.get(conversationId)?.generation ?? 0) + 1;
-    stopOutcomesRef.current.set(conversationId, { generation, outcome: 'pending' });
+    const waitingForStop = () => runStatusRef.current === 'stopping';
+    if (!conversationId || !submissionId || runStatusRef.current !== 'running') return;
+    const isCurrent = captureRunGuard(selectionEpochRef, runGenerationRef);
     setRunStatus('stopping');
     try {
-      await stopAiTurn(conversationId, id, createSubmissionId());
-      if (stopOutcomesRef.current.get(conversationId)?.generation === generation) {
-        stopOutcomesRef.current.set(conversationId, { generation, outcome: 'accepted' });
-      }
+      await stopAiTurn(conversationId, submissionId, createSubmissionId());
     } catch {
-      // Stop may have committed before its ACK was lost. Query before restoring controls.
+      // Stop may have committed before its ACK was lost. The terminal recovery path
+      // reads the stored answer; only an active or not-yet-admitted run re-enables Stop.
       try {
-        const state = await getAiSubmissionStatus(conversationId, id);
-        if (stopOutcomesRef.current.get(conversationId)?.generation !== generation) return;
-        const status = runStatusFromProtocol(state);
-        stopOutcomesRef.current.set(conversationId, { generation, outcome: status === 'stopping' ? 'accepted' : 'failed' });
-        if (selectionEpochRef.current === epoch && currentConversationIdRef.current === conversationId) setRunStatus((current) => current === 'stopping' ? status : current);
-      } catch { /* Remain stopping until durable reconciliation becomes available. */ }
+        const state = await getAiSubmissionStatus(conversationId, submissionId);
+        if (isCurrent() && waitingForStop()
+          && (runStatusFromProtocol(state) === 'running' || state.state === 'unseen')) setRunStatus('running');
+      } catch { /* Keep the existing execution state while the active run is polled. */ }
     }
-  }, [conversationId, currentConversationIdRef, getAiSubmissionStatus, messages, pendingSubmissions, runStatus, setRunStatus, stopOutcomesRef, selectionEpochRef, stopAiTurn]);
+  }, [conversationId, getAiSubmissionStatus, runGenerationRef, runStatusRef, selectionEpochRef, setRunStatus, stopAiTurn, submissionId]);
 }

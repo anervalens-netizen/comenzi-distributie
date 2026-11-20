@@ -2,7 +2,16 @@ import type { AiChatMessage, AiRunStatus, AiSubmissionResult, AiSubmissionStatus
 
 export const STREAMING_MESSAGE_ID = 'comenzi-ai-streaming';
 export type MutableRef<T> = { current: T };
-export type StopOutcomeState = { generation: number; outcome: 'pending' | 'accepted' | 'failed' };
+export function isActiveRun(status: AiRunStatus): boolean {
+  return status === 'running' || status === 'stopping';
+}
+
+/** Selection can stay the same while one turn supersedes another. */
+export function captureRunGuard(selectionEpoch: MutableRef<number>, runGeneration: MutableRef<number>): () => boolean {
+  const selected = selectionEpoch.current;
+  const generation = runGeneration.current;
+  return () => selectionEpoch.current === selected && runGeneration.current === generation;
+}
 export const delay = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms));
 export function createSubmissionId(): string {
   if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
@@ -35,7 +44,10 @@ export function runStatusFromProtocol(status: AiSubmissionStatus | null): AiRunS
 }
 
 export function latestSubmission(messages: AiChatMessage[]): string | undefined {
-  return [...messages].reverse().find((message) => message.role === 'user')?.id;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index].role === 'user') return messages[index].id;
+  }
+  return undefined;
 }
 
 export function streamingMessage(): AiChatMessage {
