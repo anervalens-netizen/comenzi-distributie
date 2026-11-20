@@ -2,7 +2,6 @@
 
 import { Bell, CalendarDays, Check, CheckCheck, ChevronLeft, ChevronRight, Package, Radio, Store } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, type ComponentType } from 'react';
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { PushNotifications } from '@/components/push-notifications';
 import { errorMessage, networkApi } from '@/lib/client-api';
 import type { NotificationFeed, NotificationItem } from '@/lib/leave-types';
@@ -79,26 +78,24 @@ function NotificationRow({ item, busy, canOpenTarget = true, onOpenTarget, onRea
   </li>;
 }
 
-export function NotificationBell({ onOpenCenter, onOpenTarget, canOpenTarget = true }: TargetProps & { onOpenCenter: () => void }) {
-  const [open, setOpen] = useState(false);
-  const [feed, setFeed] = useState<NotificationFeed>();
-  const [busy, setBusy] = useState(false);
-  const [loadError, setLoadError] = useState('');
-  const [actionError, setActionError] = useState('');
+type BellProps = {
+  onOpenCenter: () => void;
+  active: boolean;
+  blocked: boolean;
+};
+
+export function NotificationBell({ onOpenCenter, active, blocked }: BellProps) {
+  const [unread, setUnread] = useState(0);
   const pendingRead = useRef<AbortController>(null);
-  const pendingAction = useRef<AbortController>(null);
   const refresh = useCallback(async () => {
     pendingRead.current?.abort();
     const controller = new AbortController();
     pendingRead.current = controller;
     try {
       const next = await requestFeed('notifications/feed?limit=5', 'GET', undefined, controller.signal);
-      if (!controller.signal.aborted) {
-        setFeed(next);
-        setLoadError('');
-      }
-    } catch (error) {
-      if (!controller.signal.aborted) setLoadError(errorMessage(error));
+      if (!controller.signal.aborted) setUnread(next.unread);
+    } catch {
+      // Keep the last verified badge. The full center reports feed errors and supports retry.
     }
   }, []);
   useEffect(() => {
@@ -110,72 +107,23 @@ export function NotificationBell({ onOpenCenter, onOpenTarget, canOpenTarget = t
     window.addEventListener('focus', load);
     window.addEventListener('online', load);
     window.addEventListener(FEED_CHANGED, load);
+    document.addEventListener('visibilitychange', load);
     return () => {
       pendingRead.current?.abort();
-      pendingAction.current?.abort();
       window.clearInterval(interval);
       window.removeEventListener('focus', load);
       window.removeEventListener('online', load);
       window.removeEventListener(FEED_CHANGED, load);
+      document.removeEventListener('visibilitychange', load);
     };
   }, [refresh]);
 
-  async function act(item: NotificationItem, navigate: boolean) {
-    if (busy) return;
-    const controller = new AbortController();
-    pendingAction.current = controller;
-    setBusy(true);
-    setActionError('');
-    try {
-      if (!item.readAt) {
-        const next = await requestFeed('notifications/read', 'POST', { ids: [item.id] }, controller.signal);
-        if (controller.signal.aborted) return;
-        pendingRead.current?.abort();
-        setFeed({ ...next, items: next.items.slice(0, 5) });
-        setLoadError('');
-      }
-      if (navigate) {
-        setOpen(false);
-        onOpenTarget(item);
-      }
-    } catch (error) {
-      if (!controller.signal.aborted) setActionError(errorMessage(error));
-    } finally {
-      if (!controller.signal.aborted) setBusy(false);
-    }
-  }
-
-  const unread = feed?.unread || 0;
-  return <Dialog open={open} onOpenChange={next => {
-    setOpen(next);
-    setActionError('');
-    if (next) void refresh();
-  }}>
-    <DialogTrigger render={<button type="button" className="icon-button request-bell"
-      title="Notificări" aria-label={unread ? 'Notificări necitite '+unread : 'Notificări'}/>}>
-      <Bell size={20}/>
-      {unread > 0 && <span className="request-count" aria-hidden="true">{unread > 99 ? '99+' : unread}</span>}
-    </DialogTrigger>
-    <DialogContent className="admin-dialog notification-dialog">
-      <DialogHeader>
-        <DialogTitle>Notificări recente</DialogTitle>
-        <DialogDescription>{unread ? unread+' notificări necitite' : 'Ultimele notificări din contul tău'}</DialogDescription>
-      </DialogHeader>
-      {(loadError || actionError) && <div className="error-banner" role="alert">{actionError || loadError}
-        {loadError && !actionError && <button type="button" className="quiet" onClick={() => void refresh()}>Reîncarcă</button>}
-      </div>}
-      {feed?.items.length
-        ? <ul className="notification-list">
-          {feed.items.map(item => <NotificationRow key={item.id} item={item} busy={busy} canOpenTarget={canOpenTarget}
-            onOpenTarget={() => void act(item, true)} onRead={() => void act(item, false)}/>)}
-        </ul>
-        : !loadError && <p className="muted">{feed ? 'Nu ai notificări.' : 'Se încarcă notificările…'}</p>}
-      <button type="button" className="secondary notification-all" disabled={!canOpenTarget}
-        onClick={() => { setOpen(false); onOpenCenter(); }}>
-        Vezi toate notificările <ChevronRight size={16}/>
-      </button>
-    </DialogContent>
-  </Dialog>;
+  return <button type="button" className="icon-button request-bell" title="Notificări"
+    aria-label={unread ? 'Notificări necitite '+unread : 'Notificări'}
+    aria-current={active ? 'page' : undefined} disabled={blocked} onClick={onOpenCenter}>
+    <Bell size={20} aria-hidden="true"/>
+    {unread > 0 && <span className="request-count" aria-hidden="true">{unread > 99 ? '99+' : unread}</span>}
+  </button>;
 }
 
 export function NotificationCenter({ onOpenTarget, canOpenTarget = true }: TargetProps) {
@@ -186,6 +134,7 @@ export function NotificationCenter({ onOpenTarget, canOpenTarget = true }: Targe
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [retry, setRetry] = useState(0);
+  const heading = useRef<HTMLHeadingElement>(null);
   const pendingRead = useRef<AbortController>(null);
   const pendingAction = useRef<AbortController>(null);
 
@@ -204,7 +153,10 @@ export function NotificationCenter({ onOpenTarget, canOpenTarget = true }: Targe
     return () => controller.abort();
   }, [path, retry]);
 
-  useEffect(() => () => pendingAction.current?.abort(), []);
+  useEffect(() => {
+    heading.current?.focus({ preventScroll: true });
+    return () => pendingAction.current?.abort();
+  }, []);
 
   async function act(selection: { ids: string[] } | { all: true }, navigate?: NotificationItem) {
     if (busy) return;
@@ -241,10 +193,10 @@ export function NotificationCenter({ onOpenTarget, canOpenTarget = true }: Targe
   }
 
   return <div className="notification-center">
-    <section className="panel notification-panel">
+    <section className="panel notification-panel" aria-labelledby="notification-heading">
       <div className="section-heading">
         <Bell size={22}/>
-        <div><h1>Notificări</h1><p>{current
+        <div><h1 ref={heading} id="notification-heading" tabIndex={-1}>Notificări</h1><p>{current
           ? current.categoryUnread+' necitite'+(category==='all' ? '' : ' în această categorie')
           : 'Mesajele din contul tău'}</p></div>
       </div>

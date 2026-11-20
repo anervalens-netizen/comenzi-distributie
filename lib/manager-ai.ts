@@ -1,6 +1,7 @@
 export const managerAiModels = ['gpt-6.1-terra', 'gpt-6.2-sol'] as const;
 export type ManagerAiModel = typeof managerAiModels[number];
 export const defaultManagerAiModel = managerAiModels[0];
+export const managerAiNotConfiguredMessage = 'Asistentul AI nu este configurat pentru Comenzi.';
 
 export type ManagerAiCell = string | number | null;
 export type ManagerAiCoverage = {

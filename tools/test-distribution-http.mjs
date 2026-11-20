@@ -51,7 +51,22 @@ writeFileSync(join(root,'vodafone-top-locations.json'),JSON.stringify({version:1
  {month:'2026-10',pointCode:'B',target:0},
  {month:'2026-09',pointCode:'A',target:4},
 ]}));
-const child=spawn(process.execPath,['dist/standalone/server.js'],{env:{...process.env,MOBIUP_DATA_DIR:root,MOBIUP_ACTIVATIONS_DIR:root,MOBIUP_ACTIVATIONS_PILOT_MANAGER_ID:'manager',MOBIUP_ACTIVATIONS_PILOT_ADDITIONAL_MANAGER_IDS:'regional',MOBIUP_ACTIVATIONS_PILOT_AGENT_ID:'north',MOBIUP_ACTIVATIONS_PILOT_ADDITIONAL_AGENT_IDS:'south,non',MOBIUP_USAGE_DISABLED:'1',HOST:'127.0.0.1',PORT:'3096'},stdio:'ignore'});
+const providerFixture=join(root,'synthetic-provider.mjs');
+writeFileSync(providerFixture,`
+ const originalFetch=globalThis.fetch;
+ globalThis.fetch=(url,options)=>{
+   if(String(url)!=='https://api.openai.com/v1/responses')return originalFetch(url,options);
+   const request=JSON.parse(options.body);
+   const text='**Răspuns sintetic verificat**';
+   const events=[
+     {type:'response.created',response:{model:request.model}},
+     {type:'response.output_text.delta',delta:text},
+     {type:'response.completed',response:{model:request.model,status:'completed',output:[{type:'message',role:'assistant',content:[{type:'output_text',text}]}]}},
+   ];
+   return new Response(events.map(event=>'data: '+JSON.stringify(event)+'\\n\\n').join(''),{headers:{'Content-Type':'text/event-stream'}});
+ };
+`);
+const child=spawn(process.execPath,['--import',providerFixture,'dist/standalone/server.js'],{env:{...process.env,MOBIUP_MANAGER_AI_OPENAI_API_KEY:'synthetic-provider-key',MOBIUP_DATA_DIR:root,MOBIUP_ACTIVATIONS_DIR:root,MOBIUP_ACTIVATIONS_PILOT_MANAGER_ID:'manager',MOBIUP_ACTIVATIONS_PILOT_ADDITIONAL_MANAGER_IDS:'regional',MOBIUP_ACTIVATIONS_PILOT_AGENT_ID:'north',MOBIUP_ACTIVATIONS_PILOT_ADDITIONAL_AGENT_IDS:'south,non',MOBIUP_USAGE_DISABLED:'1',HOST:'127.0.0.1',PORT:'3096'},stdio:'ignore'});
 let browser;const cookies={};
 async function request(path,id='manager'){const r=await fetch(origin+'/api/'+path,{headers:{Cookie:'mobiup_session='+cookies[id]}});return {status:r.status,data:await r.json()};}
 try{
@@ -177,6 +192,37 @@ try{
  await waitFor(()=>browser.evaluate('document.querySelector(".profile strong")?.textContent==="Synthetic manager"'),'manager session');
  await browser.evaluate(`localStorage.setItem('distribution-selection-v1:manager',JSON.stringify({months:['2026-09','2026-10'],projects:['vodafone_sud','vodafone_nord','non_exclusiv']}));location.reload();`);
  await waitFor(()=>browser.evaluate('document.querySelector(".manager-overview h1")?.textContent==="Sinteză"'),'operational summary');
+ assert(await browser.evaluate(`!Array.from(document.querySelectorAll(".main-nav [role=tab]")).some(tab=>/Notificări|AI manager/.test(tab.textContent))`),'notifications and AI are header-only');
+ await browser.evaluate(`document.querySelector(".manager-ai-trigger").click()`);
+ await waitFor(()=>browser.evaluate(`!document.querySelector('[aria-label="Mesaj pentru AI Comenzi"]')?.disabled && !!document.querySelector('[role=complementary][aria-label="AI Comenzi"]')`),'AI opens and loads desktop session');
+ assert.equal(await browser.evaluate(`document.querySelector('[aria-label="Model AI"]')?.value ?? document.querySelector('[aria-label="AI Comenzi"] select option[value="gpt-6.1-terra"]')?.parentElement.value`),'gpt-6.1-terra');
+ await browser.send('Emulation.setDeviceMetricsOverride',{width:320,height:800,deviceScaleFactor:1,mobile:true});
+ await waitFor(()=>browser.evaluate(`!!document.querySelector('[role=dialog][aria-label="AI Comenzi"]')`),'AI becomes a phone dialog');
+ assert(await browser.evaluate(`(()=>{
+   const panel=document.querySelector('[role=dialog][aria-label="AI Comenzi"]');
+   const composer=panel.querySelector('textarea');
+   const bounds=panel.getBoundingClientRect(),input=composer.getBoundingClientRect();
+   return bounds.left>=0&&bounds.right<=innerWidth&&input.bottom<=innerHeight&&input.width>250;
+ })()`),'AI chat fits a 320px phone');
+ await browser.evaluate(`(()=>{
+   const textarea=document.querySelector('[aria-label="Mesaj pentru AI Comenzi"]');
+   Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(textarea,'Întrebare sintetică');
+   textarea.dispatchEvent(new Event('input',{bubbles:true}));
+ })()`);
+ await waitFor(()=>browser.evaluate(`document.querySelector('[aria-label="Trimite"]')?.disabled===false`),'AI accepts a message');
+ await browser.evaluate(`document.querySelector('[aria-label="Trimite"]').click()`);
+ await waitFor(()=>browser.evaluate(`document.querySelector("[data-ai-message-list] strong")?.textContent==="Răspuns sintetic verificat"`),'AI renders streamed Markdown');
+ await browser.evaluate(`document.querySelector('aside [aria-label="Închide AI Comenzi"]').click()`);
+ await waitFor(()=>browser.evaluate(`!document.querySelector('aside[aria-label="AI Comenzi"]')`),'AI closes back to current section');
+ assert.equal(await browser.evaluate(`document.querySelector(".manager-overview h1")?.textContent`),'Sinteză');
+ await browser.evaluate(`location.reload()`);
+ await waitFor(()=>browser.evaluate(`!!document.querySelector(".manager-ai-trigger")`),'manager reload');
+ await browser.evaluate(`document.querySelector(".manager-ai-trigger").click()`);
+ await waitFor(()=>browser.evaluate(`document.querySelector("[data-ai-message-list] strong")?.textContent==="Răspuns sintetic verificat"`),'AI history remains after reload');
+ await browser.evaluate(`document.querySelector('[aria-label="Sesiune nouă"]').click()`);
+ await waitFor(()=>browser.evaluate(`document.querySelector('[aria-label="Selectează sesiunea AI"]')?.options.length===2 && !document.querySelector("[data-ai-message-list] strong")`),'AI creates a fresh conversation');
+ await browser.evaluate(`document.querySelector('aside [aria-label="Închide AI Comenzi"]').click()`);
+ await browser.send('Emulation.setDeviceMetricsOverride',{width:1280,height:900,deviceScaleFactor:1,mobile:false});
  assert(!(await browser.evaluate('!!document.querySelector(".manager-overview .distribution-card")')),'summary contains no duplicated commercial reports');
  assert.equal(await browser.evaluate('getComputedStyle(document.querySelector(".manager-overview .manager-summary-grid")).gridTemplateColumns.split(" ").length'),4,'cold summary has four operational metric columns before opening commerce');
  assert.equal(await browser.evaluate('getComputedStyle(document.querySelector(".manager-operational-title")).fontSize'),'16px','cold summary owns its heading styles');

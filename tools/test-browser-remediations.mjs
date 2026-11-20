@@ -460,7 +460,8 @@ try {
   check(managerLogin,'Manager browser login');await cdp.send('Page.reload',{ignoreCache:true});
   await waitFor(()=>cdp.evaluate("document.querySelector('.manager-overview h1')?.textContent==='Sinteză'"),'manager default activity dashboard');
   const managerNavigation=await cdp.evaluate("Array.from(document.querySelectorAll('.main-nav [role=tab]'), tab=>({label:tab.textContent.trim(),selected:tab.getAttribute('aria-selected')==='true'}))");
-  assert.deepEqual(managerNavigation.map(tab=>tab.label),['Sinteză','Parteneri','Accesorii','Prepay','Focus','AI manager','Echipă','Operațiuni','Concedii','Notificări']);
+  assert.deepEqual(managerNavigation.map(tab=>tab.label),['Sinteză','Parteneri','Accesorii','Prepay','Focus','Echipă','Operațiuni','Concedii']);
+  check(await cdp.evaluate("!!document.querySelector('.app-header .request-bell')&&!!document.querySelector('.app-header .manager-ai-trigger')"),'Notifications and AI have header shortcuts');
   check(managerNavigation[0].selected,'Manager defaults to Sinteză with all operational and reporting destinations available');
   check(await cdp.evaluate("document.querySelectorAll('.manager-summary-grid .manager-metric').length===4&&!document.querySelector('.activity-partners-card')"),'Manager overview has four operational metrics without an approval queue');
 
@@ -496,14 +497,14 @@ try {
 
   const unreadBefore=await cdp.evaluate("fetch('/api/notifications/inbox').then(r=>r.json()).then(r=>r.count)");
   await cdp.evaluate("document.querySelector('.request-bell').click();true");
-  await waitFor(()=>cdp.evaluate("!!document.querySelector('.notification-dialog .notification-row-unread')"),'Informational client notification');
-  check(await cdp.evaluate("document.querySelector('.notification-dialog').textContent.includes('notificări necitite')&&!document.querySelector('.notification-dialog').textContent.includes('așteaptă confirmarea')"),'Inbox describes informational unread notifications, not approvals');
-  const notificationTitle=await cdp.evaluate("document.querySelector('.notification-dialog .notification-row-unread strong').textContent");
-  await cdp.evaluate(`[...document.querySelectorAll('.notification-dialog .notification-row-unread button')].find(b=>b.getAttribute('aria-label')===${JSON.stringify('Marchează ca citită: '+notificationTitle)}).click();true`);
+  await waitFor(()=>cdp.evaluate("!!document.querySelector('.notification-center .notification-row-unread')"),'Informational client notification');
+  check(await cdp.evaluate("document.querySelector('.notification-center').textContent.includes('necitite')&&!document.querySelector('.notification-center').textContent.includes('așteaptă confirmarea')"),'Inbox describes informational unread notifications, not approvals');
+  const notificationTitle=await cdp.evaluate("document.querySelector('.notification-center .notification-row-unread strong').textContent");
+  await cdp.evaluate(`[...document.querySelectorAll('.notification-center .notification-row-unread button')].find(b=>b.getAttribute('aria-label')===${JSON.stringify('Marchează ca citită: '+notificationTitle)}).click();true`);
   await waitFor(()=>cdp.evaluate("fetch('/api/notifications/inbox').then(r=>r.json()).then(r=>r.count)").then(count=>count===unreadBefore-1),'Read state saved without approval');
   checks++;
-  await waitFor(()=>cdp.evaluate(`[...document.querySelectorAll('.notification-dialog .notification-row:not(.notification-row-unread) strong')].some(node=>node.textContent===${JSON.stringify(notificationTitle)})`),'Read partner notification stays in recent history');
-  await cdp.evaluate(`[...document.querySelectorAll('.notification-dialog .notification-row')].find(row=>row.querySelector('strong').textContent===${JSON.stringify(notificationTitle)}).querySelector('button').click();true`);
+  await waitFor(()=>cdp.evaluate(`[...document.querySelectorAll('.notification-center .notification-row:not(.notification-row-unread) strong')].some(node=>node.textContent===${JSON.stringify(notificationTitle)})`),'Read partner notification stays in recent history');
+  await cdp.evaluate(`[...document.querySelectorAll('.notification-center .notification-row')].find(row=>row.querySelector('strong').textContent===${JSON.stringify(notificationTitle)}).querySelector('button').click();true`);
   await waitFor(()=>cdp.evaluate("document.querySelector('.partner-activity-detail h1')?.textContent==='Clienți noi'"),'partner activity drill-down');
   check(await cdp.evaluate("!document.querySelector('.partner-detail-panel .status-filter')&&!document.querySelector('.partner-activity-detail').textContent.includes('așteptare')&&![...document.querySelectorAll('.partner-activity-detail button')].some(button=>button.textContent.includes('Confirmă'))"),'New clients have no approval filters, counters or actions');
   check(await cdp.evaluate("document.querySelector('.activity-detail-summary').textContent.includes('TOTAL ADĂUGAȚI')&&!document.querySelector('.partner-agent-filter')"),'Added-client count remains available without a duplicate local agent filter');

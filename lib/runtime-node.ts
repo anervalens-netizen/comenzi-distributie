@@ -1,4 +1,5 @@
 import orderLimitApprovalsSchema from '@/drizzle/0013_order_limit_approvals.sql?raw';
+import managerAiSchema from '@/drizzle/0014_manager_ai_conversations.sql?raw';
 import leaveNotificationsSchema from '@/drizzle/0012_leave_notifications.sql?raw';
 import portfolioReadModelSchema from '@/drizzle/0009_portfolio_read_model.sql?raw';
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
@@ -52,7 +53,8 @@ function sqlite() {
     candidate.exec("CREATE TABLE IF NOT EXISTS push_subscriptions (endpoint TEXT PRIMARY KEY NOT NULL,user_id TEXT NOT NULL REFERENCES users(id),p256dh TEXT NOT NULL,auth TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL); CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user ON push_subscriptions(user_id);");
     candidate.exec('BEGIN IMMEDIATE;');
     try { candidate.exec(leaveNotificationsSchema);
-    candidate.exec(orderLimitApprovalsSchema); candidate.exec('COMMIT;'); } catch(error) { candidate.exec('ROLLBACK;'); throw error; }
+    candidate.exec(orderLimitApprovalsSchema);
+    candidate.exec(managerAiSchema); candidate.exec('COMMIT;'); } catch(error) { candidate.exec('ROLLBACK;'); throw error; }
     candidate.exec(partnerPortfolioSchema);
     candidate.exec(partnerDayPlansSchema);
     const visitColumns=candidate.prepare('PRAGMA table_info(partner_visits)').all().map(row=>row.name);

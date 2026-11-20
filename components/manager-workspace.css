@@ -4,7 +4,8 @@
 .manager-shell .page-heading{margin-bottom:20px;flex-wrap:wrap;gap:14px}
 .manager-shell .page-heading h1{font-size:27px}
 .manager-shell .internal-label{display:none}
-.manager-shell .manager-settings[aria-pressed=true]{color:var(--manager-accent);background:var(--manager-soft)}
+.manager-shell .manager-settings[aria-pressed=true],
+.manager-shell .manager-ai-trigger[aria-expanded=true]{color:var(--manager-accent);background:var(--manager-soft)}
 .manager-scope-bar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:0 0 26px;position:relative;z-index:25}
 .manager-scope-choice{position:relative;min-width:190px;max-width:360px;flex:1;background:var(--card);border:1px solid var(--manager-line);border-radius:10px}
 .manager-scope-choice>summary{display:flex;align-items:center;justify-content:space-between;gap:12px;cursor:pointer;padding:10px 13px;list-style:none;min-height:60px}
@@ -31,3 +32,40 @@
 
 .manager-operational-title{font-size:16px;display:flex;align-items:center;gap:12px;margin:22px 0 14px}.manager-operational-title small{font-size:12px;font-weight:400;color:#6d7983}.manager-overview .manager-summary-grid{grid-template-columns:repeat(4,minmax(0,1fr))}.manager-scope-bar .manager-scope-note{font-size:11px;margin-left:auto}
 @media(max-width:900px){.manager-overview .manager-summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+@media (max-width: 639px) {
+  .manager-shell .app-header .brand {
+    flex: 1;
+    min-width: 0;
+  }
+  .manager-shell .app-header .brand img {
+    width: min(108px, 100%);
+  }
+  .manager-shell .header-right {
+    gap: 4px;
+  }
+  .manager-shell .app-header .profile {
+    min-width: 44px;
+    min-height: 44px;
+    justify-content: center;
+  }
+  .manager-shell .app-header .profile .avatar {
+    display: grid;
+  }
+  .manager-shell .nav-wrap {
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+  }
+  .manager-shell .main-nav {
+    display: flex;
+    justify-content: flex-start;
+    width: max-content;
+    max-width: none;
+  }
+  .manager-shell .main-nav [data-slot=tabs-trigger] {
+    flex: 0 0 auto;
+    min-width: 58px;
+    padding-inline: 10px;
+    white-space: nowrap;
+  }
+}

@@ -12,13 +12,9 @@
   font-size: 20px;
 }
 
-.notification-dialog {
-  max-width: 620px !important;
-}
-
-.notification-dialog .notification-list {
-  max-height: min(55dvh, 460px);
-  overflow: auto;
+.request-bell[aria-current='page'] {
+  color: #bf2430;
+  background: #fff1f2;
 }
 
 .notification-controls,
@@ -154,10 +150,6 @@
   color: #526177;
   border: 1px solid #e2e8f0;
   border-radius: 9px;
-}
-
-.notification-all {
-  justify-self: end;
 }
 
 @media (max-width: 600px) {

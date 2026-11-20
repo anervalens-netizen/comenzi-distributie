@@ -442,12 +442,12 @@ try {
   await browser.evaluate("document.querySelector('.request-bell').click()");
   await content(
     browser,
-    '.notification-dialog .notification-row',
+    '.notification-center .notification-row',
     'Cerere de concediu nouă',
   );
   await click(
     browser,
-    '.notification-dialog .notification-row:first-child button',
+    '.notification-center .notification-row:first-child button',
     'Deschide',
   );
   await content(browser, '.leave-detail .leave-status', 'În așteptare');
@@ -523,12 +523,12 @@ try {
     await browser.evaluate("document.querySelector('.request-bell').click()");
     await content(
       browser,
-      '.notification-dialog .notification-row',
+      '.notification-center .notification-row',
       'Respinsă',
     );
     await click(
       browser,
-      '.notification-dialog .notification-row button',
+      '.notification-center .notification-row button',
       'Deschide',
     );
     await content(browser, '.leave-detail .leave-status', 'Respinsă');
