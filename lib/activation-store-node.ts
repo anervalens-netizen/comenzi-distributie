@@ -12,6 +12,8 @@ import {resolve,dirname} from 'node:path';
 import {existsSync,lstatSync,realpathSync} from 'node:fs';
 import {emptyActivationCounts,type ActivationCounts,type ActivationReport,type ActivationProvider} from './activation-types';
 
+// Concurrent read-only opens can briefly contend during native SQLite WAL recovery.
+const readerOptions={readOnly:true,timeout:500};
 type Row={month:string;item_type:string;site:string;count:number;last_date:string|null};
 function add(totals:ActivationCounts,row:Pick<Row,'count'|'item_type'|'site'>){
   totals.total+=row.count;
@@ -31,12 +33,12 @@ export function readActivations(month:string,sites:string[]|null,provider:Activa
   if(onOverviewBase||query?.focus||query?.focusSummaries)result.publication=activationPublicationVersion(provider,directory);
   const path=resolve(directory,'activation-report.sqlite');
   if(!existsSync(path))return result;
-  const report=new DatabaseSync(path,{readOnly:true});
+  const report=new DatabaseSync(path,readerOptions);
   let source:DatabaseSync|undefined;
   try{
     const meta=Object.fromEntries(report.prepare('SELECT key,value FROM report_meta').all().map(r=>[String(r.key),String(r.value)]));
     if(!['1','2','3','4'].includes(meta.version))throw new Error('Unsupported activation report');
-    source=new DatabaseSync(resolve(directory,'activations.sqlite'),{readOnly:true});
+    source=new DatabaseSync(resolve(directory,'activations.sqlite'),readerOptions);
     if(query?.focus||query?.focusSummaries?.length)source.exec('BEGIN');
     const schema=String(source.prepare("SELECT value FROM activation_meta WHERE key='schema_version'").get()?.value);
     if(!['2','3'].includes(schema))throw new Error('Unsupported activation ledger');
