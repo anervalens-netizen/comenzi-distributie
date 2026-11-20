@@ -113,8 +113,8 @@ invalidate the Vodafone report. Report version 2 carries an explicit provider;
 the reader preserves compatibility with the original Vodafone version 1 report.
 Backup and restore verify both ledgers and each network's source checksums.
 
-Digi imports require `--operator digi` and a dedicated database. The source has one
-SIM sheet, ten named columns and a row-1 header. `Activat` must be the exact
+Digi imports require `--operator digi` and a dedicated database. The internal
+source has one SIM sheet, ten named columns and a row-1 header. `Activat` must be the exact
 19-digit text IMEI; `DataDigi` supplies the activation month. `Cantitate` is a
 repeated signed document quantity: each serial row contributes only its sign.
 Blank activations, numeric serials, invalid dates, contradictory observations,
@@ -123,12 +123,17 @@ Original rows, including retail and inventory observations, remain private sourc
 evidence. Only distinct TR sale facts enter the application report. Inventory
 channels ending in `Inv` remain distinct and never enter the TR population.
 
-Optionally provide `--site-reference-data-dir /private/vodafone-ledger` to use
-unique exact company and TR-label mappings from the historical Vodafone ledger.
-This opens the reference read-only; it never copies Vodafone activations. The
-mapping snapshot is recorded in the Digi ledger; a changed mapping requires
-explicit reconciliation. No fuzzy person matching, company merging or current
+For an internal Digi import, `--site-reference-data-dir /private/vodafone-ledger`
+can supply unique exact company and TR-label mappings from the historical Vodafone
+ledger. This opens the reference read-only. The first internal import records the
+mapping snapshot and may replace an empty snapshot left by an older operator-only
+ledger. Subsequent internal imports must match the stored mapping. Changes
+require explicit reconciliation. Operator imports use only the official report
+and its company namespace. No fuzzy person matching, company merging or current
 account activity filtering is performed. Missing aliases remain unassigned.
+The application uses the published Vodafone ledger as the read-only reference
+when the first internal Digi import needs a mapping. If the reference mapping
+changes after preview, the application requires a new preview before committing.
 
 ## Reporting revisions and atomic jobs
 
@@ -138,17 +143,26 @@ explicit verified `source_at` date. Activation-only changes do not create extra
 quantities. Equal-revision commercial contradictions remain quarantined. Source
 file names and import order never establish precedence. Unknown activation fields
 cannot erase known values; independent operator observations take precedence over
-internal observations for valid supplied fields. The exact Excel leading apostrophe
-text marker is accepted for an 18-digit operator serial and retained in raw evidence.
-Other prefixes and numeric serial cells are refused.
+internal observations for valid supplied fields. Numeric serial cells are refused.
 
-`source_kind=operator` requires an explicit Vodafone company namespace. Supported
-inputs are the named Detailed SIM XLSX sheet and a private JSON.gz extraction with
-the same named fields; an optional extracted `serial` must exactly agree with
-SerieText after the explicit text-marker decoding. Operator rows without verified
-TR distribution stay in the manager reconciliation queue. An explicit operator
-serial/date can update retained pre-existing SIM movements through the validated
-19/18-digit relationship; IMEI alone never creates an activation.
+`source_kind=operator` requires an explicit company namespace for Vodafone or
+Digi. Each workbook uses its provider's activation sheet and columns.
+
+- Vodafone uses the `Detailed SIM` sheet with `SerieText`, `DATE_OF_ACTIVATION`,
+  `COUNTY_OF_ACTIVATION` and `Paid SIM Category`. `SerieText` is an 18-digit
+  serial. A leading Excel apostrophe is accepted as a text marker and retained
+  in raw evidence. An optional extracted `serial` must agree with the decoded
+  `SerieText`. Attribution uses the validated 19/18-digit commercial relationship.
+- Digi uses the `activari` sheet with `Distribuitor`, `Seria SIM (iccid)` and
+  `Data activare`. The distributor must match the declared company ignoring case.
+  The serial is a 19-digit ICCID stored as text and the date uses ISO format.
+  Attribution uses the exact ICCID and the validated equality between the
+  19-digit `Activat` and `IMEI` values when both appear in a commercial record.
+
+The application also accepts private Vodafone `.json.gz` extracts. The
+low-level importer accepts `.json.gz` extracts using the respective provider's
+fields. Operator rows without verified TR distribution stay in reconciliation.
+An activation requires a reported date in addition to the SIM identifier.
 
 Use `tools/activation_job.py --data-dir /private/network --manifest
 /private/batches.json --rules /private/rules.json` for a complete import/rebuild.

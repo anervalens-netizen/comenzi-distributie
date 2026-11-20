@@ -85,12 +85,15 @@ def apply_observations(rows, official):
     for field in ('serial','activation_date','county','handset'):
         selected[field],refs[field],conflict=select_field(observations,field)
         if conflict:conflicts.append(field+'_conflict')
+    superseded_date_issues = {'missing_activation_date', 'invalid_DataActivare'}
+    if any('importId' in ref for ref in refs['activation_date']):
+        superseded_date_issues.add('invalid_DataDigi')
     for r in rows:
         if selected['serial']:
             r['serial']=selected['serial'];r['activation_date']=selected['activation_date'] or None
             # A valid selected observation supersedes stale/missing activation fields only.
             if selected['activation_date']:
-                r['issues']=json.dumps([i for i in json.loads(r['issues']) if i not in ('missing_activation_date','invalid_DataActivare')])
+                r['issues']=json.dumps([i for i in json.loads(r['issues']) if i not in superseded_date_issues])
     return selected,refs,conflicts
 
 

@@ -437,7 +437,11 @@ def reconcile_group(rows, conflicts):
 
 def facts_need_rebuild(c):
     version=c.execute("SELECT value FROM activation_meta WHERE key='facts_version'").fetchone()
-    return not version or version[0]!=versions.FACTS_VERSION or not c.execute("SELECT 1 FROM activation_meta WHERE key='generation'").fetchone()
+    if not version or version[0]!=versions.FACTS_VERSION or not c.execute("SELECT 1 FROM activation_meta WHERE key='generation'").fetchone():
+        return True
+    # Reconcile the old Digi interpretation once, including on an exact replay.
+    return (c.execute("SELECT 1 FROM activation_imports WHERE operator='digi' AND status='complete' LIMIT 1").fetchone() is not None
+            and c.execute("SELECT 1 FROM activation_meta WHERE key='digi_operator_date_reconciled'").fetchone() is None)
 
 
 def rebuild(c, operator=None, incremental=False):
@@ -549,6 +553,8 @@ def rebuild(c, operator=None, incremental=False):
         c.execute('INSERT INTO activation_facts VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',(*key,ad,ad[:7] if ad else None,None,None,None,'unresolved',dump(reasons),None,dump({'observation':selected,'observationSources':refs,'movementIds':[],'returnLinks':[],'remainingSaleIds':[],'versionIds':[]})))
     c.execute("INSERT INTO activation_meta VALUES('generation','1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1")
     c.execute("INSERT OR REPLACE INTO activation_meta VALUES('facts_version',?)",(versions.FACTS_VERSION,))
+    if c.execute("SELECT 1 FROM activation_imports WHERE operator='digi' AND status='complete' LIMIT 1").fetchone():
+        c.execute("INSERT OR IGNORE INTO activation_meta VALUES('digi_operator_date_reconciled','1')")
     if not incremental and operator is None:
         c.execute("INSERT OR REPLACE INTO activation_meta VALUES('chronology_policy_version',?)",(CHRONOLOGY_POLICY_VERSION,))
 
@@ -722,11 +728,19 @@ def _import_files(c, directory, paths, *, operator, nominal_period='', site_alia
         if operator == 'digi':
             if c.execute("SELECT 1 FROM activation_imports WHERE operator<>'digi' LIMIT 1").fetchone():
                 raise ImportError('Digi requires its own dedicated database')
-            basis = dump([[*key, value] for key, value in sorted(aliases.items())])
-            old = c.execute("SELECT value FROM activation_meta WHERE key='digi_site_aliases'").fetchone()
-            if old and old[0] != basis:
-                raise ImportError('Digi site mapping changed; explicit reconciliation required')
-            c.execute("INSERT OR IGNORE INTO activation_meta VALUES('digi_site_aliases',?)", (basis,))
+            if source_kind == 'internal':
+                basis = dump([[*key, value] for key, value in sorted(aliases.items())])
+                old = c.execute("SELECT value FROM activation_meta WHERE key='digi_site_aliases'").fetchone()
+                if old and old[0] != basis:
+                    # Older operator-only ledgers could have frozen an empty map.
+                    # Replace that placeholder before the first commercial source.
+                    if (old[0] != '[]'
+                            or not c.execute("SELECT 1 FROM activation_imports WHERE source_kind='operator' LIMIT 1").fetchone()
+                            or c.execute("SELECT 1 FROM activation_imports WHERE source_kind='internal' LIMIT 1").fetchone()):
+                        raise ImportError('Digi site mapping changed; explicit reconciliation required')
+                    c.execute("UPDATE activation_meta SET value=? WHERE key='digi_site_aliases'", (basis,))
+                else:
+                    c.execute("INSERT OR IGNORE INTO activation_meta VALUES('digi_site_aliases',?)", (basis,))
         elif c.execute("SELECT 1 FROM activation_imports WHERE operator='digi' LIMIT 1").fetchone():
             raise ImportError('Digi database cannot contain another operator')
         for source in paths:
@@ -790,6 +804,17 @@ def _import_files(c, directory, paths, *, operator, nominal_period='', site_alia
     return {'files': results} if defer_rebuild else {'files': results, **summary(c)}
 
 
+def historical_site_aliases(reference):
+    if reference.execute("SELECT value FROM activation_meta WHERE key='schema_version'").fetchone() not in (('2',),(str(VERSION),)):
+        raise ImportError('Unsupported site reference ledger')
+    return {(company, agent):site for company, agent, site in reference.execute("""
+        SELECT company, agent, MIN(site)
+        FROM activation_movements
+        WHERE provider='vodafone' AND is_tr=1 AND site<>''
+        GROUP BY company, agent HAVING COUNT(DISTINCT site)=1
+    """)}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--data-dir', required=True, type=Path)
@@ -811,9 +836,7 @@ def main():
             raise ImportError('Site reference must be a separate read-only ledger for Digi')
         reference = sqlite3.connect((args.site_reference_data_dir.resolve() / 'activations.sqlite').as_uri() + '?mode=ro', uri=True)
         try:
-            if reference.execute("SELECT value FROM activation_meta WHERE key='schema_version'").fetchone() not in (('2',),(str(VERSION),)):
-                raise ImportError('Unsupported site reference ledger')
-            aliases = {(r[0], r[1]): r[2] for r in reference.execute("SELECT company,agent,MIN(site) FROM activation_movements WHERE provider='vodafone' AND is_tr=1 AND site<>'' GROUP BY company,agent HAVING COUNT(DISTINCT site)=1")}
+            aliases = historical_site_aliases(reference)
         finally:
             reference.close()
     if args.preview:
