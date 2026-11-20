@@ -260,7 +260,7 @@ export function beginAiSubmission(db:DatabaseSync,account:AiAccount,conversation
 
 function collectSandboxFiles(db:DatabaseSync,owner:string,conversationId:string,scopeKey:string,messages:ManagerAiChatMessage[]) {
   const {maxFiles,maxTotalBytes}=managerAiAttachmentLimits;
-  const names=new Set<string>(),files:ManagerAiPreparedArtifact[]=[];
+  const artifactIds=new Set<string>(),files:ManagerAiPreparedArtifact[]=[];
   let total=0;
   for(const message of messages.toReversed()){
     if(!message.attachments.length)continue;
@@ -273,10 +273,10 @@ function collectSandboxFiles(db:DatabaseSync,owner:string,conversationId:string,
     if(run?.scope_key!==scopeKey)continue;
     for(const entry of message.attachments){
       if(files.length>=maxFiles)return files;
-      if(entry.removed||total+entry.size_bytes>maxTotalBytes||names.has(entry.filename))continue;
+      if(entry.removed||total+entry.size_bytes>maxTotalBytes||artifactIds.has(entry.id))continue;
       const file=getAiArtifact(db,owner,conversationId,entry.id);
       files.push({...file,kind:'input'});
-      names.add(file.filename);
+      artifactIds.add(entry.id);
       total+=file.bytes.byteLength;
     }
   }

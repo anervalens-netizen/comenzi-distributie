@@ -9,7 +9,7 @@ import {build} from 'esbuild';
 const directory=mkdtempSync(join(tmpdir(),'manager-ai-sandbox-test-'));
 try {
   const bundle=await build({
-    stdin:{resolveDir:process.cwd(),contents:"export * from './lib/manager-ai-sandbox.ts';"},
+    stdin:{resolveDir:process.cwd(),contents:"export * from './lib/manager-ai-sandbox.ts'; export * from './lib/manager-ai-sandbox-artifacts.ts';"},
     platform:'node',format:'esm',bundle:true,write:false,
     plugins:[{name:'synthetic-sandbox-runner',setup(b){
       b.onResolve({filter:/^\.\/server$/},()=>({path:'server',namespace:'test'}));
@@ -22,7 +22,19 @@ try {
   });
   const modulePath=join(directory,'sandbox-test.mjs');
   writeFileSync(modulePath,bundle.outputFiles[0].text);
-  const {runManagerAiSandbox,managerAiSandboxAvailable}=await import(pathToFileURL(modulePath));
+  const {runManagerAiSandbox,managerAiSandboxAvailable,normalizeManagerAiSandboxArtifact}=await import(pathToFileURL(modulePath));
+  for(const [extension,separator] of [['csv',','],['tsv','\t']]) {
+    const literals=['-1','+3.5','-.75','-1.25e-4','-9223372036854775808'];
+    const formulas=['-1+2','+3+5','=1+1','@SUM(1)',' +1+1','-1\n+1'];
+    const rows=[['Label','Value'],...[...literals,...formulas].map((value,index)=>['Example '+index,'"'+value+'"'])];
+    const result=normalizeManagerAiSandboxArtifact({filename:'synthetic.'+extension,
+      mime_type:extension==='csv'?'text/csv':'text/tab-separated-values',kind:'output',
+      bytes:new TextEncoder().encode(rows.map(row=>row.join(separator)).join('\n'))});
+    assert(result);
+    const output=new TextDecoder().decode(result.bytes);
+    for(const [index,value] of literals.entries())assert(output.includes('"Example '+index+'"'+separator+value+'\r\n'),value+' must keep its numeric spelling');
+    for(const value of formulas)assert(output.includes(separator+'"\''+value+'"\r\n'),value+' must stay literal text');
+  }
   const fixture=join(directory,'dataset.sqlite');
   const connection=new DatabaseSync(fixture);
   connection.exec(`
@@ -46,6 +58,9 @@ try {
     assert.equal(sql.exitCode,0);
     assert.deepEqual(sql.rows,{columns:['sku','units'],rows:[['FIXTURE-A',5],['FIXTURE-B',1]],truncated:false,exportTruncated:false,exportedRows:2});
     assert.deepEqual(sql.artifacts.map(file=>file.filename),['rezultat-sql.csv']);
+    const correction=await runManagerAiSandbox({...request,code:'SELECT -1 AS units'});
+    assert.equal(correction.exitCode,0);
+    assert.equal(correction.artifacts.length,1);
     const write=await runManagerAiSandbox({...request,code:'CREATE TABLE synthetic_write (id INTEGER)'});
     assert.notEqual(write.exitCode,0);
     assert.deepEqual(write.artifacts,[]);
@@ -70,7 +85,8 @@ try {
 
     process.env.MOBIUP_SANDBOX_TEST_SENTINEL='synthetic-value';
     const python=await runManagerAiSandbox({
-      ...request,language:'python',inputs:[{filename:'sample.txt',mime_type:'text/plain',kind:'input',bytes:Buffer.from('fixture only')}],
+      ...request,language:'python',inputs:[{filename:'sample.txt',mime_type:'text/plain',kind:'input',bytes:Buffer.from('fixture only')},
+        {...correction.artifacts[0],kind:'input'}],
       code:`
 import binascii
 import os
@@ -89,6 +105,7 @@ assert not Path("/etc/passwd").exists()
 assert not os.access("/proc/1/fd/1", os.R_OK)
 assert not os.access("/input/data.sqlite", os.W_OK)
 assert Path("/input/files/1-sample.txt").read_text() == "fixture only"
+assert pd.read_csv("/input/files/2-rezultat-sql.csv")["units"].sum() == -1
 try:
     socket.socket()
 except PermissionError:

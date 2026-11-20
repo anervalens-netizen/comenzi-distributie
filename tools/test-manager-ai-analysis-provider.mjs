@@ -6,21 +6,30 @@ const bundle=await build({
   stdin:{resolveDir:process.cwd(),contents:`
     export * from './lib/manager-ai-provider.ts';
     export * from './lib/manager-ai-analysis-tool.ts';
+    export * from './lib/manager-ai-analysis.ts';
     export * from './lib/manager-ai-sandbox-artifacts.ts';
   `},
   bundle:true,platform:'node',format:'esm',write:false,
   plugins:[{name:'synthetic-errors',setup(plugin){
     plugin.onResolve({filter:/^\.\/server$/},()=>({path:'server',namespace:'fixture'}));
-    plugin.onLoad({filter:/.*/,namespace:'fixture'},()=>({contents:`
+    plugin.onLoad({filter:/^server$/,namespace:'fixture'},()=>({contents:`
       export class AppError extends Error {
         constructor(status,message){super(message);this.status=status;}
       }
       export function fail(status,message){throw new AppError(status,message);}
       export async function readLimited(){throw Error('Unexpected request body read');}
     `}));
+    plugin.onResolve({filter:/^\.\/(manager-ai-sandbox|manager-ai-analysis-data|manager-ai-analysis-database)$/},
+      args=>({path:args.path.slice(2),namespace:'fixture'}));
+    const mocks={
+      'manager-ai-sandbox':'export const runManagerAiSandbox=request=>globalThis.syntheticAnalysisSandbox(request);',
+      'manager-ai-analysis-data':'export async function readManagerAiAnalysisTable(){throw Error("Unexpected table");}',
+      'manager-ai-analysis-database':'export async function materializeManagerAiDatabase(){throw Error("Unexpected database");}',
+    };
+    plugin.onLoad({filter:/^manager-ai-/,namespace:'fixture'},args=>({contents:mocks[args.path]}));
   }}],
 });
-const {runManagerAi,parseManagerAiAnalysis,normalizeManagerAiSandboxArtifact}=await import(
+const {runManagerAi,parseManagerAiAnalysis,createManagerAiAnalysis,normalizeManagerAiSandboxArtifact}=await import(
   'data:text/javascript;base64,'+Buffer.from(bundle.outputFiles[0].text).toString('base64'));
 
 const request={
@@ -105,5 +114,31 @@ for(const revoked of [false,true]){
     assert.equal(result.analysisArtifacts[0].filename,'synthetic.csv');
     assert.equal(result.analysisArtifacts[0].bytes.byteLength,normalized.bytes.byteLength);
   }
+}
+const encode=value=>new TextEncoder().encode(value);
+const upload=(name,value)=>({filename:name,mime_type:'text/csv',bytes:encode(value),kind:'input'});
+const files=[upload('daily.csv','first'),upload('daily.csv','second'),upload('daily (2).csv','literal suffix')];
+const selections=[];
+globalThis.syntheticAnalysisSandbox=({inputs})=>{
+  selections.push(inputs.map(file=>[file.filename,new TextDecoder().decode(file.bytes)]));
+  return {exitCode:0,stdout:'',stderr:'',artifacts:selections.length===1?[{...upload('daily.csv','generated'),kind:'output'}]:[]};
+};
+try{
+  const analysis=createManagerAiAnalysis({scope:{},check:async()=>{},signal:new AbortController().signal,files});
+  assert(analysis.instructions.includes('["daily.csv","daily (3).csv","daily (2).csv"]'));
+  const run=names=>analysis.run(parseManagerAiAnalysis(JSON.stringify({language:'python',code:'print("synthetic")',
+    tables:[],files:names}),analysis.tables));
+  const result=await run(['daily (3).csv','daily.csv','daily (2).csv']);
+  assert.deepEqual(result.result.files,['daily.csv','daily (3).csv','daily (2).csv','daily (4).csv']);
+  assert.deepEqual(result.result.exported,[{filename:'daily.csv',selectionName:'daily (4).csv',bytes:9}]);
+  assert.equal(result.artifacts[0].filename,'daily.csv');
+  await run(['daily.csv','daily (4).csv']);
+  assert.deepEqual(selections,[
+    [['daily (3).csv','second'],['daily.csv','first'],['daily (2).csv','literal suffix']],
+    [['daily.csv','first'],['daily (4).csv','generated']],
+  ]);
+  assert.deepEqual(files.map(file=>file.filename),['daily.csv','daily.csv','daily (2).csv']);
+}finally{
+  delete globalThis.syntheticAnalysisSandbox;
 }
 console.log('PASS: scoped SQL/Python tool contract, provider fencing, CSV formula protection and Excel values-only downloads.');

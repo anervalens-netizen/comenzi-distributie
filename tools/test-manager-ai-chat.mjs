@@ -236,11 +236,13 @@ try {
 
   process.env.MOBIUP_MANAGER_AI_SANDBOX_ENABLED='1';
   const analysisInputs=[];
+  const analysisInputContent=[];
   const sandboxArtifact={
     kind:'output',filename:'synthetic-sandbox.csv',mime_type:'text/csv',bytes:new TextEncoder().encode('units\n7\n'),
   };
   globalThis.syntheticAnalysisTool=options=>{
     analysisInputs.push(options.files.map(item=>item.filename));
+    analysisInputContent.push(options.files.map(item=>new TextDecoder().decode(item.bytes)));
     return {tables:['sales_lines'],instructions:'Synthetic SQL workspace',async run(value){
       assert.equal(value.tables[0].table,'sales_lines');
       assert.equal(value.language,'sql');
@@ -250,16 +252,25 @@ try {
   };
   const sandboxConversation=await (await call('conversations',{body:{effort:'low'}})).json();
   const sandboxPath='conversations/'+sandboxConversation.id;
-  const firstSandbox=(await events(await call(sandboxPath+'/turn',{body:form('Raport sandbox inițial',undefined,[
+  const firstSandboxEvents=await events(await call(sandboxPath+'/turn',{body:form('Raport sandbox inițial',undefined,[
     new File(['units\n7'],'synthetic-data.csv',{type:'text/csv'}),
-  ])[0]}))).at(-1);
+    new File(['units\n11'],'synthetic-data.csv',{type:'text/csv'}),
+  ])[0]}));
+  const firstSandbox=firstSandboxEvents.at(-1);
+  const uploaded=firstSandboxEvents.find(event=>event.type==='user_message').message.attachments;
+  assert.deepEqual(uploaded.map(item=>item.filename),['synthetic-data.csv','synthetic-data.csv']);
+  const downloads=await Promise.all(uploaded.map(item=>call(item.download_url.split('/api/manager-ai/')[1])));
+  assert.deepEqual(await Promise.all(downloads.map(response=>response.text())),['units\n7','units\n11']);
   assert.equal(firstSandbox.type,'complete');
   const sandboxDownload=firstSandbox.message.attachments[0].download_url.split('/api/manager-ai/')[1];
   assert.equal(await (await call(sandboxDownload)).text(),'units\n7\n');
   await assert.rejects(call(sandboxDownload,{token:'beta-token'}),{status:404});
   await events(await call(sandboxPath+'/turn',{body:form('Raport sandbox repetat')[0]}));
   await events(await call(sandboxPath+'/turn?agentId=synthetic-selection',{body:form('Raport sandbox alt portofoliu')[0]}));
-  assert.deepEqual(analysisInputs,[['synthetic-data.csv'],['synthetic-sandbox.csv','synthetic-data.csv'],[]]);
+  assert.deepEqual(analysisInputs,[
+    ['synthetic-data.csv','synthetic-data.csv'],['synthetic-sandbox.csv','synthetic-data.csv','synthetic-data.csv'],[],
+  ]);
+  assert.deepEqual(analysisInputContent,[['units\n7','units\n11'],['units\n7\n','units\n7','units\n11'],[]]);
   delete process.env.MOBIUP_MANAGER_AI_SANDBOX_ENABLED;
   delete globalThis.syntheticAnalysisTool;
 
