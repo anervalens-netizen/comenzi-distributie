@@ -56,6 +56,8 @@ La actualizarea unei instalări existente, operatorul poate aplica indexurile de
 Registrul păstrează o copie derivată privată în `.vodafone-bonus-cache/current.bin` din directorul de date. Refolosirea cere aceeași versiune de worker, aceleași surse și aceleași reguli. Accesul și gestiunile vizibile se verifică pentru fiecare solicitare. O copie absentă sau deteriorată se reconstruiește automat. Într-un director fără drept de scriere aplicația folosește memoria procesului.
 
 
-Cererea ecranului și exportul folosesc `progressive=1`. Dacă registrul încă se pregătește, API-ul răspunde cu HTTP 202 și `Retry-After: 5`. Pagina verifică automat de cel mult 24 de ori și oprește verificarea la schimbarea selecției. Fiecare cerere reverifică permisiunile. Apelurile fără acest parametru păstrează contractul sincron.
+Cererea ecranului și exportul folosesc `progressive=1`. Dacă registrul încă se pregătește, API-ul răspunde cu HTTP 202 și `Retry-After: 5`. Pagina verifică la 5 secunde, apoi la 15 secunde după 24 de răspunsuri în curs. Verificarea se suspendă în fundal, se reia la revenire și se oprește la schimbarea selecției sau la o eroare reală. Fiecare cerere reverifică permisiunile. Apelurile fără acest parametru păstrează contractul sincron.
 
 Serviciul periodic și workerul aplicației folosesc aceeași rezervare SQLite în directorul privat de cache pentru calculul registrului. Închiderea procesului eliberează rezervarea. Publicarea rămâne atomică și verifică generația datelor înainte de salvare.
+
+Bugetul unei pregătiri la rece este de 11 minute pentru worker și pentru serviciul periodic. La volumul măsurat, cea mai lentă reconstrucție observată pe discul ocupat a durat 311 secunde. Raportul finalizat se poate reciti pentru aceeași generație, lună și selecție.

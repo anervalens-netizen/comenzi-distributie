@@ -1,27 +1,35 @@
 'use client';
 
 import {useEffect,useRef,useState} from 'react';
-import {api,errorMessage} from '@/lib/client-api';
+import {api,ApiError,errorMessage} from '@/lib/client-api';
 import {bucharestMonthKey} from '@/lib/bucharest-month';
 import {filterVodafoneBonusRows,firstVodafoneBonusMonth,vodafoneBonusPageSize,vodafoneBonusReasonLabels,type VodafoneBonusScreen} from '@/lib/vodafone-bonus-types';
 import './vodafone-bonus.css';
 
 type Pending={state:'preparing'};
-async function readBonus<T extends object>(url:string,signal:AbortSignal,onPreparing?:()=>void):Promise<T>{
-  for(let attempt=0;attempt<24;attempt++){
+function waitForBonusPoll(signal:AbortSignal,delay:number) {
+  return new Promise<void>((resolve,reject)=>{
+    let timer:ReturnType<typeof setTimeout>|undefined;
+    function cleanup(){clearTimeout(timer);signal.removeEventListener('abort',abort);document.removeEventListener('visibilitychange',visibility);}
+    function ready(){cleanup();resolve();}
+    function abort(){cleanup();reject(signal.reason);}
+    function visibility(){clearTimeout(timer);if(!document.hidden)ready();}
+    if(signal.aborted){abort();return;}
+    signal.addEventListener('abort',abort,{once:true});
+    document.addEventListener('visibilitychange',visibility);
+    if(!document.hidden)timer=setTimeout(ready,delay);
+  });
+}
+async function readBonus<T extends object>(url:string,signal:AbortSignal,onPreparing?:(long:boolean)=>void):Promise<T>{
+  for(let pending=0;;pending++){
     const response=await api<T|Pending>(url+'&progressive=1','GET',undefined,signal);
     if(!('state' in response && response.state==='preparing'))return response as T;
-    onPreparing?.();
-    if(attempt===23)break;
-    await new Promise<void>((resolve,reject)=>{
-      const done=()=>{signal.removeEventListener('abort',abort);resolve();};
-      const timer=setTimeout(done,5000);
-      const abort=()=>{clearTimeout(timer);reject(signal.reason);};
-      if(signal.aborted)abort();else signal.addEventListener('abort',abort,{once:true});
-    });
+    const long=pending>=23;
+    onPreparing?.(long);
+    await waitForBonusPoll(signal,long?15000:5000);
   }
-  throw new Error('Registrul este încă în pregătire. Apasă Reîncarcă pentru a verifica din nou.');
 }
+const accessChanged=(error:unknown)=>error instanceof ApiError && [401,403,409].includes(error.status);
 
 type View = 'points' | 'documents' | 'unresolved';
 const labels: Record<View,string> = {points:'Registru pe punct',documents:'Facturi și stingeri',unresolved:'De identificat'};
@@ -36,7 +44,7 @@ export function VodafoneBonus({scopeQuery}: {scopeQuery: string}) {
   const [wantFull,setWantFull] = useState(false);
   const [find,setFind] = useState('');
   const [reload,setReload] = useState(0);
-  const [read,setRead] = useState<{key: string; report?: VodafoneBonusScreen; error?: string; preparing?:boolean}>();
+  const [read,setRead] = useState<{key: string; report?: VodafoneBonusScreen; error?: string; preparing?:boolean; long?:boolean}>();
   const [exporting,setExporting] = useState(false);
   const [exportError,setExportError] = useState('');
   const exportRequest = useRef<AbortController|undefined>(undefined);
@@ -57,10 +65,10 @@ export function VodafoneBonus({scopeQuery}: {scopeQuery: string}) {
   useEffect(()=>{
     const request = new AbortController();
     const url='vodafone/bonuses?'+key+(wantFull?'':'&view=preview');
-    readBonus<VodafoneBonusScreen>(url,request.signal,()=>{if(!request.signal.aborted)setRead({key,preparing:true});})
+    readBonus<VodafoneBonusScreen>(url,request.signal,long=>{if(!request.signal.aborted)setRead(previous=>({key,report:previous?.key===key?previous.report:undefined,preparing:true,long}));})
       .then(report=>{if(!request.signal.aborted)setRead({key,report});})
       .catch(error=>{
-        if(!request.signal.aborted)setRead(previous=>({key,report:previous?.key===key ? previous.report : undefined,error:errorMessage(error)}));
+        if(!request.signal.aborted)setRead(previous=>({key,report:!accessChanged(error)&&previous?.key===key ? previous.report : undefined,error:errorMessage(error)}));
       });
     return ()=>request.abort();
   },[key,reload,wantFull]);
@@ -88,15 +96,18 @@ export function VodafoneBonus({scopeQuery}: {scopeQuery: string}) {
       link.click();
       setTimeout(()=>URL.revokeObjectURL(file),0);
     } catch (error) {
-      if (!request.signal.aborted) setExportError(errorMessage(error));
+      if (!request.signal.aborted) {
+        if(accessChanged(error))setRead({key,error:errorMessage(error)});
+        else setExportError(errorMessage(error));
+      }
     } finally {
       if (exportRequest.current===request) setExporting(false);
     }
   }
-  const {points,documents,unresolved} = report ? filterVodafoneBonusRows(report,find) : {points:[],documents:[],unresolved:[]};
+  const incompleteSearch = !!(report?.preview && find.trim());
+  const {points,documents,unresolved} = report ? filterVodafoneBonusRows(report,incompleteSearch?'':find) : {points:[],documents:[],unresolved:[]};
   const selectedRows = {points,documents,unresolved}[view];
   const rowCount = report?.preview?.counts[view] ?? selectedRows.length;
-  const incompleteSearch = !!(report?.preview && find.trim());
   const loadingFull = wantFull && !!report?.preview && !visible?.error;
 
 
@@ -117,7 +128,7 @@ export function VodafoneBonus({scopeQuery}: {scopeQuery: string}) {
     </div>
     {visible?.error && <p className="error-banner" role="alert">{visible.error}</p>}
     {exportError && <p className="error-banner" role="alert">{exportError}</p>}
-    {!report && !visible?.error && <output className="commerce-loading">{visible?.preparing?'Se pregătește registrul din datele actualizate. Pagina se actualizează automat.':'Se încarcă registrul Vodafone…'}</output>}
+    {!report && !visible?.error && <output className="commerce-loading">{visible?.long?'Pregătirea registrului durează mai mult. Verificarea continuă automat.':visible?.preparing?'Se pregătește registrul din datele actualizate. Pagina se actualizează automat.':'Se încarcă registrul Vodafone…'}</output>}
     {coverage && <>
       <p className="commerce-source">{coverage.publishedOn ? 'Raport final din '+dateLabel(coverage.publishedOn) : 'Raportul final nu este disponibil'} · Date până la {dateLabel(coverage.sourceThrough)} · {count(coverage.activations)} activări partenere · {count(coverage.unresolvedActivations)} fără franciză identificată</p>
       {!report?.fiscalKindsComplete && <p className="commerce-source-warning">Tipul fiscal lipsește pentru unele documente. Acestea pot apărea în simulare când vânzarea sau factura la zero se reconciliază între surse.</p>}
@@ -128,8 +139,9 @@ export function VodafoneBonus({scopeQuery}: {scopeQuery: string}) {
         </div>
         <input aria-label="Caută în registru" type="search" maxLength={180} placeholder="Partener, franciză, CUI sau TR" value={find} onChange={event=>{setFind(event.target.value);setLimit(vodafoneBonusPageSize);setWantFull(Boolean(event.target.value.trim()));}}/>
       </div>
-      {loadingFull && <output className="commerce-loading">Se încarcă detaliile registrului…</output>}
-      {!incompleteSearch && <div className="distribution-table-scroll">
+      {loadingFull && <output className="commerce-loading">{visible?.long?'Pregătirea detaliilor durează mai mult. Verificarea continuă automat.':'Se încarcă detaliile registrului…'}</output>}
+      {incompleteSearch && <p>Se afișează previzualizarea nefiltrată. Căutarea se aplică după încărcarea registrului complet.</p>}
+      <div className="distribution-table-scroll">
         {view==='points' && <table className="distribution-table"><thead><tr>
           <th>Partener / punct</th><th>TR</th><th>SIM 0</th><th>Target</th><th>Top Locații</th><th>Bonus SIM 0 calculat</th><th>Total calculat</th><th>Acordat în lună</th><th>Stins confirmat</th><th>Rest confirmat</th><th>Rest SIM 0 simulat</th>
         </tr></thead><tbody>{points.slice(0,limit).map(row=><tr key={row.pointCode}>
@@ -153,7 +165,7 @@ export function VodafoneBonus({scopeQuery}: {scopeQuery: string}) {
         </tr></thead><tbody>{unresolved.slice(0,limit).map(row=><tr key={JSON.stringify([row.month,row.site,row.cui,row.reason])}>
           <th>{row.partner}</th><td>{row.cui}</td><td>{row.site}</td><td>{vodafoneBonusReasonLabels[row.reason]}</td><td>{count(row.count)}</td>
         </tr>)}</tbody></table>}
-      </div>}
+      </div>
       {view==='points' && !incompleteSearch && (report?.preview?.hasUnknownTopBonus ?? points.some(row=>row.topBonus===null)) && <p className="commerce-source">Totalul combinat și restul confirmat necesită decontul Top Locații pentru punct și lună.</p>}
       {!incompleteSearch && !selectedRows.length && <p className="commerce-empty">Niciun rezultat pentru selecția curentă.</p>}
       {!incompleteSearch && rowCount>limit && <button type="button" className="secondary" disabled={loadingFull} onClick={()=>{

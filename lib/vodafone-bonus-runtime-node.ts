@@ -18,7 +18,8 @@ function rememberRegisterError(key:string,error:Error){
   if(recentRegisterErrors.size>4)recentRegisterErrors.delete(recentRegisterErrors.keys().next().value!);
 }
 const paused=new Error('Foreground Vodafone report requested');
-const registerDeadlineMs=120_000;
+// Twice the observed 311 s cold rebuild, rounded up to whole minutes.
+const registerDeadlineMs=11*60_000;
 const rankingDeadlineMs=75_000;
 const foregroundGraceMs=2_000;
 let current:Job|undefined;

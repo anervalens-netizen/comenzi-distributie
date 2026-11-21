@@ -16,6 +16,7 @@ const root=mkdtempSync(join(tmpdir(),'synthetic-vodafone-bonus-'));
 try {
   const bundle=join(root,'bonus.mjs');
   await build({stdin:{contents:`
+    export * from './lib/vodafone-bonus-preparing';
     export * from './lib/vodafone-bonus-rules';
     export * from './lib/vodafone-sim0-coverage';
     export * from './lib/vodafone-bonus-types';
@@ -25,7 +26,7 @@ try {
     export * from './lib/vodafone-bonus-evidence';
     export * from './lib/vodafone-bonus-export';
   `,resolveDir:process.cwd()},outfile:bundle,bundle:true,format:'esm',platform:'node'});
-  const {vodafoneBonusPreview,filterVodafoneBonusRows,bonusProjectSites,isVodafoneGenericPartner,vodafoneDocumentKind,vodafoneSim0Bonus,vodafoneBonusLedger,readVodafoneBonus,parseVodafoneBonusEvidence,vodafoneBonusWorkbook}
+  const {observeVodafoneBonus,VodafoneBonusPreparing,vodafoneBonusPreview,filterVodafoneBonusRows,bonusProjectSites,isVodafoneGenericPartner,vodafoneDocumentKind,vodafoneSim0Bonus,vodafoneBonusLedger,readVodafoneBonus,parseVodafoneBonusEvidence,vodafoneBonusWorkbook}
     =await import(pathToFileURL(bundle).href);
   const scopedRules={assignments:[{siteCode:'test-n',projectId:'vodafone_nord'},{siteCode:'test-s',projectId:'vodafone_sud'}]};
   const allProjects=new Set(['vodafone_sud','vodafone_nord','non_exclusiv']);
@@ -217,7 +218,20 @@ try {
   // Exercise the installed entrypoint in fresh processes and then request a normal restricted screen.
   const packaged=join(root,'packaged'),workerFile=join(packaged,'vodafone-bonus-worker.mjs');
   mkdirSync(packaged);
-  await build({entryPoints:['lib/vodafone-bonus-worker.ts'],outfile:workerFile,bundle:true,platform:'node',format:'esm',packages:'external'});
+  await build({entryPoints:['lib/vodafone-bonus-worker.ts'],outfile:workerFile,bundle:true,platform:'node',format:'esm',packages:'external',
+    plugins:[{name:'slow-final-projection',setup(builder){
+      builder.onLoad({filter:/\/vodafone-bonus-ledger\.ts$/},({path})=>{
+        const source=readFileSync(path,'utf8').replace('export function vodafoneBonusLedger','function originalLedger');
+        return {loader:'ts',contents:source+`
+          import {workerData} from 'node:worker_threads';
+          export function vodafoneBonusLedger(...args:Parameters<typeof originalLedger>){
+            if(workerData?.lag && args[1]===null && args[2]===null){
+              const seen=new Int32Array(workerData.lag);Atomics.add(seen,0,1);Atomics.wait(seen,1,0,2250);
+            }
+            return originalLedger(...args);
+          }`};
+      });
+    }}]});
   const settings=new DatabaseSync(join(root,'mobiup.sqlite'));
   settings.exec('CREATE TABLE settings(key TEXT PRIMARY KEY,value TEXT)');
   const set=settings.prepare('INSERT INTO settings VALUES(?,?)');
@@ -263,7 +277,7 @@ try {
     assert.equal(existsSync(join(cacheDir,'ranking.bin')),false);
     const beforeDirectory=process.cwd();
     process.chdir(packaged);
-    const pageWorker=new Worker(workerFile);
+    const lag=new SharedArrayBuffer(8),pageWorker=new Worker(workerFile,{workerData:{lag}});
     try {
       const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Bucharest',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
       const targets=options.targets.map(({month,pointCode,target,bonus})=>({month,pointCode,target,bonus}));
@@ -273,6 +287,14 @@ try {
       assert.ok(screen && screen.months.some(row=>row.month==='2026-06' && row.activations===3));
       assert.equal(statSync(ledger).ino,firstInode,'the restricted web request reused the prewarmed canonical ledger');
       assert.equal(existsSync(join(cacheDir,'preview.bin')),true);
+      const whole={...options,today,targets,month:null,scope:null};
+      const request=()=>{const answer=once(pageWorker,'message').then(([report])=>report);pageWorker.postMessage(whole);return answer;};
+      const first=request();
+      await assert.rejects(observeVodafoneBonus(first),VodafoneBonusPreparing);
+      const completed=await first;
+      const collected=await observeVodafoneBonus(request());
+      assert.deepEqual(collected,completed);assert.equal(Atomics.load(new Int32Array(lag),0),1,'the completed national report is reused across polls');
+      assert(XLSX.read(vodafoneBonusWorkbook(collected),{type:'base64'}).SheetNames.length>=3);
     } finally {await pageWorker.terminate();process.chdir(beforeDirectory);}
     updateCampaign(options.targets.map(row=>({...row,target:row.target+1})));
     assert.equal(status(),'rebuilt');

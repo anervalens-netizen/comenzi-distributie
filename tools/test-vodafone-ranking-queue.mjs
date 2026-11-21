@@ -10,7 +10,7 @@ const cwd=process.cwd(),dir=mkdtempSync(join(tmpdir(),'vodafone-scheduler-'));
 try {
   const modulePath=join(dir,'runtime.mjs');
   const code=readFileSync('lib/vodafone-bonus-runtime-node.ts','utf8')
-    .replace('registerDeadlineMs=120_000','registerDeadlineMs=1200')
+    .replace('registerDeadlineMs=11*60_000','registerDeadlineMs=1200')
     .replace('rankingDeadlineMs=75_000','rankingDeadlineMs=2400')
     .replace('foregroundGraceMs=2_000','foregroundGraceMs=60');
   await build({stdin:{resolveDir:join(cwd,'lib'),contents:code,loader:'ts'},bundle:true,format:'esm',platform:'node',outfile:modulePath});

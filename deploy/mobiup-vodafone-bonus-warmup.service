@@ -11,7 +11,8 @@ Environment=NODE_ENV=production
 Environment=MOBIUP_DATA_DIR=/storage/comenzi-distributie
 Environment=MOBIUP_ACTIVATIONS_DIR=/storage/comenzi-distributie/activations
 ExecStart=/usr/bin/node --max-old-space-size=192 --max-semi-space-size=8 ./vodafone-bonus-worker.mjs --warm-ledger
-TimeoutStartSec=4min
+# A contended cold rebuild took 311 seconds. Match the bounded application budget.
+TimeoutStartSec=11min
 Nice=12
 CPUWeight=20
 CPUQuota=75%
