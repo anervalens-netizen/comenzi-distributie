@@ -56,7 +56,7 @@ rows are silently filtered by TR, category, customer or franchise.
 3. Additional locations found in the master or unassociated codes in the imported
    source prevent an unsafe single-point assumption. The complete source identity
    set is versioned with the reference; allocation does not depend on row order. Ambiguous/missing identities remain visible for reconciliation.
-4. Receipts for the reserved ERP accounts `CLIENTGEN` and `GENERICPARTENER` retain a separate consumer classification across existing and future imports. Reconciliation preserves invoice-line and monetary totals.
+4. Receipts for the reserved ERP accounts `CLIENTGEN`, `GENERICPARTENER`, and its English spelling `GENERICPARTNER` retain a separate consumer classification across existing and future imports. Reconciliation preserves invoice-line and monetary totals.
 5. Original seller attribution never changes when references or portfolios change.
 
 Normalization preserves address punctuation and identifier zeroes. No fuzzy

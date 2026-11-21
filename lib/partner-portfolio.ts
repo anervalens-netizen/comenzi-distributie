@@ -25,11 +25,22 @@ type Row = {
 };
 const membership =
   "SELECT 1 FROM json_each(COALESCE(json_extract(c.data,'$.warehouseIds'),json_array(c.warehouse_id))) w";
-// Historical company-only imports used a deterministic ID for each ERP account.
-// Seek just those legacy IDs, and retain a record if its CUI has since been corrected.
-const consumerCatalogIds=consumerAccountCodes.map(code=>"'hist-"+sha256(JSON.stringify([code,'company'])).slice(0,32)+"'").join(',');
-const consumerCodes=consumerAccountCodes.map(code=>"'"+code+"'").join(',');
-const commercialRecord=`(c.id NOT IN (${consumerCatalogIds}) OR COALESCE(UPPER(REPLACE(TRIM(json_extract(c.data,'$.cui')),' ','')),'') NOT IN (${consumerCodes}))`;
+// Reserved codes contain G and no digits. The partial index narrows the input
+// before normalization. The uncorrelated ID set is evaluated once per statement.
+const consumerCuis=consumerAccountCodes.flatMap(code=>[code,'RO'+code]);
+const consumerCodesSql=consumerCuis.map(code=>"'"+code+"'").join(',');
+const maxCodeLength=Math.max(...consumerCuis.map(code=>code.length));
+const commercialRecord=`c.id NOT IN (
+  WITH RECURSIVE fiscal(id,rest,code) AS (
+    SELECT id,upper(CAST(json_extract(data,'$.cui') AS TEXT)),''
+    FROM customers WHERE json_valid(data) AND CAST(json_extract(data,'$.cui') AS TEXT) GLOB '*[gG]*'
+      AND CAST(json_extract(data,'$.cui') AS TEXT) NOT GLOB '*[0-9]*'
+    UNION ALL
+    SELECT id,substr(rest,2),code || CASE WHEN substr(rest,1,1) GLOB '[A-Z0-9]' THEN substr(rest,1,1) ELSE '' END
+    FROM fiscal WHERE rest<>'' AND length(code)<=${maxCodeLength}
+  )
+  SELECT id FROM fiscal WHERE rest='' AND code IN (${consumerCodesSql})
+)`;
 export function partnerScope(user: User): { sql: string; args: string[] } {
   if (isGlobalManager(user)) return { sql: commercialRecord, args: [] };
   if (user.role === 'agent')

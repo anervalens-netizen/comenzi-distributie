@@ -178,6 +178,7 @@ node tools/test-api.mjs
 node tools/test-order-pagination.mjs
 node tools/test-audit-regressions.mjs
 node tools/test-partner-portfolio.mjs
+node tools/test-partner-account-identity-http.mjs
 node tools/test-partner-activity-http.mjs
 node tools/test-client-sales-http.mjs
 node tools/test-client-history-import-http.mjs

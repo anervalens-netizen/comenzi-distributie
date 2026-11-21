@@ -12,6 +12,7 @@ import initialSchema from '@/drizzle/0000_rare_hardball.sql?raw';
 import partnerPortfolioSchema from '@/drizzle/0006_partner_portfolio.sql?raw';
 
 import partnerDayPlansSchema from '@/drizzle/0007_partner_day_plans.sql?raw';
+import consumerCandidateIndex from '@/drizzle/0016_consumer_candidate_index.sql?raw';
 import partnerMapIndex from '@/drizzle/0008_partner_map_index.sql?raw';
 import orderListRevisionSchema from '@/drizzle/0010_order_list_revision.sql?raw';
 
@@ -77,6 +78,7 @@ function sqlite() {
     if(!visitColumns.includes('follow_up_date'))candidate.exec('ALTER TABLE partner_visits ADD COLUMN follow_up_date TEXT');
     candidate.exec('CREATE INDEX IF NOT EXISTS idx_partner_visits_follow_up ON partner_visits(follow_up_date,agent_id,customer_id)');
     candidate.exec(partnerMapIndex);
+    candidate.exec(consumerCandidateIndex);
     candidate.exec('BEGIN IMMEDIATE;');
     try{
       applyRevisionTriggers(candidate);

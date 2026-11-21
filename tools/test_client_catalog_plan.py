@@ -31,7 +31,7 @@ class CatalogTests(unittest.TestCase):
   p=build_plan(self.snapshot(),[self.identity(franchise='')],[])
   self.assertEqual(p['summary']['newCompanyOnly'],1);self.assertEqual(p['identityLinks'][0]['status'],'reconcile')
  def test_generic_consumer_not_company(self):
-  for code in ['CLIENTGEN','GENERICPARTENER','GENERIC PARTENER']:
+  for code in ['CLIENTGEN','GENERICPARTENER','GENERIC PARTENER','RO GENERIC–PARTNER']:
    p=build_plan(self.snapshot(),[self.identity(client=code,franchise='')],[])
    self.assertEqual(p['summary']['additions'],0);self.assertEqual(p['identityLinks'][0]['status'],'consumer')
   coded=build_plan(self.snapshot(),[self.identity(client='GENERICPARTENER',franchise='F1')],[])

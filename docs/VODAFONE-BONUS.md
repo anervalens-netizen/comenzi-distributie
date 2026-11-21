@@ -10,7 +10,7 @@ Sunt eligibile documentele complete cu SIM 5 și vouchere Vodafone la preț și 
 
 ## Vânzări către persoane fizice
 
-În rapoartele de activări și vânzări, codurile ERP `CLIENTGEN` și `GENERICPARTENER` reprezintă vânzări către persoane fizice. Aceste vânzări nu necesită cod de punct de lucru. În „Pe partener” apar separat și sunt excluse din numărul de puncte comerciale și din clasamentele partenerilor.
+În rapoartele de activări și vânzări, codurile ERP `CLIENTGEN`, `GENERICPARTENER` și varianta în engleză `GENERICPARTNER` reprezintă vânzări către persoane fizice. Aceste vânzări nu necesită cod de punct de lucru. În „Pe partener” apar separat și sunt excluse din numărul de puncte comerciale și din clasamentele partenerilor.
 
 În Focus, o activare generică eligibilă pentru totalul regional contribuie și la „Realizare TR” numai dacă județul activării figurează între județele alocate agentului. Cu județ lipsă sau atribuit altui agent, activarea rămâne doar în regional. Ecranul, detaliul și exportul Excel folosesc aceeași atribuire. Pentru o firmă cu mai multe puncte, identificarea CUI-ului singur nu stabilește magazinul.
 

@@ -20,10 +20,10 @@ def norm(v):
  return re.sub(r'\s+',' ',''.join(c for c in unicodedata.normalize('NFD',str(v or '').strip().upper()) if not unicodedata.combining(c)))
 def code_key(v):return str(v or '').strip().upper()
 def cui_key(v):
- v=re.sub(r'[^A-Z0-9]','',code_key(v))
+ v=re.sub(r'[^A-Za-z0-9]','',str(v or '')).upper()
  return v[2:] if v.startswith('RO') else v
 def is_consumer_code(value):
- return cui_key(value) in ('CLIENTGEN','GENERICPARTENER')
+ return cui_key(value) in ('CLIENTGEN','GENERICPARTENER','GENERICPARTNER')
 def place(r):return (norm(r.get('county')),norm(r.get('city')),norm(r.get('address')))
 def master_place(r):return (norm(r.get('Judet')),norm(r.get('Oras')),norm(r.get('Street')))
 def now():return dt.datetime.now(dt.timezone.utc).isoformat()

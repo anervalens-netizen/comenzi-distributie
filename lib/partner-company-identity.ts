@@ -1,8 +1,11 @@
-export const normalizedCui=(s:string)=>s.toUpperCase().replace(/[^A-Z0-9]/g,'').replace(/^RO/,'');
+export function normalizedCui(value:unknown) {
+  const code=typeof value==='string' || typeof value==='number' ? String(value) : '';
+  return code.replace(/[^A-Za-z0-9]/g,'').toUpperCase().replace(/^RO/,'');
+}
 // Reserved ERP account identifiers. Compare exact codes so a registered company
 // keeps its fiscal identity regardless of its displayed name.
-export const consumerAccountCodes = ['CLIENTGEN','GENERICPARTENER'] as const;
-export function isConsumerAccountCode(code:string) {
+export const consumerAccountCodes = ['CLIENTGEN','GENERICPARTENER','GENERICPARTNER'] as const;
+export function isConsumerAccountCode(code:unknown) {
   const normalized=normalizedCui(code);
   return consumerAccountCodes.some(value=>value===normalized);
 }
