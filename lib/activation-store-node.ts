@@ -1,4 +1,5 @@
 import {vodafoneFocusWorkbook} from './vodafone-focus-export';
+import {readFocusEvidence} from './vodafone-focus-evidence-node';
 import {readFocusSlips} from './vodafone-focus-documents-node';
 import {selectFocusSource, vodafoneFocusReport} from './vodafone-focus-node';
 import {applyVodafoneFocusOverview,readFocusSummaries} from './vodafone-focus-overview';
@@ -56,7 +57,9 @@ export function readActivations(month:string,sites:string[]|null,provider:Activa
       const focusLabels=()=>new Map(report.prepare('SELECT site,label FROM sites').all().map(row=>[String(row.site).toUpperCase(),String(row.label)]));
       const focusGeneration=JSON.stringify([directory,meta.sourceGeneration,meta.sourceImports,meta.builtAt]);
       if(query.focus&&provider==='vodafone'&&schema==='3'){
-        const focus=vodafoneFocusReport(source,focusLabels(),sites,query,focusGeneration,readFocusSlips());
+        const labels=focusLabels(),slips=readFocusSlips();
+        const focus=readFocusEvidence(directory,meta.sourceGeneration,factsVersion,meta.sourceImports,source,
+          evidence=>vodafoneFocusReport(evidence,labels,sites,query,focusGeneration,slips));
         const available=!!focus?.months.some(month=>month.coveredThrough);
         if(query.focus.exportAll&&available&&focus&&(!query.revision||query.revision===focus.revision)){
           return {...result,available,focus:{...focus,detail:undefined},focusWorkbook:vodafoneFocusWorkbook(focus)};
@@ -71,10 +74,13 @@ export function readActivations(month:string,sites:string[]|null,provider:Activa
         if(schema!=='3') return {...scoped,commissionCoverage:'missing'};
         // Ordinary totals leave the worker before commercial attribution begins.
         if(!query.focusCardsOnly)onOverviewBase?.({...scoped,commissionCoverage:'unavailable'});
-        const labels=focusLabels(),slips=readFocusSlips(onSlipRevision),sourceFacts=selectFocusSource(source,query.months);
-        return readFocusSummaries(scoped,query.focusSummaries,
-          focus=>vodafoneFocusReport(source!,labels,sites,{...query,focus},focusGeneration,slips,sourceFacts),
-          !!query.returnFocusCards,!!query.focusCardsOnly);
+        const labels=focusLabels(),slips=readFocusSlips(onSlipRevision);
+        return readFocusEvidence(directory,meta.sourceGeneration,factsVersion,meta.sourceImports,source,evidence=>{
+          const sourceFacts=selectFocusSource(evidence,query.months);
+          return readFocusSummaries(evidence===source?scoped:structuredClone(scoped),query.focusSummaries!,
+            focus=>vodafoneFocusReport(evidence,labels,sites,{...query,focus},focusGeneration,slips,sourceFacts),
+            !!query.returnFocusCards,!!query.focusCardsOnly,evidence!==source);
+        });
       }
       if(provider==='digi'){
         for(const entry of scoped.monthly||[])if(entry.reported)entry.source='internal';

@@ -11,6 +11,7 @@ import time
 import unittest
 from unittest.mock import patch
 from activation_job import authorized_publication, run_job
+from activation_focus_evidence import build_focus_evidence
 import activations
 from test_activations import fixture,row
 
@@ -77,6 +78,33 @@ class JobTests(unittest.TestCase):
    with closing(sqlite3.connect(new/'activation-report.sqlite')) as c:
     self.assertEqual(c.execute('PRAGMA quick_check').fetchone()[0],'ok')
     self.assertEqual(c.execute("SELECT SUM(count) FROM dimension_monthly WHERE is_tr=1 AND provider='digi'").fetchone()[0],1)
+
+ def test_focus_evidence_published_and_recoverable_without_mutating_sources(self):
+  with tempfile.TemporaryDirectory() as folder:
+   root=Path(folder); data=root/'data'; source=root/'operator.json.gz'
+   with gzip.open(source,'wt') as out:
+    json.dump([{'SerieText':'000000000000000001','DATE_OF_ACTIVATION':'2026-10-15',
+      'COUNTY_OF_ACTIVATION':'ARGES','DEALER_NAME':'MOBIUP DISTRIBUTION SRL - CONSIGNATIE'}],out)
+   batch={'files':[str(source)],'operator':'vodafone','source_kind':'operator','source_at':'2026-10-22',
+     'period_start':'2026-10-01','period_end':'2026-10-22','company':'Vodafone'}
+   def publish(stage):
+    self.assertTrue((stage/'vodafone-focus-evidence.sqlite').is_file())
+   result=run_job(data,[batch],before_publish=publish)
+   self.assertEqual(result['report']['focusEvidence'],'rebuilt')
+   current=(data/'current').resolve()
+   def source_hashes():
+    return [hashlib.sha256((current/name).read_bytes()).digest() for name in ('activations.sqlite','activation-report.sqlite')]
+   hashes=source_hashes()
+   (current/'vodafone-focus-evidence.sqlite').unlink()
+   self.assertEqual(build_focus_evidence(current),'rebuilt')
+   self.assertEqual(build_focus_evidence(current),'current')
+   self.assertEqual(build_focus_evidence(current,force=True),'rebuilt')
+   self.assertEqual(source_hashes(),hashes)
+   self.assertEqual((data/'current').resolve(),current)
+   with patch('activation_job.build_focus_evidence',side_effect=OSError('unavailable')):
+    fallback=run_job(data,[])
+   self.assertEqual(fallback['report']['focusEvidence'],'unavailable: OSError')
+   self.assertTrue((data/'current'/'activation-report.sqlite').exists())
 
  def test_noop_semantic_migration_is_atomic_and_preserves_prior_generation(self):
   with tempfile.TemporaryDirectory() as folder:

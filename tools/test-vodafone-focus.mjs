@@ -1,13 +1,17 @@
 import assert from 'node:assert/strict';
+import {execFileSync} from 'node:child_process';
+import {mkdtempSync, mkdirSync, rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
 import {build} from 'esbuild';
 import {read, utils} from 'xlsx';
 
 const {outputFiles} = await build({
-  stdin: {resolveDir: process.cwd(), contents: "export * from './lib/vodafone-focus-node.ts'; export * from './lib/vodafone-focus.ts'; export * from './lib/vodafone-focus-export.ts'; export * from './lib/vodafone-focus-overview.ts';"},
+  stdin: {resolveDir: process.cwd(), contents: "export * from './lib/vodafone-focus-node.ts'; export * from './lib/vodafone-focus.ts'; export * from './lib/vodafone-focus-export.ts'; export * from './lib/vodafone-focus-overview.ts'; export * from './lib/vodafone-focus-evidence-node.ts';"},
   bundle: true, platform: 'node', format: 'esm', write: false,
 });
-const {vodafoneFocusReport, focusCategory, focusAttribution, vodafoneFocusWorkbook, applyVodafoneFocusOverview, readFocusSummaries} =
+const {vodafoneFocusReport, focusCategory, focusAttribution, vodafoneFocusWorkbook, applyVodafoneFocusOverview, readFocusSummaries, readFocusEvidence} =
   await import('data:text/javascript;base64,' + Buffer.from(outputFiles[0].text).toString('base64'));
 
 const ledger = new DatabaseSync(':memory:');
@@ -196,6 +200,50 @@ try {
   assert.deepEqual(picked.map(row=>row.serial).sort(),[serial(1501),serial(1504)]);
   const excel=read(vodafoneFocusWorkbook(individual),{type:'base64'});
   assert.equal(utils.sheet_to_json(excel.Sheets['Detaliu activări']).length,individual.attributed);
+  const temp = mkdtempSync(join(tmpdir(), 'focus-evidence-'));
+  const generation = join(temp, 'generations', 'generation-a');
+  mkdirSync(generation, {recursive: true});
+  try {
+    const path = join(generation, 'activations.sqlite');
+    ledger.prepare('VACUUM INTO ?').run(path);
+    const original = new DatabaseSync(path);
+    let imports;
+    try {
+      original.exec(`ALTER TABLE activation_imports ADD COLUMN sha256 TEXT;
+        ALTER TABLE activation_imports ADD COLUMN parser_version INTEGER DEFAULT 1;
+        ALTER TABLE activation_imports ADD COLUMN row_count INTEGER DEFAULT 0;
+        UPDATE activation_imports SET sha256=printf('%064d',id);
+        ALTER TABLE activation_observations ADD COLUMN source_row INTEGER;
+        UPDATE activation_observations SET source_row=rowid;
+        INSERT INTO activation_meta VALUES('generation','4'),('facts_version','3'),('conflict:1001','1');`);
+      imports = JSON.stringify(original.prepare("SELECT sha256,operator,row_count,parser_version FROM activation_imports WHERE status='complete' ORDER BY sha256").all().map(Object.values));
+      const buildEvidence = () => execFileSync('python3', ['tools/activation_focus_evidence.py','--generation-dir',generation], {encoding: 'utf8'}).trim();
+      assert.equal(buildEvidence(), 'rebuilt');
+      assert.equal(buildEvidence(), 'current');
+      for (const scope of [null, ['S'], ['N'], []]) {
+        const calculate = db => vodafoneFocusReport(db, new Map(), scope,
+          {...query, focus:{...options,detail:scope?'attributed':'regional',exportAll:true}}, 'generation', related);
+        let projected = false;
+        const result = readFocusEvidence(generation, '4', '3', imports, original, db => {
+          projected = db !== original;
+          return calculate(db);
+        });
+        assert(projected);
+        assert.deepEqual(result, calculate(original));
+      }
+      for (const [revision, manifest] of [['5',imports],['4','stale']]) {
+        assert.equal(readFocusEvidence(generation,revision,'3',manifest,original,db=>db===original),true);
+      }
+      const damaged = new DatabaseSync(join(generation,'vodafone-focus-evidence.sqlite'));
+      try { damaged.exec('DROP TABLE activation_observations'); } finally { damaged.close(); }
+      assert.equal(readFocusEvidence(generation,'4','3',imports,original,db=>{
+        db.prepare('SELECT 1 FROM activation_observations LIMIT 1').get();
+        return db===original;
+      }),true);
+      rmSync(join(generation,'vodafone-focus-evidence.sqlite'));
+      assert.equal(readFocusEvidence(generation,'4','3',imports,original,db=>db===original),true);
+    } finally { original.close(); }
+  } finally { rmSync(temp, {recursive:true,force:true}); }
   console.log('Vodafone Focus source precedence, commercial attribution, history, scope and workbook passed.');
 } finally {
   ledger.close();
