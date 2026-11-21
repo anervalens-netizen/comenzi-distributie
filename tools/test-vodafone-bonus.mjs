@@ -269,6 +269,19 @@ try {
     writeFileSync('vodafone-bonus-worker.mjs','// Synthetic packaged worker identity');
     const fresh=key=>import(pathToFileURL(bundle).href+'?instance='+key);
     const first=(await fresh('one')).readVodafoneBonus(options);
+    const screenOptions={...options,month:'2026-06',preview:true};
+    const screen=(await fresh('screen-one')).readVodafoneBonus(screenOptions);
+    assert.deepEqual(screen,vodafoneBonusPreview((await fresh('screen-full')).readVodafoneBonus({...screenOptions,preview:false})));
+    try {
+      DatabaseSync.prototype.prepare=function(sql) {
+        if (sql.includes('SELECT key,value FROM report_meta')) throw new Error('Unexpected full ledger read for a certified preview');
+        return originalPrepare.call(this,sql);
+      };
+      assert.deepEqual((await fresh('screen-restart')).readVodafoneBonus(screenOptions),screen);
+    } finally { DatabaseSync.prototype.prepare=originalPrepare; }
+    const otherScope=(await fresh('screen-scoped')).readVodafoneBonus({...screenOptions,scope:[]});
+    assert.equal(otherScope.points.length,0);
+    assert.notEqual(otherScope.revision,screen.revision);
     const saved=join(root,'.vodafone-bonus-cache','current.bin');
     const beforeInode=statSync(saved).ino;
     assert.deepEqual((await fresh('two')).readVodafoneBonus(options),first,'worker restart safely reuses source-keyed snapshot');

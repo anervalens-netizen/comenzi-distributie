@@ -8,7 +8,7 @@ import {db,fail,isGlobalManager,response} from './server';
 import {salesSiteKey} from './sales-location';
 import {bonusMonth,parseVodafoneBonusEvidence,vodafoneBonusEvidenceSetting} from './vodafone-bonus-evidence';
 import {readVodafoneTopLocations} from './vodafone-top-locations';
-import {firstVodafoneBonusMonth,vodafoneBonusPreview,type VodafoneBonusReport,type VodafoneBonusScope} from './vodafone-bonus-types';
+import {firstVodafoneBonusMonth,type VodafoneBonusReport,type VodafoneBonusScope} from './vodafone-bonus-types';
 import {vodafoneBonusWorkbook} from './vodafone-bonus-export';
 import type {User} from './types';
 
@@ -64,7 +64,7 @@ export async function readVodafoneBonusForManager(
   const scope=bonusProjectSites(permittedSites,rules,projects);
   let evidence;
   try { evidence=parseVodafoneBonusEvidence(raw); } catch { fail(503,'Dovezile fiscale ale registrului necesită verificare.'); }
-  const report=await readVodafoneBonusAsync({today,rules,targets,evidence,scope,month:all==='1'?null:chosenMonth})
+  const report=await readVodafoneBonusAsync({today,rules,targets,evidence,scope,month:all==='1'?null:chosenMonth,preview:view==='preview'})
     .catch(()=>fail(503,'Registrul Vodafone nu este disponibil momentan. Reîncarcă raportul.'));
   const current = revalidate ? await revalidate() : user;
   if (current.id!==user.id || current.profileVersion!==user.profileVersion || current.managerScope!==user.managerScope ||
@@ -81,5 +81,5 @@ export async function vodafoneBonusResponse(user: User, params: URLSearchParams,
   const report = await readVodafoneBonusForManager(user,params,revalidate);
   const view=params.get('view');
   if (view==='export') return response({workbook:vodafoneBonusWorkbook(report,params.get('q') || '')});
-  return response(view==='preview' ? vodafoneBonusPreview(report) : report);
+  return response(report);
 }

@@ -6,10 +6,10 @@ import {salesLocationKey,salesSiteKey} from './sales-location';
 import {normalizedCui} from './partner-company-identity';
 import type {DistributionRules} from './distribution-rules';
 import {activationFactsVersion} from './activation-semantics';
-import {firstVodafoneBonusMonth, type VodafoneBonusReason, type VodafoneBonusReport, type VodafoneBonusScope, type VodafoneTopLocation} from './vodafone-bonus-types';
+import {firstVodafoneBonusMonth, vodafoneBonusPreview, type VodafoneBonusScreen, type VodafoneBonusReason, type VodafoneBonusReport, type VodafoneBonusScope, type VodafoneTopLocation} from './vodafone-bonus-types';
 import {bonusDate,bonusMonth,bonusEvidenceIdentity,type VodafoneBonusEvidence} from './vodafone-bonus-evidence';
 import {isVodafoneGenericPartner,vodafoneDocumentKind} from './vodafone-bonus-rules';
-import {readBonusCache,writeBonusCache} from './vodafone-bonus-cache-node';
+import {createVodafoneDiskCache,readBonusCache,writeBonusCache} from './vodafone-bonus-cache-node';
 import {vodafoneBonusLedger,type BonusActivation,type BonusLedgerInput} from './vodafone-bonus-ledger';
 
 type DocFields = {date: string; site: string; number: string};
@@ -24,6 +24,8 @@ type HistoryLine = {
 type CommercialLine = {company: string; site_code: string; date: string; location: string; order_number: string; item_code: string; quantity: number; price_cents: number; value_cents: number};
 type Point = BonusLedgerInput['portfolios'][number];
 let cached: Snapshot<BonusLedgerInput> | undefined;
+let cachedPreview: Snapshot<VodafoneBonusScreen> | undefined;
+const previewDisk=createVodafoneDiskCache<VodafoneBonusScreen>('preview');
 type Raw = Record<string,unknown>;
 const s = (value: unknown) => typeof value === 'string' ? value.trim() : typeof value === 'number' ? String(value) : '';
 const uniform = <T>(values: Iterable<T>): T|undefined => {
@@ -437,6 +439,7 @@ function monthCoverage(source: DatabaseSync, activations: Activation[], today: s
 }
 
 export type VodafoneBonusRead = {
+  preview?: boolean;
   directory?: string;
   activationDirectory?: string;
   today: string;
@@ -446,13 +449,13 @@ export type VodafoneBonusRead = {
   month: string | null;
   targets: readonly VodafoneTopLocation[];
 };
-type BonusSources = {app: DatabaseSync; history: DatabaseSync; source: DatabaseSync; report: DatabaseSync};
+type BonusSources = {app: DatabaseSync; history: DatabaseSync; source: DatabaseSync; report: DatabaseSync; sales?: DatabaseSync};
 type Snapshot<T> = {key: string; value: T};
 type BonusSourceInput = Pick<VodafoneBonusRead,'directory' | 'activationDirectory' | 'today' | 'rules' | 'evidence'>;
 
 function readSnapshot<T>(
   input: BonusSourceInput, selection: readonly unknown[], withPayments: boolean,
-  read: (sources: BonusSources, sales: DatabaseSync | undefined, key: string)=>T,
+  read: (openSources: ()=>BonusSources, key: string)=>T,
   previous?: Snapshot<T>,
   disk?: {load:(directory:string,key:string)=>T|undefined; save:(directory:string,key:string,value:T)=>void},
 ): Snapshot<T> {
@@ -490,16 +493,19 @@ function readSnapshot<T>(
     if (previous?.key===key) {verifySources();return previous;}
     const restored=disk?.load(directory,key);
     if (restored!==undefined) {verifySources();return {key,value:restored};}
-    const [history,source,report,sales]=paths.map(open);
-    const meta = Object.fromEntries(report.prepare('SELECT key,value FROM report_meta').all().map(row=>[row.key,row.value]));
-    const sourceMeta = Object.fromEntries(source.prepare("SELECT key,value FROM activation_meta WHERE key IN ('schema_version','facts_version','generation')").all().map(row=>[row.key,row.value]));
-    const sourceImports = source.prepare("SELECT sha256,operator,row_count,parser_version FROM activation_imports WHERE status='complete' ORDER BY sha256").all()
-      .map(row=>[row.sha256,row.operator,row.row_count,row.parser_version]);
-    if (meta.version!=='4' || meta.factsVersion!==sourceMeta.facts_version || !['2',activationFactsVersion].includes(s(sourceMeta.facts_version)) ||
-        sourceMeta.schema_version!=='3' || meta.sourceGeneration!==sourceMeta.generation || meta.sourceImports!==JSON.stringify(sourceImports)) {
-      throw new Error('Stale or unsupported Vodafone activation projection');
+    function openSources():BonusSources {
+      const [history,source,report,sales]=paths.map(open);
+      const meta = Object.fromEntries(report.prepare('SELECT key,value FROM report_meta').all().map(row=>[row.key,row.value]));
+      const sourceMeta = Object.fromEntries(source.prepare("SELECT key,value FROM activation_meta WHERE key IN ('schema_version','facts_version','generation')").all().map(row=>[row.key,row.value]));
+      const sourceImports = source.prepare("SELECT sha256,operator,row_count,parser_version FROM activation_imports WHERE status='complete' ORDER BY sha256").all()
+        .map(row=>[row.sha256,row.operator,row.row_count,row.parser_version]);
+      if (meta.version!=='4' || meta.factsVersion!==sourceMeta.facts_version || !['2',activationFactsVersion].includes(s(sourceMeta.facts_version)) ||
+          sourceMeta.schema_version!=='3' || meta.sourceGeneration!==sourceMeta.generation || meta.sourceImports!==JSON.stringify(sourceImports)) {
+        throw new Error('Stale or unsupported Vodafone activation projection');
+      }
+      return {app,history,source,report,sales};
     }
-    const value=read({app,history,source,report},sales,key);
+    const value=read(openSources,key);
     verifySources();
     disk?.save(directory,key,value);
     return {key,value};
@@ -522,8 +528,18 @@ function fiscalEvidence(input: BonusSourceInput) {
   return new Map(input.evidence.documents.map(row=>[bonusEvidenceIdentity(row.source,row.company,row.date,row.site,row.number),row.kind]));
 }
 
-export function readVodafoneBonus(input: VodafoneBonusRead): VodafoneBonusReport {
-  cached=readSnapshot(input,[input.targets],true,({app,history,source,report},sales,revision)=>{
+export function readVodafoneBonus(input: VodafoneBonusRead): VodafoneBonusScreen {
+  if (!input.preview) return readFullVodafoneBonus(input);
+  // A certified screen also survives a restart. New activations or settlement documents must
+  // rebuild the complete ledger before its monthly balances can be displayed.
+  cachedPreview=readSnapshot(input,[input.targets,input.month,input.scope],true,
+    ()=>vodafoneBonusPreview(readFullVodafoneBonus(input)),cachedPreview,previewDisk);
+  return cachedPreview.value;
+}
+
+function readFullVodafoneBonus(input: VodafoneBonusRead): VodafoneBonusReport {
+  cached=readSnapshot(input,[input.targets],true,(openSources,revision)=>{
+    const {app,history,source,report,sales}=openSources();
     const activations=readSim0Details(report,input,firstVodafoneBonusMonth,input.today.slice(0,7));
     const evidence=fiscalEvidence(input);
     const {activation,identity}=matchActivations(source,history,app,activations,evidence,new Set(input.targets.map(row=>row.pointCode)));
@@ -543,7 +559,8 @@ type Sim0SourceRows = {activation:BonusActivation[];companies:Map<string,string>
 export function projectVodafoneSim0Rows<T>(input:BonusSourceInput,fromMonth:string,toMonth:string,scope:VodafoneBonusScope,
   project:(source:Sim0SourceRows)=>T, previous?:Snapshot<T>) {
   if (!bonusMonth(fromMonth) || !bonusMonth(toMonth) || fromMonth>toMonth || toMonth>input.today.slice(0,7)) throw new Error('Invalid activation period');
-  return readSnapshot(input,[fromMonth,toMonth,scope],false,({app,history,source,report},_sales,revision)=>{
+  return readSnapshot(input,[fromMonth,toMonth,scope],false,(openSources,revision)=>{
+    const {app,history,source,report}=openSources();
     const details=readSim0Details(report,input,fromMonth,toMonth);
     const {activation}=matchActivations(source,history,app,details,fiscalEvidence(input),new Set());
     const companies=new Map<string,string>();
