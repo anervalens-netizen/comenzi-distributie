@@ -5,7 +5,7 @@ import {build} from 'esbuild';
 
 const bundle=await build({stdin:{contents:"export * from './components/activation-eligibility';export * from './lib/activation-labels';",resolveDir:process.cwd()},bundle:true,platform:'node',format:'esm',jsx:'automatic',write:false});
 const {ActivationEligibility,activationReasonLabels,activationDateLabel}=await import('data:text/javascript;base64,'+Buffer.from(bundle.outputFiles[0].text).toString('base64'));
-const known={outside_territory:'Județ în afara ariei',missing_county:'Județ lipsă',ineligible_type:'Tip SIM neeligibil',missing_type:'Tip SIM lipsă',contradictory_source:'Date contradictorii'};
+const known={unconfirmed_agent_county:'Județ neconfirmat pentru agent',outside_territory:'Județ în afara ariei',missing_county:'Județ lipsă',ineligible_type:'Tip SIM neeligibil',missing_type:'Tip SIM lipsă',contradictory_source:'Date contradictorii'};
 assert.deepEqual(activationReasonLabels,known);
 for(const [reason,label] of Object.entries(known)){
   const html=renderToStaticMarkup(createElement(ActivationEligibility,{eligible:false,reasons:[reason]}));
