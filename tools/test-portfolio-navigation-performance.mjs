@@ -2,6 +2,7 @@
 // Bind the fixture's local account explicitly; cross-tab auth has its own real HTTP tests.
 import assert from 'node:assert/strict';
 import { build } from 'esbuild';
+import { readyChromePort } from './offline-browser-fixture.mjs';
 import { mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -48,8 +49,7 @@ const child=spawn(chrome,['--headless=new','--no-sandbox','--disable-dev-shm-usa
 let socket,closeBrowser;
 const evidence={synthetic:true,checks:0,scenarios:{}};
 try{
- for(let i=0;!existsSync(join(profile,'DevToolsActivePort'))&&i<100;i++)await delay(50);
- const port=Number(readFileSync(join(profile,'DevToolsActivePort'),'utf8').split('\n')[0]);
+ const port=await readyChromePort(profile);
  const target=await fetch(`http://127.0.0.1:${port}/json/new?about:blank`,{method:'PUT'}).then(r=>r.json());
  socket=new WebSocket(target.webSocketDebuggerUrl);await new Promise(resolve=>socket.addEventListener('open',resolve,{once:true}));
  let next=1;const pending=new Map(),errors=[];
