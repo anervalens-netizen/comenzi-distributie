@@ -32,7 +32,7 @@ const {outputFiles} = await build({
     `}));
     build.onLoad({filter:/^vodafone-bonus-api$/,namespace:'test'},()=>({contents:`
       export const authorizedScope = async()=>globalThis.syntheticSim0Scope??null;
-      export const getEvidence = async()=>undefined;
+      export const getEvidence = async()=>globalThis.syntheticSim0Evidence;
       export function readVodafoneBonusForManager() { throw Error('Unexpected dataset'); }
     `}));
     build.onLoad({filter:/^client-sales-portfolio$/,namespace:'test'},()=>({contents:`
@@ -111,7 +111,7 @@ const cuiA=syntheticCui(800001),cuiB=syntheticCui(800002);
 const months=['2026-01','2026-02','2026-03'];
 const identified={month:months[0],cui:cuiA,partner:'Nume anterior al firmei',pointCode:'P-1',site:'A',reason:'commercial'};
 const sim0Fixture={revision:'synthetic',companies:new Map([[cuiA,'Firma exemplu'],[cuiB,'Firma exemplu']]),
-  coverage:months.map((month,i)=>({month,sourceThrough:i===2?null:month+(i?'-19':'-31'),reported:i<2})),activation:[
+  coverage:months.map((month,i)=>({month,sourceThrough:i===2?null:month+(i?'-19':'-31'),reported:i===0,status:['complete','partial','missing'][i],ranges:i<2?[month+'-01–'+month+(i?'-19':'-31')]:[],expectedThrough:month+(i===1?'-28':'-31')})),activation:[
     identified,{...identified,pointCode:'P-2',reason:'document-unknown'},
     {...identified,cui:cuiB,site:'B',pointCode:'P-3'},
     {...identified,month:months[1],partner:'Altă preluare veche'},
@@ -136,14 +136,21 @@ const readSim0=managerAiReader(new Request('https://example.invalid/api/manager-
   {params:new URLSearchParams(),filter:null,signature:'synthetic'},async()=>({id:'m',role:'manager',managerScope:'assigned'}));
 const ranked=makeManagerAiReport(sim0Query,await readSim0(sim0Query),'S');
 assert.deepEqual(ranked.rows,[[cuiA,'Firma exemplu',3,2]]);
-assert.deepEqual(ranked.coverage.map(c=>[c.available,c.through]),[[true,'2026-01-31'],[true,'2026-02-19'],[false,null]]);
+assert.deepEqual(ranked.coverage.map(c=>[c.available,c.through]),[[true,'2026-01-31'],[false,'2026-02-19'],[false,null]]);
 assert.match(ranked.coverage[0].note,/5 activări din selecție excluse/);
+assert.match(ranked.coverage[0].note,/doar contribuțiile gestiunilor/);
+assert.match(ranked.coverage[1].note,/Acoperire parțială/);
+assert.match(ranked.coverage[2].note,/Totalul lunar este necunoscut/);
 const pointsQuery={...sim0Query,groupBy:['cui','franchise']};
 assert.deepEqual(makeManagerAiReport(pointsQuery,await readSim0(pointsQuery),'P').rows,[[cuiA,'P-1',2,2],[cuiA,'P-2',1,0]]);
 assert.equal(reads,1,'the annual ranking and drilldown should share the same source');
 globalThis.syntheticSim0Scope=['B'];
 await assert.rejects(()=>readSim0.checkSourceScope(),{status:409});
 await assert.rejects(()=>readSim0(sim0Query),{status:409});
+globalThis.syntheticSim0Evidence='malformed';
+const invalidReader=managerAiReader(new Request('https://example.invalid/api/manager-ai'),{params:new URLSearchParams(),filter:null,signature:'synthetic'},async()=>({role:'manager'}));
+await assert.rejects(()=>invalidReader(sim0Query),{status:503});
+delete globalThis.syntheticSim0Evidence;
 delete globalThis.syntheticSim0Scope;
 delete globalThis.syntheticReadSim0;
 

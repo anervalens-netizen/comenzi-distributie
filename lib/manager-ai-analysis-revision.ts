@@ -1,5 +1,6 @@
 import { lstatSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { vodafoneSim0CatalogRevision } from './vodafone-bonus-node';
 import { rulesSetting } from './distribution-rules';
 import { historyFileGeneration } from './history-source-generation';
 import { db, sha256 } from './server';
@@ -33,6 +34,7 @@ export async function managerAiAnalysisRevision(tables:readonly string[]) {
   const settings=bonus||sim0?[rulesSetting,vodafoneBonusEvidenceSetting]:[rulesSetting];
   const revisions:unknown[]=[(await db().prepare('SELECT key,value FROM settings WHERE key IN (SELECT value FROM json_each(?)) ORDER BY key')
     .bind(JSON.stringify(settings)).all()).results];
+  if(sim0)revisions.push(vodafoneSim0CatalogRevision(data));
   if(bonus||sim0||selected.has('orders')||selected.has('stands')){
     revisions.push(await db().prepare('SELECT revision FROM order_list_revision WHERE id=1').first());
   }

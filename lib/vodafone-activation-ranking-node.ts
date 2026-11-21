@@ -6,7 +6,7 @@ import type {BonusActivation} from './vodafone-bonus-ledger';
 import type {VodafoneBonusScope} from './vodafone-bonus-types';
 
 export type VodafoneSim0RankingRead = VodafoneBonusRead & {kind:'sim0-clients';fromMonth:string;toMonth:string};
-type Coverage = {month:string;sourceThrough:string|null;reported:boolean};
+type Coverage = import('./vodafone-sim0-coverage').Sim0MonthCoverage;
 const excludedReasons={
   'excluded':'client generic sau operațiune exclusă în surse',
   'conflict':'surse contradictorii',

@@ -13,6 +13,7 @@ try {
   const bundle=join(root,'bonus.mjs');
   await build({stdin:{contents:`
     export * from './lib/vodafone-bonus-rules';
+    export * from './lib/vodafone-sim0-coverage';
     export * from './lib/vodafone-bonus-types';
     export * from './lib/vodafone-bonus-ledger';
     export * from './lib/vodafone-bonus-node';
@@ -307,12 +308,12 @@ try {
   earlier.exec("INSERT INTO details SELECT '2026-02','2026-02-05',distribution_date,company,serial,client_code,point_code,item_code,label,site,contradictory,provider,is_tr,item_type FROM details WHERE serial='serial-1'");
   earlier.close();
   rmSync(join(root,'sales.sqlite'));
-  const {readVodafoneSim0ActivationRows,projectVodafoneSim0Rows}=await import(pathToFileURL(bundle).href);
+  const {readVodafoneSim0ActivationRows,projectVodafoneSim0Rows,sim0Coverage,vodafoneSim0CatalogRevision}=await import(pathToFileURL(bundle).href);
   const rank=readVodafoneSim0ActivationRows(options,'2026-01','2026-06');
   assert.equal(rank.activation.filter(row=>row.month==='2026-02' && row.pointCode==='FR-A' && row.reason==='commercial').length,1);
   assert.equal(rank.activation.filter(row=>row.month==='2026-06' && row.reason!=='excluded').length,3);
   assert.equal(rank.companies.get('SYNTHETIC'),'Legal Example Company');
-  assert.deepEqual(rank.coverage.map(m=>[m.month,m.reported]),[['2026-01',false],['2026-02',true],['2026-03',false],['2026-04',false],['2026-05',false],['2026-06',true]]);
+  assert.deepEqual(rank.coverage.map(m=>[m.month,m.reported]),[['2026-01',false],['2026-02',false],['2026-03',false],['2026-04',false],['2026-05',false],['2026-06',true]]);
   assert.equal(rank.coverage.at(-1).sourceThrough,'2026-06-30');
   const previousCwd=process.cwd();
   try {
@@ -350,6 +351,22 @@ try {
     assert.notEqual(statSync(rankingPath).ino,beforeRelease,'release changes force fresh aggregation');
   } finally {process.chdir(previousCwd);}
 
+  assert.equal(rank.coverage[1].status,'observed');
+  assert.equal(rank.coverage[1].lastObserved,'2026-02-05');
+  assert.equal(rank.coverage[1].sourceThrough,null);
+  const intervals=[['2026-01-15','2026-01-31'],['2026-02-01','2026-02-10'],['2026-02-05','2026-02-12'],
+    ['2026-02-14','2026-02-28'],['2026-03-01','2026-03-10'],['2026-03-11','2026-04-18'],['2026-04-18','2026-05-01']];
+  const cases=sim0Coverage('2026-01','2026-04','2026-04-21',intervals.map(([start,end])=>({start,end})),new Map());
+  assert.deepEqual(cases.map(c=>[c.status,c.sourceThrough]),[['partial',null],['partial','2026-02-12'],['complete','2026-03-31'],['current','2026-04-21']]);
+  assert.deepEqual(cases[1].ranges,['2026-02-01–2026-02-12','2026-02-14–2026-02-28']);
+  assert.deepEqual(cases.map(c=>c.reported),[false,false,true,true]);
+  const foreign=new DatabaseSync(join(root,'activations.sqlite'));
+  foreign.exec("UPDATE activation_imports SET company='Unrelated Example'");
+  const unknown=readVodafoneSim0ActivationRows(options,'2026-06','2026-06').coverage[0];
+  assert.deepEqual([unknown.status,unknown.reported,unknown.sourceThrough],['observed',false,null]);
+  foreign.exec("UPDATE activation_imports SET company='Vodafone'");
+  foreign.close();
+  const priorCatalog=vodafoneSim0CatalogRevision(root);
   let projects=0;
   const compact=rows=>{projects++;return rows.activation.length;};
   const first=projectVodafoneSim0Rows(options,'2026-01','2026-06',['SITE-A'],compact);
@@ -363,6 +380,9 @@ try {
   const refreshed=projectVodafoneSim0Rows(options,'2026-01','2026-06',['SITE-B'],compact,filtered);
   assert.notEqual(refreshed.key,filtered.key);
   assert.equal(projects,3);
+  assert.notEqual(vodafoneSim0CatalogRevision(root),priorCatalog);
+  const hidden=projectVodafoneSim0Rows(options,'2026-02','2026-02',[],rows=>rows.coverage).value[0];
+  assert.equal(hidden.status,'missing','an observation outside the selected scope is private');
   console.log('PASS: Vodafone reward attribution, source changes, restart-safe cache, YTD activation source and XLSX');
 } finally {
   rmSync(root,{recursive:true,force:true});

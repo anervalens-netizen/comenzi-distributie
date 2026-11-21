@@ -101,6 +101,9 @@ export function createManagerAiAnalysis({
         const outcome=await runManagerAiSandbox({language:request.language,code:request.code,database,inputs:selected,signal});
         await check();
         signal.throwIfAborted();
+        if(requestedTables.includes('activation_sim0_clients') && sourceRevision!==await managerAiAnalysisRevision(requestedTables)) {
+          fail(409,'Sursele de date s-au actualizat în timpul analizei. Reia analiza.');
+        }
         const artifacts:ManagerAiPreparedArtifact[]=[];
         let exportLimit=false;
         for(const artifact of (outcome.exitCode===0?outcome.artifacts:[])){

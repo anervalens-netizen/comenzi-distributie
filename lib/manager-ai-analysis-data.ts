@@ -152,7 +152,15 @@ export async function readManagerAiAnalysisTable(
   const billingPoints=pointVersion?await managerAiBillingPoints(currentUser,scope.filter?.warehouseIds):null;
 
   if (table==='activation_sim0_clients') {
-    const result=await readLegacy({dataset:'sim0Clients',fromMonth:selection.from,toMonth:selection.to,site:'',groupBy:[],filters:[],orderBy:'activations',descending:true,limit:1});
+    let result;
+    try {
+      result=await readLegacy({dataset:'sim0Clients',fromMonth:selection.from,toMonth:selection.to,site:'',groupBy:[],filters:[],orderBy:'activations',descending:true,limit:1});
+    } catch(error) {
+      if (!(error instanceof AppError) || error.status!==403&&error.status!==503) throw error;
+      await check();
+      const note=error.status===403?'Sursa nu este disponibilă acestui cont.':'Sursa momentan indisponibilă.';
+      return {table,fromMonth:selection.from,toMonth:selection.to,columns:info.columns,rows,coverage:months.map(month=>missing(info.label,month,note))};
+    }
     for (const row of result.rows) push([row.month,row.cui,label(row.partner),row.franchise,row.activations,row.confirmedActivations]);
     await readLegacy.checkSourceScope(await check());
     rememberSim0Access?.(readLegacy.checkSourceScope);

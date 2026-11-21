@@ -10,6 +10,7 @@ import {firstVodafoneBonusMonth, vodafoneBonusPreview, type VodafoneBonusScreen,
 import {bonusDate,bonusMonth,bonusEvidenceIdentity,type VodafoneBonusEvidence} from './vodafone-bonus-evidence';
 import {isVodafoneGenericPartner,vodafoneDocumentKind} from './vodafone-bonus-rules';
 import {createVodafoneDiskCache,type VodafoneDiskCache} from './vodafone-bonus-cache-node';
+import {sim0Coverage,type Sim0MonthCoverage} from './vodafone-sim0-coverage';
 import {vodafoneBonusLedger,type BonusActivation,type BonusLedgerInput} from './vodafone-bonus-ledger';
 
 type DocFields = {date: string; site: string; number: string};
@@ -92,6 +93,25 @@ function applicationIdentity(app: DatabaseSync, path: string, companyNames: bool
   if (hasTable(app,'crm_customer_links')) add('SELECT customer_id,address_id FROM crm_customer_links ORDER BY customer_id,address_id');
   if (hasTable(app,'customer_identity_aliases')) add('SELECT alias_id,canonical_id FROM customer_identity_aliases ORDER BY alias_id');
   return digest.digest('hex');
+}
+function pinnedApplicationIdentity(app:DatabaseSync,appPath:string,stamp:string,withPayments:boolean) {
+  // BEGIN is deferred. Pin the catalog before trusting a previously calculated digest.
+  app.prepare('PRAGMA schema_version').get();
+  const stable=fingerprint(appPath)===stamp;
+  const memo=stable ? appRevisions.get(withPayments) : undefined;
+  if (memo?.stamp===stamp) return memo.digest;
+  const digest=applicationIdentity(app,appPath,!withPayments);
+  if (stable) appRevisions.set(withPayments,{stamp,digest});
+  return digest;
+}
+/** Same legal-entity names, alias, work-point and document inputs used by the worker. */
+export function vodafoneSim0CatalogRevision(directory:string) {
+  const path=resolve(directory,'mobiup.sqlite'),stamp=fingerprint(path);
+  const app=new DatabaseSync(path,{readOnly:true,timeout:500});
+  try {
+    app.exec('PRAGMA query_only=ON; BEGIN');
+    return pinnedApplicationIdentity(app,path,stamp,false);
+  } finally {app.close();}
 }
 function keys(a: {date: string; site: string; number: string}[]) {
   return [...new Map(a.map(x => [docKey(x.date,x.site,x.number),x])).values()];
@@ -416,10 +436,10 @@ function paymentDocuments(history: DatabaseSync, sales: DatabaseSync, identity: 
   return documents;
 }
 
+const operatorWindowsWhere="operator='vodafone' AND status='complete' AND source_kind='operator' AND UPPER(TRIM(company)) IN ('VODAFONE','MOBIUP','MOBIUP DISTRIBUTION SRL')";
 function monthCoverage(source: DatabaseSync, activations: Activation[], today: string, external: VodafoneBonusEvidence) {
   const finals = source.prepare(`SELECT source_at,period_start,period_end FROM activation_imports
-    WHERE operator='vodafone' AND status='complete' AND source_kind='operator'
-    AND UPPER(TRIM(company)) IN ('VODAFONE','MOBIUP','MOBIUP DISTRIBUTION SRL')`).all();
+    WHERE ${operatorWindowsWhere}`).all();
   const latestActivation = new Map<string,string>();
   for (const act of activations) {
     if ((latestActivation.get(act.month)||'') < act.activation_date) latestActivation.set(act.month,act.activation_date);
@@ -478,12 +498,7 @@ function readSnapshot<T>(
     };
     const initialApp=fingerprint(appPath);
     const app=open(appPath);
-    // BEGIN is deferred: pin the catalog before trusting a previously calculated digest.
-    app.prepare('PRAGMA schema_version').get();
-    const unchangedAtPin=fingerprint(appPath)===initialApp;
-    const memo=unchangedAtPin ? appRevisions.get(withPayments) : undefined;
-    const appIdentity=memo?.stamp===initialApp ? memo.digest : applicationIdentity(app,appPath,!withPayments);
-    if (unchangedAtPin && memo?.stamp!==initialApp) appRevisions.set(withPayments,{stamp:initialApp,digest:appIdentity});
+    const appIdentity=pinnedApplicationIdentity(app,appPath,initialApp,withPayments);
     const key=createHash('sha256').update(JSON.stringify([appIdentity,before,generation,input.today,input.rules,input.evidence,selection])).digest('hex');
     function verifySources() {
       if (generation!==activationsDirectory(base) || paths.some((path,i)=>fingerprint(path)!==before[i]) ||
@@ -556,7 +571,7 @@ function readFullVodafoneBonus(input: VodafoneBonusRead): VodafoneBonusReport {
 
 /** Activation analytics is independent of the reward campaign's opening month and payment sources. */
 type Sim0SourceRows = {activation:BonusActivation[];companies:Map<string,string>;revision:string;
-  coverage:{month:string;sourceThrough:string|null;reported:boolean}[]};
+  coverage:Sim0MonthCoverage[]};
 export function projectVodafoneSim0Rows<T>(input:BonusSourceInput,fromMonth:string,toMonth:string,scope:VodafoneBonusScope,
   project:(source:Sim0SourceRows)=>T, previous?:Snapshot<T>,disk?:VodafoneDiskCache<T>) {
   if (!bonusMonth(fromMonth) || !bonusMonth(toMonth) || fromMonth>toMonth || toMonth>input.today.slice(0,7)) throw new Error('Invalid activation period');
@@ -569,26 +584,13 @@ export function projectVodafoneSim0Rows<T>(input:BonusSourceInput,fromMonth:stri
       const cui=normalizedCui(s(row.cif)), name=s(row.name);
       if (cui && name && !isVodafoneGenericPartner(cui,name) && !companies.has(cui)) companies.set(cui,name);
     }
-    const windows=source.prepare(`SELECT period_start,period_end FROM activation_imports
-      WHERE operator='vodafone' AND status='complete' AND source_kind='operator'
-      AND period_start<=? AND period_end>=?`).all(input.today,fromMonth+'-01');
-    const observed=new Map<string,string>();
-    for (const row of details) if (row.activation_date>(observed.get(row.month)||'')) observed.set(row.month,row.activation_date);
-    const coverage=[];
-    const cursor=new Date(fromMonth+'-01T00:00:00Z');
-    while (cursor.toISOString().slice(0,7)<=toMonth) {
-      const month=cursor.toISOString().slice(0,7);
-      cursor.setUTCMonth(cursor.getUTCMonth()+1);
-      const lastDay=new Date(cursor.getTime()-86400000).toISOString().slice(0,10);
-      let through=observed.get(month)||'';
-      for (const window of windows) {
-        const start=s(window.period_start), end=s(window.period_end);
-        if (!bonusDate(start) || !bonusDate(end) || start>end || start>lastDay || start>input.today || end<month+'-01') continue;
-        const bound=[lastDay,end,input.today].sort()[0];
-        if (bound>through) through=bound;
-      }
-      coverage.push({month,sourceThrough:through||null,reported:!!through});
+    const windows=source.prepare(`SELECT period_start,period_end FROM activation_imports WHERE ${operatorWindowsWhere}
+      AND period_start<=? AND period_end>=?`).all(input.today,fromMonth+'-01').map(r=>({start:s(r.period_start),end:s(r.period_end)}));
+    const observed=new Map<string,string>(),sites=scope===null?null:new Set(scope);
+    for (const row of details) if ((!sites || sites.has(salesSiteKey(row.site))) && row.activation_date>(observed.get(row.month)||'')) {
+      observed.set(row.month,row.activation_date);
     }
+    const coverage=sim0Coverage(fromMonth,toMonth,input.today,windows,observed);
     return project({activation,revision,coverage,companies});
   },previous,disk);
 }
