@@ -89,18 +89,20 @@ try {
   writeFileSync(vodafoneFile,'published again');writeFileSync(digiFile,'published again');
   readPartnerPage(partial,0);
   // Rotate after the cache key is captured but before the worker returns page two.
-  const prepare=DatabaseSync.prototype.prepare,readsBeforeCachedPage=globalThis.__providerReads;
+  const descriptor=Object.getOwnPropertyDescriptor(DatabaseSync.prototype,'prepare');
+  const readsBeforeCachedPage=globalThis.__providerReads;
+  assert.ok(descriptor && typeof descriptor.value==='function');
   let rotated=false;
   try{
     DatabaseSync.prototype.prepare=function(sql,...args){
       if(!rotated&&sql.includes('SELECT revision FROM crm_directory_revision')){
         rotated=true;writeFileSync(vodafoneWal,'new publication while reading a cached page');
       }
-      return prepare.call(this,sql,...args);
+      return Reflect.apply(descriptor.value,this,[sql,...args]);
     };
     assert.throws(()=>readPartnerPage(partial,1),/Activation publication changed/);
     assert.equal(globalThis.__providerReads,readsBeforeCachedPage,'the race occurred on a cache hit');
-  } finally {DatabaseSync.prototype.prepare=prepare;}
+  } finally {Object.defineProperty(DatabaseSync.prototype,'prepare',descriptor);}
   // Hosts without local operator files still return the normal unavailable page contract.
   const cloudBuild=await build({entryPoints:['lib/activation-store-cloudflare.ts'],bundle:true,platform:'node',format:'esm',write:false});
   const cloud=await import('data:text/javascript;base64,'+Buffer.from(cloudBuild.outputFiles[0].text).toString('base64'));
