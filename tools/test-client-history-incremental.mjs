@@ -12,10 +12,10 @@ try{
   mkdirSync(join(root,'client-history'));
   const modulePath=join(root,'module.mjs');
   await build({
-    stdin:{contents:"export {buildActivitySnapshot} from './lib/partner-activity-snapshot';export {refreshActivitySnapshotMonth} from './lib/partner-activity-incremental';export {historyFileGeneration} from './lib/history-source-generation';",resolveDir:process.cwd(),loader:'ts'},
+    stdin:{contents:"export {buildActivitySnapshot,readActivitySnapshot} from './lib/partner-activity-snapshot';export {refreshActivitySnapshotMonth} from './lib/partner-activity-incremental';export {historyFileGeneration} from './lib/history-source-generation';",resolveDir:process.cwd(),loader:'ts'},
     outfile:modulePath,bundle:true,platform:'node',format:'esm',logLevel:'silent',
   });
-  const {buildActivitySnapshot,refreshActivitySnapshotMonth:refreshReal,historyFileGeneration}=await import(pathToFileURL(modulePath).href);
+  const {buildActivitySnapshot,readActivitySnapshot,refreshActivitySnapshotMonth:refreshReal,historyFileGeneration}=await import(pathToFileURL(modulePath).href);
   const digest=value=>createHash('sha256').update(value).digest('hex');
   // Synthetic month replacements below simulate the importer's pre-write receipt.
   let readingReceipt=false;
@@ -119,6 +119,13 @@ try{
   // Old snapshots cannot prove which older import generations they contain.
   const oldMeta=new DatabaseSync(join(root,'client-history','partner-activity.sqlite'));
   const savedMeta=oldMeta.prepare("SELECT value FROM meta WHERE key='snapshot'").get().value;
+  const migrated=JSON.parse(savedMeta);
+  assert.equal(migrated.version,'9');
+  oldMeta.prepare("UPDATE meta SET value=? WHERE key='snapshot'").run(JSON.stringify({...migrated,version:'8'}));
+  assert.equal(readActivitySnapshot([{id:'a',cui:'123'}],root,'2026-09-30').state,'unavailable','v8 historical commercial totals cannot be served');
+  let reason;
+  assert.equal(refreshReal(root,'2026-09','2026-09-30',digest(migrated.sourceGeneration),undefined,undefined,v=>{reason=v;}),null);
+  assert.equal(reason,'snapshot_version_changed','v8 cannot retain older monthly partitions');
   const legacy=JSON.parse(savedMeta);delete legacy.sourceImports;
   oldMeta.prepare("UPDATE meta SET value=? WHERE key='snapshot'").run(JSON.stringify(legacy));oldMeta.close();
   assert.equal(refreshActivitySnapshotMonth(root,'2026-09','2026-09-30'),null,'legacy snapshot requests one full rebuild');
@@ -154,11 +161,11 @@ try{
   // document cancellation, blank numbers, consumer/reconcile and empty CUI cards.
   const moreCatalog=new DatabaseSync(join(root,'mobiup.sqlite'));moreCatalog.prepare('INSERT INTO customers VALUES(?,?)').run('blank','{"cui":""}');moreCatalog.close();
   const matrix=new DatabaseSync(history);
-  matrix.exec(`UPDATE history_references SET master_json='[{"CIF":"123","PartnerCode":"123","Cod_Franciza":"F001"},{"CIF":"123","PartnerCode":"AMB"},{"CIF":"999","PartnerCode":"AMB"}]' WHERE id='ref2';
-    INSERT INTO history_identities VALUES(3,'CLIENTGEN','');
+  matrix.exec(`UPDATE history_references SET master_json='[{"CIF":"123","PartnerCode":"123","Cod_Franciza":"F001"},{"CIF":"123","PartnerCode":"AMB"},{"CIF":"999","PartnerCode":"AMB"},{"CIF":"123","PartnerCode":"CLIENTGEN","Cod_Franciza":"F001"}]' WHERE id='ref2';
+    INSERT INTO history_identities VALUES(3,'Client Gen','F001');
     INSERT INTO history_identities VALUES(4,'AMB','');
     INSERT INTO history_identities VALUES(5,'NOCUI','');
-    INSERT INTO history_allocations VALUES(3,'ref2','consumer','','[]','consumer','[]');
+    INSERT INTO history_allocations VALUES(3,'ref2','direct_code','franchise:F001','["a"]','legacy direct link','[]');
     INSERT INTO history_allocations VALUES(4,'ref2','reconcile','','[]','conflicting','["a"]');
     INSERT INTO history_allocations VALUES(5,'ref2','direct_code','','["blank","blank"]','synthetic','[]');`);
   matrix.close();buildActivitySnapshot(root,'2026-10-31');
@@ -173,6 +180,16 @@ try{
     for(const [id,doc,value,quantity] of rows)e.prepare('INSERT INTO history_rows VALUES(?,?,?,?,?,?,?)').run(10+offset,id,'2026-10-10','s',doc,value,quantity);
     e.close();assert(refreshActivitySnapshotMonth(root,'2026-10','2026-10-31'));
     const beforeFull=readSnapshot();buildActivitySnapshot(root,'2026-10-31');assert.deepEqual(beforeFull,readSnapshot(),'adversarial month matrix '+offset+' equals full rebuild');
+    if(offset===0){
+      const consumer=beforeFull.revenue_daily.find(r=>r.identity_id===3);
+      assert.deepEqual([consumer.category,consumer.company_id,consumer.value_cents],['consumer',null,800]);
+      assert.equal(beforeFull.point_identity_links.some(r=>r.identity_id===3),false);
+      assert.equal(beforeFull.company_identity_links.some(r=>r.identity_id===3),false);
+      for(const [table,id,key] of [['daily','partner_id','a'],['company_daily','company_id','123']]){
+        const day=beforeFull[table].find(r=>r[id]===key&&r.date==='2026-10-10');
+        assert.equal(day.value_cents,500,'the 800 consumer cents never enter '+table);
+      }
+    }
   }
 
   // New allocation for an identity with older unresolved revenue is unsafe.

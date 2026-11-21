@@ -1,4 +1,5 @@
 import {territories,type DistributionProject,type DistributionRules,type Territory} from './distribution-rules';
+import {isConsumerAccountCode} from './partner-company-identity';
 import {canonicalCounty} from './portfolio-facets';
 
 export const focusTerritories = ['sud', 'nord_a', 'nord_b'] as const satisfies readonly Territory[];
@@ -29,6 +30,7 @@ export type FocusRegional = {
   otherChannels: number;
   unassigned: number;
   unassignedCounty: number;
+  consumerCountyUnconfirmed: number;
   sourceConflicts: number;
 };
 export type FocusMonth = FocusCounts & {
@@ -43,7 +45,7 @@ export type FocusRow = {
   date: string;
   county: string;
   category: FocusCategory;
-  kind: 'attributed' | 'possibleStock' | 'otherTR' | 'otherChannel' | 'unassigned';
+  kind: 'attributed' | 'possibleStock' | 'otherTR' | 'otherChannel' | 'unassigned' | 'consumerCountyUnconfirmed';
   site?: string;
   document?: {date: string; source: FocusDocument['source']; reference?: string};
   clientCode?: string;
@@ -135,14 +137,15 @@ export function focusAttribution(date: string, documents: FocusDocument[]) {
     // uncertain. Show client/point identity only if the documents agree.
     const identities = new Set(positive.map(row => JSON.stringify([row.company, row.clientCode, row.pointCode])));
     const document = positive.reduce((latest, row) => row.date > latest.date ? row : latest);
-    return {attributed: true, document, uniqueLocation: identities.size === 1};
+    return {attributed: true, document, uniqueLocation: identities.size === 1,
+      consumer: positive.some(sale => isConsumerAccountCode(sale.clientCode || ''))};
   }
   if (prior.length) return null;
 
   const later = documents.filter(document => document.quantity > 0);
   if (later.length && new Set(later.map(documentSite)).size === 1 && later[0].tr && later[0].site) {
     const document = later.reduce((first, row) => row.date < first.date ? row : first);
-    return {attributed: false, document, uniqueLocation: false};
+    return {attributed: false, document, uniqueLocation: false, consumer: false};
   }
   return null;
 }

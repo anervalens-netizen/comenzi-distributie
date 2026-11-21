@@ -4,7 +4,7 @@ import {once} from 'node:events';
 import {Worker} from 'node:worker_threads';
 import {deserialize} from 'node:v8';
 import assert from 'node:assert/strict';
-import {existsSync,mkdtempSync,mkdirSync,readFileSync,rmSync,statSync,writeFileSync} from 'node:fs';
+import {chmodSync,existsSync,mkdtempSync,mkdirSync,readFileSync,rmSync,statSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {pathToFileURL} from 'node:url';
 import {join} from 'node:path';
@@ -16,6 +16,7 @@ const root=mkdtempSync(join(tmpdir(),'synthetic-vodafone-bonus-'));
 try {
   const bundle=join(root,'bonus.mjs');
   await build({stdin:{contents:`
+    export * from './lib/vodafone-bonus-preparing';
     export * from './lib/vodafone-bonus-rules';
     export * from './lib/vodafone-sim0-coverage';
     export * from './lib/vodafone-bonus-types';
@@ -25,7 +26,7 @@ try {
     export * from './lib/vodafone-bonus-evidence';
     export * from './lib/vodafone-bonus-export';
   `,resolveDir:process.cwd()},outfile:bundle,bundle:true,format:'esm',platform:'node'});
-  const {vodafoneBonusPreview,filterVodafoneBonusRows,bonusProjectSites,isVodafoneGenericPartner,vodafoneDocumentKind,vodafoneSim0Bonus,vodafoneBonusLedger,readVodafoneBonus,parseVodafoneBonusEvidence,vodafoneBonusWorkbook}
+  const {observeVodafoneBonus,VodafoneBonusPreparing,vodafoneBonusPreview,filterVodafoneBonusRows,bonusProjectSites,isVodafoneGenericPartner,vodafoneDocumentKind,vodafoneSim0Bonus,vodafoneBonusLedger,readVodafoneBonus,parseVodafoneBonusEvidence,vodafoneBonusWorkbook}
     =await import(pathToFileURL(bundle).href);
   const scopedRules={assignments:[{siteCode:'test-n',projectId:'vodafone_nord'},{siteCode:'test-s',projectId:'vodafone_sud'}]};
   const allProjects=new Set(['vodafone_sud','vodafone_nord','non_exclusiv']);
@@ -104,6 +105,18 @@ try {
     assert.equal(unresolvedCampaign.documents[0].allocations[0].month,'2026-07');
     assert.equal(unresolvedCampaign.points.find(row=>row.month==='2026-07'&&row.pointCode==='P1').remaining,null);
   }
+  // Without the earlier campaign statement, a later balance cannot be certified.
+  const incompleteCampaign={
+    ...input,
+    activation:[act('2026-06','A','P1'),...input.activation.filter(row=>row.month==='2026-07')],
+    targets:[input.targets[1]],
+  };
+  const gap=vodafoneBonusLedger(incompleteCampaign,null,null);
+  const july=gap.points.find(row=>row.month==='2026-07' && row.pointCode==='P1');
+  assert.equal(july.remaining,null,'missing June campaign must keep the July balance unconfirmed');
+  assert.equal(july.simulatedApplied,2,'SIM 0 simulation remains available');
+  assert.ok(gap.documents.every(row=>row.allocations.every(allocation=>allocation.status==='simulation')));
+
   const full=vodafoneBonusLedger(input,null,null);
   assert.equal(vodafoneBonusPreview(full),full,'small reports are already complete');
   const expanded={...full,points:Array.from({length:53},(_,i)=>({...full.points[0],pointCode:'sample-'+i,topBonus:i===52?null:3,partial:i===52}))};
@@ -205,7 +218,20 @@ try {
   // Exercise the installed entrypoint in fresh processes and then request a normal restricted screen.
   const packaged=join(root,'packaged'),workerFile=join(packaged,'vodafone-bonus-worker.mjs');
   mkdirSync(packaged);
-  await build({entryPoints:['lib/vodafone-bonus-worker.ts'],outfile:workerFile,bundle:true,platform:'node',format:'esm',packages:'external'});
+  await build({entryPoints:['lib/vodafone-bonus-worker.ts'],outfile:workerFile,bundle:true,platform:'node',format:'esm',packages:'external',
+    plugins:[{name:'slow-final-projection',setup(builder){
+      builder.onLoad({filter:/\/vodafone-bonus-ledger\.ts$/},({path})=>{
+        const source=readFileSync(path,'utf8').replace('export function vodafoneBonusLedger','function originalLedger');
+        return {loader:'ts',contents:source+`
+          import {workerData} from 'node:worker_threads';
+          export function vodafoneBonusLedger(...args:Parameters<typeof originalLedger>){
+            if(workerData?.lag && args[1]===null && args[2]===null){
+              const seen=new Int32Array(workerData.lag);Atomics.add(seen,0,1);Atomics.wait(seen,1,0,2250);
+            }
+            return originalLedger(...args);
+          }`};
+      });
+    }}]});
   const settings=new DatabaseSync(join(root,'mobiup.sqlite'));
   settings.exec('CREATE TABLE settings(key TEXT PRIMARY KEY,value TEXT)');
   const set=settings.prepare('INSERT INTO settings VALUES(?,?)');
@@ -228,6 +254,19 @@ try {
       assert.equal(result.status,0,result.error?.message||result.stderr);
       return JSON.parse(result.stdout).vodafoneLedger;
     }
+    mkdirSync(cacheDir,{recursive:true,mode:0o700});
+    const lockName=join(cacheDir,'build-lock.sqlite'),lock=new DatabaseSync(lockName);chmodSync(lockName,0o600);
+    lock.exec('BEGIN IMMEDIATE');
+    try {
+      assert.equal(status(),'preparing','the installed timer must not duplicate an existing foreground rebuild');
+      const cwd=process.cwd();process.chdir(packaged);
+      const screen=new Worker(workerFile);
+      try {
+        const result=once(screen,'message');screen.postMessage({...options,preview:true,month:'2026-06'});
+        assert.deepEqual((await result)[0],{state:'preparing'},'the foreground waits if another process holds the canonical ledger lock');
+        assert.equal(existsSync(ledger),false);
+      } finally {await screen.terminate();process.chdir(cwd);}
+    } finally {lock.close();}
     assert.equal(status(),'rebuilt');
     assert.equal(statSync(ledger).mode&0o777,0o600);
     assert.equal(statSync(cacheDir).mode&0o777,0o700);
@@ -238,7 +277,7 @@ try {
     assert.equal(existsSync(join(cacheDir,'ranking.bin')),false);
     const beforeDirectory=process.cwd();
     process.chdir(packaged);
-    const pageWorker=new Worker(workerFile);
+    const lag=new SharedArrayBuffer(8),pageWorker=new Worker(workerFile,{workerData:{lag}});
     try {
       const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Bucharest',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
       const targets=options.targets.map(({month,pointCode,target,bonus})=>({month,pointCode,target,bonus}));
@@ -248,6 +287,14 @@ try {
       assert.ok(screen && screen.months.some(row=>row.month==='2026-06' && row.activations===3));
       assert.equal(statSync(ledger).ino,firstInode,'the restricted web request reused the prewarmed canonical ledger');
       assert.equal(existsSync(join(cacheDir,'preview.bin')),true);
+      const whole={...options,today,targets,month:null,scope:null};
+      const request=()=>{const answer=once(pageWorker,'message').then(([report])=>report);pageWorker.postMessage(whole);return answer;};
+      const first=request();
+      await assert.rejects(observeVodafoneBonus(first),VodafoneBonusPreparing);
+      const completed=await first;
+      const collected=await observeVodafoneBonus(request());
+      assert.deepEqual(collected,completed);assert.equal(Atomics.load(new Int32Array(lag),0),1,'the completed national report is reused across polls');
+      assert(XLSX.read(vodafoneBonusWorkbook(collected),{type:'base64'}).SheetNames.length>=3);
     } finally {await pageWorker.terminate();process.chdir(beforeDirectory);}
     updateCampaign(options.targets.map(row=>({...row,target:row.target+1})));
     assert.equal(status(),'rebuilt');

@@ -11,7 +11,15 @@ db.prepare("INSERT OR IGNORE INTO manager_agents(manager_id,agent_id) VALUES('qa
 const insert=db.prepare('INSERT OR REPLACE INTO customers(id,warehouse_id,data,active) VALUES(?,?,?,1)');
 for(const [id,warehouses] of [['ph-one',['g-5']],['ph-shared',['g-5','g-3']],['ph-other',['g-3']]])insert.run(id,warehouses[0],JSON.stringify({id,warehouseId:warehouses[0],warehouseIds:warehouses,name:id,cui:'RO123456',address:'Strada Test 1',city:'București',county:'București',route:'qa'}));
 async function call(user,path='',method='GET',body,status=200){const r=await fetch(root+path,{method,headers:{Cookie:sessions[user],...(body?{'Content-Type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{})});const data=await r.json();assert.ok((Array.isArray(status)?status:[status]).includes(r.status),`${method} ${path}: ${JSON.stringify(data)}`);checks++;return data;}
+const genericId='hist-'+hash(JSON.stringify(['GENERICPARTENER','company'])).slice(0,32);
 try{
+  const entry={id:genericId,warehouseIds:[],name:'GENERIC PARTENER',cui:'GENERICPARTENER',historyCatalog:{kind:'company'}};
+  insert.run(genericId,'',JSON.stringify(entry));
+  await call('qa-manager','/'+genericId,'GET',undefined,404);
+  const catalog=await fetch('http://127.0.0.1:3000/api/partner/browse?q=GENERIC+PARTENER',{headers:{Cookie:sessions['qa-manager']}});
+  assert.equal(catalog.status,200);assert(!(await catalog.text()).includes(genericId));
+  insert.run(genericId,'',JSON.stringify({...entry,cui:'RO1234567'}));
+  await call('qa-manager','/'+genericId);
   db.prepare("INSERT INTO partner_requests(id,agent_id,warehouse_id,cui_key,status,payload,created_at,updated_at,confirmed_at,customer_id,revision) VALUES(?,'qa-agent1','g-5','123456','confirmed',?,'2026-09-24','2026-09-24','2026-09-24','ph-one',1)").run(randomUUID(),JSON.stringify({contact:'Confirmed contact',phone:'0701234567',email:'qa@example.invalid'}));
   const inherited=(await call('qa-agent1','/ph-one')).partner;assert.equal(inherited.contact,'Confirmed contact');assert.equal(inherited.phone,'0701234567');
   const cleared=await call('qa-agent1','/ph-one','PATCH',{...inherited,contact:'',phone:'',email:''});assert.equal(cleared.partner.contact,'','explicit clear overrides request fallback');
@@ -63,4 +71,4 @@ try{
   const beforeGps=(await call('qa-agent1','/ph-shared')).partner;
   const corrected=(await call('qa-agent1','/ph-shared','PATCH',{...beforeGps,positionSource:'gps',positionAccuracy:8})).partner;assert.equal(corrected.positionSource,'gps');assert.equal(corrected.positionAccuracy,8);assert.equal(corrected.positionQuality,null,'confirmed GPS correction clears approximate metadata');
   console.log(`PASS: Partner Hub ${checks} HTTP checks, scope/shared portfolios/CAS/address invalidation/visits/pagination/geocoder provenance.`);
-}finally{for(const id of Object.keys(sessions))db.prepare('DELETE FROM sessions WHERE token_hash=?').run(hash(sessions[id].split('=')[1]));db.close();}
+}finally{db.prepare('DELETE FROM customers WHERE id=?').run(genericId);for(const id of Object.keys(sessions))db.prepare('DELETE FROM sessions WHERE token_hash=?').run(hash(sessions[id].split('=')[1]));db.close();}

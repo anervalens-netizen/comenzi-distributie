@@ -16,9 +16,9 @@ try{
  };
  add({point_key:'["ExampleCo","EXAMPLE","P1"]',point_code:'P1'});
  add({point_key:'["ExampleCo","EXAMPLE","P1"]',point_code:'P1'});
- add({client_code:'CLIENTGEN'});add({client_code:'CLIENTGEN'});
+ add({client_code:'CLIENTGEN'});add({client_code:'GENERICPARTENER',label:'GENERIC PARTENER'});
  // An ERP code on CLIENTGEN does not create a real commercial work point.
- add({client_code:'CLIENTGEN',point_code:'PERSONAL',point_key:'["ExampleCo","CLIENTGEN","PERSONAL"]'});
+ add({client_code:'GENERICPARTENER',point_code:'PERSONAL',point_key:'["ExampleCo","GENERICPARTENER","PERSONAL"]'});
  add();add();add({client_code:''});
  add({client_code:'CLIENTGEN',site:'S'}); // excluded by the authenticated scope
  add({client_code:'CLIENTGEN',company:'OtherCo'});
@@ -29,7 +29,7 @@ try{
   activationPartnerView(db,result,'provider=? AND is_tr=1 AND site=?',['vodafone','N'],{months:['2026-10'],rules,policy:'manager',projects:[],view:'partners',...extra});
   return result;
  };
- const portfolio=[{id:'mapped',name:'Identified synthetic point',client:'EXAMPLE',codes:['P1']},{id:'zero',name:'Zero synthetic point',client:'ZERO',codes:[]},{id:'generic-placeholder',name:'Generic account',client:'CLIENTGEN',codes:[]}];
+ const portfolio=[{id:'mapped',name:'Identified synthetic point',client:'EXAMPLE',codes:['P1']},{id:'zero',name:'GENERIC PARTENER',client:'RO1234567',codes:[]},{id:'generic-placeholder',name:'GENERIC PARTENER',client:'GENERICPARTENER',codes:[]}];
  const report=read({portfolio}).partners;
  assert.equal(report.realPointCount,2,'only an identified source point and the known zero-activation portfolio point enter the denominator');
  assert.equal(report.genericActivations,4);assert.equal(report.unresolvedActivations,3);assert.equal(report.unassignedActivations,7);
@@ -66,9 +66,19 @@ try{
  assert.equal(read({view:'detail',point:'generic:'+JSON.stringify(['ExampleCo','S'])}).detail.total,0,'forged personal-sales group never broadens authenticated seller access');
  assert.equal(read({view:'detail',point:'unassigned:'+JSON.stringify(['ExampleCo','EXAMPLE','','S'])}).detail.total,0);
  assert.equal(read({view:'detail',point:'unresolved:6'}).detail.total,1,'previous unresolved bookmark remains supported');
+ assert.equal(read({view:'detail',point:'unresolved:4'}).detail.total,0,'a historical unresolved bookmark cannot turn a consumer into a partner');
+ assert.equal(read({view:'detail',point:'unassigned:'+JSON.stringify(['ExampleCo','GENERICPARTENER','','N'])}).detail.total,0);
+
  assert.equal(read({view:'detail',company:JSON.stringify(['ExampleCo','CLIENTGEN'])}).detail.total,3,'company drilldown retains authorized generic sales');
  assert.equal(read({q:'CLIENTGEN',portfolio}).partners.realPointCount,0,'filtered denominators exclude unrelated real points');
  assert.equal(read({q:'CLIENTGEN',portfolio}).partners.genericActivations,4);
+ assert.equal(read({view:'detail',company:JSON.stringify(['ExampleCo','GENERIC PARTENER'])}).detail.total,3);
+ assert.equal(read({q:'GENERIC PARTENER',portfolio}).partners.genericActivations,4);
+ assert.equal(read({view:'detail',point:JSON.stringify(['ExampleCo','GENERICPARTENER','PERSONAL'])}).detail.total,0);
+ const eligibleRows=read({rules:{assignments:[{siteCode:'N',territoryId:'nord_a',counties:['HR']}]},view:'detail',point:personal.key}).detail.rows;
+ assert(eligibleRows.every(row=>row.eligible===false&&row.reasons.includes('unconfirmed_agent_county')));
+ const localRows=read({rules:{assignments:[{siteCode:'N',territoryId:'nord_a',counties:['Covasna']}]},view:'detail',point:personal.key}).detail.rows;
+ assert(localRows.every(row=>row.eligible===true));
  const point=report.rows.find(r=>r.kind==='point'&&r.total);
  assert.equal(activationPartnerSummary([point,{...point,key:'another-historical-code'},personal]).realPointCount,1,'operator/history aliases of the same identified portfolio point count once');
  for(let i=0;i<55;i++)add({client_code:'PAGED',point_code:String(i),point_key:JSON.stringify(['ExampleCo','PAGED',String(i)])});

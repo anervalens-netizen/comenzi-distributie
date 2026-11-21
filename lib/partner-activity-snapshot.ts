@@ -4,15 +4,15 @@ import {createHash,randomUUID} from 'node:crypto';
 import {existsSync,renameSync,rmSync,chmodSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {partnerActivity,type PartnerActivity} from './partner-sales-health';
-import {normalizedCui,type CompanyAlias} from './partner-company-identity';
+import {normalizedCui,isConsumerAccountCode,type CompanyAlias} from './partner-company-identity';
 export {normalizedCui} from './partner-company-identity';
-import {historyCompanyLinks} from './partner-company-links';
+import {historyCompanyLinks,registerConsumerAccountCheck} from './partner-company-links';
 import {derivedOutputTarget} from './derived-output-target';
 import {fileGeneration,historyFileGeneration,historyLogicalRevision,sameHistoryRevision} from './history-source-generation';
 import {cooperativeStamp,type VerifiedHistoryStamp} from './history-source-stamp';
 import {salesYield} from './client-sales-cooperative';
 import {buildDetailLinks} from './partner-detail-snapshot';
-export const activityVersion='8';
+export const activityVersion='9';
 export const bucharestToday=(now=new Date())=>new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Bucharest',year:'numeric',month:'2-digit',day:'2-digit'}).format(now);
 export function activitySourceImports(c:DatabaseSync){
   const hasImportedAt=c.prepare('PRAGMA table_info(history_imports)').all().some(row=>row.name==='imported_at');
@@ -65,20 +65,21 @@ export function buildActivitySnapshot(directory:string,today=bucharestToday(),ou
   let out:DatabaseSync|undefined;
   try {
     c.exec('BEGIN');catalog.exec('BEGIN');
+    registerConsumerAccountCheck(c);
     const stamp=historyStamp(c);
     if(!stamp.reference||!stamp.through)throw new Error('No active history');
     const partners=catalog.prepare("SELECT id,json_extract(data,'$.cui') cui FROM customers").all() as {id:string;cui:string|null}[];
     const companyCodes=new Map<string,Set<string>>();
     for(const p of partners){const key=normalizedCui(p.cui||'');if(key&&!companyCodes.has(key))companyCodes.set(key,new Set([key]));}
     const master=JSON.parse(String(c.prepare('SELECT master_json FROM history_references WHERE id=?').get(stamp.reference)?.master_json||'[]')) as CompanyAlias[];
-    for(const row of master){const key=normalizedCui(String(row.CIF||''));if(row.PartnerCode)companyCodes.get(key)?.add(normalizedCui(String(row.PartnerCode)));}
+    for(const row of master){const key=normalizedCui(String(row.CIF||''));if(row.PartnerCode&&!isConsumerAccountCode(String(row.PartnerCode)))companyCodes.get(key)?.add(normalizedCui(String(row.PartnerCode)));}
     const unresolvedCodes=new Set<string>(),unresolvedPartners=new Set<string>();
-    for(const row of c.prepare("SELECT i.client_code,a.candidates_json FROM history_allocations a JOIN history_identities i ON i.id=a.identity_id WHERE a.reference_id=? AND (a.status='reconcile' OR (a.status IN ('direct_code','single_partner') AND json_array_length(a.partner_ids_json)=0))").all(stamp.reference)){
+    for(const row of c.prepare("SELECT i.client_code,a.candidates_json FROM history_allocations a JOIN history_identities i ON i.id=a.identity_id WHERE a.reference_id=? AND NOT history_is_consumer(i.client_code) AND (a.status='reconcile' OR (a.status IN ('direct_code','single_partner') AND json_array_length(a.partner_ids_json)=0))").all(stamp.reference)){
       unresolvedCodes.add(normalizedCui(String(row.client_code)));
       for(const id of JSON.parse(String(row.candidates_json)))if(typeof id==='string')unresolvedPartners.add(id);
     }
     // DISTINCT prevents duplicate membership entries from multiplying source facts.
-    const prefix="WITH links AS (SELECT DISTINCT a.identity_id,p.value partner_id FROM history_allocations a,json_each(a.partner_ids_json) p WHERE a.reference_id=? AND a.status IN ('direct_code','single_partner')), facts AS (SELECT l.partner_id,r.* FROM links l JOIN history_rows r ON r.identity_id=l.identity_id JOIN history_imports b ON b.id=r.import_id AND b.state='active') ";
+    const prefix="WITH links AS (SELECT DISTINCT a.identity_id,p.value partner_id FROM history_allocations a JOIN history_identities i ON i.id=a.identity_id,json_each(a.partner_ids_json) p WHERE a.reference_id=? AND NOT history_is_consumer(i.client_code) AND a.status IN ('direct_code','single_partner')), facts AS (SELECT l.partner_id,r.* FROM links l JOIN history_rows r ON r.identity_id=l.identity_id JOIN history_imports b ON b.id=r.import_id AND b.state='active') ";
     const asOf=today<stamp.through?today:stamp.through;
     const recentStart=new Date(Date.parse(asOf)-29*86400000).toISOString().slice(0,10),previousStart=new Date(Date.parse(asOf)-59*86400000).toISOString().slice(0,10);
     const stats=c.prepare(prefix+"SELECT partner_id,SUM(value_cents IS NULL) missing,SUM(CASE WHEN date>=? AND date<=? THEN COALESCE(value_cents,0) ELSE 0 END) recent,SUM(CASE WHEN date>=? AND date<? THEN COALESCE(value_cents,0) ELSE 0 END) previous FROM facts GROUP BY partner_id").all(stamp.reference,recentStart,asOf,previousStart,recentStart) as {partner_id:string;missing:number;recent:number;previous:number}[];

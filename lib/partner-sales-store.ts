@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { partnerActivity } from './partner-sales-health';
 import {normalizedCui as cuiKey} from './partner-company-identity';
-import {historyCompanyLinks,openCompanyLinkSource} from './partner-company-links';
+import {historyCompanyLinks,openCompanyLinkSource,registerConsumerAccountCheck} from './partner-company-links';
 import {readDetailLinks} from './partner-detail-snapshot';
 import {cooperativeStamp,fileGeneration} from './history-source-stamp';
 import {historyFileGeneration} from './history-source-generation';
@@ -26,6 +26,7 @@ export function readPartnerSales(partnerId: string, cui: string, params: URLSear
   try{return readDetail(c,partnerId,cui,params,undefined,bucharestToday(now));}finally{c.close();}
 }
 function readDetail(c:DatabaseSync,partnerId:string,cui:string,params:URLSearchParams,prepared?:ReturnType<typeof readDetailLinks>,today=bucharestToday()){
+  registerConsumerAccountCheck(c);
   c.function('history_cui_key',{deterministic:true},value=>cuiKey(String(value||'')));
   const reference=c.prepare("SELECT value FROM history_meta WHERE key='current_reference'").get()?.value;
   const periods=c.prepare("SELECT period_start,period_end FROM history_imports WHERE state='active' ORDER BY period_start").all() as {period_start:string;period_end:string}[];
@@ -36,7 +37,7 @@ function readDetail(c:DatabaseSync,partnerId:string,cui:string,params:URLSearchP
     if(Date.parse(p.period_start)-Date.parse(covered)>86_400_000)coverageComplete=false;
     if(p.period_end>covered)covered=p.period_end;
   }
-  const identityRows=prepared?.pointRows??c.prepare("SELECT a.identity_id FROM history_allocations a WHERE reference_id=? AND status IN ('direct_code','single_partner') AND EXISTS(SELECT 1 FROM json_each(a.partner_ids_json) p WHERE p.value=?)").all(String(reference),partnerId);
+  const identityRows=prepared?.pointRows??c.prepare("SELECT a.identity_id FROM history_allocations a JOIN history_identities i ON i.id=a.identity_id WHERE a.reference_id=? AND NOT history_is_consumer(i.client_code) AND a.status IN ('direct_code','single_partner') AND EXISTS(SELECT 1 FROM json_each(a.partner_ids_json) p WHERE p.value=?)").all(String(reference),partnerId);
   const companyKey=cuiKey(cui);
   const companyLinks=prepared?.companyLinks??historyCompanyLinks(c,String(reference));
   const companyCodes=companyLinks.codesByCompany.get(companyKey)||new Set<string>();
@@ -47,7 +48,7 @@ function readDetail(c:DatabaseSync,partnerId:string,cui:string,params:URLSearchP
   const scope=requestedScope==='company'||(requestedScope==='auto'&&companyLinks.known.has(companyKey))?'company' as const:'point' as const;
   const selectedIdentities=scope==='company'?companyRows:identityRows;
   const identities=JSON.stringify(selectedIdentities.map(r=>r.identity_id));
-  const unresolved=scope==='company'?{n:companyLinks.unresolvedCounts.get(companyKey)||0}:prepared?{n:prepared.pointUnresolved}:c.prepare("SELECT COUNT(*) n FROM history_allocations a JOIN history_identities i ON i.id=a.identity_id WHERE a.reference_id=? AND (a.status='reconcile' OR (a.status IN ('direct_code','single_partner') AND json_array_length(a.partner_ids_json)=0)) AND (history_cui_key(i.client_code) IN (SELECT value FROM json_each(?)) OR EXISTS(SELECT 1 FROM json_each(a.candidates_json) p WHERE p.value=?))").get(String(reference),JSON.stringify([...companyCodes]),partnerId) as {n:number};
+  const unresolved=scope==='company'?{n:companyLinks.unresolvedCounts.get(companyKey)||0}:prepared?{n:prepared.pointUnresolved}:c.prepare("SELECT COUNT(*) n FROM history_allocations a JOIN history_identities i ON i.id=a.identity_id WHERE a.reference_id=? AND NOT history_is_consumer(i.client_code) AND (a.status='reconcile' OR (a.status IN ('direct_code','single_partner') AND json_array_length(a.partner_ids_json)=0)) AND (history_cui_key(i.client_code) IN (SELECT value FROM json_each(?)) OR EXISTS(SELECT 1 FROM json_each(a.candidates_json) p WHERE p.value=?))").get(String(reference),JSON.stringify([...companyCodes]),partnerId) as {n:number};
   if(!selectedIdentities.length)return {state:'unlinked' as const,through,message:'Istoricul nu este încă asociat sigur acestei fișe. Aceasta nu înseamnă că partenerul nu a cumpărat.'};
   const from=isoDate(params.get('from')||periods[0].period_start);
   const to=isoDate(params.get('to')||through);

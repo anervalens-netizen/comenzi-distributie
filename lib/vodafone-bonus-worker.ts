@@ -1,5 +1,6 @@
 import {realpathSync} from 'node:fs';
 import {dirname} from 'node:path';
+import {VodafoneBonusPreparing} from './vodafone-bonus-preparing';
 import {parentPort} from 'node:worker_threads';
 import {readVodafoneBonus, type VodafoneBonusRead} from './vodafone-bonus-node';
 
@@ -13,17 +14,20 @@ if (!parentPort && process.argv[2]==='--warm-ledger') {
     const {warmConfiguredVodafoneLedger}=await import('./vodafone-bonus-warmup-node');
     const status=await warmConfiguredVodafoneLedger();
     console.log(JSON.stringify({vodafoneLedger:status,elapsedMs:Date.now()-started}));
-  } catch {
-    // Settings and SQLite diagnostics may contain business data.
-    console.error('Vodafone ledger warmup failed. Check the configured sources, release, owner and private cache.');
-    process.exitCode=1;
+  } catch (error) {
+    if (error instanceof VodafoneBonusPreparing) console.log(JSON.stringify({vodafoneLedger:'preparing'}));
+    else {
+      // Settings and SQLite diagnostics may contain business data.
+      console.error('Vodafone ledger warmup failed. Check the configured sources, release, owner and private cache.');
+      process.exitCode=1;
+    }
   }
 }
 
 parentPort?.on('message',(options: VodafoneBonusRead|VodafoneSim0RankingRead)=>{
   try {
     parentPort?.postMessage('kind' in options ? readVodafoneSim0Ranking(options) : readVodafoneBonus(options));
-  } catch {
-    parentPort?.postMessage(null);
+  } catch (error) {
+    parentPort?.postMessage(error instanceof VodafoneBonusPreparing ? {state:'preparing'} : null);
   }
 });

@@ -121,8 +121,9 @@ explicit calendar year, the latest 90/365 days, last billing at least 365 days
 ago, and unlinked/incomplete history. The default includes every catalog record.
 The filter follows commercial billing, excluding zero-value movements and net
 cancelled documents, using the same definition as cadence. Years are stored in
-the current derived snapshot (schema 7); rebuild every older schema, including 6,
-before serving filters. See [rebuild and staging instructions](client-sales.md).
+the current derived snapshot (schema 9). Rebuild v8 and earlier snapshots in full
+before serving filters. A single-month refresh cannot remove previously allocated
+consumer receipts from older commercial totals. See [rebuild and staging instructions](client-sales.md).
 
 Period selection changes which partners are visible, not their current portfolio
 assignment. Cadence and 30-day financial comparisons remain evaluated at source
@@ -146,8 +147,10 @@ search and optional activity filters sit above it. The existing manager region
 and agent controls scope the same table. Current shared owners are displayed;
 unassigned counties remain visible to managers without an agent filter.
 
-The current schema 7 snapshot retains point daily data, separate company activity
-and daily tables, and indexed detail identities. The client table groups authorized cards once per company and
+Schema 9 stores point-level daily data, company activity and daily totals, and
+indexed detail identities. Consumer receipts remain in revenue reconciliation.
+Commercial totals exclude these receipts even when an old allocation attached
+the generic ERP account to a registered company or work point. The client table groups authorized cards once per company and
 uses complete company totals, including unresolved point rows. Selected-period sales include
 returns and preserve missing amounts. Positive document groups are counted once
 per company/date/site/number, excluding blank numbers, net cancellations and free
@@ -157,10 +160,9 @@ records display a dash, never a false zero; partial associations are marked.
 All sorting occurs before pagination, with unknown values last in both directions.
 No national total is calculated by summing potentially shared/legacy aliases.
 
-Keep code rollout and snapshot promotion separate: use the matching schema 7 builder
-to rebuild every older snapshot (including 6), validate it against the same authoritative
-source database, then promote only the derived output through the supported release path;
-source history, original seller attribution and existing TR reports stay intact.
+Use the schema 9 builder to rebuild v8 and earlier snapshots in a private staging
+directory. Validate the result against the active source database and publish
+the derived file with its matching application release.
 
 ## Sales-first partner sheet
 
@@ -209,7 +211,7 @@ and moves keyboard focus to its button. Opening the shortcut does not request
 geolocation or write data; GPS capture and the existing save confirmation remain
 explicit. Sales still opens by default and contact editing starts collapsed.
 
-## Monthly client report (snapshot schema 7)
+## Monthly client report (snapshot schema 9)
 
 Navigation: **Vânzări → Pe clienți**, or **Echipă → Agenți → Vânzări pe
 clienți**. This is a separate, lazy subtab in the existing sales screen. Its
@@ -225,8 +227,8 @@ currently authorized point, retaining their full legal-company history.
 Totals and chip counts apply before status filtering and pagination. Null
 amounts sort last in both directions. Unlinked histories stay unknown.
 
-Schema 7 contains point/company daily tables, company identity quality, import-level
-coverage and indexed detail identities. Rebuild every older schema, including 6,
+Schema 9 contains point/company daily tables, company identity quality, import-level
+coverage and indexed detail identities. Rebuild v8 and all earlier snapshots
 with the same explicitly configured
 `MOBIUP_DATA_DIR` and `node tools/build-partner-activity.mjs`. Older snapshots
 return an explicit rebuild message in all readers. Raw source aggregation only

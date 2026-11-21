@@ -12,6 +12,7 @@ import initialSchema from '@/drizzle/0000_rare_hardball.sql?raw';
 import partnerPortfolioSchema from '@/drizzle/0006_partner_portfolio.sql?raw';
 
 import partnerDayPlansSchema from '@/drizzle/0007_partner_day_plans.sql?raw';
+import consumerCandidateIndex from '@/drizzle/0016_consumer_candidate_index.sql?raw';
 import partnerMapIndex from '@/drizzle/0008_partner_map_index.sql?raw';
 import orderListRevisionSchema from '@/drizzle/0010_order_list_revision.sql?raw';
 
@@ -24,6 +25,17 @@ function verifyDatabase(candidate:DatabaseSync){
   if(rows.length!==1||rows[0].quick_check!=='ok')throw new Error('Database structural check failed.');
   if(candidate.prepare('PRAGMA foreign_key_check').get())throw new Error('Database foreign key check failed.');
 }
+// SQLite stores each CREATE TRIGGER without its final semicolon. Keep a canonical
+// trigger installed; missing or changed definitions still run the versioned SQL.
+function applyRevisionTriggers(db:DatabaseSync) {
+  let migration=orderListRevisionSchema+'\n'+portfolioReadModelSchema;
+  for (const trigger of db.prepare("SELECT name,sql FROM sqlite_schema WHERE type='trigger'").all()) {
+    const installed='DROP TRIGGER IF EXISTS '+trigger.name+';\n'+trigger.sql+';\n';
+    migration=migration.replace(installed,'');
+  }
+  db.exec(migration);
+}
+
 function sqlite() {
   if (connection) return connection;
   mkdirSync(dataDirectory, { recursive: true, mode: 0o700 });
@@ -31,6 +43,9 @@ function sqlite() {
   try {
     // Verify before journal-mode changes, migrations or user normalization.
     candidate.exec('PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON;');
+    // Observe writes from this connection, commits by other connections and DDL.
+    const revision=candidate.prepare('SELECT total_changes() AS writes,schema_version,data_version FROM pragma_schema_version,pragma_data_version');
+    const beforeVerification=JSON.stringify(revision.get());
     verifyDatabase(candidate);
     candidate.exec('PRAGMA journal_mode=WAL;');
     if (!candidate.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='users'").get()) {
@@ -43,7 +58,7 @@ function sqlite() {
     if(!userColumns.includes('site_code'))candidate.exec("ALTER TABLE users ADD COLUMN site_code TEXT NOT NULL DEFAULT ''");
     if(!userColumns.includes('manager_scope'))candidate.exec("ALTER TABLE users ADD COLUMN manager_scope TEXT NOT NULL DEFAULT 'assigned'");
     if(!userColumns.includes('profile_revision'))candidate.exec("ALTER TABLE users ADD COLUMN profile_revision INTEGER NOT NULL DEFAULT 1");
-    candidate.exec("UPDATE users SET manager_scope='global' WHERE id='manager' AND role='manager'");
+    candidate.exec("UPDATE users SET manager_scope='global' WHERE id='manager' AND role='manager' AND manager_scope IS NOT 'global'");
     const hasManagerAgents=!!candidate.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='manager_agents'").get();
     candidate.exec("CREATE TABLE IF NOT EXISTS manager_agents (manager_id TEXT NOT NULL REFERENCES users(id), agent_id TEXT NOT NULL REFERENCES users(id), PRIMARY KEY(manager_id,agent_id)); CREATE INDEX IF NOT EXISTS idx_manager_agents_agent ON manager_agents(agent_id);");
     if(!hasManagerAgents)candidate.exec("INSERT OR IGNORE INTO manager_agents(manager_id,agent_id) SELECT m.id,a.id FROM users m CROSS JOIN users a WHERE m.role='manager' AND m.manager_scope='assigned' AND m.active=1 AND a.role='agent' AND a.active=1");
@@ -63,10 +78,10 @@ function sqlite() {
     if(!visitColumns.includes('follow_up_date'))candidate.exec('ALTER TABLE partner_visits ADD COLUMN follow_up_date TEXT');
     candidate.exec('CREATE INDEX IF NOT EXISTS idx_partner_visits_follow_up ON partner_visits(follow_up_date,agent_id,customer_id)');
     candidate.exec(partnerMapIndex);
-    candidate.exec(orderListRevisionSchema);
+    candidate.exec(consumerCandidateIndex);
     candidate.exec('BEGIN IMMEDIATE;');
     try{
-      candidate.exec(portfolioReadModelSchema);
+      applyRevisionTriggers(candidate);
       const membershipObjects=candidate.prepare(`SELECT sql FROM sqlite_schema WHERE name IN (
         'activation_portfolio_memberships','activation_memberships_customer','activation_customer_warehouse_rows',
         'activation_membership_insert','activation_membership_update','activation_membership_delete')`).all();
@@ -79,7 +94,8 @@ function sqlite() {
       }
       candidate.exec('COMMIT;');
     }catch(error){candidate.exec('ROLLBACK;');throw error;}
-    verifyDatabase(candidate);
+    // When initialization made no changes, the preflight already checked this revision.
+    if (JSON.stringify(revision.get())!==beforeVerification) verifyDatabase(candidate);
     connection=candidate;
     return candidate;
   } catch(error) {

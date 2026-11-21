@@ -8,7 +8,7 @@ import xml.etree.ElementTree as ET
 D=decimal.Decimal
 NS={'s':'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
 HEADERS=['Data','Regional','TR','ItemCode','ItemName','Cantitate','Brand','Pret','Valoare','PretFD','Denumire Client','Nr','TRVechi','ItemType','Cod Client','SiteId','TipArticol','PriceWithVAT','Categorie','Cod_Franciza']
-RULE_VERSION='customer-history-v1.2'
+RULE_VERSION='customer-history-v1.3'
 def dump(v):return json.dumps(v,ensure_ascii=False,separators=(',',':'))
 def sha(v):return hashlib.sha256(v).hexdigest()
 def file_sha(path):
@@ -20,8 +20,10 @@ def norm(v):
  return re.sub(r'\s+',' ',''.join(c for c in unicodedata.normalize('NFD',str(v or '').strip().upper()) if not unicodedata.combining(c)))
 def code_key(v):return str(v or '').strip().upper()
 def cui_key(v):
- v=re.sub(r'[^A-Z0-9]','',code_key(v))
+ v=re.sub(r'[^A-Za-z0-9]','',str(v or '')).upper()
  return v[2:] if v.startswith('RO') else v
+def is_consumer_code(value):
+ return cui_key(value) in ('CLIENTGEN','GENERICPARTENER','GENERICPARTNER')
 def place(r):return (norm(r.get('county')),norm(r.get('city')),norm(r.get('address')))
 def master_place(r):return (norm(r.get('Judet')),norm(r.get('Oras')),norm(r.get('Street')))
 def now():return dt.datetime.now(dt.timezone.utc).isoformat()
@@ -129,18 +131,19 @@ class Resolver:
    if client and cui:self.aliases[client].add(cui)
   for identity in source_identities:
    client=cui_key(identity['client_code']);code=code_key(identity['franchise_code'])
-   if code:
+   if code and not is_consumer_code(client):
     for company in self.aliases.get(client,{client}):self.source_codes[company].add(code)
  def resolve(self,client,franchise):
   client=cui_key(client);franchise=code_key(franchise)
   def result(status,point=None,ids=(),reason='',candidates=()):
    return {'status':status,'point_key':point,'partner_ids':sorted(set(ids)),'reason':reason,'candidates':sorted(set(candidates))}
+  if is_consumer_code(client):return result('consumer',reason='Generic fiscal receipt; no business work point')
   if franchise:
    refs=self.franchises.get(franchise,[])
    named=self.named_franchises.get(franchise,[])
    possible={client}|self.aliases.get(client,set())
    named_owners={cui_key(p.get('cui')) for p in named}
-   if named and (len(named_owners)!=1 or (client and client!='CLIENTGEN' and not named_owners.issubset(possible))):
+   if named and (len(named_owners)!=1 or (client and not named_owners.issubset(possible))):
     return result('reconcile',reason='Conflicting stored franchise ownership',candidates=[p['id'] for p in named])
    # Explicit code remains the direct work-point identity even outside a partial master.
    if not refs:return result('direct_code','franchise:'+franchise,[p['id'] for p in named],reason='Stored franchise association' if named else 'Code present; address/partner link absent from partial master')
@@ -148,11 +151,10 @@ class Resolver:
    if len(identities)!=1:return result('reconcile',reason='Conflicting master entries for franchise',candidates=[franchise])
    cui,address=next(iter(identities))
    possible={client}|self.aliases.get(client,set())
-   if client and client!='CLIENTGEN' and cui and cui not in possible:return result('reconcile',reason='Franchise/client mismatch',candidates=[franchise])
+   if client and cui and cui not in possible:return result('reconcile',reason='Franchise/client mismatch',candidates=[franchise])
    if named and named_owners!={cui}:return result('reconcile',reason='Stored franchise conflicts with master ownership',candidates=[p['id'] for p in named])
    matches=named or [p for p in self.partners.get(cui,[]) if place(p)==address and address[2]]
    return result('direct_code','franchise:'+franchise,[p['id'] for p in matches],'Explicit franchise code'+(' with exact partner address link' if matches else '; current partner address link unresolved'))
-  if client=='CLIENTGEN':return result('consumer',reason='Direct fiscal receipt; no business work point')
   if not client:return result('reconcile',reason='Missing client and franchise')
   possible=self.aliases.get(client,{client})|({client} if client in self.partners else set())
   if len(possible)!=1:return result('reconcile',reason='Ambiguous client-to-tax-ID mapping')

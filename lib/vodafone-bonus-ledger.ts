@@ -46,12 +46,6 @@ export function vodafoneBonusLedger(input: BonusLedgerInput, scope: VodafoneBonu
   const portfolio = new Map(input.portfolios.map(point => [point.pointCode, point]));
   const targets = new Map(input.targets.map(target => [pointMonth(target.pointCode, target.month), target]));
   const coverage = new Map(input.coverage.map(source => [source.month, {...source, activations: 0, confirmedActivations: 0, unresolvedActivations: 0}]));
-  const firstUnknownTop = new Map<string, string>();
-  for (const target of input.targets) {
-    if (target.bonus !== null || !coverage.has(target.month)) continue;
-    const previous=firstUnknownTop.get(target.pointCode);
-    if (!previous || target.month<previous) firstUnknownTop.set(target.pointCode,target.month);
-  }
   const positions = new Map<string, Position>();
   const byPoint = new Map<string, Position[]>();
   const unresolved = new Map<string, VodafoneBonusUnresolved>();
@@ -126,11 +120,25 @@ export function vodafoneBonusLedger(input: BonusLedgerInput, scope: VodafoneBonu
       linkSite(pointCode,site);
     }
   }
-  for (const history of byPoint.values()) history.sort((a,b) => a.month.localeCompare(b.month));
+  // An absent campaign entry is unknown, including when the point had no
+  // SIM 0 activations in that month. Only an explicit zero rules out a reward.
+  const firstUnverifiedMonth = new Map<string,string>();
+  const months = [...coverage.keys()].sort();
+  for (const [code,history] of byPoint) {
+    history.sort((a,b) => a.month.localeCompare(b.month));
+    for (const month of months) {
+      const key = pointMonth(code,month);
+      const row = positions.get(key);
+      if (targets.get(key)?.bonus == null || !coverage.get(month)?.publishedOn ||
+          (row && sum(row) !== confirmedSum(row))) {
+        firstUnverifiedMonth.set(code,month);
+        break;
+      }
+    }
+  }
   function canConfirm(row: Position) {
-    const earlierUnknown = firstUnknownTop.get(row.pointCode);
-    return (!earlierUnknown || earlierUnknown >= row.month) &&
-      row.top?.bonus != null && coverage.get(row.month)?.publishedOn && sum(row) === confirmedSum(row) &&
+    const firstUnverified = firstUnverifiedMonth.get(row.pointCode);
+    return coverage.has(row.month) && (!firstUnverified || row.month < firstUnverified) &&
       !uncertainDocuments.has(row.pointCode) && !unresolvedCompanies.has(row.cui);
   }
   for (const row of positions.values()) {

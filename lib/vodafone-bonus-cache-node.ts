@@ -1,13 +1,41 @@
 import {createHash,randomUUID,timingSafeEqual} from 'node:crypto';
 import {constants,closeSync,existsSync,fstatSync,lstatSync,mkdirSync,openSync,readFileSync,readSync,readdirSync,renameSync,unlinkSync,writeFileSync} from 'node:fs';
+import {DatabaseSync} from 'node:sqlite';
+import {VodafoneBonusPreparing} from './vodafone-bonus-preparing';
 import {join,resolve} from 'node:path';
 import {deserialize,serialize} from 'node:v8';
 
 const filenames={ledger:'current.bin',ranking:'ranking.bin',preview:'preview.bin'} as const;
 type Slot=keyof typeof filenames;
-export type VodafoneDiskCache<T>={load:(directory:string,key:string)=>T|undefined;save:(directory:string,key:string,value:T)=>boolean};
+export type VodafoneDiskCache<T>={load:(directory:string,key:string)=>T|undefined;save:(directory:string,key:string,value:T)=>boolean;acquire?:(directory:string)=>void|(()=>void)};
 export function createVodafoneDiskCache<T>(slot:Slot): VodafoneDiskCache<T> {
-  return {load:(directory,key)=>readCached<T>(slot,directory,key),save:(directory,key,value)=>writeCached(slot,directory,key,value)};
+  return {load:(directory,key)=>readCached<T>(slot,directory,key),save:(directory,key,value)=>writeCached(slot,directory,key,value),...(slot==='ledger'?{acquire:acquireBuild}:{})};
+}
+
+// The timer and the foreground worker share one derivation. SQLite releases
+// the reservation when a worker exits, including after an interrupted build.
+function acquireBuild(directory:string):void|(()=>void) {
+  if(!releaseIdentity('ledger'))return;
+  const folder=join(directory,'.vodafone-bonus-cache'),path=join(folder,'build-lock.sqlite');
+  try {
+    mkdirSync(folder,{recursive:true,mode:0o700});
+    const folderInfo=lstatSync(folder);
+    if (!folderInfo.isDirectory() || folderInfo.uid!==process.getuid?.() || (folderInfo.mode&0o077)!==0) return;
+    try { closeSync(openSync(path,constants.O_RDWR|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600)); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code!=='EEXIST') throw error; }
+    const info=lstatSync(path);
+    if (!info.isFile() || info.uid!==process.getuid?.() || (info.mode&0o077)!==0) return;
+  } catch { return; } // A read-only deployment can still serve the in-memory ledger.
+  let lock:DatabaseSync|undefined;
+  try { lock=new DatabaseSync(path,{timeout:0});lock.exec('BEGIN IMMEDIATE'); }
+  catch (error) {
+    lock?.close();
+    const sqliteCode=((error as {errcode?:number}).errcode??0)%256;
+    if([3,8,14].includes(sqliteCode))return;
+    if (sqliteCode===5) throw new VodafoneBonusPreparing();
+    throw error;
+  }
+  return ()=>lock.close();
 }
 
 const maxBytes=48*1024*1024;

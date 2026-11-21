@@ -1,4 +1,5 @@
-import {normalizedCui} from './partner-company-identity';
+import {isConsumerAccountCode,normalizedCui} from './partner-company-identity';
+import {isVodafoneGenericPartner} from './vodafone-bonus-rules';
 import type {ActivationPartner} from './activation-types';
 import type {ActivationPortfolioPoint,ActivationQuery} from './activation-distribution';
 import type {ActivationPartnerSort,ActivationSortDirection} from './activation-partner-sort';
@@ -27,6 +28,10 @@ export function portfolioPoint(row: PortfolioFields): ActivationPortfolioPoint {
   const codes = [...(JSON.parse(row.franchises || '[]') || []),row.historyCode,row.crmCode]
     .filter(Boolean).map(value=>String(value).trim().toUpperCase());
   return {id:row.id,name:row.name||'',client:normalizedCui(row.cui||''),codes:[...new Set<string>(codes)]};
+}
+
+export function personalSalesPortfolioAccount(point: ActivationPortfolioPoint) {
+  return point.client ? isConsumerAccountCode(point.client) : isVodafoneGenericPartner(point.name);
 }
 
 export function portfolioPlaceholder(p:ActivationPortfolioPoint):ActivationPartner {

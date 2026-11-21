@@ -23,8 +23,9 @@ export function PartnerStands({id}: {id: string}) {
     return () => controller.abort();
   }, [id, attempt]);
   const result = read.data;
+  const quantity = result?.stands.reduce((sum, stand) => sum + stand.quantity, 0) ?? 0;
   return <details className="partner-sales partner-sales-overview">
-    <summary>{result?.stands.length ? 'Standuri avizate (' + result.stands.length + ')' : 'Standuri'}</summary>
+    <summary>{quantity ? 'Standuri avizate (' + quantity + ' buc.)' : 'Standuri'}</summary>
     {read.error && <><p role="alert">{read.error}</p><button type="button" className="secondary" onClick={() => {setRead({}); setAttempt(attempt + 1);}}>Reîncearcă</button></>}
     {!read.error && !result && <output>Se consultă avizele…</output>}
     {result && <>
@@ -39,7 +40,7 @@ export function PartnerStands({id}: {id: string}) {
           <td>{timing[stand.timing]}</td>
         </tr>)}</tbody>
       </table></div>}
-      {result.availableFrom && <p className="muted">Avize disponibile din {date(result.availableFrom)}.</p>}
+      {result.availableFrom && <p className="muted">Primul aviz de stand identificat la acest punct · {date(result.availableFrom)}.</p>}
     </>}
   </details>;
 }

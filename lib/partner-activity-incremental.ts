@@ -4,7 +4,7 @@ import {randomUUID,createHash} from 'node:crypto';
 import {resolve} from 'node:path';
 import {activityVersion,activitySourceImports,bucharestToday,historyStamp,type ActivitySnapshotRow} from './partner-activity-snapshot';
 import {partnerActivity} from './partner-sales-health';
-import {normalizedCui,type CompanyAlias} from './partner-company-identity';
+import {normalizedCui,isConsumerAccountCode,type CompanyAlias} from './partner-company-identity';
 import {historyCompanyLinks,type CompanyLinks} from './partner-company-links';
 import {buildDetailLinks} from './partner-detail-snapshot';
 import {historyFileGeneration} from './history-source-generation';
@@ -155,7 +155,7 @@ function recomputeActivity(
   for(const cui of partners.values())if(cui&&!aliases.has(cui))aliases.set(cui,new Set([cui]));
   for(const row of master){
     const key=normalizedCui(String(row.CIF||''));
-    if(row.PartnerCode)aliases.get(key)?.add(normalizedCui(String(row.PartnerCode)));
+    if(row.PartnerCode&&!isConsumerAccountCode(String(row.PartnerCode)))aliases.get(key)?.add(normalizedCui(String(row.PartnerCode)));
   }
 
   out.exec('DELETE FROM activity');
@@ -316,12 +316,15 @@ export function refreshActivitySnapshotMonth(directory:string,month:string,today
     const reasons=unresolvedReasons(out,ids);
 
     const pointDays=new Map<string,Day>(),companyDays=new Map<string,Day>();
-    const revenue=new Map<string,{identity:number;client:string;date:string;sum:number;known:number;missing:number;rows:number}>();
+    const revenue=new Map<string,{identity:number;client:string;consumer:boolean;date:string;sum:number;known:number;missing:number;rows:number}>();
     for(const row of sourceRows){
       const id=Number(row.identity_id);
-      for(const partner of points.get(id)||[])addDay(pointDays,partner+'\u0001'+row.date,row);
-      for(const company of companies.get(id)||[])addDay(companyDays,company+'\u0001'+row.date,row);
-      const key=id+'\u0001'+row.date,item=revenue.get(key)||{identity:id,client:String(row.client_code||''),date:row.date,sum:0,known:0,missing:0,rows:0};
+      const consumer=statuses.get(id)==='consumer'||isConsumerAccountCode(row.client_code);
+      if(!consumer){
+        for(const partner of points.get(id)||[])addDay(pointDays,partner+'\u0001'+row.date,row);
+        for(const company of companies.get(id)||[])addDay(companyDays,company+'\u0001'+row.date,row);
+      }
+      const key=id+'\u0001'+row.date,item=revenue.get(key)||{identity:id,client:String(row.client_code||''),consumer,date:row.date,sum:0,known:0,missing:0,rows:0};
       item.rows++;if(row.value_cents===null)item.missing++;else{item.sum+=Number(row.value_cents);item.known++;}
       revenue.set(key,item);
     }
@@ -341,7 +344,7 @@ export function refreshActivitySnapshotMonth(directory:string,month:string,today
     }
     const revenueInsert=out.prepare('INSERT INTO revenue_daily VALUES(?,?,?,?,?,?,?,?,?)');
     for(const item of revenue.values()){
-      const company=(companies.get(item.identity)||[])[0]||null,status=statuses.get(item.identity),category=status==='consumer'?'consumer':company?'company':'identity';
+      const company=item.consumer?null:(companies.get(item.identity)||[])[0]||null,category=item.consumer?'consumer':company?'company':'identity';
       revenueInsert.run(item.date,item.identity,category,company,item.client,category==='identity'?reasons.get(item.identity)||'No reliable company association':'',item.known?item.sum:null,item.missing,item.rows);
     }
 

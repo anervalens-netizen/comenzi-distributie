@@ -211,3 +211,25 @@ Projection v4 keeps a uniquely reconciled distribution cohort member when its
 activation predates a later movement. The activation remains an attribution
 exception where required; it is not erased from the cohort or counted twice.
 The projection build revision participates in pagination identity.
+
+## Vodafone Focus evidence
+
+The activation job prepares `vodafone-focus-evidence.sqlite` in each private Vodafone
+generation before publishing it. The worker checks the directory identity, ledger
+generation, facts version and complete import manifest, then applies current order
+slips, distribution rules and user scope. Missing, obsolete or unreadable evidence
+falls back to the authoritative ledger. The publication receipt records
+`report.focusEvidence`. Digi generations skip this projection.
+
+After restoring a backup or installing the reader against an existing generation,
+run the following from the deployed runtime as the activation ledger owner.
+
+```sh
+python3 activation_focus_evidence.py --generation-dir /storage/comenzi-distributie/activations/current
+```
+
+The command reads the ledger, writes a private temporary file and atomically
+renames it inside the resolved generation. A second invocation reports
+`current`. Use `--force` to rebuild a damaged projection. Recovery can
+recreate this file from the authoritative ledger. Treat it as private
+commercial evidence since it contains SIM and work-point identifiers.

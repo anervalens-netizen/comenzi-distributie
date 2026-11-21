@@ -12,7 +12,7 @@ export async function clientSalesTestRuntime({profile=false,sourceRef}={}){
  const sql=new DatabaseSync(join(root,'mobiup.sqlite'));
  sql.exec(readFileSync('drizzle/0000_rare_hardball.sql','utf8'));
  sql.exec("ALTER TABLE users ADD COLUMN manager_scope TEXT DEFAULT 'assigned';CREATE TABLE manager_agents(manager_id TEXT,agent_id TEXT);CREATE TABLE partner_requests(id TEXT,customer_id TEXT,status TEXT,confirmed_at TEXT,payload TEXT);");
- for(const f of ['0006_partner_portfolio.sql','0007_partner_day_plans.sql','0008_partner_map_index.sql','0009_portfolio_read_model.sql'])sql.exec(readFileSync('drizzle/'+f,'utf8'));
+ for(const f of ['0006_partner_portfolio.sql','0007_partner_day_plans.sql','0008_partner_map_index.sql','0009_portfolio_read_model.sql','0016_consumer_candidate_index.sql'])sql.exec(readFileSync('drizzle/'+f,'utf8'));
  for(const [id,role,warehouse] of [['agent','agent','g-5'],['other','agent','g-3'],['manager','manager','']])sql.prepare('INSERT INTO users(id,username,name,role,warehouse_id,password_hash,must_change_password,active,manager_scope) VALUES(?,?,?,?,?,?,0,1,?)').run(id,id,'Synthetic '+id,role,warehouse,'not-a-credential','global');
  const {partners}=createClientSalesFixture(root,true);
  const queries={};

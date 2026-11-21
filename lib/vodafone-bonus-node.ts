@@ -9,6 +9,7 @@ import {activationFactsVersion} from './activation-semantics';
 import {firstVodafoneBonusMonth, vodafoneBonusPreview, type VodafoneBonusScreen, type VodafoneBonusReason, type VodafoneBonusReport, type VodafoneBonusScope, type VodafoneTopLocation} from './vodafone-bonus-types';
 import {bonusDate,bonusMonth,bonusEvidenceIdentity,type VodafoneBonusEvidence} from './vodafone-bonus-evidence';
 import {isVodafoneGenericPartner,vodafoneDocumentKind} from './vodafone-bonus-rules';
+import {createReadProjectionCache} from './read-projection-cache';
 import {createVodafoneDiskCache,type VodafoneDiskCache} from './vodafone-bonus-cache-node';
 import {sim0Coverage,type Sim0MonthCoverage} from './vodafone-sim0-coverage';
 import {vodafoneBonusLedger,type BonusActivation,type BonusLedgerInput} from './vodafone-bonus-ledger';
@@ -521,10 +522,16 @@ function readSnapshot<T>(
       }
       return {app,history,source,report,sales};
     }
-    const value=read(openSources,key);
-    verifySources();
-    disk?.save(directory,key,value);
-    return {key,value};
+    const release=disk?.acquire?.(directory);
+    try {
+      // The prewarm service may have published after our first disk lookup.
+      const concurrent=release && disk?.load(directory,key);
+      if(concurrent!==undefined){verifySources();return {key,value:concurrent};}
+      const value=read(openSources,key);
+      verifySources();
+      disk?.save(directory,key,value);
+      return {key,value};
+    } finally {release?.();}
   } finally {
     for (const database of databases.reverse()) database.close();
   }
@@ -569,7 +576,7 @@ function readLedger(input:VodafoneBonusRead,previous:Snapshot<BonusLedgerInput>|
 /** Warm the shared pre-scope ledger. Maintenance must fail if its private cache could not be persisted. */
 export function warmVodafoneBonusLedger(input:VodafoneBonusRead) {
   let status='current';
-  readLedger(input,undefined,{load:ledgerCache.load,save:(directory,key,value)=>{
+  readLedger(input,undefined,{load:ledgerCache.load,acquire:ledgerCache.acquire,save:(directory,key,value)=>{
     if (!ledgerCache.save(directory,key,value)) throw new Error('Cannot persist private Vodafone ledger cache');
     status='rebuilt';
     return true;
@@ -577,11 +584,19 @@ export function warmVodafoneBonusLedger(input:VodafoneBonusRead) {
   return status;
 }
 
+// A report which completed between two polls must remain available. Recheck the
+// immutable source generation before every cache hit, including after a role/scope change.
+const scopedReports=createReadProjectionCache(24*1024*1024,4);
 function readFullVodafoneBonus(input: VodafoneBonusRead): VodafoneBonusReport {
   cached=readLedger(input,cached,ledgerCache);
   const snapshot=cached.value;
   const revision=createHash('sha256').update(JSON.stringify([snapshot.revision,input.scope])).digest('hex');
-  return vodafoneBonusLedger({...snapshot,revision},input.scope,input.month);
+  const selection=JSON.stringify([input.scope,input.month]);
+  const ready=scopedReports.get<VodafoneBonusReport>(selection,revision);
+  if(ready)return ready;
+  const report=vodafoneBonusLedger({...snapshot,revision},input.scope,input.month);
+  scopedReports.put(selection,revision,report);
+  return report;
 }
 
 /** Activation analytics is independent of the reward campaign's opening month and payment sources. */

@@ -232,7 +232,8 @@ export async function api<T=Record<string,unknown>>(path:string,method='GET',bod
   if(typeof window!=='undefined'&&sessionStorageAvailable()&&method==='GET'&&cacheable(path)&&account)await saveSnapshot(account,path,result).catch(error=>{window.dispatchEvent(new CustomEvent('mobiup-storage-error',{detail:error instanceof Error?error.message:'Datele primite nu au putut fi pregătite pentru offline.'}));});
   assertScope(responseOwner,responseGeneration);
   await confirmAuthority();
-  if(method==='GET'&&account){if(sessionStorageAvailable())rememberRead(account,responseGeneration,path,result);emitFreshness(account,path,'network',Date.now());}
+  const preparing=path.startsWith('vodafone/bonuses?')&&record(result)&&result.state==='preparing';
+  if(method==='GET'&&account&&!preparing){if(sessionStorageAvailable())rememberRead(account,responseGeneration,path,result);emitFreshness(account,path,'network',Date.now());}
   return result;
  }catch(e){
   if(typeof window==='undefined'||method!=='GET'||!cacheable(path)||signal?.aborted||(e instanceof ApiError&&e.status<500))throw e;

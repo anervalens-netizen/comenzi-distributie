@@ -6,7 +6,7 @@ import {salesYield} from './client-sales-cooperative';
 import {packClientSales,unpackClientSales,type PackedClientSales} from './client-sales-cache-codec';
 import {resolve} from 'node:path';
 import {activityVersion,bucharestToday,historyStamp} from './partner-activity-snapshot';
-import {normalizedCui} from './partner-company-identity';
+import {normalizedCui,isConsumerAccountCode} from './partner-company-identity';
 import type {PartnerSummary} from './partner-map-types';
 import type {ClientHealth,ClientMetrics,ClientSalesRow,MonthWindow,SourceCoverage} from './client-sales-types';
 
@@ -84,7 +84,7 @@ function* calculateClientSales(partners:PartnerSummary[],month:string,directory=
     const day=!window.complete&&window.to?Number(window.to.slice(8)):undefined;
     const comparisons=[1,2,3].map(i=>monthlyWindow(shiftMonth(month,-i),intervals,day));
     const groups=new Map<string,PartnerSummary[]>();
-    for(const p of partners){if(++work%256===0)yield;const cui=normalizedCui(p.cui),key=cui&&cui!=='CLIENTGEN'?'company:'+cui:'point:'+p.id;const group=groups.get(key)||[];group.push(p);groups.set(key,group);}
+    for(const p of partners){if(++work%256===0)yield;const cui=normalizedCui(p.cui);if(isConsumerAccountCode(cui))continue;const key=cui?'company:'+cui:'point:'+p.id;const group=groups.get(key)||[];group.push(p);groups.set(key,group);}
     const keys=JSON.stringify([...new Set(partners.map(p=>normalizedCui(p.cui)))]);
     const identities=new Map<string,boolean>();
     for(const r of s.prepare('SELECT company_id,complete FROM company_identity WHERE company_id IN (SELECT value FROM json_each(?))').iterate(keys)){identities.set(String(r.company_id),!!r.complete);if(++work%256===0)yield;}

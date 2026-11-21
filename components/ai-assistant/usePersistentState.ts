@@ -39,7 +39,12 @@ export function readPersistentState<T>(
 ): T {
   const storage = options.storage === undefined ? getBrowserStorage() : options.storage;
   if (!storage) return fallback;
-  const raw = storage.getItem(key);
+  let raw: string | null;
+  try {
+    raw = storage.getItem(key);
+  } catch {
+    return fallback;
+  }
   if (raw === null) return fallback;
   return (options.deserialize ?? deserializePersistentValue)(raw, fallback);
 }
@@ -51,12 +56,14 @@ export function writePersistentState<T>(
 ) {
   const storage = options.storage === undefined ? getBrowserStorage() : options.storage;
   if (!storage) return;
-  if (options.removeWhen?.(value)) {
-    storage.removeItem(key);
-    return;
+  const remove = options.removeWhen?.(value);
+  const serialized = remove ? null : (options.serialize ?? serializePersistentValue)(value);
+  try {
+    if (serialized === null) storage.removeItem(key);
+    else storage.setItem(key, serialized);
+  } catch {
+    // Preferences can still be used in React state when browser storage is unavailable.
   }
-  const serialize = options.serialize ?? serializePersistentValue;
-  storage.setItem(key, serialize(value));
 }
 
 export function usePersistentState<T>(

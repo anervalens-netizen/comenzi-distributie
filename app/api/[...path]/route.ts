@@ -294,6 +294,10 @@ async function finalize(id: string,user: User,req: Request) {
   const result=await getOrder(id,user);
   return response({order:result,mail:mailFor(result,await settingsForOrder(result))});
 }
+async function reportingProfile(user: User): Promise<User> {
+  const configured = await db().prepare("SELECT 1 FROM settings WHERE key='distribution-rules-v1'").first();
+  return {...user, distributionConfigured: Boolean(configured)};
+}
 async function dispatch(req: Request) {
   if(req.method!=='GET') assertOrigin(req);
   const path=new URL(req.url).pathname.replace(/^\/api\//,'').split('/');
@@ -324,20 +328,19 @@ async function dispatch(req: Request) {
     const sessionResults=await db().batch([db().prepare('INSERT INTO sessions (token_hash,user_id,expires_at) SELECT ?,id,? FROM users WHERE id=? AND active=1 AND username=? AND password_hash=? AND profile_revision=?').bind(sha256(token),now+SESSION_TTL_MS,row.id,row.username,row.password_hash,row.profile_revision),db().prepare('DELETE FROM login_attempts WHERE key=? AND EXISTS (SELECT 1 FROM sessions WHERE token_hash=?)').bind(keys[0],sha256(token)),db().prepare('DELETE FROM sessions WHERE expires_at<?').bind(now)]);
     if(!sessionResults[0]?.meta.changes)fail(401,'Datele de acces s-au modificat. Autentifică-te din nou.');
     usageAuth(req,String(row.id),'login',token);
-    return response({user:userView(row)},200,{'Set-Cookie':cookie(req,token)});
+    return response({user:await reportingProfile(userView(row))},200,{'Set-Cookie':cookie(req,token)});
   }
   if((path[0]==='bootstrap'||path.join('/')==='auth/session') && req.method==='GET') {
     let user=await currentUser(req);
     const existingToken=sessionToken(req);
     const refreshedToken=user?await refreshSession(req):'';
-    if(user&&!refreshedToken)user=null;
+    if(user)user=refreshedToken?await reportingProfile(user):null;
     const sessionHeaders=refreshedToken?{'Set-Cookie':cookie(req,refreshedToken)}:existingToken?{'Set-Cookie':cookie(req,'',0)}:undefined;
     if(path.join('/')==='auth/session')return response({user},200,sessionHeaders);
     if(!user||user.mustChangePassword) return response({user},200,sessionHeaders);
     const cfg=await settings();
     const regional=user.role==='manager'&&!isGlobalManager(user)?await regionalOperationalSettings(user.id):undefined;
-    const distributionConfigured=!!await db().prepare("SELECT 1 FROM settings WHERE key='distribution-rules-v1'").first();
-    const common={user:{...user,distributionConfigured},warehouses:await visibleWarehouses(user),users:user.role==='manager'?await getUsers(user):[],settings:cfg,managerMailSettings:user.role==='manager'?await managerMailSettings(user.id):undefined,regionalSettings:regional?.settings,regionalSettingsMixed:regional?.mixed,weekKey:weekKey(),importWarnings:isGlobalManager(user)?seed.importWarnings:[]};
+    const common={user,warehouses:await visibleWarehouses(user),users:user.role==='manager'?await getUsers(user):[],settings:cfg,managerMailSettings:user.role==='manager'?await managerMailSettings(user.id):undefined,regionalSettings:regional?.settings,regionalSettingsMixed:regional?.mixed,weekKey:weekKey(),importWarnings:isGlobalManager(user)?seed.importWarnings:[]};
     if(new URL(req.url).searchParams.get('compact')==='1')return response({...common,...await listOrdersPage(user,new URLSearchParams('kind=orders&range=7d&limit=40'))},200,sessionHeaders);
     return response({...common,products:(await readCatalog()).products,orders:await listOrders(user)},200,sessionHeaders);
   }
@@ -497,8 +500,9 @@ async function dispatch(req: Request) {
     const id=path[1];
     if(!id && req.method==='GET') {
       const params=new URL(req.url).searchParams;
-      if(params.get('page')==='1')return response({user,...await listOrdersPage(user,params),weekKey:weekKey()});
-      return response({user,orders:await listOrders(user),weekKey:weekKey()});
+      const profile=await reportingProfile(user);
+      if(params.get('page')==='1')return response({user:profile,...await listOrdersPage(user,params),weekKey:weekKey()});
+      return response({user:profile,orders:await listOrders(user),weekKey:weekKey()});
     }
     if(!id && req.method==='POST') {
       const body=await jsonBody(req); const kind=body.kind as Kind;

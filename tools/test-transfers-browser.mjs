@@ -9,7 +9,7 @@ export async function testTransferBrowser(origin,cookies){
  const profile=mkdtempSync(join(tmpdir(),'transfer-chrome-')),downloads=mkdtempSync(join(tmpdir(),'transfer-downloads-'));
  const downloadEvents=new Map();
  const completedDownloads=()=>[...downloadEvents.values()].filter(event=>event.state==='completed');
- const chrome=spawn(process.env.CHROME_BIN,['--headless=new','--no-sandbox','--disable-dev-shm-usage','--remote-debugging-port=0',`--user-data-dir=${profile}`,'about:blank'],{stdio:['ignore','ignore','pipe']});
+ const chrome=spawn(process.env.CHROME_BIN,['--headless=new','--no-sandbox','--disable-dev-shm-usage','--no-first-run','--no-default-browser-check','--disable-background-networking','--remote-debugging-port=0',`--user-data-dir=${profile}`,'about:blank'],{stdio:['ignore','ignore','pipe']});
  let stderr='',spawnError,chromeExit,startupError,port;
  chrome.stderr.on('data',chunk=>{stderr=(stderr+chunk.toString()).slice(-4000);});
  chrome.on('error',error=>{spawnError=error;});
@@ -27,7 +27,15 @@ export async function testTransferBrowser(origin,cookies){
   startupError&&`lastStartupError=${startupError.message}`,
   `stderr=${stderr.trim()||'<empty>'}`,
  ].filter(Boolean).join('; ');
- const wait=async(fn,label)=>{for(let i=0;i<150;i++){if(spawnError||chromeExit)throw new Error(`Chrome exited before ${label}: ${chromeDiagnostics()}`);if(await fn())return;await pause(100);}throw new Error(`Browser timeout: ${label}; ${chromeDiagnostics()}`);};
+ const wait=async(fn,label,timeoutMs=15_000)=>{
+  const deadline=Date.now()+timeoutMs;
+  while(Date.now()<deadline){
+   if(spawnError||chromeExit)throw new Error(`Chrome exited before ${label}: ${chromeDiagnostics()}`);
+   if(await fn())return;
+   await pause(100);
+  }
+  throw new Error(`Browser timeout: ${label}; ${chromeDiagnostics()}`);
+ };
  const send=(method,params={})=>new Promise((resolve,reject)=>{const id=++next;const timer=setTimeout(()=>{pending.delete(id);reject(new Error('CDP timeout: '+method));},20000);pending.set(id,{resolve,reject,timer});socket.send(JSON.stringify({id,method,params}));});
  const evaluate=async expression=>{const result=await send('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true});if(result.exceptionDetails)throw new Error(JSON.stringify(result.exceptionDetails));return result.result?.value;};
  const click=async(selector)=>{check(await evaluate(`(()=>{const node=document.querySelector(${JSON.stringify(selector)});if(!node)return false;node.click();return true;})()`),'Clickable '+selector);};
@@ -35,7 +43,7 @@ export async function testTransferBrowser(origin,cookies){
  const fill=async(selector,value)=>{await evaluate(`(()=>{const node=document.querySelector(${JSON.stringify(selector)});const setter=Object.getOwnPropertyDescriptor(node.tagName==='SELECT'?HTMLSelectElement.prototype:HTMLInputElement.prototype,'value').set;setter.call(node,${JSON.stringify(value)});node.dispatchEvent(new Event('input',{bubbles:true}));node.dispatchEvent(new Event('change',{bubbles:true}));return true;})()`);};
  const screenshot=async(name)=>{mkdirSync('work/transfer-browser',{recursive:true});const shot=await send('Page.captureScreenshot',{format:'png'});writeFileSync(`work/transfer-browser/${name}.png`,Buffer.from(shot.data,'base64'));};
  try{
-  let target;await wait(async()=>{try{port=Number(readFileSync(join(profile,'DevToolsActivePort'),'utf8').split('\n')[0]);if(!Number.isInteger(port)||port<1||port>65535)throw new Error(`Invalid DevTools port in ${join(profile,'DevToolsActivePort')}: ${port}`);const response=await fetch(`http://127.0.0.1:${port}/json/new?about:blank`,{method:'PUT'});if(!response.ok)throw new Error(`DevTools HTTP ${response.status}: ${(await response.text()).slice(0,500)}`);target=await response.json();if(!target.webSocketDebuggerUrl)throw new Error(`DevTools target missing websocket URL: ${JSON.stringify(target).slice(0,500)}`);return true;}catch(error){startupError=error;return false;}},'Chrome start');
+  let target;await wait(async()=>{try{port=Number(readFileSync(join(profile,'DevToolsActivePort'),'utf8').split('\n')[0]);if(!Number.isInteger(port)||port<1||port>65535)throw new Error(`Invalid DevTools port in ${join(profile,'DevToolsActivePort')}: ${port}`);const response=await fetch(`http://127.0.0.1:${port}/json/new?about:blank`,{method:'PUT',signal:AbortSignal.timeout(2_000)});if(!response.ok)throw new Error(`DevTools HTTP ${response.status}: ${(await response.text()).slice(0,500)}`);target=await response.json();if(!target.webSocketDebuggerUrl)throw new Error(`DevTools target missing websocket URL: ${JSON.stringify(target).slice(0,500)}`);return true;}catch(error){startupError=error;return false;}},'Chrome start',60_000);
   socket=new WebSocket(target.webSocketDebuggerUrl);await new Promise(resolve=>socket.addEventListener('open',resolve,{once:true}));
   socket.addEventListener('message',event=>{const message=JSON.parse(event.data);if(message.method==='Browser.downloadWillBegin'||message.method==='Browser.downloadProgress'){const details=message.params;downloadEvents.set(details.guid,{...downloadEvents.get(details.guid),...details});}if(!message.id)return;const request=pending.get(message.id);if(!request)return;clearTimeout(request.timer);pending.delete(message.id);if(message.error)request.reject(new Error(JSON.stringify(message.error)));else request.resolve(message.result);});
   await send('Page.enable');await send('Network.enable');

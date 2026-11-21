@@ -12,6 +12,7 @@ const fixture = await build({stdin:{contents:`
   import {createRoot} from 'react-dom/client';
   import {ManagerPrepay} from './components/manager-commerce';
   import {AgentCommerce} from './components/agent-commerce';
+  import {VodafoneBonus} from './components/vodafone-bonus';
   import {ReportPeriod} from './components/report-period';
   import {setLocalWorkUserId} from './lib/local-work';
   const role = location.search.includes('agent') ? 'agent' : 'manager';
@@ -25,11 +26,11 @@ const fixture = await build({stdin:{contents:`
         <><ReportPeriod selected={months} onChange={setMonths}/>
         <ManagerPrepay userId={user.id} query={query} distributionConfigured canViewActivations scopeLabel="Synthetic"/></>)}</>;
   }
-  createRoot(document.querySelector('main')).render(<Fixture/>);
+  createRoot(document.querySelector('main')).render(location.search.includes('registerOnly')?<VodafoneBonus scopeQuery="month=2026-07"/>:<Fixture/>);
 `,loader:'tsx',resolveDir:process.cwd()},bundle:true,platform:'browser',format:'esm',jsx:'automatic',
   define:{'process.env.NODE_ENV':'"production"'},loader:{'.css':'empty','.woff2':'empty'},write:false});
 
-let mode = 'good', role = 'manager', bonusReads = 0, fullBonusReads = 0;
+let mode = 'good', role = 'manager', bonusReads = 0, fullBonusReads = 0, pendingReads = 0, searchPolls = 0;
 const script = '/_next/static/fixture-pilot.js';
 const shellVersion = 'a'.repeat(16);
 const ref = {release:'a'.repeat(40),shellVersion,referenceId:'b'.repeat(32),role:'manager'};
@@ -87,6 +88,14 @@ const server = createServer((req,res) => {
       }
       case '/api/vodafone/bonuses':
         bonusReads++;
+        if(!url.searchParams.has('view') && ['pending_search','forbidden_search'].includes(mode)){
+          searchPolls++;
+          if(mode==='forbidden_search'){res.statusCode=403;return json({error:'Acces revocat'});}
+          res.statusCode=202;return json({state:'preparing'});
+        }
+        if(mode==='pending_register' && !pendingReads && url.searchParams.get('view')==='preview' && url.searchParams.get('progressive')==='1'){
+          pendingReads++;res.statusCode=202;res.setHeader('Retry-After','5');return json({state:'preparing'});
+        }
         return json(register(url.searchParams));
       default: res.statusCode = 503; return json({error:'Synthetic unused view'});
     }
@@ -144,6 +153,35 @@ try {
   mode = 'wrong_period';
   error(await probe(annual),'trend_months_mismatch');
   mode = 'good';
+  mode='pending_register';
+  pass(await probe(bonus,{},15000));
+  assert.equal(pendingReads,1,'a browser opens the completed register automatically after a cold source');
+  mode='good';
+  const active=await browser.newTab(origin+'/?registerOnly');
+  try {
+    const rows=()=>active.evaluate("document.querySelectorAll('.vodafone-bonus tbody tr').length");
+    await waitFor(async()=>await rows()===50,'initial 50 points');
+    await active.evaluate(`window.realTimer=window.setTimeout;
+      window.setTimeout=(fn,ms,...args)=>window.realTimer(fn,ms===5000||ms===15000?12:ms,...args);
+      window.searchBonus=value=>{const input=document.querySelector('[aria-label="Caută în registru"]');
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,value);
+        input.dispatchEvent(new Event('input',{bubbles:true}));};
+      window.fixtureHidden=false;Object.defineProperty(document,'hidden',{get:()=>window.fixtureHidden});
+      window.visibility=value=>{window.fixtureHidden=value;document.dispatchEvent(new Event('visibilitychange'));};true`);
+    mode='pending_search';await active.evaluate("window.searchBonus('EXAMPLE-50');true");
+    await waitFor(()=>searchPolls>=25,'progressive full search continues after 24 pending responses');
+    assert.equal(await rows(),50);
+    assert(await active.evaluate("document.querySelector('[aria-label=\"Caută în registru\"]').value==='EXAMPLE-50' && document.body.textContent.includes('previzualizarea nefiltrată') && document.body.textContent.includes('durează mai mult')"));
+    await active.evaluate('window.visibility(true);true');
+    await new Promise(resolve=>setTimeout(resolve,50));const paused=searchPolls;
+    await new Promise(resolve=>setTimeout(resolve,110));assert.equal(searchPolls,paused);
+    mode='good';await active.evaluate('window.visibility(false);true');
+    await waitFor(async()=>await rows()===1,'full scoped search resumed when visible');
+    await active.evaluate("window.searchBonus('');true");await waitFor(async()=>await rows()===50,'preview before revocation');
+    mode='forbidden_search';await active.evaluate("window.searchBonus('EXAMPLE-50');true");
+    await waitFor(()=>active.evaluate("document.body.textContent.includes('Acces revocat')"),'access loss');
+    assert.equal(await rows(),0);assert.equal(await active.evaluate("!!document.querySelector('input[type=search]')"),false);
+  } finally {mode='good';await active.close();}
   const initialFullReads = fullBonusReads;
   pass(await probe(bonus));
   assert.equal(fullBonusReads, initialFullReads + 1, 'the reference point beyond page one requires the full scoped request');

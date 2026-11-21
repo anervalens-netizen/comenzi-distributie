@@ -20,8 +20,6 @@ export async function partnerStands(req: Request, readUser: User, id: string, us
   const {partner} = await partnerDetail(readUser, id, null, user);
   const aliasesTable = await db().prepare("SELECT 1 FROM sqlite_schema WHERE name='customer_identity_aliases' AND type='table'").first();
   const pointIds = aliasesTable ? (await db().prepare('SELECT alias_id id FROM customer_identity_aliases WHERE canonical_id=?').bind(id).all<{id: string}>()).results.map(row => row.id) : [];
-  const source = await db().prepare("SELECT MIN(finalized_at) first FROM orders WHERE kind='stand_client' AND status='finalized' AND (? IS NULL OR warehouse_id=?)")
-    .bind(user.role === 'agent' ? user.warehouseId ?? '' : null, user.warehouseId).first<{first: string | null}>();
   const rows = (await db().prepare(`
     SELECT o.id orderId,o.number reference,o.finalized_at finalizedAt,CAST(line.key AS TEXT) lineId,
       json_extract(line.value,'$.code') code,json_extract(line.value,'$.name') type,
@@ -53,6 +51,6 @@ export async function partnerStands(req: Request, readUser: User, id: string, us
   });
   return {
     firstBilling, billingThrough: sales?.state === 'ready' || sales?.state === 'unlinked' ? sales.through : null,
-    availableFrom: source?.first ? bucharestDate(source.first) : null, stands,
+    availableFrom: stands.at(-1)?.date ?? null, stands,
   };
 }

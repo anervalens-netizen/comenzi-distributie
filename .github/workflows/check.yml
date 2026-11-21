@@ -12,7 +12,7 @@ on:
 jobs:
   check:
     runs-on: ${{ (github.event_name == 'pull_request' || vars.CI_EXECUTOR != 'gaming') && 'ubuntu-latest' || fromJSON('["self-hosted","Linux","X64","gaming-ci","comenzi-distributie"]') }}
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:

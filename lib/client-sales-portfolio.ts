@@ -1,6 +1,7 @@
 import {statSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {db,fail} from './server';
+import {isConsumerAccountCode} from './partner-company-identity';
 import {portfolioSummary} from './partner-portfolio';
 import {maintainReadModelBatch,portfolioVersion,selectedSql} from './portfolio-read-model';
 import {salesYield} from './client-sales-cooperative';
@@ -20,7 +21,7 @@ const CARD_BYTES=24*1024*1024;
 /** Reuse the existing trigger-maintained projection and live scope SQL. Keyset batches
  * keep national reads and first projection builds from monopolizing the HTTP thread. */
 export async function clientSalesPortfolio(user:User,warehouseIds?:string[]){
-  if(await clientPortfolioVersion()===null)return portfolioSummary(user,undefined,warehouseIds);
+  if(await clientPortfolioVersion()===null)return (await portfolioSummary(user,undefined,warehouseIds)).filter(p=>!isConsumerAccountCode(p.cui));
   let complete=false;
   for(let i=0;i<2000&&!complete;i++){complete=await maintainReadModelBatch();await salesYield();}
   if(!complete)fail(503,'Portofoliul se actualizează. Reîncearcă.');
@@ -40,7 +41,7 @@ export async function clientSalesPortfolio(user:User,warehouseIds?:string[]){
         if(cardVersion===version&&cardBytes+bytes<=CARD_BYTES){cards.set(row.id,p);cardBytes+=bytes;}
       }
     }
-    for(const row of rows){const p=cards.get(row.id)||fresh.get(row.id);if(p)partners.push(p);}
+    for(const row of rows){const p=cards.get(row.id)||fresh.get(row.id);if(p&&!isConsumerAccountCode(p.cui))partners.push(p);}
     if(rows.length<512)break;
     cursor=rows.at(-1)!.id;await salesYield();
   }

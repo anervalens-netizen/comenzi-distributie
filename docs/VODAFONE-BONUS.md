@@ -2,15 +2,21 @@
 
 Managerii cu acces la Activări găsesc **Bonusuri Vodafone** în secțiunea Activări. Registrul grupează activările pe lună și franciză și păstrează contribuțiile pe gestiune. Excelul poate fi descărcat pe lună sau pentru toată perioada de la iunie 2026.
 
-Registrul folosește proiectele, regiunea, agentul și luna selectate. La prima deschidere afișează primele 50 de rânduri din fiecare vedere. Căutarea și butonul „Arată încă” consultă lista completă. Dacă ai introdus un text de căutare, exporturile includ toate rândurile care corespund căutării, inclusiv pe cele din afara primei pagini. Foaia „Luni” păstrează acoperirea întregului portofoliu selectat.
+Registrul folosește proiectele, regiunea, agentul și luna selectate. La prima deschidere afișează primele 50 de rânduri din fiecare vedere. Căutarea după partener, franciză, CUI, TR sau număr de document și butonul „Arată încă” consultă lista completă. Dacă ai introdus un text de căutare, exporturile includ toate rândurile care corespund căutării, inclusiv pe cele din afara primei pagini. Foaia „Luni” păstrează acoperirea întregului portofoliu selectat.
 
 Pentru 3–4 activări SIM 0 premiul calculat este un SIM 5. Pentru 5–9 se calculează două. De la 10 se adaugă câte cinci pentru fiecare grup complet de 10 activări. O franciză deservită de mai multe gestiuni are un singur prag. Managerul care are acces la o parte dintre gestiuni vede contribuțiile disponibile și un indicator de acoperire. Activările fără franciză univocă sunt în **De identificat**.
 
 Sunt eligibile documentele complete cu SIM 5 și vouchere Vodafone la preț și valoare zero, reconciliate în exporturile pe client și pe gestiune. Conturile generice și mișcările tehnice identificate sunt excluse. Documentele mixte, retururile și diferențele dintre surse rămân vizibile pentru reconciliere. Stingerile merg către cea mai veche lună eligibilă a aceleiași francize și păstrează numărul facturii, data și luna dreptului.
 
+## Vânzări către persoane fizice
+
+În rapoartele de activări și vânzări, codurile ERP `CLIENTGEN`, `GENERICPARTENER` și varianta în engleză `GENERICPARTNER` reprezintă vânzări către persoane fizice. Aceste vânzări nu necesită cod de punct de lucru. În „Pe partener” apar separat și sunt excluse din numărul de puncte comerciale și din clasamentele partenerilor.
+
+În Focus, o activare generică eligibilă pentru totalul regional contribuie și la „Realizare TR” numai dacă județul activării figurează între județele alocate agentului. Cu județ lipsă sau atribuit altui agent, activarea rămâne doar în regional. Ecranul, detaliul și exportul Excel folosesc aceeași atribuire. Pentru o firmă cu mai multe puncte, identificarea CUI-ului singur nu stabilește magazinul.
+
 ## Publicarea și dovada fiscală
 
-O lună are raport final când o sursă Vodafone acoperă întreaga lună și are dată de publicare în luna următoare sau mai târziu. Perioadele fără raport final au valori de calcul provizorii. Soldul confirmat cere dovada fiscală a documentelor și un premiu Top Locații stabilit pentru punct și lună. Documentele fără tip fiscal pot contribui la simularea SIM 0 după reconcilierea surselor. În această simulare soldul de deschidere la 1 iunie este zero.
+O lună are raport final când o sursă Vodafone acoperă întreaga lună și are dată de publicare în luna următoare sau mai târziu. Perioadele fără raport final au valori de calcul provizorii. Soldul confirmat cere dovada fiscală a documentelor și un premiu Top Locații stabilit pentru punct și lună. Documentele fără tip fiscal pot contribui la simularea SIM 0 după reconcilierea surselor. În această simulare soldul de deschidere la 1 iunie este zero. O perioadă anterioară fără raport final, cu activări atribuite neconfirmate fiscal sau fără decont Top Locații pe punct păstrează soldul lunilor următoare neconfirmat. Un bonus zero explicit în decont confirmă că punctul nu are drepturi Top Locații pentru luna respectivă.
 
 Când sursa principală fiscală există în afara exporturilor, operatorul poate înregistra dovezile exacte în cheia privată `vodafone-bonus-evidence-v1` din configurația aplicației. Cheia are câmpurile `published` și `documents`. Intrările trebuie susținute de o referință de audit în câmpul `evidence`. Un document de acordare este legat prin emitent, data documentului, SiteId ERP și numărul facturii. În cazul activărilor, emitentul și SiteId se citesc din mișcarea de distribuție. O etichetă explicită de bon de consum sau reglare de gestiune din sursă exclude documentul.
 
@@ -48,3 +54,10 @@ Unitățile `deploy/mobiup-vodafone-bonus-warmup.service` și `.timer` pornesc v
 La actualizarea unei instalări existente, operatorul poate aplica indexurile de factură și produse gratuite prin `python3 tools/client_sales_history.py --database /cale/configurată/client-history/client-sales-history.sqlite --ensure-schema`. Aceeași schemă se aplică la importurile următoare. După prima actualizare de schemă, reconstruiește proiecția de activitate din aceeași sursă cu procedura din [client-sales.md](client-sales.md). Repetarea comenzii păstrează indexurile existente.
 
 Registrul păstrează o copie derivată privată în `.vodafone-bonus-cache/current.bin` din directorul de date. Refolosirea cere aceeași versiune de worker, aceleași surse și aceleași reguli. Accesul și gestiunile vizibile se verifică pentru fiecare solicitare. O copie absentă sau deteriorată se reconstruiește automat. Într-un director fără drept de scriere aplicația folosește memoria procesului.
+
+
+Cererea ecranului și exportul folosesc `progressive=1`. Dacă registrul încă se pregătește, API-ul răspunde cu HTTP 202 și `Retry-After: 5`. Pagina verifică la 5 secunde, apoi la 15 secunde după 24 de răspunsuri în curs. Verificarea se suspendă în fundal, se reia la revenire și se oprește la schimbarea selecției sau la o eroare reală. Fiecare cerere reverifică permisiunile. Apelurile fără acest parametru păstrează contractul sincron.
+
+Serviciul periodic și workerul aplicației folosesc aceeași rezervare SQLite în directorul privat de cache pentru calculul registrului. Închiderea procesului eliberează rezervarea. Publicarea rămâne atomică și verifică generația datelor înainte de salvare.
+
+Bugetul unei pregătiri la rece este de 11 minute pentru worker și pentru serviciul periodic. La volumul măsurat, cea mai lentă reconstrucție observată pe discul ocupat a durat 311 secunde. Raportul finalizat se poate reciti pentru aceeași generație, lună și selecție.

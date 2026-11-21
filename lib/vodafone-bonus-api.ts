@@ -1,3 +1,4 @@
+import {observeVodafoneBonus,VodafoneBonusPreparing} from './vodafone-bonus-preparing';
 import {readVodafoneBonusAsync} from '#mobiup-activation-store';
 import {canViewActivations} from './activation-access';
 import {readDistributionRules} from './distribution-config';
@@ -40,7 +41,7 @@ export async function getEvidence() {
   return (await db().prepare('SELECT value FROM settings WHERE key=?').bind(vodafoneBonusEvidenceSetting).first<{value:string}>())?.value;
 }
 export async function readVodafoneBonusForManager(
-  user: User, params: URLSearchParams, revalidate?: ()=>Promise<User>,
+  user: User, params: URLSearchParams, revalidate?: ()=>Promise<User>, progressive=false,
 ): Promise<VodafoneBonusReport> {
   const permittedSites = await authorizedScope(user,params);
   const keys = new Set<string>();
@@ -64,11 +65,18 @@ export async function readVodafoneBonusForManager(
   const scope=bonusProjectSites(permittedSites,rules,projects);
   let evidence;
   try { evidence=parseVodafoneBonusEvidence(raw); } catch { fail(503,'Dovezile fiscale ale registrului necesită verificare.'); }
-  const report=await readVodafoneBonusAsync({today,rules,targets,evidence,scope,month:all==='1'?null:chosenMonth,preview:view==='preview'})
-    .catch(()=>fail(503,'Registrul Vodafone nu este disponibil momentan. Reîncarcă raportul.'));
+  const operation=readVodafoneBonusAsync({today,rules,targets,evidence,scope,month:all==='1'?null:chosenMonth,preview:view==='preview'});
+  const report=await (progressive ? observeVodafoneBonus(operation) : operation).catch(error=>{
+    if(error instanceof VodafoneBonusPreparing){
+      if(progressive)return null;
+      fail(503,'Registrul Vodafone se pregătește. Reîncearcă după actualizarea sursei.');
+    }
+    fail(503,'Registrul Vodafone nu este disponibil momentan. Reîncarcă raportul.');
+  });
   const current = revalidate ? await revalidate() : user;
   if (current.id!==user.id || current.profileVersion!==user.profileVersion || current.managerScope!==user.managerScope ||
       JSON.stringify(permittedSites)!==JSON.stringify(await authorizedScope(current,params))) fail(409,'Accesul la registru s-a schimbat.');
+  if (!report) throw new VodafoneBonusPreparing();
   const [updatedRules,updatedTargets,updatedEvidence]=await Promise.all([readDistributionRules(),readVodafoneTopLocations(),getEvidence()]).catch(()=>{
     fail(503,'Configurarea registrului nu a putut fi reverificată.');
   });
@@ -78,7 +86,15 @@ export async function readVodafoneBonusForManager(
 }
 
 export async function vodafoneBonusResponse(user: User, params: URLSearchParams, revalidate: ()=>Promise<User>) {
-  const report = await readVodafoneBonusForManager(user,params,revalidate);
+  const query=new URLSearchParams(params),progressive=query.getAll('progressive');
+  if(progressive.length>1 || (progressive.length===1 && progressive[0]!=='1'))fail(400,'Opțiunea de pregătire a registrului este invalidă.');
+  query.delete('progressive');
+  let report:VodafoneBonusReport;
+  try {report=await readVodafoneBonusForManager(user,query,revalidate,progressive.length===1);}
+  catch(error){
+    if(error instanceof VodafoneBonusPreparing)return Response.json({state:'preparing'},{status:202,headers:{'Retry-After':'5','Cache-Control':'no-store'}});
+    throw error;
+  }
   const view=params.get('view');
   if (view==='export') return response({workbook:vodafoneBonusWorkbook(report,params.get('q') || '')});
   return response(report);

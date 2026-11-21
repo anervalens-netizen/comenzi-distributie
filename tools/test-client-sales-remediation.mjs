@@ -73,6 +73,18 @@ try{
  m.buildActivitySnapshot(root,'2026-09-30');let firm=get(m.readClientSales(partners,'2026-09',root,'2026-09-30'),'monthly-a');assert.equal(firm.identityComplete,true);assert.equal(firm.metrics.valueCents,4122);
  const competing=new DatabaseSync(history);competing.prepare('UPDATE history_references SET master_json=?').run(JSON.stringify([{CIF:'100',PartnerCode:'alias',Cod_Franciza:'same'},{CIF:'200',Cod_Franciza:'same'}]));competing.close();m.buildActivitySnapshot(root,'2026-09-30');
  firm=get(m.readClientSales(partners,'2026-09',root,'2026-09-30'),'monthly-a');assert.equal(firm.identityComplete,false);assert.equal(firm.metrics.valueCents,3900,'changing candidate company excludes the disputed amount');assert(firm.flags.includes('billed'),'known undisputed bills still count on explicitly partial firms');assert(!firm.flags.includes('new'));
+ // The read path also repairs old materialized categories before the next import.
+ const previousBridge=async()=>(await (await m.clientSalesReconciliation(t.user('manager'),new URLSearchParams('month=2026-09'),new Date('2026-09-30T12:00:00Z'))).json()).buckets;
+ const priorBuckets=await previousBridge();
+ const rawConsumer=new DatabaseSync(history);
+ rawConsumer.exec("INSERT INTO history_identities VALUES(22000,'GENERICPARTENER','');INSERT INTO history_allocations VALUES(22000,'ref','reconcile','[]','[]','Old reserved account');INSERT INTO history_rows VALUES(1,22000,'2026-09-15','site','personal',222,1000000,'Synthetic seller','x','Synthetic item',22000);UPDATE history_imports SET sha256='consumer-proof'");
+ rawConsumer.close();m.buildActivitySnapshot(root,'2026-09-30');
+ const published=new DatabaseSync(snapshot);
+ assert.equal(published.prepare('SELECT category FROM revenue_daily WHERE identity_id=22000').get().category,'consumer');
+ published.exec("UPDATE revenue_daily SET category='company',company_id='GENERICPARTENER' WHERE identity_id=22000");published.close();
+ const compatible=await previousBridge();
+ assert.equal(compatible.raw.knownCents,priorBuckets.raw.knownCents+222);
+ assert.equal(compatible.consumer.knownCents,priorBuckets.consumer.knownCents+222);assert.deepEqual(compatible.linkedCompany,priorBuckets.linkedCompany);
  // Broken derived data never poisons the single-flight cache; replacement can recover.
  const saved=join(root,'saved-snapshot.sqlite');copyFileSync(snapshot,saved);const invalid=new DatabaseSync(snapshot);invalid.exec("UPDATE meta SET value='{' WHERE key='snapshot'");invalid.close();await assert.rejects(call());renameSync(saved,snapshot);assert.equal((await call()).state,'ready');
  console.log('PASS: C1 conflict/same-company/detail, C2 historic additions/edit/merge/split, cache isolation/reimport/reference/replacement, ACL/actors/live visits, C3 day-one/year/DST rollover and missing month.');

@@ -35,14 +35,14 @@ export function applyVodafoneFocusOverview(report: ActivationReport, reports: Fo
 /** A source error in one territory must not erase the independently valid cards. */
 export function readFocusSummaries(
   report:ActivationReport, queries:FocusQuery[], read:(focus:FocusQuery)=>FocusReport|undefined,
-  includeCards:boolean, cardsOnly:boolean,
+  includeCards:boolean, cardsOnly:boolean, throwOnError=false,
 ):ActivationReport {
   const summaries:FocusReport[]=[], failed:FocusReport['territory'][]=[];
   for(const focus of queries){
     try{
       const summary=read(focus);
       if(summary)summaries.push(summary);
-    }catch{failed.push(focus.territory);}
+    }catch(error){if(throwOnError)throw error;failed.push(focus.territory);}
   }
   const result=cardsOnly?report:applyVodafoneFocusOverview(report,summaries);
   if(failed.length){

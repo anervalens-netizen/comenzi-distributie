@@ -12,4 +12,4 @@ node tools/import-vodafone-top-locations.mjs \
 
 Opțiunea `--previous` păstrează celelalte luni din fișierul activ. Comanda creează un fișier nou și validează coloanele, valorile întregi și unicitatea francizei pe lună. Păstrează sursa și fișierul precedent privat. Publică fișierul nou prin redenumire atomică în același director, la calea setată prin `MOBIUP_VODAFONE_TOP_LOCATIONS` sau la `vodafone-top-locations.json` în `MOBIUP_DATA_DIR`.
 
-Targetul și bonusul campaniei sunt valori distincte. Un bonus lipsă rămâne indisponibil până când există o valoare confirmată în unități. Raportul SIM 0 folosește pragurile sale.
+Targetul și bonusul campaniei sunt valori distincte. Un bonus lipsă rămâne indisponibil până când există o valoare confirmată în unități. Dacă decontul exprimă premiul în lei, importă numai targetul. Coloana de bonus trebuie să indice SIM-uri, vouchere sau bucăți. Importatorul respinge sumele și procentele, inclusiv dacă sunt indicate prin formatul numeric al celulelor. Raportul SIM 0 folosește pragurile sale.

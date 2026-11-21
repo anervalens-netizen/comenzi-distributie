@@ -11,6 +11,7 @@ import sqlite3
 import time
 import uuid
 import activations
+from activation_focus_evidence import build_focus_evidence
 from activation_report import build_report, build_report_incremental, IncrementalReportUnavailable
 
 
@@ -102,6 +103,11 @@ def run_job(directory,batches,rules=None,before_publish=None,publication_guard=N
             if fallback:
                 report=build_report(stage,rules)
                 report['rebuildReason']=fallback
+            try:
+                report['focusEvidence']=build_focus_evidence(stage)
+            except (OSError,sqlite3.DatabaseError,ValueError) as exc:
+                # The authoritative ledger/report can still be published and read normally.
+                report['focusEvidence']='unavailable: '+type(exc).__name__
             if before_publish:before_publish(stage)
             for name in ['activations.sqlite','activation-report.sqlite']:
                 with (stage/name).open('rb') as f:os.fsync(f.fileno())
