@@ -1,5 +1,6 @@
 import {createHash} from 'node:crypto';
 import type {DatabaseSync, StatementSync} from 'node:sqlite';
+import {assignedActivationCounty} from './distribution-rules';
 import type {ActivationQuery} from './activation-distribution';
 import {
   focusAttribution, focusCounty, focusCategory, focusProjects, focusSiteScope,
@@ -24,7 +25,7 @@ type Movement = {
 };
 const blankCounts = (): FocusCounts => ({attributed: 0, possibleStock: 0});
 const blankRegional = (): FocusRegional => ({
-  total: 0, otherTR: 0, otherChannels: 0, unassigned: 0, unassignedCounty: 0, sourceConflicts: 0,
+  total: 0, otherTR: 0, otherChannels: 0, unassigned: 0, unassignedCounty: 0, consumerCountyUnconfirmed: 0, sourceConflicts: 0,
 });
 const dealer = 'MOBIUP DISTRIBUTION SRL - CONSIGNATIE';
 const pageSize = 50;
@@ -155,6 +156,7 @@ export function vodafoneFocusReport(
     focus.includeSerials, focus.detail, focus.detailSite,
   ]));
   const report: FocusReport = {...blankCounts(), revision: '', territory, regionalDetails, months: [], sites: [], ...(regionalVisible ? {regional: blankRegional()} : {})};
+  const assignments=new Map(query.rules.assignments.map(row=>[row.siteCode.toUpperCase(),row]));
   const counts = new Map([...visible].map(site => [site, blankCounts()]));
   const details: FocusRow[] = [];
   const input = prepared ?? selectFocusSource(source, query.months);
@@ -188,14 +190,19 @@ export function vodafoneFocusReport(
     const attribution = invalid ? null : focusAttribution(date, documents);
     const document = attribution?.document;
     const site = document?.tr ? document.site : undefined;
-    const kind = attribution?.attributed
+    let kind: FocusRow['kind'] = attribution?.attributed
       ? document?.tr ? territorySites.has(site!) ? 'attributed' : 'otherTR' : 'otherChannel'
       : attribution && site && territorySites.has(site) ? 'possibleStock' : 'unassigned';
+    // Keep the certified regional observation even when this seller cannot claim a consumer sale.
+    if (kind === 'attributed' && attribution?.consumer && !assignedActivationCounty(county,assignments.get(site!))) {
+      kind = 'consumerCountyUnconfirmed';
+    }
     if (report.regional && month.regional) {
       for (const regional of [report.regional, month.regional]) {
         regional.total++;
         if (county === '<UNASSIGNED>') regional.unassignedCounty++;
         if (kind === 'otherTR') regional.otherTR++;
+        if (kind === 'consumerCountyUnconfirmed') regional.consumerCountyUnconfirmed++;
         if (kind === 'otherChannel') regional.otherChannels++;
         if (kind === 'unassigned' || kind === 'possibleStock') regional.unassigned++;
       }

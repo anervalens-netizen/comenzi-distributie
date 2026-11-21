@@ -17,6 +17,7 @@ export function vodafoneFocusWorkbook(report: FocusReport): string {
     ...(regional ? [
       ['Total regional Focus ' + name, regional.total],
       ['Alte TR', regional.otherTR],
+      ['Persoane fizice · județ neconfirmat pentru agent', regional.consumerCountyUnconfirmed],
       ['Alte canale', regional.otherChannels],
       ['Fără atribuire sigură', regional.unassigned],
       ['Județ nealocat · inclus în regional', regional.unassignedCounty],

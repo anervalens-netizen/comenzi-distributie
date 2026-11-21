@@ -8,6 +8,23 @@ export async function waitFor(fn,label='browser condition'){
  for(let i=0;i<300;i++){if(await fn())return;await delay(50);}
  throw Error('Timeout: '+label);
 }
+// Chrome can create DevToolsActivePort before writing the port or accepting HTTP.
+export async function readyChromePort(profile) {
+ let port;
+ await waitFor(async () => {
+  try {
+   const line = readFileSync(join(profile, 'DevToolsActivePort'), 'utf8').split('\n')[0];
+   if (!/^\d{1,5}$/.test(line)) return false;
+   const candidate = Number(line);
+   if (candidate < 1 || candidate > 65535) return false;
+   const response = await fetch('http://127.0.0.1:' + candidate + '/json/version', {signal: AbortSignal.timeout(500)});
+   if (!response.ok || !(await response.json()).webSocketDebuggerUrl) return false;
+   port = candidate;
+   return true;
+  } catch { return false; }
+ }, 'Chrome DevTools HTTP startup');
+ return port;
+}
 export async function browserFixture(origin){
  const profile=mkdtempSync(join(tmpdir(),'offline-regression-'));
  const child=spawn(process.env.CHROME_BIN||'/usr/bin/google-chrome',['--headless=new','--no-sandbox','--disable-dev-shm-usage','--no-first-run','--remote-debugging-port=0','--user-data-dir='+profile,'about:blank'],{stdio:'ignore',detached:true});
@@ -20,7 +37,7 @@ export async function browserFixture(origin){
   rmSync(profile,{recursive:true,force:true,maxRetries:20,retryDelay:100});
  };
  try{
-  let port;await waitFor(()=>{try{port=Number(readFileSync(join(profile,'DevToolsActivePort'),'utf8').split('\n')[0]);return !!port;}catch{return false;}},'Chrome startup');
+  const port=await readyChromePort(profile);
   const newTab=async(url=origin)=>{
   const pending=new Map();
   const target=await fetch(`http://127.0.0.1:${port}/json/new?about:blank`,{method:'PUT'}).then(r=>r.json());

@@ -4,7 +4,7 @@ import {randomUUID,createHash} from 'node:crypto';
 import {resolve} from 'node:path';
 import {activityVersion,activitySourceImports,bucharestToday,historyStamp,type ActivitySnapshotRow} from './partner-activity-snapshot';
 import {partnerActivity} from './partner-sales-health';
-import {normalizedCui,type CompanyAlias} from './partner-company-identity';
+import {normalizedCui,isConsumerAccountCode,type CompanyAlias} from './partner-company-identity';
 import {historyCompanyLinks,type CompanyLinks} from './partner-company-links';
 import {buildDetailLinks} from './partner-detail-snapshot';
 import {historyFileGeneration} from './history-source-generation';
@@ -341,7 +341,7 @@ export function refreshActivitySnapshotMonth(directory:string,month:string,today
     }
     const revenueInsert=out.prepare('INSERT INTO revenue_daily VALUES(?,?,?,?,?,?,?,?,?)');
     for(const item of revenue.values()){
-      const company=(companies.get(item.identity)||[])[0]||null,status=statuses.get(item.identity),category=status==='consumer'?'consumer':company?'company':'identity';
+      const company=(companies.get(item.identity)||[])[0]||null,status=statuses.get(item.identity),category=status==='consumer'||isConsumerAccountCode(item.client)?'consumer':company?'company':'identity';
       revenueInsert.run(item.date,item.identity,category,company,item.client,category==='identity'?reasons.get(item.identity)||'No reliable company association':'',item.known?item.sum:null,item.missing,item.rows);
     }
 

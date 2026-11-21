@@ -2,7 +2,7 @@ import {createHash} from 'node:crypto';
 import {compareActivationPartners} from './activation-partner-sort';
 import {activationPartnerSummary} from './activation-partner-summary';
 import type {ActivationReport,CombinedActivationPartners} from './activation-types';
-import {portfolioPlaceholder,type CombinedPartnerRead} from './activation-portfolio';
+import {personalSalesPortfolioAccount,portfolioPlaceholder,type CombinedPartnerRead} from './activation-portfolio';
 import type {ActivationPortfolioPoint,ActivationQuery} from './activation-distribution';
 
 const hash = (value:string)=>createHash('sha256').update(value).digest('hex');
@@ -47,7 +47,7 @@ export function combinePartnerReports(input:CombinedPartnerRead, portfolio:Activ
   if(hasPartnerSource && !input.query.q){
     for(const p of portfolio){
       const key='portfolio:'+p.id;
-      if(p.client==='CLIENTGEN'||represented.has(p.id)||groups.has(key))continue;
+      if(personalSalesPortfolioAccount(p)||represented.has(p.id)||groups.has(key))continue;
       points.push({...portfolioPlaceholder(p),recentToday:0,vodafone:0,digi:0});
     }
   }

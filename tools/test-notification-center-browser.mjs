@@ -63,6 +63,9 @@ window.fetch = async (input,init={}) => {
   const body=init.body?JSON.parse(init.body):null;
   fixture.requests.push({path,owner,body,query:url.search});
   switch (path) {
+    case 'manager-ai/conversations': return json({items:[{id:'example',title:'Sesiune de test',effort:'medium',
+      created_at:'2026-11-10',updated_at:'2026-11-10'}]});
+    case 'manager-ai/conversations/example/messages': return json({items:[],has_more:false});
     case 'auth/session': return json({user:fixture.user});
     case 'bootstrap': return json({user:fixture.user,users:[agent,manager],warehouses:[{id:'w',name:'Synthetic warehouse'}],orders:[],products:[],weekKey:'2026-11-16'});
     case 'orders': return json({user:fixture.user,orders:[],weekKey:'2026-11-16'});
@@ -198,6 +201,7 @@ try {
   await browser.evaluate("fixture.switchToManager()");
   await wait(browser,"document.querySelector('.profile strong')?.textContent==='Synthetic manager'&&document.querySelector('.request-count')?.textContent==='1'",'manager replaces agent account');
   assert.equal(await browser.evaluate(`!!document.querySelector('.app-header button[aria-label="Agent AI"]')`),true,'Manager AI is a header action');
+  assert.equal(await browser.evaluate("document.querySelector('.manager-ai-trigger').innerText.trim()"),'AI','The AI shortcut has a visible label');
   const managerDestinations=await browser.evaluate(`[...document.querySelectorAll('.main-nav [role=tab]')].map(tab=>tab.textContent.trim())`);
   assert.deepEqual(managerDestinations,['Sinteză','Parteneri','Accesorii','Prepay','Focus','Echipă','Operațiuni','Concedii']);
   await wait(browser,"document.querySelector('.app-header .brand img')?.naturalWidth>0",'Real Mobiup logo loads');
@@ -235,6 +239,31 @@ try {
   assert.equal(await browser.evaluate("document.querySelector('.request-count')?.textContent"),'1','old account badge is not restored');
   await button(browser,'Deschide','.notification-center');
   await wait(browser,"fixture.requests.some(request=>request.path==='partner/requests/20000000-0000-0000-0000-000000000001'&&request.owner==='synthetic-manager')",'manager opens exact legacy partner request');
+
+  // A denied preference read or full session store must leave the chat and application usable.
+  await browser.evaluate(`(() => {
+    const read = Storage.prototype.getItem, write = Storage.prototype.setItem;
+    Storage.prototype.getItem = function(key) {
+      if (this === sessionStorage && key === 'comenzi_ai_model') throw new DOMException('Unavailable','SecurityError');
+      return read.call(this,key);
+    };
+    Storage.prototype.setItem = function(key,value) {
+      if (this === sessionStorage && key.startsWith('comenzi_ai_')) throw new DOMException('Full','QuotaExceededError');
+      return write.call(this,key,value);
+    };
+  })()`);
+  await click(browser,'.manager-ai-trigger');
+  const model = 'aside select[aria-label="Model AI"]';
+  await wait(browser,`document.querySelector(${JSON.stringify(model)})?.disabled === false`,'Manager AI works with unavailable browser storage');
+  assert.equal(await browser.evaluate(`document.querySelector(${JSON.stringify(model)}).value`),'gpt-6.1-terra');
+  await browser.evaluate(`(() => {
+    const input = document.querySelector(${JSON.stringify(model)});
+    input.value = 'gpt-6.2-sol';
+    input.dispatchEvent(new Event('change',{bubbles:true}));
+  })()`);
+  await wait(browser,`document.querySelector(${JSON.stringify(model)})?.value === 'gpt-6.2-sol'`,'Model selection still works in memory');
+  await click(browser,'aside button[aria-label="Închide AI Comenzi"]');
+  await wait(browser,"document.querySelector('.manager-ai-trigger')?.getAttribute('aria-expanded') === 'false'",'Manager returns to the application');
 
   const deepLinkTab=await browser.newTab(origin+'/?notifications=1&manager=1');
   await wait(deepLinkTab,"document.querySelector('.notification-center .notification-list')?.textContent.includes('Synthetic legacy partner')",'device link opens authenticated notification center');

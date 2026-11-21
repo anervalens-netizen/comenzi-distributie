@@ -106,6 +106,7 @@ function VodafoneFocusSelection({query, visible}: {query: string; visible: Focus
       </dl>
       {!!visible.possibleStock && <p>Stocul posibil se bazează pe un document ulterior activării și rămâne în verificare până la confirmarea atribuirii.{region && ' Este inclus în totalul regional și în activările fără atribuire sigură.'}</p>}
       {region && <p>În regional sunt incluse și {number(region.otherTR)} atribuite altor TR-uri, {number(region.otherChannels)} din alte canale și {number(region.unassigned)} fără atribuire sigură. {number(region.unassignedCounty)} au județ nealocat.</p>}
+      {!!region?.consumerCountyUnconfirmed && <p>{number(region.consumerCountyUnconfirmed)} activări către persoane fizice intră doar în totalul regional. Județul activării lipsește sau nu aparține agentului.</p>}
       {!!region?.sourceConflicts && <p>{number(region.sourceConflicts)} înregistrări cu date de verificat au fost excluse din calcul.</p>}
       <details className="commerce-details">
         <summary>Realizare și stoc posibil pe TR</summary>

@@ -2,6 +2,7 @@ import { createReadProjectionCache } from './read-projection-cache';
 import { db, fail, isGlobalManager, sha256, textField } from './server';
 import type { Client, User } from './types';
 import type { PartnerFollowUp, PortfolioPartner, PartnerVisit } from './partner-portfolio-types';
+import {consumerAccountCodes} from './partner-company-identity';
 import {managerFilter} from './manager-scope';
 
 type Row = {
@@ -24,15 +25,20 @@ type Row = {
 };
 const membership =
   "SELECT 1 FROM json_each(COALESCE(json_extract(c.data,'$.warehouseIds'),json_array(c.warehouse_id))) w";
+// Historical company-only imports used a deterministic ID for each ERP account.
+// Seek just those legacy IDs, and retain a record if its CUI has since been corrected.
+const consumerCatalogIds=consumerAccountCodes.map(code=>"'hist-"+sha256(JSON.stringify([code,'company'])).slice(0,32)+"'").join(',');
+const consumerCodes=consumerAccountCodes.map(code=>"'"+code+"'").join(',');
+const commercialRecord=`(c.id NOT IN (${consumerCatalogIds}) OR COALESCE(UPPER(REPLACE(TRIM(json_extract(c.data,'$.cui')),' ','')),'') NOT IN (${consumerCodes}))`;
 export function partnerScope(user: User): { sql: string; args: string[] } {
-  if (isGlobalManager(user)) return { sql: '1=1', args: [] };
+  if (isGlobalManager(user)) return { sql: commercialRecord, args: [] };
   if (user.role === 'agent')
     return {
-      sql: `EXISTS (${membership} WHERE w.value=?)`,
+      sql: `${commercialRecord} AND EXISTS (${membership} WHERE w.value=?)`,
       args: [user.warehouseId || ''],
     };
   return {
-    sql: `EXISTS (${membership} JOIN users a ON a.warehouse_id=w.value JOIN manager_agents ma ON ma.agent_id=a.id WHERE ma.manager_id=? AND a.active=1)`,
+    sql: `${commercialRecord} AND EXISTS (${membership} JOIN users a ON a.warehouse_id=w.value JOIN manager_agents ma ON ma.agent_id=a.id WHERE ma.manager_id=? AND a.active=1)`,
     args: [user.id],
   };
 }

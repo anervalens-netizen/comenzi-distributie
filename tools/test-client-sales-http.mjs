@@ -44,12 +44,14 @@ try{
  };
  addSlip('a','monthly-a','Stand variant A',sameDay);
  addSlip('b','monthly-a','Stand variant B',later);
- addSlip('sibling','monthly-sibling','Al doilea punct',later);
+ const earlier=new Date(Date.parse(sameDay+'T00:00:00Z')-86400000).toISOString().slice(0,10);
+ addSlip('sibling','monthly-sibling','Al doilea punct',earlier);
  addSlip('draft','monthly-a','Ciornă',later,'draft');
  addSlip('stock','monthly-a','Aprovizionare',later,'finalized','stands');
  const standsUrl='http://127.0.0.1:3000/api/partner/portfolio/monthly-a/stands';
  const standResponse=await fetch(standsUrl,{headers:{Cookie:sessions['qa-agent1']}});assert.equal(standResponse.status,200);
  const stands=await standResponse.json();assert.equal(stands.firstBilling,sameDay);
+ assert.equal(stands.availableFrom,sameDay,'a prior slip for another point cannot set this point’s first known delivery');
  assert.deepEqual(stands.stands.map(({type,code,quantity,timing})=>[type,code,quantity,timing]),[
    ['Stand variant B','QA-STAND',2,'later'],['Stand variant A','QA-STAND',2,'same-day'],
  ]);

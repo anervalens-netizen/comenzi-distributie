@@ -55,7 +55,11 @@ class Tests(unittest.TestCase):
   self.assertEqual(self.resolve(franchise='F001',master=[self.master,b])['status'],'reconcile')
   self.assertEqual(self.resolve(code='456',franchise='F001')['status'],'reconcile')
  def test_consumer_and_absent(self):
-  self.assertEqual(self.resolve(code='clientgen')['status'],'consumer')
+  for code in ['clientgen','GENERICPARTENER','GENERIC PARTENER']:
+   self.assertEqual(self.resolve(code=code)['status'],'consumer')
+  self.assertNotEqual(self.resolve(code='GENERIC PARTENER SRL')['status'],'consumer')
+  self.assertNotEqual(self.resolve(code='RO123')['status'],'consumer')
+  self.assertEqual(self.resolve(code='GENERICPARTENER',franchise='F001')['status'],'consumer')
   self.assertEqual(self.resolve(code='')['status'],'reconcile')
  def test_alias_to_cif(self):
   b={**self.master,'PartnerCode':'CRM123'}
