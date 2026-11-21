@@ -2,7 +2,7 @@
 
 `MOBIUP_DATA_DIR=/explicit/data/directory node tools/build-partner-activity.mjs`
 rebuilds the derived `client-history/partner-activity.sqlite` outside HTTP requests.
-Schema **7** requires rebuilding **every older snapshot**, including schema 6. The builder opens
+Schema **9** requires a full rebuild of **v8 and all earlier snapshots**. The builder opens
 history and application databases read-only, checks the temporary derived database
 and atomically replaces the snapshot. No authoritative database migration is needed.
 The source CLI and private server build bundle the helpers through normal imports;
@@ -85,7 +85,7 @@ latency guarantees or evidence of production acceptance.
 
 The source fingerprint is computed in bounded UTF-8 byte chunks for HTTP cold reads and shared between concurrent months for the same filesystem generation. It remains identical to the batch fingerprint. Warm reports must demonstrate cache admission in tests, including wide synthetic company labels.
 
-The schema 7 snapshot also contains indexed company and point identity lookups for
+The schema 9 snapshot also contains indexed company and point identity lookups for
 cold detail reads. Code rollout and derived rebuild are separate steps: prepare the
 matching code release, rebuild with that release's builder, verify its output, then
 promote it through the deployment's supported procedure. Older or stale snapshots

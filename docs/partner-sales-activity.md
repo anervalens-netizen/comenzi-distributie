@@ -160,10 +160,9 @@ records display a dash, never a false zero; partial associations are marked.
 All sorting occurs before pagination, with unknown values last in both directions.
 No national total is calculated by summing potentially shared/legacy aliases.
 
-Keep code rollout and snapshot promotion separate: use the matching schema 7 builder
-to rebuild every older snapshot (including 6), validate it against the same authoritative
-source database, then promote only the derived output through the supported release path;
-source history, original seller attribution and existing TR reports stay intact.
+Use the schema 9 builder to rebuild v8 and earlier snapshots in a private staging
+directory. Validate the result against the active source database and publish
+the derived file with its matching application release.
 
 ## Sales-first partner sheet
 
@@ -212,7 +211,7 @@ and moves keyboard focus to its button. Opening the shortcut does not request
 geolocation or write data; GPS capture and the existing save confirmation remain
 explicit. Sales still opens by default and contact editing starts collapsed.
 
-## Monthly client report (snapshot schema 7)
+## Monthly client report (snapshot schema 9)
 
 Navigation: **Vânzări → Pe clienți**, or **Echipă → Agenți → Vânzări pe
 clienți**. This is a separate, lazy subtab in the existing sales screen. Its
@@ -228,8 +227,8 @@ currently authorized point, retaining their full legal-company history.
 Totals and chip counts apply before status filtering and pagination. Null
 amounts sort last in both directions. Unlinked histories stay unknown.
 
-Schema 7 contains point/company daily tables, company identity quality, import-level
-coverage and indexed detail identities. Rebuild every older schema, including 6,
+Schema 9 contains point/company daily tables, company identity quality, import-level
+coverage and indexed detail identities. Rebuild v8 and all earlier snapshots
 with the same explicitly configured
 `MOBIUP_DATA_DIR` and `node tools/build-partner-activity.mjs`. Older snapshots
 return an explicit rebuild message in all readers. Raw source aggregation only
