@@ -187,11 +187,11 @@ async function processRun(req:Request,start:AiAccount,scope:AiScope,conversation
         const authorize=async()=>{
           signal.throwIfAborted();
           const {user}=await current();
-          await readSource.checkBillingScope();
+          await readSource.checkSourceScope(user);
           signal.throwIfAborted();
           return user;
         };
-        const analysis=analysisModule?.createManagerAiAnalysis({scope,check:authorize,signal,files:work.sandboxFiles});
+        const analysis=analysisModule?.createManagerAiAnalysis({scope,check:authorize,signal,files:work.sandboxFiles,readSource});
         const answer=await runManagerAi({
           key,...work.options,turns:[],signal,readSource,check:authorize,analysis,
           content:work.recent.map(turn=>{

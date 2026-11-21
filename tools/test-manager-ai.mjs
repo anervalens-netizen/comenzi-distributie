@@ -7,6 +7,7 @@ import {join} from 'node:path';
 
 const {outputFiles} = await build({
   stdin:{resolveDir:process.cwd(),contents:`
+    export {groupVodafoneSim0Clients} from './lib/vodafone-activation-ranking-node.ts';
     export * from './lib/manager-ai-provider.ts';
     export * from './lib/manager-ai-query.ts';
     export * from './lib/manager-ai.ts';
@@ -20,12 +21,20 @@ const {outputFiles} = await build({
     const mocks = {
       'activation-api':'activationReport',
       'commercial-focus-api':'commercialFocus',
-      'vodafone-bonus-api':'readVodafoneBonusForManager',
       'vodafone-activation-targets':'applyVodafoneActivationTargets',
       'manager-scope':'managerFilter',
     };
     build.onResolve({filter:/^\.\/(distribution-config|stock-server|sales-server|activation-api|commercial-focus-api|client-sales-portfolio|vodafone-bonus-api|vodafone-activation-targets|manager-scope|partner-portfolio|client-sales-store)$/},
       args=>({path:args.path.slice(2),namespace:'test'}));
+    build.onResolve({filter:/^#mobiup-activation-store$/},()=>({path:'activation-runtime',namespace:'test'}));
+    build.onLoad({filter:/^activation-runtime$/,namespace:'test'},()=>({contents:`
+      export const readVodafoneSim0RankingAsync = input=>globalThis.syntheticReadSim0(input);
+    `}));
+    build.onLoad({filter:/^vodafone-bonus-api$/,namespace:'test'},()=>({contents:`
+      export const authorizedScope = async()=>globalThis.syntheticSim0Scope??null;
+      export const getEvidence = async()=>undefined;
+      export function readVodafoneBonusForManager() { throw Error('Unexpected dataset'); }
+    `}));
     build.onLoad({filter:/^client-sales-portfolio$/,namespace:'test'},()=>({contents:`
       export async function clientPortfolioVersion() { return globalThis.syntheticManagerAIPortfolioRevision; }
       export async function clientSalesPortfolio() { throw Error('Unexpected dataset'); }
@@ -41,7 +50,7 @@ const {outputFiles} = await build({
     build.onLoad({filter:/^sales-server$/,namespace:'test'},()=>({contents:`
       export async function salesView(request,user) { return Response.json(globalThis.syntheticManagerAISales(request,user)); }
     `}));
-    build.onLoad({filter:/^(activation-api|commercial-focus-api|vodafone-bonus-api|vodafone-activation-targets|manager-scope)$/,namespace:'test'},
+    build.onLoad({filter:/^(activation-api|commercial-focus-api|vodafone-activation-targets|manager-scope)$/,namespace:'test'},
       args=>({contents:`export function ${mocks[args.path]}() { throw Error('Unexpected dataset'); }`}));
     build.onLoad({filter:/^distribution-config$/,namespace:'test'},()=>({contents:`
       export async function readDistributionRules() { return {products:{SKU1:'vodafone_0',SKU2:'vodafone_5',SKU3:'digi'}}; }
@@ -57,7 +66,7 @@ const {outputFiles} = await build({
     `}));
   }}],
 });
-const {parseManagerAiQuery,makeManagerAiReport,managerAiMonths,runManagerAi,defaultManagerAiModel,managerAiModels,managerAiOperations,managerAiReader,managerAiBillingPoints} =
+const {groupVodafoneSim0Clients,parseManagerAiQuery,makeManagerAiReport,managerAiMonths,runManagerAi,defaultManagerAiModel,managerAiModels,managerAiOperations,managerAiReader,managerAiBillingPoints} =
   await import('data:text/javascript;base64,'+Buffer.from(outputFiles[0].text).toString('base64'));
 
 const query = {dataset:'bonuses',fromMonth:'2026-06',toMonth:'2026-09',site:'',groupBy:['franchise'],
@@ -91,6 +100,52 @@ assert.equal(first.settled,null);
 assert.equal(first.balance,null);
 assert.equal(defaultManagerAiModel,'gpt-6.1-terra');
 assert.deepEqual(managerAiModels,['gpt-6.1-terra','gpt-6.2-sol']);
+
+
+const syntheticCui = n => {
+  const digits=String(n).padStart(9,'0');
+  const sum=[...digits].reduce((value,digit,i)=>value+Number(digit)*Number('753217532'[i]),0);
+  return String(n)+String((sum*10%11)%10);
+};
+const cuiA=syntheticCui(800001),cuiB=syntheticCui(800002);
+const months=['2026-01','2026-02','2026-03'];
+const identified={month:months[0],cui:cuiA,partner:'Nume anterior al firmei',pointCode:'P-1',site:'A',reason:'commercial'};
+const sim0Fixture={revision:'synthetic',companies:new Map([[cuiA,'Firma exemplu'],[cuiB,'Firma exemplu']]),
+  coverage:months.map((month,i)=>({month,sourceThrough:i===2?null:month+(i?'-19':'-31'),reported:i<2})),activation:[
+    identified,{...identified,pointCode:'P-2',reason:'document-unknown'},
+    {...identified,cui:cuiB,site:'B',pointCode:'P-3'},
+    {...identified,month:months[1],partner:'Altă preluare veche'},
+    {...identified,partner:'CLIENT GENERIC'},{...identified,reason:'conflict'},
+    {...identified,cui:'0000000000000'},{...identified,pointCode:null},
+    {...identified,site:'B',reason:'excluded'}, {...identified,cui:syntheticCui(999999)},
+  ]};
+let reads=0;
+globalThis.syntheticSim0Scope=['A'];
+globalThis.syntheticReadSim0=async input=>{
+  assert.deepEqual([input.kind,input.fromMonth,input.toMonth],['sim0-clients',months[0],months[2]]);
+  reads++;
+  return groupVodafoneSim0Clients(sim0Fixture,input.scope);
+};
+const allSim0=groupVodafoneSim0Clients(sim0Fixture,null);
+assert.equal(allSim0.rows.length,4);
+assert.equal(new Set(allSim0.rows.map(row=>row.cui)).size,2);
+assert.deepEqual(allSim0.coverage.map(row=>row.excludedActivations),[6,0,0]);
+const sim0Query=parseManagerAiQuery(JSON.stringify({dataset:'sim0Clients',fromMonth:months[0],toMonth:months[2],site:'',
+  groupBy:['cui','partner'],filters:[],orderBy:'activations',descending:true,limit:10}),'2026-11');
+const readSim0=managerAiReader(new Request('https://example.invalid/api/manager-ai'),
+  {params:new URLSearchParams(),filter:null,signature:'synthetic'},async()=>({id:'m',role:'manager',managerScope:'assigned'}));
+const ranked=makeManagerAiReport(sim0Query,await readSim0(sim0Query),'S');
+assert.deepEqual(ranked.rows,[[cuiA,'Firma exemplu',3,2]]);
+assert.deepEqual(ranked.coverage.map(c=>[c.available,c.through]),[[true,'2026-01-31'],[true,'2026-02-19'],[false,null]]);
+assert.match(ranked.coverage[0].note,/5 activări din selecție excluse/);
+const pointsQuery={...sim0Query,groupBy:['cui','franchise']};
+assert.deepEqual(makeManagerAiReport(pointsQuery,await readSim0(pointsQuery),'P').rows,[[cuiA,'P-1',2,2],[cuiA,'P-2',1,0]]);
+assert.equal(reads,1,'the annual ranking and drilldown should share the same source');
+globalThis.syntheticSim0Scope=['B'];
+await assert.rejects(()=>readSim0.checkSourceScope(),{status:409});
+await assert.rejects(()=>readSim0(sim0Query),{status:409});
+delete globalThis.syntheticSim0Scope;
+delete globalThis.syntheticReadSim0;
 
 for (const model of managerAiModels) {
   const calls=[];
@@ -303,7 +358,7 @@ try {
   ]);
   assert.equal((await readBilling({...billingQuery,fromMonth:'2026-09',toMonth:'2026-09'})).coverage[0].available,false);
   globalThis.syntheticManagerAIPortfolioRevision='test-state-2';
-  await assert.rejects(()=>readBilling.checkBillingScope(),{status:409});
+  await assert.rejects(()=>readBilling.checkSourceScope(),{status:409});
 } finally {
   billingApp.close();
   delete globalThis.syntheticManagerAISqlite;

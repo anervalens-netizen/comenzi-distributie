@@ -13,7 +13,7 @@ import {vodafoneBonusWorkbook} from './vodafone-bonus-export';
 import type {User} from './types';
 
 const calendar = new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Bucharest',year:'numeric',month:'2-digit',day:'2-digit'});
-async function authorizedScope(user: User, params: URLSearchParams): Promise<VodafoneBonusScope> {
+export async function authorizedScope(user: User, params: URLSearchParams): Promise<VodafoneBonusScope> {
   if (user.role!=='manager' || !canViewActivations(user)) fail(403,'Registrul Vodafone este disponibil managerilor cu acces la Activări.');
   const filter = await managerFilter(user,params) ??
     (isGlobalManager(user) ? null : await managerFilter(user,new URLSearchParams({managerId:user.id})));
@@ -36,7 +36,7 @@ async function authorizedScope(user: User, params: URLSearchParams): Promise<Vod
   }
   return sites===null ? null : [...new Set(sites.map(salesSiteKey))].sort();
 }
-async function getEvidence() {
+export async function getEvidence() {
   return (await db().prepare('SELECT value FROM settings WHERE key=?').bind(vodafoneBonusEvidenceSetting).first<{value:string}>())?.value;
 }
 export async function readVodafoneBonusForManager(

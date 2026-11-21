@@ -31,6 +31,11 @@ export const managerAiAnalysisCatalog = {
     grain:'Lună × operator × gestiune, cu sursa Digi oficială când este disponibilă și autorizată.',
     columns:[month,provider,site,note,count,n('sim'),n('phone_bundles'),n('other'),n('unassigned')],
   },
+  activation_sim0_clients: {
+    label:'Activări SIM 0 Vodafone pe firme și puncte identificate',
+    grain:'O lună × CUI valid din catalogul de firme × punct de lucru atribuit univoc. Clientul generic, CUI-ul nevalid și punctele incerte sunt excluse; vezi _coverage. Sortează firmele după SUM(activations) pe cui și partner, iar punctele separat după franchise_code. confirmed_activations numără activările cu document comercial confirmat.',
+    columns:[month,t('cui',false),t('partner',false),t('franchise_code',false),count,n('confirmed_activations',false)],
+  },
   activation_partners: {
     label:'Activări pe punct de lucru',
     grain:'Lună × operator × identitate proiectată. Același punct poate apărea în mai multe rânduri. point_ref este prezent pentru corespondențe univoce în portofoliul autorizat. Surse interne.',

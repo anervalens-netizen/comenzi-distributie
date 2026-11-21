@@ -103,6 +103,7 @@ async function partnerRows(user:User, scope:AiScope, remaining:number) {
  */
 export async function readManagerAiAnalysisTable(
   scope:AiScope, request:ManagerAiAnalysisRequest, revalidate:()=>Promise<User>, signal?:AbortSignal,
+  rememberSim0Access?:ReturnType<typeof managerAiReader>['rememberSim0Access'],
 ):Promise<ManagerAiAnalysisTable> {
   const current=bucharestMonthKey(new Date());
   const selection=monthSelection(request,current);
@@ -149,6 +150,14 @@ export async function readManagerAiAnalysisTable(
   const pointVersion=table==='sales_partner_lines'?await clientPortfolioVersion():null;
   if (table==='sales_partner_lines'&&!pointVersion) fail(503,'Portofoliul punctelor nu este disponibil.');
   const billingPoints=pointVersion?await managerAiBillingPoints(currentUser,scope.filter?.warehouseIds):null;
+
+  if (table==='activation_sim0_clients') {
+    const result=await readLegacy({dataset:'sim0Clients',fromMonth:selection.from,toMonth:selection.to,site:'',groupBy:[],filters:[],orderBy:'activations',descending:true,limit:1});
+    for (const row of result.rows) push([row.month,row.cui,label(row.partner),row.franchise,row.activations,row.confirmedActivations]);
+    await readLegacy.checkSourceScope(await check());
+    rememberSim0Access?.(readLegacy.checkSourceScope);
+    return {table,fromMonth:selection.from,toMonth:selection.to,columns:info.columns,rows,coverage:result.coverage};
+  }
 
   for (const month of months) {
     const user=await check();

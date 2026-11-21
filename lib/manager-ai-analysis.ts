@@ -5,7 +5,7 @@ import { readManagerAiAnalysisTable } from './manager-ai-analysis-data';
 import { managerAiAnalysisRevision } from './manager-ai-analysis-revision';
 import { runManagerAiSandbox } from './manager-ai-sandbox';
 import type { ManagerAiAnalysisCapability } from './manager-ai-analysis-tool';
-import type { AiScope } from './manager-ai-data';
+import type { AiScope, managerAiReader } from './manager-ai-data';
 import type { ManagerAiPreparedArtifact } from './manager-ai-media-contract';
 import { managerAiAttachmentLimits } from './manager-ai-media-contract';
 import { fail } from './server';
@@ -18,6 +18,7 @@ const catalogue=Object.entries(managerAiAnalysisCatalog).map(([table,entry])=>
 
 const guidance=`
 Pentru rapoarte ad-hoc, relații între surse, calcule avansate, fișiere sau grafică folosește run_analysis.
+Pentru activările Vodafone SIM 0 cu firme și puncte identificate folosește activation_sim0_clients; pentru bonusuri acordate folosește bonuses.
 Alege numai tabelele necesare și perioada pe fiecare sursă. Pentru sume financiare păstrează cenții întregi până la afișare. Citește _coverage și _datasets din copia SQLite. Verifică acoperirea înainte să spui că o lună are zero activări sau zero vânzări. Precizează granulația și sursele. Nu însuma surse suprapuse.
 Pentru SQL, folosește o singură interogare de citire. Pentru Python, baza locală este /input/data.sqlite dacă ai cerut tabele. Deschide SQLite read-only. Fișierele selectate pentru analiză apar în /input/files cu prefix numeric în ordinea selecției. Alege numele distincte din lista fișierelor, inclusiv când încărcările au același nume inițial. Enumeră căile cu sorted(Path("/input/files").iterdir()). Pentru artefacte scrie fișiere CSV, TSV, XLSX cu valori, JSON, TXT, Markdown sau PNG în /output. Rezultatele SQL au și un CSV când dimensiunea permite. Menționează în text fișierul pe care l-ai creat. Fiecare apel are propriul spațiu temporar, dar fișierele produse sunt disponibile în pașii următori folosind numele din rezultat.
 Rezultatul întors modelului este o previzualizare. Raportează totalurile prin agregări în SQL/Python. Când exportul sau selecția depășește limita, restrânge perioada sau rândurile printr-o selecție explicită.
@@ -42,12 +43,13 @@ function selectableName(filename:string, isTaken:(name:string)=>boolean) {
 }
 
 export function createManagerAiAnalysis({
-  scope,check,signal,files,
+  scope,check,signal,files,readSource,
 }:{
   scope:AiScope;
   check:()=>Promise<User>;
   signal:AbortSignal;
   files:readonly ManagerAiPreparedArtifact[];
+  readSource?:ReturnType<typeof managerAiReader>;
 }):ManagerAiAnalysisCapability{
   const inputs=new Map<string,ManagerAiPreparedArtifact>();
   const originals=new Set(files.map(file=>file.filename));
@@ -85,7 +87,7 @@ export function createManagerAiAnalysis({
           signal.throwIfAborted();
           const table=await readManagerAiAnalysisTable(scope,{
             ...selection,table:selection.table as ManagerAiAnalysisDataset,
-          },check,signal);
+          },check,signal,readSource?.rememberSim0Access);
           totalRows+=table.rows.length;
           if(totalRows>managerAiAnalysisLimits.rows)fail(413,'Restrânge selecția la cel mult 80.000 de rânduri sursă.');
           tables.push(table);

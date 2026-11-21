@@ -162,6 +162,6 @@ export {verifySim} from './sim-verification-node';
 
 export {readDigiOverview,readVodafoneFocus} from './vodafone-focus-runtime-node';
 
-export {readVodafoneBonusAsync} from './vodafone-bonus-runtime-node';
+export {readVodafoneBonusAsync,readVodafoneSim0RankingAsync} from './vodafone-bonus-runtime-node';
 
 export {readCombinedActivationPartners} from './activation-partners-runtime-node';

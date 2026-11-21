@@ -5,7 +5,11 @@ import {Worker} from 'node:worker_threads';
 import {readVodafoneBonus,type VodafoneBonusRead} from './vodafone-bonus-node';
 import type {VodafoneBonusReport} from './vodafone-bonus-types';
 
-const active = new Map<string,Promise<VodafoneBonusReport>>();
+import {readVodafoneSim0Ranking,type VodafoneSim0Ranking,type VodafoneSim0RankingRead} from './vodafone-activation-ranking-node';
+
+type Read = VodafoneBonusRead | VodafoneSim0RankingRead;
+type Result = VodafoneBonusReport | VodafoneSim0Ranking;
+const active = new Map<string,Promise<Result>>();
 let tail = Promise.resolve();
 let service: Worker | undefined;
 const limit = 4;
@@ -20,9 +24,9 @@ function workerFor(script: string) {
   });
   return worker;
 }
-export async function readVodafoneBonusAsync(options: VodafoneBonusRead): Promise<VodafoneBonusReport> {
+async function requestWorker(options: Read): Promise<Result> {
   const script = ['vodafone-bonus-worker.mjs','dist/standalone/vodafone-bonus-worker.mjs'].map(path=>resolve(path)).find(existsSync);
-  if (!script && process.env.NODE_ENV==='development') return readVodafoneBonus(options);
+  if (!script && process.env.NODE_ENV==='development') return 'kind' in options ? readVodafoneSim0Ranking(options) : readVodafoneBonus(options);
   if (!script) throw new Error('Vodafone bonus worker is unavailable');
   const key = createHash('sha256').update(JSON.stringify(options)).digest('hex');
   const existing = active.get(key);
@@ -31,11 +35,11 @@ export async function readVodafoneBonusAsync(options: VodafoneBonusRead): Promis
   const timeout = new Error('Vodafone bonus calculation timed out');
   let expired = false;
   let abort: (()=>void)|undefined;
-  const run = tail.then(()=>new Promise<VodafoneBonusReport>((done,reject)=>{
+  const run = tail.then(()=>new Promise<Result>((done,reject)=>{
     if (expired) { reject(timeout); return; }
     const worker = workerFor(script);
     worker.ref();
-    const finish = (error: Error|null, result?: VodafoneBonusReport) => {
+    const finish = (error: Error|null, result?: Result) => {
       worker.off('message',onMessage);
       worker.off('error',onError);
       worker.off('exit',onExit);
@@ -48,7 +52,7 @@ export async function readVodafoneBonusAsync(options: VodafoneBonusRead): Promis
         done(result!);
       }
     };
-    const onMessage=(message: VodafoneBonusReport|null)=>{
+    const onMessage=(message: Result|null)=>{
       if (message) finish(null,message);
       else finish(new Error('Vodafone bonus sources are unavailable'));
     };
@@ -70,5 +74,17 @@ export async function readVodafoneBonusAsync(options: VodafoneBonusRead): Promis
   });
   const result = Promise.race([run,deadline]).finally(()=>clearTimeout(timer));
   active.set(key,result);
+  return result;
+}
+
+export async function readVodafoneBonusAsync(options: VodafoneBonusRead):Promise<VodafoneBonusReport> {
+  const result=await requestWorker(options);
+  if (!('points' in result)) throw new Error('Unexpected Vodafone bonus response');
+  return result;
+}
+
+export async function readVodafoneSim0RankingAsync(options: VodafoneSim0RankingRead):Promise<VodafoneSim0Ranking> {
+  const result=await requestWorker(options);
+  if (!('rows' in result)) throw new Error('Unexpected Vodafone activation ranking response');
   return result;
 }

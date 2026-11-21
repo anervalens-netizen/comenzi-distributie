@@ -143,6 +143,12 @@ export function makeManagerAiReport(query: AiReportQuery, source: AiSource, id: 
     const left = a[query.orderBy] ?? null, right = b[query.orderBy] ?? null;
     if (left === null || right === null) return Number(left === null)-Number(right === null);
     const diff = typeof left === 'number' && typeof right === 'number' ? left-right : String(left).localeCompare(String(right),'ro');
+    if (!diff && query.dataset==='sim0Clients') {
+      for (const field of ['cui','franchise','month']) {
+        const tie=String(a[field]??'').localeCompare(String(b[field]??''),'ro');
+        if (tie) return tie;
+      }
+    }
     return query.descending ? -diff : diff;
   });
   return {id,dataset:query.dataset,dimensions:[...(query.groupBy.length?query.groupBy:dimensions)],columns,

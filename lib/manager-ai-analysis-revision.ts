@@ -9,12 +9,13 @@ export async function managerAiAnalysisRevision(tables:readonly string[]) {
   if(!tables.length)return '';
   const data=resolve(process.env.MOBIUP_DATA_DIR||'./work/server-data');
   const activations=resolve(process.env.MOBIUP_ACTIVATIONS_DIR||data);
-  const activation=tables.some(table=>table.startsWith('activation_'));
+  const activation=tables.some(table=>table.startsWith('activation_')&&table!=='activation_sim0_clients');
   const bonus=tables.some(table=>table.startsWith('bonus')||table==='settlements');
+  const sim0=tables.includes('activation_sim0_clients');
   const focus=tables.some(table=>table.startsWith('focus_'));
   const selected=new Set(tables);
   const files:string[]=[];
-  if(activation||bonus){
+  if(activation||bonus||sim0){
     const providers=activation?[activations,resolve(activations,'digi')]:[activations];
     for(const provider of providers){
       const pointer=resolve(provider,'current');
@@ -23,19 +24,19 @@ export async function managerAiAnalysisRevision(tables:readonly string[]) {
     }
   }
   if(focus||bonus||selected.has('sales_lines'))files.push(resolve(data,'sales.sqlite'));
-  if(focus||bonus||selected.has('sales_lines')||selected.has('sales_partner_lines')){
+  if(focus||bonus||sim0||selected.has('sales_lines')||selected.has('sales_partner_lines')){
     files.push(resolve(data,'client-history','client-sales-history.sqlite'));
   }
   if(focus)files.push(process.env.MOBIUP_COMMERCIAL_FOCUS_RULES||resolve(data,'vodafone-commercial-focus-rules.json'));
   if(bonus)files.push(process.env.MOBIUP_VODAFONE_TOP_LOCATIONS||resolve(data,'vodafone-top-locations.json'));
 
-  const settings=bonus?[rulesSetting,vodafoneBonusEvidenceSetting]:[rulesSetting];
+  const settings=bonus||sim0?[rulesSetting,vodafoneBonusEvidenceSetting]:[rulesSetting];
   const revisions:unknown[]=[(await db().prepare('SELECT key,value FROM settings WHERE key IN (SELECT value FROM json_each(?)) ORDER BY key')
     .bind(JSON.stringify(settings)).all()).results];
-  if(bonus||selected.has('orders')||selected.has('stands')){
+  if(bonus||sim0||selected.has('orders')||selected.has('stands')){
     revisions.push(await db().prepare('SELECT revision FROM order_list_revision WHERE id=1').first());
   }
-  if(bonus||selected.has('partners')||selected.has('sales_partner_lines')||selected.has('activation_partners')){
+  if(bonus||sim0||selected.has('partners')||selected.has('sales_partner_lines')||selected.has('activation_partners')){
     revisions.push(await db().prepare('SELECT revision FROM crm_directory_revision WHERE id=1').first());
   }
   if(selected.has('stock')){
