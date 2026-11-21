@@ -2,6 +2,10 @@ import {DatabaseSync} from 'node:sqlite';
 import {historyFileGeneration} from './history-source-generation';
 import {normalizedCui,isConsumerAccountCode,companyIdentityIndex,type CompanyAlias} from './partner-company-identity';
 
+export function registerConsumerAccountCheck(db: DatabaseSync) {
+  db.function('history_is_consumer', {deterministic:true}, code=>Number(isConsumerAccountCode(String(code||''))));
+}
+
 type ReferencePartner={id:string;cui?:string;historyFranchises?:string[];historyCatalog?:{franchiseCode?:string}};
 type Master=CompanyAlias&{Cod_Franciza?:string};
 const codeKey=(s:string)=>s.trim().toUpperCase();

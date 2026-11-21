@@ -1,5 +1,5 @@
 import type {DatabaseSync} from 'node:sqlite';
-import {normalizedCui} from './partner-company-identity';
+import {normalizedCui,isConsumerAccountCode} from './partner-company-identity';
 import type {CompanyLinks} from './partner-company-links';
 
 /** Batch only: normalized rows, indexed for one company/point. No raw reference
@@ -17,6 +17,7 @@ export function buildDetailLinks(source:DatabaseSync,out:DatabaseSync,reference:
   for(const key of new Set([...index.known,...index.incomplete]))company.run(key,Number(index.known.has(key)),Number(!index.incomplete.has(key)),index.unresolvedCounts.get(key)||0);
   const point=out.prepare('INSERT OR IGNORE INTO point_identity_links VALUES(?,?)'),unresolvedCode=out.prepare('INSERT OR IGNORE INTO point_unresolved_codes VALUES(?,?)'),candidate=out.prepare('INSERT OR IGNORE INTO point_unresolved_candidates VALUES(?,?)');
   for(const row of source.prepare('SELECT a.*,i.client_code FROM history_allocations a JOIN history_identities i ON i.id=a.identity_id WHERE a.reference_id=?').iterate(reference)){
+    if(row.status==='consumer'||isConsumerAccountCode(String(row.client_code||'')))continue;
     const ids=JSON.parse(String(row.partner_ids_json)) as string[],direct=['direct_code','single_partner'].includes(String(row.status));
     if(direct)for(const id of ids)point.run(id,row.identity_id);
     if(row.status==='reconcile'||(direct&&!ids.length)){

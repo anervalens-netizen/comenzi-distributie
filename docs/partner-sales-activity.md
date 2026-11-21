@@ -121,8 +121,9 @@ explicit calendar year, the latest 90/365 days, last billing at least 365 days
 ago, and unlinked/incomplete history. The default includes every catalog record.
 The filter follows commercial billing, excluding zero-value movements and net
 cancelled documents, using the same definition as cadence. Years are stored in
-the current derived snapshot (schema 7); rebuild every older schema, including 6,
-before serving filters. See [rebuild and staging instructions](client-sales.md).
+the current derived snapshot (schema 9). Rebuild v8 and earlier snapshots in full
+before serving filters. A single-month refresh cannot remove previously allocated
+consumer receipts from older commercial totals. See [rebuild and staging instructions](client-sales.md).
 
 Period selection changes which partners are visible, not their current portfolio
 assignment. Cadence and 30-day financial comparisons remain evaluated at source
@@ -146,8 +147,10 @@ search and optional activity filters sit above it. The existing manager region
 and agent controls scope the same table. Current shared owners are displayed;
 unassigned counties remain visible to managers without an agent filter.
 
-The current schema 7 snapshot retains point daily data, separate company activity
-and daily tables, and indexed detail identities. The client table groups authorized cards once per company and
+Schema 9 stores point-level daily data, company activity and daily totals, and
+indexed detail identities. Consumer receipts remain in revenue reconciliation.
+Commercial totals exclude these receipts even when an old allocation attached
+the generic ERP account to a registered company or work point. The client table groups authorized cards once per company and
 uses complete company totals, including unresolved point rows. Selected-period sales include
 returns and preserve missing amounts. Positive document groups are counted once
 per company/date/site/number, excluding blank numbers, net cancellations and free
