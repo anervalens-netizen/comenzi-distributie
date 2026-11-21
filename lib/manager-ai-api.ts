@@ -66,8 +66,7 @@ export async function managerAi(req:Request,user:User) {
   try {
     const readSource=managerAiReader(req,scope,check);
     const result = await runManagerAi({...input,key,signal,readSource,check:async()=>{
-      await check();
-      await readSource.checkBillingScope();
+      await readSource.checkSourceScope(await check());
     }});
     return response(result);
   } catch (error) {

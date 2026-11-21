@@ -3,6 +3,7 @@ import {bucharestMonthKey, bucharestMonthUtcRange} from './bucharest-month';
 import {commercialFocus} from './commercial-focus-api';
 import {readDistributionRules} from './distribution-config';
 import {managerFilter, type ManagerFilter} from './manager-scope';
+import {readManagerAiSim0} from './manager-ai-sim0';
 import {managerAiOperations} from './manager-ai-operations';
 import {managerAiSales,managerAiSalesSiteMode} from './manager-ai-sales';
 import {clientSalesPortfolio,clientPortfolioVersion} from './client-sales-portfolio';
@@ -40,9 +41,13 @@ const focusSource = 'Focus comercial Vodafone';
 
 export function managerAiReader(request: Request, scope: AiScope, check: () => Promise<User>, options?:{cacheMonths:false}) {
   const monthlyCache = new Map<string,Promise<AiSource>>();
+  const rankings=new Map<string,ReturnType<typeof readManagerAiSim0>>();
+  let verifyActivationAccess:((user:User)=>Promise<void>)|undefined;
   let registry: Promise<VodafoneBonusReport>|undefined;
   let billing: {version:string;points:Map<string,BillingPoint>}|undefined;
-  async function checkBillingScope() {
+  function rememberSim0Access(verify:(user:User)=>Promise<void>) { verifyActivationAccess??=verify; }
+  async function checkSourceScope(user?:User) {
+    if (verifyActivationAccess) await verifyActivationAccess(user??await check());
     if (billing&&billing.version!==await clientPortfolioVersion()) fail(409,'Portofoliul punctelor de lucru s-a modificat. Reîncarcă analiza.');
   }
   async function loadBillingPoints(user:User) {
@@ -52,11 +57,11 @@ export function managerAiReader(request: Request, scope: AiScope, check: () => P
       const points=await managerAiBillingPoints(user,scope.filter?.warehouseIds);
       billing={version,points};
     }
-    await checkBillingScope();
+    await checkSourceScope(user);
     return billing.points;
   }
 
-  async function readMonth(query: AiReportQuery, month: string): Promise<AiSource> {
+  async function readMonth(query: AiReportQuery & {dataset:Exclude<AiReportQuery['dataset'],'sim0Clients'>}, month: string): Promise<AiSource> {
     const user = await check();
     const params = new URLSearchParams(scope.params);
     params.set('month',month);
@@ -77,7 +82,7 @@ export function managerAiReader(request: Request, scope: AiScope, check: () => P
       case 'salesByPoint':
       case 'billingDocuments': {
         const result=await readManagerAiBilling(month,query.dataset,await loadBillingPoints(user),await readDistributionRules());
-        await checkBillingScope();
+        await checkSourceScope(user);
         return result;
       }
       case 'activations':
@@ -192,17 +197,29 @@ export function managerAiReader(request: Request, scope: AiScope, check: () => P
   }
 
   async function readSource(query: AiReportQuery): Promise<AiSource> {
+    const {dataset}=query;
+    if (dataset==='sim0Clients') {
+      const key=JSON.stringify([dataset,query.fromMonth,query.toMonth]);
+      const user=await check();
+      if (verifyActivationAccess) await verifyActivationAccess(user);
+      if (!rankings.has(key)) rankings.set(key,readManagerAiSim0(scope.params,query.fromMonth,query.toMonth,check));
+      try {
+        const {rows,coverage,checkAccess}=await rankings.get(key)!;
+        rememberSim0Access(checkAccess);
+        return {rows,coverage};
+      } catch(error) { rankings.delete(key); throw error; }
+    }
     const result: AiSource = {rows:[],coverage:[]};
     const months = (query.dataset==='partners'||query.dataset==='stock') ? [bucharestMonthKey(new Date())] : managerAiMonths(query.fromMonth,query.toMonth);
     for (const month of months) {
       // Reuse completed queries within one turn, especially after a model drills down.
       const key = JSON.stringify([query.dataset,query.site,month,query.dataset==='sales'?managerAiSalesSiteMode(query):null]);
-      if (!options && !monthlyCache.has(key)) monthlyCache.set(key,readMonth(query,month));
-      const source = await (options ? readMonth(query,month) : monthlyCache.get(key)!);
+      if (!options && !monthlyCache.has(key)) monthlyCache.set(key,readMonth({...query,dataset},month));
+      const source = await (options ? readMonth({...query,dataset},month) : monthlyCache.get(key)!);
       result.rows.push(...source.rows);
       result.coverage.push(...source.coverage);
     }
     return result;
   }
-  return Object.assign(readSource,{checkBillingScope});
+  return Object.assign(readSource,{checkSourceScope,rememberSim0Access});
 }

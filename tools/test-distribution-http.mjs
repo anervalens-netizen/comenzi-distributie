@@ -201,6 +201,9 @@ try{
  assert.equal(regionalTargets.status,200);assert(regionalTargets.data.partners.rows.some(p=>p.pointCode==='A'));
  assert(!regionalTargets.data.partners.rows.some(p=>p.vodafoneTargets),'national activation browsing does not grant private targets');
  assert.equal((await request('vodafone/bonuses','north')).status,403);
+ assert.equal((await request('vodafone/bonuses?projects=unrecognized','manager')).status,400);
+ assert.equal((await request('vodafone/bonuses?view=preview&all=1','manager')).status,400);
+ assert.equal((await request('vodafone/bonuses?view=preview&q=sample','manager')).status,400);
  assert.equal((await request('manager-ai','north')).status,403);
  const selected=list.data.partners.rows.find(p=>p.total>0);const point=encodeURIComponent(selected.key);
  assert.equal((await request('activations?month=2026-10&view=detail&point='+point,'north')).data.detail.total,selected.total);
@@ -387,9 +390,14 @@ try{
  for(const [width,height] of [[1280,900],[820,1180],[390,844]]){await browser.send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:width<700});assert(await browser.evaluate('document.documentElement.scrollWidth<=innerWidth'),'no overflow '+width);mkdirSync('work/evidence',{recursive:true});const screenshot=await browser.send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});writeFileSync('work/evidence/distribution-'+width+'.png',Buffer.from(screenshot.data,'base64'));}
  await browser.evaluate(`window.bonusRequests=[];window.bonusOriginalFetch=window.fetch;window.fetch=(...args)=>{window.bonusRequests.push(String(args[0]));return window.bonusOriginalFetch(...args);};true`);
  await browser.evaluate('[...document.querySelectorAll(".activation-workspace button")].find(button=>button.textContent==="Bonusuri Vodafone").click()');
- await waitFor(()=>browser.evaluate(`window.bonusRequests.some(path=>path.startsWith('/api/vodafone/bonuses?')&&new URL(path,location.origin).searchParams.get('month')==='2026-10')`),'bonus report uses historical reporting month on opening');
+ await waitFor(()=>browser.evaluate(`window.bonusRequests.some(path=>path.startsWith('/api/vodafone/bonuses?')&&new URL(path,location.origin).searchParams.get('month')==='2026-10'&&new URL(path,location.origin).searchParams.get('view')==='preview')`),'bonus report previews the historical reporting month on opening');
  await browser.evaluate(`document.querySelector('[aria-label="octombrie 2026"]').click()`);
- await waitFor(()=>browser.evaluate(`window.bonusRequests.some(path=>path.startsWith('/api/vodafone/bonuses?')&&new URL(path,location.origin).searchParams.get('month')==='2026-09')`),'bonus report follows changes to the reporting month');
+ await waitFor(()=>browser.evaluate(`window.bonusRequests.some(path=>path.startsWith('/api/vodafone/bonuses?')&&new URL(path,location.origin).searchParams.get('month')==='2026-09'&&new URL(path,location.origin).searchParams.get('view')==='preview')`),'bonus report previews the changed reporting month');
+ const projectToggle="[...document.querySelectorAll('.distribution-projects button')].find(button=>button.textContent==='Vodafone Nord')";
+ const northSelected=await browser.evaluate(projectToggle+'.getAttribute("aria-pressed")')==='true';
+ await browser.evaluate('window.bonusRequests=[];'+projectToggle+'.click()');
+ await waitFor(()=>browser.evaluate(`window.bonusRequests.some(path=>{const q=new URL(path,location.origin).searchParams;return path.startsWith('/api/vodafone/bonuses?')&&q.has('projects')&&q.get('projects').split(',').includes('vodafone_nord')===${!northSelected}})`),'bonus report follows selected projects');
+ await browser.evaluate(projectToggle+'.click()');
  await browser.evaluate(`document.querySelector('[aria-label="octombrie 2026"]').click();window.fetch=window.bonusOriginalFetch;true`);
  await browser.evaluate('[...document.querySelectorAll(".main-nav [role=tab]")].find(button=>button.textContent==="Accesorii").click()');
  await waitFor(()=>browser.evaluate('document.querySelectorAll(".commerce-category-card").length===3'),'accessory categories');
@@ -446,6 +454,7 @@ try{
   await waitFor(()=>browser.evaluate('!!document.querySelector(".agent-commerce .prepay-sales")'),'agent Prepay sales '+id);
   await browser.evaluate('[...document.querySelectorAll(".prepay-workspace .commerce-tabs button")].find(button=>button.textContent==="Activări").click()');
   await waitFor(()=>browser.evaluate('document.querySelector(".activation-primary strong")?.textContent==='+JSON.stringify(String(october))),'agent activation policy '+id);
+  assert.equal(await browser.evaluate('[...document.querySelectorAll(".activation-workspace button")].some(button=>button.textContent==="Bonusuri Vodafone")'),false,'manager-only bonus register is hidden for agents');
   assert.equal(await browser.evaluate('document.querySelectorAll(".agent-commerce .report-period").length'),1,'agent activation and sales share one period');
   assert(!(await browser.evaluate('!!document.querySelector(".activation-workspace input[type=month]")')),'shared agent period replaces the separate activation month');
   const control='.agent-report-scope [aria-label="septembrie 2026"]';

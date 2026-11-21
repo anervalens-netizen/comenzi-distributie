@@ -24,6 +24,9 @@ globalThis.syntheticManagerAnalysisDb={
 };
 const modulePath=join(root,'fixture.mjs');
 try {
+  const activationApi=join(root,'activation-store.ts');
+  writeFileSync(activationApi,`export * from ${JSON.stringify(resolve('lib/activation-store-node.ts'))};
+    export const readVodafoneSim0RankingAsync=options=>globalThis.syntheticAnalysisSim0(options);`);
   await build({
     stdin:{resolveDir:process.cwd(),contents:`
       export * from './lib/manager-ai-analysis-data';
@@ -35,7 +38,7 @@ try {
     `},
     bundle:true,platform:'node',format:'esm',outfile:modulePath,
     alias:{
-      '#mobiup-activation-store':resolve('lib/activation-store-node.ts'),
+      '#mobiup-activation-store':activationApi,
       '#mobiup-sales-parser':resolve('lib/sales-parser-node.ts'),
       '#mobiup-sales-view':resolve('lib/sales-view-direct.ts'),
       '#mobiup-commercial-focus-runtime':resolve('lib/commercial-focus-runtime-node.ts'),
@@ -215,6 +218,42 @@ try {
   await assert.rejects(()=>read('unknown'),{status:400});
   await assert.rejects(()=>read('sales_lines','2025-06','2026-08'),{status:400});
 
+  let sim0Reads=0;
+  globalThis.syntheticAnalysisSim0=async options=>{
+    assert.deepEqual(options.scope,['SITE-A']);
+    assert.deepEqual([options.fromMonth,options.toMonth],['2026-01','2026-02']);
+    sim0Reads++;
+    return {revision:'fixture',rows:[
+      {month:'2026-01',cui:'8000014',partner:'Firma fictivă',franchise:'F-01',activations:3,confirmedActivations:1},
+      {month:'2026-02',cui:'8000014',partner:'Firma fictivă',franchise:'F-02',activations:2,confirmedActivations:0}],
+      coverage:[
+        {month:'2026-01',sourceThrough:'2026-01-31',status:'complete',reported:true,excludedActivations:2,exclusions:{'punct neidentificat':2}},
+        {month:'2026-02',sourceThrough:'2026-02-19',status:'partial',expectedThrough:'2026-02-28',ranges:['2026-02-01–2026-02-19'],reported:false,excludedActivations:1,exclusions:{'CUI nevalid':1}}]};
+  };
+  const sim0=await read('activation_sim0_clients','2026-01','2026-02');
+  assert.equal(sim0Reads,1);
+  assert.equal(sim0.coverage[1].through,'2026-02-19');
+  assert.match(sim0.coverage[0].note,/doar contribuțiile/);
+  assert.equal(sim0.coverage[1].available,false);
+  const allowedPilot=process.env.MOBIUP_ACTIVATIONS_PILOT_MANAGER_ID;
+  delete process.env.MOBIUP_ACTIVATIONS_PILOT_MANAGER_ID;
+  const denied=await read('activation_sim0_clients','2026-01','2026-02');
+  assert.deepEqual(denied.rows,[]);
+  assert.deepEqual(denied.coverage.map(c=>[c.month,c.available]),[['2026-01',false],['2026-02',false]]);
+  assert.match(denied.coverage[0].note,/acestui cont/);
+  process.env.MOBIUP_ACTIVATIONS_PILOT_MANAGER_ID=allowedPilot;
+  globalThis.syntheticAnalysisSim0=async()=>{throw Error('unavailable');};
+  const unavailable=await read('activation_sim0_clients');
+  assert.deepEqual(unavailable.rows,[]);
+  assert.match(unavailable.coverage[0].note,/momentan indisponibilă/);
+  delete globalThis.syntheticAnalysisSim0;
+  const sim0file=join(root,'sim0.sqlite');
+  writeFileSync(sim0file,await m.materializeManagerAiDatabase([sim0]));
+  const sim0db=new DatabaseSync(sim0file,{readOnly:true});
+  try {
+    const totals=sim0db.prepare('SELECT cui,SUM(activations),COUNT(DISTINCT franchise_code),SUM(confirmed_activations) FROM activation_sim0_clients GROUP BY cui').get();
+    assert.deepEqual(Object.values(totals),['8000014',5,2,1]);
+  } finally {sim0db.close();}
   const file=join(root,'export.sqlite');
   const bytes=await m.materializeManagerAiDatabase([sales,partners,orders,activations,billing,activationPartners]);
   const text=Buffer.from(bytes).toString();

@@ -183,6 +183,8 @@ CREATE TABLE IF NOT EXISTS history_rows(import_id INTEGER NOT NULL REFERENCES hi
 CREATE INDEX IF NOT EXISTS history_rows_date ON history_rows(date,import_id);
 CREATE INDEX IF NOT EXISTS history_rows_identity_date ON history_rows(identity_id,date,import_id);
 CREATE INDEX IF NOT EXISTS history_rows_site_date ON history_rows(site_id,date,import_id);
+CREATE INDEX IF NOT EXISTS history_rows_invoice ON history_rows(site_id,date,document_number,import_id);
+CREATE INDEX IF NOT EXISTS history_rows_zero_price_item_date ON history_rows(item_code,date,site_id,document_number,import_id) WHERE price_cents=0;
 CREATE INDEX IF NOT EXISTS history_rows_hash ON history_rows(import_id,row_hash);
 CREATE INDEX IF NOT EXISTS history_allocations_point ON history_allocations(reference_id,point_key,identity_id);
 CREATE VIEW IF NOT EXISTS history_current AS SELECT r.*,i.client_code,i.franchise_code,a.status allocation_status,a.point_key,a.partner_ids_json,a.reason allocation_reason FROM history_rows r JOIN history_imports b ON b.id=r.import_id AND b.state='active' JOIN history_identities i ON i.id=r.identity_id JOIN history_allocations a ON a.identity_id=r.identity_id AND a.reference_id=(SELECT value FROM history_meta WHERE key='current_reference');
@@ -389,8 +391,12 @@ def summary(c):
  'reconciliation':[dict(r) for r in c.execute("SELECT allocation_reason,COUNT(*) rows,SUM(value_cents) value_cents FROM history_current WHERE allocation_status='reconcile' GROUP BY 1")],
  'unlinked_direct_rows':c.execute("SELECT COUNT(*) FROM history_current WHERE allocation_status='direct_code' AND partner_ids_json='[]'").fetchone()[0]}
 def main():
- p=argparse.ArgumentParser(description=__doc__);p.add_argument('--database',required=True);p.add_argument('--partners');p.add_argument('--locations');p.add_argument('--file',action='append',default=[]);p.add_argument('--replace',action='store_true');p.add_argument('--allow-regression',action='store_true');p.add_argument('--reconcile',action='store_true');p.add_argument('--summary-json')
- a=p.parse_args();c=connect(a.database)
+ p=argparse.ArgumentParser(description=__doc__);p.add_argument('--database',required=True);p.add_argument('--partners');p.add_argument('--locations');p.add_argument('--file',action='append',default=[]);p.add_argument('--replace',action='store_true');p.add_argument('--allow-regression',action='store_true');p.add_argument('--reconcile',action='store_true');p.add_argument('--summary-json');p.add_argument('--ensure-schema',action='store_true',help='Initialize or upgrade only the dedicated history schema')
+ a=p.parse_args()
+ if a.ensure_schema and (a.file or a.reconcile or a.summary_json):p.error('--ensure-schema is a separate maintenance operation')
+ c=connect(a.database)
+ if a.ensure_schema:
+  c.close();print(dump({'status':'schema_ready'}));return
  if a.file or a.reconcile:
   if not a.partners or not a.locations:p.error('--partners and --locations required')
  for file in a.file:print(dump(import_file(c,file,a.partners,a.locations,a.replace,a.allow_regression)),flush=True)

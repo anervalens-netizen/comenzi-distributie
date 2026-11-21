@@ -45,6 +45,11 @@ export const managerAiFields = {
     measures: ['total', 'sim', 'phoneBundles', 'other', 'unassigned'],
     purpose: 'Activări Vodafone pe lună și gestiune. Raportul activationsPartners oferă detaliul pe punct.',
   },
+  sim0Clients: {
+    dimensions: ['month', 'cui', 'partner', 'franchise'],
+    measures: ['activations', 'confirmedActivations'],
+    purpose: 'Activări Vodafone SIM 0 atribuite firmelor din catalog cu CUI valid și punct unic. Exclude clienții generici și identitățile incerte. Pentru un clasament anual pe firme grupează pe cui și partner și sortează descrescător după activations. Pentru detaliu pe punct adaugă franchise. confirmedActivations numără activările cu dovadă comercială fiscală.',
+  },
   activationsPartners: {
     dimensions: ['month', 'partner', 'franchise', 'identity'],
     measures: ['activations', 'target'],

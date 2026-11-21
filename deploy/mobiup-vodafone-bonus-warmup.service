@@ -1,0 +1,32 @@
+[Unit]
+Description=Prepare the private Vodafone bonus ledger
+After=mobiup-comenzi-distributie.service
+ConditionPathExists=/opt/Mobiup/comenzi-distributie/runtime/current/vodafone-bonus-warmup-v1
+
+[Service]
+Type=oneshot
+User=operator
+WorkingDirectory=/opt/Mobiup/comenzi-distributie/runtime/current
+Environment=NODE_ENV=production
+Environment=MOBIUP_DATA_DIR=/storage/comenzi-distributie
+Environment=MOBIUP_ACTIVATIONS_DIR=/storage/comenzi-distributie/activations
+ExecStart=/usr/bin/node --max-old-space-size=192 --max-semi-space-size=8 ./vodafone-bonus-worker.mjs --warm-ledger
+TimeoutStartSec=4min
+Nice=12
+CPUWeight=20
+CPUQuota=75%
+IOWeight=20
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+MemoryHigh=320M
+MemoryMax=384M
+MemorySwapMax=0
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateNetwork=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+ReadWritePaths=/storage/comenzi-distributie/.vodafone-bonus-cache

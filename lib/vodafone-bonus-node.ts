@@ -6,9 +6,11 @@ import {salesLocationKey,salesSiteKey} from './sales-location';
 import {normalizedCui} from './partner-company-identity';
 import type {DistributionRules} from './distribution-rules';
 import {activationFactsVersion} from './activation-semantics';
-import {firstVodafoneBonusMonth, type VodafoneBonusReason, type VodafoneBonusReport, type VodafoneBonusScope, type VodafoneTopLocation} from './vodafone-bonus-types';
-import {bonusDate,bonusEvidenceIdentity,type VodafoneBonusEvidence} from './vodafone-bonus-evidence';
+import {firstVodafoneBonusMonth, vodafoneBonusPreview, type VodafoneBonusScreen, type VodafoneBonusReason, type VodafoneBonusReport, type VodafoneBonusScope, type VodafoneTopLocation} from './vodafone-bonus-types';
+import {bonusDate,bonusMonth,bonusEvidenceIdentity,type VodafoneBonusEvidence} from './vodafone-bonus-evidence';
 import {isVodafoneGenericPartner,vodafoneDocumentKind} from './vodafone-bonus-rules';
+import {createVodafoneDiskCache,type VodafoneDiskCache} from './vodafone-bonus-cache-node';
+import {sim0Coverage,type Sim0MonthCoverage} from './vodafone-sim0-coverage';
 import {vodafoneBonusLedger,type BonusActivation,type BonusLedgerInput} from './vodafone-bonus-ledger';
 
 type DocFields = {date: string; site: string; number: string};
@@ -22,7 +24,10 @@ type HistoryLine = {
 };
 type CommercialLine = {company: string; site_code: string; date: string; location: string; order_number: string; item_code: string; quantity: number; price_cents: number; value_cents: number};
 type Point = BonusLedgerInput['portfolios'][number];
-let cached: {key: string; snapshot: BonusLedgerInput} | undefined;
+const ledgerCache=createVodafoneDiskCache<BonusLedgerInput>('ledger');
+let cached: Snapshot<BonusLedgerInput> | undefined;
+let cachedPreview: Snapshot<VodafoneBonusScreen> | undefined;
+const previewDisk=createVodafoneDiskCache<VodafoneBonusScreen>('preview');
 type Raw = Record<string,unknown>;
 const s = (value: unknown) => typeof value === 'string' ? value.trim() : typeof value === 'number' ? String(value) : '';
 const uniform = <T>(values: Iterable<T>): T|undefined => {
@@ -58,13 +63,17 @@ function fingerprint(path: string) {
   const files = [path,path+'-wal'];
   return files.map(file => {
     const stat = statSync(file,{bigint:true,throwIfNoEntry:false});
-    return stat ? [stat.dev,stat.ino,stat.size,stat.mtimeNs].join(':') : '-';
+    // Opening a WAL database for reading may create an empty sidecar without changing any rows.
+    return !stat || (file!==path && stat.size===BigInt(0)) ? '-' : [stat.dev,stat.ino,stat.size,stat.mtimeNs,stat.ctimeNs].join(':');
   }).join('|');
 }
 function hasTable(app: DatabaseSync, name: string) {
   return !!app.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name);
 }
-function applicationIdentity(app: DatabaseSync, path: string) {
+// Activity/session writes may alter this file. On such writes the logical digest still
+// checks only the tables and columns that affect attribution.
+const appRevisions=new Map<boolean,{stamp:string;digest:string}>();
+function applicationIdentity(app: DatabaseSync, path: string, companyNames: boolean) {
   const stat=statSync(path,{bigint:true});
   const digest=createHash('sha256').update(stat.dev+':'+stat.ino);
   const triggers=new Set(app.prepare("SELECT name FROM sqlite_master WHERE type='trigger'").all().map(row=>s(row.name)));
@@ -79,11 +88,30 @@ function applicationIdentity(app: DatabaseSync, path: string) {
   } else add("SELECT id,number,user_id,warehouse_id,finalized_at,payload FROM orders WHERE kind IN ('sim','combined') AND status='finalized' ORDER BY id");
   // Those fields influence attribution. Session and activity changes do not.
   add("SELECT id,site_code,warehouse_id,active FROM users WHERE role='agent' ORDER BY id");
-  if (hasTable(app,'crm_companies')) add('SELECT partner_id,partner_code,cif FROM crm_companies ORDER BY partner_id');
+  if (hasTable(app,'crm_companies')) add(companyNames ? 'SELECT partner_id,partner_code,cif,name FROM crm_companies ORDER BY partner_id' : 'SELECT partner_id,partner_code,cif FROM crm_companies ORDER BY partner_id');
   if (hasTable(app,'crm_locations')) add('SELECT address_id,partner_id,franchise_code FROM crm_locations ORDER BY address_id');
   if (hasTable(app,'crm_customer_links')) add('SELECT customer_id,address_id FROM crm_customer_links ORDER BY customer_id,address_id');
   if (hasTable(app,'customer_identity_aliases')) add('SELECT alias_id,canonical_id FROM customer_identity_aliases ORDER BY alias_id');
   return digest.digest('hex');
+}
+function pinnedApplicationIdentity(app:DatabaseSync,appPath:string,stamp:string,withPayments:boolean) {
+  // BEGIN is deferred. Pin the catalog before trusting a previously calculated digest.
+  app.prepare('PRAGMA schema_version').get();
+  const stable=fingerprint(appPath)===stamp;
+  const memo=stable ? appRevisions.get(withPayments) : undefined;
+  if (memo?.stamp===stamp) return memo.digest;
+  const digest=applicationIdentity(app,appPath,!withPayments);
+  if (stable) appRevisions.set(withPayments,{stamp,digest});
+  return digest;
+}
+/** Same legal-entity names, alias, work-point and document inputs used by the worker. */
+export function vodafoneSim0CatalogRevision(directory:string) {
+  const path=resolve(directory,'mobiup.sqlite'),stamp=fingerprint(path);
+  const app=new DatabaseSync(path,{readOnly:true,timeout:500});
+  try {
+    app.exec('PRAGMA query_only=ON; BEGIN');
+    return pinnedApplicationIdentity(app,path,stamp,false);
+  } finally {app.close();}
 }
 function keys(a: {date: string; site: string; number: string}[]) {
   return [...new Map(a.map(x => [docKey(x.date,x.site,x.number),x])).values()];
@@ -95,7 +123,7 @@ function historyInvoices(history: DatabaseSync, documents: DocFields[], purpose:
     WITH wanted AS (SELECT value ->> '$.date' date,value ->> '$.site' site,value ->> '$.number' number FROM json_each(?))
     SELECT r.date,r.document_number,r.site_id,r.tr,i.client_code,i.franchise_code,a.point_key,a.status allocation_status,
       r.item_code,r.customer_name,r.quantity_micros,r.price_cents,r.value_cents,r.raw_json
-    FROM wanted w CROSS JOIN history_rows r INDEXED BY history_rows_site_date
+    FROM wanted w CROSS JOIN history_rows r
       ON r.site_id=w.site AND r.date=w.date AND r.document_number=w.number
     JOIN history_imports b ON b.id=r.import_id AND b.state='active'
     JOIN history_identities i ON i.id=r.identity_id
@@ -260,63 +288,71 @@ function slipPoints(app: DatabaseSync, identities: Identity, activations: Activa
 
 function matchActivations(source: DatabaseSync, history: DatabaseSync, app: DatabaseSync, activations: Activation[], evidence: Map<string,'commercial'|'excluded'>, targetPoints: ReadonlySet<string>) {
   const movement = source.prepare(`
-    SELECT m.site,m.is_tr,m.movement_date,m.raw_json,m.quantity
-    FROM activation_facts f JOIN activation_movements m ON m.id=json_extract(f.evidence_json,'$.remainingSaleIds[0]')
-    WHERE f.provider='vodafone' AND f.company=? AND f.serial=?
-      AND json_array_length(f.evidence_json,'$.remainingSaleIds')=1`);
-  const links = new Map<Activation,MovementLink>();
-  const wanted: DocFields[] = [];
-  for (const row of activations) {
-    const move = movement.get(row.company,row.serial) as Movement | undefined;
-    if (!move) continue;
-    const raw = JSON.parse(move.raw_json) as Raw;
-    const date = move.movement_date || '', site = s(raw.SiteId), number = s(raw.Nr);
-    const partner=s(raw['Denumire Client']);
-    const tradeSite=move.is_tr === 1 && move.quantity > 0 ? salesSiteKey(move.site) : '';
-    const realClient=!isVodafoneGenericPartner(s(raw.CIF),partner);
-    links.set(row,{date,site,number,tradeSite,realClient,fiscalKind:fiscalKind(raw,number,partner,'sale')});
-    if (date && site && number && tradeSite && realClient) wanted.push({date,site,number});
-  }
-  const invoices = historyInvoices(history,wanted,'sale');
+    SELECT w.key AS ordinal,m.site,m.is_tr,m.movement_date,m.raw_json,m.quantity
+    FROM json_each(?) w CROSS JOIN activation_facts f
+      ON f.provider='vodafone' AND f.company=w.value->>0 AND f.serial=w.value->>1
+    JOIN activation_movements m ON m.id=json_extract(f.evidence_json,'$.remainingSaleIds[0]')
+    WHERE json_array_length(f.evidence_json,'$.remainingSaleIds')=1`);
   const identity = identityIndex(app,history,activations,targetPoints);
   const slips = slipPoints(app,identity,activations);
-  const activation = activations.map((row): BonusActivation => {
-    const site = salesSiteKey(row.site), cui = identity.legal(row.client_code);
-    const result: BonusActivation = {month:row.month,site,cui,partner:row.label,reason:'point-unknown',pointCode:null};
-    const link = links.get(row);
-    if (link?.realClient===false || isVodafoneGenericPartner(row.client_code,row.label)) {
-      return {...result,reason:'excluded'};
+  function resolveBatch(batch: Activation[]) {
+    const links = new Map<Activation,MovementLink>();
+    const wanted: DocFields[] = [];
+    const requested=JSON.stringify(batch.map(row=>[row.company,row.serial]));
+    for (const move of movement.iterate(requested) as unknown as Iterable<Movement & {ordinal:number}>) {
+      const row=batch[move.ordinal];
+      const raw = JSON.parse(move.raw_json) as Raw;
+      const date = move.movement_date || '', site = s(raw.SiteId), number = s(raw.Nr);
+      const partner=s(raw['Denumire Client']);
+      const tradeSite=move.is_tr === 1 && move.quantity > 0 ? salesSiteKey(move.site) : '';
+      const realClient=!isVodafoneGenericPartner(s(raw.CIF),partner);
+      links.set(row,{date,site,number,tradeSite,realClient,fiscalKind:fiscalKind(raw,number,partner,'sale')});
+      if (date && site && number && tradeSite && realClient) wanted.push({date,site,number});
     }
-    const movementKind = link?.fiscalKind || 'unknown';
-    const override = link ? evidence.get(bonusEvidenceIdentity('activation',row.company,link.date,link.site,link.number)) : undefined;
-    if (override==='excluded' || movementKind==='excluded') return {...result,reason:'excluded'};
-    if (row.contradictory) return {...result,reason:'conflict'};
-    if (!cui) return {...result,reason:'client-missing'};
-    if (!site || !link || link.tradeSite !== site) {
-      return {...result,reason:'unmatched'};
-    }
-    const matched = invoices.get(docKey(link.date,link.site,link.number)) || [];
-    const onArticle=matched.filter(line=>line.item_code===row.item_code && line.quantity_micros>0);
-    const generic=(line: HistoryLine)=>isVodafoneGenericPartner(line.client_code,line.customer_name) || line.allocation_status==='consumer';
-    if (onArticle.length && onArticle.every(line=>generic(line)||line.kind==='excluded')) return {...result,reason:'excluded'};
-    const inDocument = onArticle.filter(line=>identity.legal(line.client_code)===cui);
-    const historyKinds = inDocument.map(line=>line.kind);
-    if (historyKinds.includes('excluded') ||
-        inDocument.some(line=>isVodafoneGenericPartner(line.client_code,line.customer_name))) return {...result,reason:'excluded'};
-    const candidates = slips(row,cui);
-    const direct = salesSiteKey(row.point_code);
-    if (direct && !identity.valid(direct,cui)) return {...result,reason:'conflict'};
-    if (direct) candidates.add(direct);
-    const fifoDocumentPoint = uniform(inDocument.map(identity.fromHistory));
-    if (fifoDocumentPoint) candidates.add(fifoDocumentPoint);
-    if (candidates.size>1 || (inDocument.some(line=>!!line.franchise_code && !identity.fromHistory(line)))) {
-      return {...result,reason:'conflict'};
-    }
-    const point = uniform(candidates) || identity.fallback(cui);
-    if (!point) return result;
-    const commercial = override==='commercial' || movementKind==='commercial' || historyKinds.includes('commercial');
-    return {...result,pointCode:point,reason:commercial?'commercial':'document-unknown'};
-  });
+    const invoices = historyInvoices(history,wanted,'sale');
+    return batch.map((row): BonusActivation => {
+      const site = salesSiteKey(row.site), cui = identity.legal(row.client_code);
+      const result: BonusActivation = {month:row.month,site,cui,partner:row.label,reason:'point-unknown',pointCode:null};
+      const link = links.get(row);
+      if (link?.realClient===false || isVodafoneGenericPartner(row.client_code,row.label)) {
+        return {...result,reason:'excluded'};
+      }
+      const movementKind = link?.fiscalKind || 'unknown';
+      const override = link ? evidence.get(bonusEvidenceIdentity('activation',row.company,link.date,link.site,link.number)) : undefined;
+      if (override==='excluded' || movementKind==='excluded') return {...result,reason:'excluded'};
+      if (row.contradictory) return {...result,reason:'conflict'};
+      if (!cui) return {...result,reason:'client-missing'};
+      if (!site || !link || link.tradeSite !== site) {
+        return {...result,reason:'unmatched'};
+      }
+      const matched = invoices.get(docKey(link.date,link.site,link.number)) || [];
+      const onArticle=matched.filter(line=>line.item_code===row.item_code && line.quantity_micros>0);
+      const generic=(line: HistoryLine)=>isVodafoneGenericPartner(line.client_code,line.customer_name) || line.allocation_status==='consumer';
+      if (onArticle.length && onArticle.every(line=>generic(line)||line.kind==='excluded')) return {...result,reason:'excluded'};
+      const inDocument = onArticle.filter(line=>identity.legal(line.client_code)===cui);
+      const historyKinds = inDocument.map(line=>line.kind);
+      if (historyKinds.includes('excluded') ||
+          inDocument.some(line=>isVodafoneGenericPartner(line.client_code,line.customer_name))) return {...result,reason:'excluded'};
+      const candidates = slips(row,cui);
+      const direct = salesSiteKey(row.point_code);
+      if (direct && !identity.valid(direct,cui)) return {...result,reason:'conflict'};
+      if (direct) candidates.add(direct);
+      const fifoDocumentPoint = uniform(inDocument.map(identity.fromHistory));
+      if (fifoDocumentPoint) candidates.add(fifoDocumentPoint);
+      if (candidates.size>1 || (inDocument.some(line=>!!line.franchise_code && !identity.fromHistory(line)))) {
+        return {...result,reason:'conflict'};
+      }
+      const point = uniform(candidates) || identity.fallback(cui);
+      if (!point) return result;
+      const commercial = override==='commercial' || movementKind==='commercial' || historyKinds.includes('commercial');
+      return {...result,pointCode:point,reason:commercial?'commercial':'document-unknown'};
+    });
+  }
+  // Invoice lines and their evidence are needed only while attributing the current batch.
+  const activation: BonusActivation[]=[];
+  for (let start=0;start<activations.length;start+=2048) {
+    activation.push(...resolveBatch(activations.slice(start,start+2048)));
+  }
   return {activation,identity};
 }
 
@@ -347,19 +383,19 @@ function paymentDocuments(history: DatabaseSync, sales: DatabaseSync, identity: 
     WHERE r.date BETWEEN ? AND ? AND r.price_cents=0
       AND r.item_code IN(SELECT value FROM json_each(?))`).all(firstDay,today,JSON.stringify(giftCodes)) as DocFields[];
   const invoiceRows = historyInvoices(history,wanted,'payment');
-  const lookup = new Set<string>();
+  const lookup: [string,string][]=[];
   for (const [key,lines] of invoiceRows) {
     if (lines.some(line=>line.kind==='excluded' || line.allocation_status==='consumer' || isVodafoneGenericPartner(line.client_code,line.customer_name))) {
       invoiceRows.delete(key);
-    } else lookup.add(rowKey(lines[0].date,lines[0].document_number));
+    } else lookup.push([lines[0].date,lines[0].document_number]);
   }
   const byIdentity = new Map<string,Map<string,CommercialLine[]>>();
   for (const line of sales.prepare(`
     SELECT r.company,r.site_code,r.date,r.location,r.order_number,r.item_code,r.quantity,r.price_cents,r.value_cents
     FROM sales_months m JOIN sales_rows r ON r.import_id=m.import_id
-    WHERE m.month BETWEEN ? AND ? AND r.date BETWEEN ? AND ?`).iterate(firstVodafoneBonusMonth,today.slice(0,7),firstDay,today) as unknown as Iterable<CommercialLine>) {
+    WHERE m.month BETWEEN ? AND ? AND r.date BETWEEN ? AND ?
+      AND (r.date,r.order_number) IN (SELECT value->>0,value->>1 FROM json_each(?))`).iterate(firstVodafoneBonusMonth,today.slice(0,7),firstDay,today,JSON.stringify(lookup)) as unknown as Iterable<CommercialLine>) {
     const key = rowKey(line.date,line.order_number);
-    if (!lookup.has(key)) continue;
     const bySite = byIdentity.get(key) || new Map<string,CommercialLine[]>();
     const identity = JSON.stringify([line.company,salesSiteKey(line.site_code)]);
     const rows = bySite.get(identity);
@@ -400,10 +436,10 @@ function paymentDocuments(history: DatabaseSync, sales: DatabaseSync, identity: 
   return documents;
 }
 
+const operatorWindowsWhere="operator='vodafone' AND status='complete' AND source_kind='operator' AND UPPER(TRIM(company)) IN ('VODAFONE','MOBIUP','MOBIUP DISTRIBUTION SRL')";
 function monthCoverage(source: DatabaseSync, activations: Activation[], today: string, external: VodafoneBonusEvidence) {
   const finals = source.prepare(`SELECT source_at,period_start,period_end FROM activation_imports
-    WHERE operator='vodafone' AND status='complete' AND source_kind='operator'
-    AND UPPER(TRIM(company)) IN ('VODAFONE','MOBIUP','MOBIUP DISTRIBUTION SRL')`).all();
+    WHERE ${operatorWindowsWhere}`).all();
   const latestActivation = new Map<string,string>();
   for (const act of activations) {
     if ((latestActivation.get(act.month)||'') < act.activation_date) latestActivation.set(act.month,act.activation_date);
@@ -424,6 +460,7 @@ function monthCoverage(source: DatabaseSync, activations: Activation[], today: s
 }
 
 export type VodafoneBonusRead = {
+  preview?: boolean;
   directory?: string;
   activationDirectory?: string;
   today: string;
@@ -433,60 +470,146 @@ export type VodafoneBonusRead = {
   month: string | null;
   targets: readonly VodafoneTopLocation[];
 };
-export function readVodafoneBonus(input: VodafoneBonusRead): VodafoneBonusReport {
-  const directory = input.directory || process.env.MOBIUP_DATA_DIR || './work/server-data';
+type BonusSources = {app: DatabaseSync; history: DatabaseSync; source: DatabaseSync; report: DatabaseSync; sales?: DatabaseSync};
+type Snapshot<T> = {key: string; value: T};
+type BonusSourceInput = Pick<VodafoneBonusRead,'directory' | 'activationDirectory' | 'today' | 'rules' | 'evidence'>;
+
+function readSnapshot<T>(
+  input: BonusSourceInput, selection: readonly unknown[], withPayments: boolean,
+  read: (openSources: ()=>BonusSources, key: string)=>T,
+  previous?: Snapshot<T>,
+  disk?: VodafoneDiskCache<T>,
+): Snapshot<T> {
+  const directory = resolve(input.directory || process.env.MOBIUP_DATA_DIR || './work/server-data');
   const base = resolve(input.activationDirectory || process.env.MOBIUP_ACTIVATIONS_DIR || directory);
   const generation = activationsDirectory(base);
-  const paths = [
-    resolve(directory,'mobiup.sqlite'),resolve(directory,'client-history','client-sales-history.sqlite'),resolve(directory,'sales.sqlite'),
-    resolve(generation,'activations.sqlite'),resolve(generation,'activation-report.sqlite'),
-  ];
-  const before = paths.slice(1).map(fingerprint);
-  const reportForScope = (snapshot: BonusLedgerInput) => {
-    const revision = createHash('sha256').update(JSON.stringify([snapshot.revision,input.scope])).digest('hex');
-    return vodafoneBonusLedger({...snapshot,revision},input.scope,input.month);
-  };
+  const appPath=resolve(directory,'mobiup.sqlite');
+  const paths=[resolve(directory,'client-history/client-sales-history.sqlite'),resolve(generation,'activations.sqlite'),
+    resolve(generation,'activation-report.sqlite')];
+  if (withPayments) paths.push(resolve(directory,'sales.sqlite'));
+  const before=paths.map(fingerprint);
   const databases: DatabaseSync[] = [];
   try {
     const open = (path: string) => {
-      const database = new DatabaseSync(path,{readOnly:true});
+      const database = new DatabaseSync(path,{readOnly:true,timeout:500});
       databases.push(database);
       database.exec('PRAGMA query_only=ON; PRAGMA cache_size=-4096; PRAGMA temp_store=MEMORY; BEGIN');
       return database;
     };
-    const app = open(paths[0]);
-    const appIdentity = applicationIdentity(app,paths[0]);
-    const key = createHash('sha256').update(JSON.stringify([appIdentity,before,generation,input.today,input.rules,input.evidence,input.targets])).digest('hex');
-    if (cached?.key===key) return reportForScope(cached.snapshot);
-    const [history,sales,source,report] = paths.slice(1).map(open);
-    const meta = Object.fromEntries(report.prepare('SELECT key,value FROM report_meta').all().map(row=>[row.key,row.value]));
-    const sourceMeta = Object.fromEntries(source.prepare("SELECT key,value FROM activation_meta WHERE key IN ('schema_version','facts_version','generation')").all().map(row=>[row.key,row.value]));
-    const sourceImports = source.prepare("SELECT sha256,operator,row_count,parser_version FROM activation_imports WHERE status='complete' ORDER BY sha256").all()
-      .map(row=>[row.sha256,row.operator,row.row_count,row.parser_version]);
-    if (meta.version!=='4' || meta.factsVersion!==sourceMeta.facts_version || !['2',activationFactsVersion].includes(s(sourceMeta.facts_version)) ||
-        sourceMeta.schema_version!=='3' || meta.sourceGeneration!==sourceMeta.generation || meta.sourceImports!==JSON.stringify(sourceImports)) {
-      throw new Error('Stale or unsupported Vodafone activation projection');
+    const initialApp=fingerprint(appPath);
+    const app=open(appPath);
+    const appIdentity=pinnedApplicationIdentity(app,appPath,initialApp,withPayments);
+    const key=createHash('sha256').update(JSON.stringify([appIdentity,before,generation,input.today,input.rules,input.evidence,selection])).digest('hex');
+    function verifySources() {
+      if (generation!==activationsDirectory(base) || paths.some((path,i)=>fingerprint(path)!==before[i]) ||
+          (fingerprint(appPath)!==initialApp && appIdentity!==applicationIdentity(open(appPath),appPath,!withPayments))) {
+        throw new Error('Vodafone report source updated during read');
+      }
     }
-    const zero = Object.keys(input.rules.products).filter(code=>input.rules.products[code]==='vodafone_0');
-    if (!zero.length) throw new Error('No Vodafone SIM 0 products configured');
-    const activations = report.prepare(`SELECT month,activation_date,distribution_date,company,serial,client_code,point_code,item_code,label,site,contradictory
-      FROM details WHERE provider='vodafone' AND is_tr=1 AND item_type<>'TELSIM'
-      AND month BETWEEN ? AND ? AND activation_date BETWEEN ? AND ?
-      AND item_code IN (SELECT value FROM json_each(?))`)
-      .all(firstVodafoneBonusMonth,input.today.slice(0,7),firstVodafoneBonusMonth+'-01',input.today,JSON.stringify(zero)) as unknown as Activation[];
-    const evidence = new Map(input.evidence.documents.map(row=>[bonusEvidenceIdentity(row.source,row.company,row.date,row.site,row.number),row.kind]));
-    const {activation,identity} = matchActivations(source,history,app,activations,evidence,new Set(input.targets.map(row=>row.pointCode)));
-    const sim5 = Object.keys(input.rules.products).filter(code=>input.rules.products[code]==='vodafone_5');
-    const documents = paymentDocuments(history,sales,identity,[...new Set([...sim5,...knownVoucherCodes])],input.today,evidence);
-    const coverage = monthCoverage(source,activations,input.today,input.evidence);
-    if (generation!==activationsDirectory(base) || paths.slice(1).some((path,i)=>fingerprint(path)!==before[i]) ||
-        appIdentity!==applicationIdentity(open(paths[0]),paths[0])) {
-      throw new Error('Vodafone report source updated during read');
+    if (previous?.key===key) {verifySources();return previous;}
+    const restored=disk?.load(directory,key);
+    if (restored!==undefined) {verifySources();return {key,value:restored};}
+    function openSources():BonusSources {
+      const [history,source,report,sales]=paths.map(open);
+      const meta = Object.fromEntries(report.prepare('SELECT key,value FROM report_meta').all().map(row=>[row.key,row.value]));
+      const sourceMeta = Object.fromEntries(source.prepare("SELECT key,value FROM activation_meta WHERE key IN ('schema_version','facts_version','generation')").all().map(row=>[row.key,row.value]));
+      const sourceImports = source.prepare("SELECT sha256,operator,row_count,parser_version FROM activation_imports WHERE status='complete' ORDER BY sha256").all()
+        .map(row=>[row.sha256,row.operator,row.row_count,row.parser_version]);
+      if (meta.version!=='4' || meta.factsVersion!==sourceMeta.facts_version || !['2',activationFactsVersion].includes(s(sourceMeta.facts_version)) ||
+          sourceMeta.schema_version!=='3' || meta.sourceGeneration!==sourceMeta.generation || meta.sourceImports!==JSON.stringify(sourceImports)) {
+        throw new Error('Stale or unsupported Vodafone activation projection');
+      }
+      return {app,history,source,report,sales};
     }
-    const snapshot = {activation,documents,coverage,targets:input.targets,portfolios:identity.portfolios,revision:key};
-    cached={key,snapshot};
-    return reportForScope(snapshot);
+    const value=read(openSources,key);
+    verifySources();
+    disk?.save(directory,key,value);
+    return {key,value};
   } finally {
     for (const database of databases.reverse()) database.close();
   }
+}
+
+function readSim0Details(report: DatabaseSync,input: BonusSourceInput,fromMonth: string,toMonth: string) {
+  const zero = Object.keys(input.rules.products).filter(code=>input.rules.products[code]==='vodafone_0');
+  if (!zero.length) throw new Error('No Vodafone SIM 0 products configured');
+  return report.prepare(`SELECT month,activation_date,distribution_date,company,serial,client_code,point_code,item_code,label,site,contradictory
+    FROM details WHERE provider='vodafone' AND is_tr=1 AND item_type<>'TELSIM'
+    AND month BETWEEN ? AND ? AND activation_date BETWEEN ? AND ?
+    AND item_code IN (SELECT value FROM json_each(?))`)
+    .all(fromMonth,toMonth,fromMonth+'-01',input.today,JSON.stringify(zero)) as unknown as Activation[];
+}
+
+function fiscalEvidence(input: BonusSourceInput) {
+  return new Map(input.evidence.documents.map(row=>[bonusEvidenceIdentity(row.source,row.company,row.date,row.site,row.number),row.kind]));
+}
+
+export function readVodafoneBonus(input: VodafoneBonusRead): VodafoneBonusScreen {
+  if (!input.preview) return readFullVodafoneBonus(input);
+  // A certified screen also survives a restart. New activations or settlement documents must
+  // rebuild the complete ledger before its monthly balances can be displayed.
+  cachedPreview=readSnapshot(input,[input.targets,input.month,input.scope],true,
+    ()=>vodafoneBonusPreview(readFullVodafoneBonus(input)),cachedPreview,previewDisk);
+  return cachedPreview.value;
+}
+
+function readLedger(input:VodafoneBonusRead,previous:Snapshot<BonusLedgerInput>|undefined,disk:VodafoneDiskCache<BonusLedgerInput>) {
+  return readSnapshot(input,[input.targets],true,(openSources,revision)=>{
+    const {app,history,source,report,sales}=openSources();
+    const activations=readSim0Details(report,input,firstVodafoneBonusMonth,input.today.slice(0,7));
+    const evidence=fiscalEvidence(input);
+    const {activation,identity}=matchActivations(source,history,app,activations,evidence,new Set(input.targets.map(row=>row.pointCode)));
+    const sim5=Object.keys(input.rules.products).filter(code=>input.rules.products[code]==='vodafone_5');
+    const documents=paymentDocuments(history,sales!,identity,[...new Set([...sim5,...knownVoucherCodes])],input.today,evidence);
+    const coverage=monthCoverage(source,activations,input.today,input.evidence);
+    return {activation,documents,coverage,targets:input.targets,portfolios:identity.portfolios,revision};
+  },previous,disk);
+}
+
+/** Warm the shared pre-scope ledger. Maintenance must fail if its private cache could not be persisted. */
+export function warmVodafoneBonusLedger(input:VodafoneBonusRead) {
+  let status='current';
+  readLedger(input,undefined,{load:ledgerCache.load,save:(directory,key,value)=>{
+    if (!ledgerCache.save(directory,key,value)) throw new Error('Cannot persist private Vodafone ledger cache');
+    status='rebuilt';
+    return true;
+  }});
+  return status;
+}
+
+function readFullVodafoneBonus(input: VodafoneBonusRead): VodafoneBonusReport {
+  cached=readLedger(input,cached,ledgerCache);
+  const snapshot=cached.value;
+  const revision=createHash('sha256').update(JSON.stringify([snapshot.revision,input.scope])).digest('hex');
+  return vodafoneBonusLedger({...snapshot,revision},input.scope,input.month);
+}
+
+/** Activation analytics is independent of the reward campaign's opening month and payment sources. */
+type Sim0SourceRows = {activation:BonusActivation[];companies:Map<string,string>;revision:string;
+  coverage:Sim0MonthCoverage[]};
+export function projectVodafoneSim0Rows<T>(input:BonusSourceInput,fromMonth:string,toMonth:string,scope:VodafoneBonusScope,
+  project:(source:Sim0SourceRows)=>T, previous?:Snapshot<T>,disk?:VodafoneDiskCache<T>) {
+  if (!bonusMonth(fromMonth) || !bonusMonth(toMonth) || fromMonth>toMonth || toMonth>input.today.slice(0,7)) throw new Error('Invalid activation period');
+  return readSnapshot(input,[fromMonth,toMonth,scope],false,(openSources,revision)=>{
+    const {app,history,source,report}=openSources();
+    const details=readSim0Details(report,input,fromMonth,toMonth);
+    const {activation}=matchActivations(source,history,app,details,fiscalEvidence(input),new Set());
+    const companies=new Map<string,string>();
+    if (hasTable(app,'crm_companies')) for (const row of app.prepare('SELECT cif,name FROM crm_companies ORDER BY partner_id').iterate()) {
+      const cui=normalizedCui(s(row.cif)), name=s(row.name);
+      if (cui && name && !isVodafoneGenericPartner(cui,name) && !companies.has(cui)) companies.set(cui,name);
+    }
+    const windows=source.prepare(`SELECT period_start,period_end FROM activation_imports WHERE ${operatorWindowsWhere}
+      AND period_start<=? AND period_end>=?`).all(input.today,fromMonth+'-01').map(r=>({start:s(r.period_start),end:s(r.period_end)}));
+    const observed=new Map<string,string>(),sites=scope===null?null:new Set(scope);
+    for (const row of details) if ((!sites || sites.has(salesSiteKey(row.site))) && row.activation_date>(observed.get(row.month)||'')) {
+      observed.set(row.month,row.activation_date);
+    }
+    const coverage=sim0Coverage(fromMonth,toMonth,input.today,windows,observed);
+    return project({activation,revision,coverage,companies});
+  },previous,disk);
+}
+
+export function readVodafoneSim0ActivationRows(input:BonusSourceInput,fromMonth:string,toMonth:string) {
+  return projectVodafoneSim0Rows(input,fromMonth,toMonth,null,source=>source).value;
 }

@@ -74,3 +74,39 @@ export const vodafoneBonusReasonLabels: Record<VodafoneBonusReason,string> = {
   unmatched:'Linii nereconciliate',
   mixed:'Document mixt',
 };
+
+
+// The monthly source coverage describes the entire selected portfolio. Search
+// narrows the same three sets of detail rows on screen and in both exports.
+export function filterVodafoneBonusRows(report: VodafoneBonusReport, search: string) {
+  const query = search.trim().toLocaleLowerCase('ro');
+  if (!query) return {points:report.points,documents:report.documents,unresolved:report.unresolved};
+  const matches = (...values: (string|null)[]) => values.some(value=>value?.toLocaleLowerCase('ro').includes(query));
+  return {
+    points:report.points.filter(row=>matches(row.partner,row.pointCode,row.cui,...row.sites.map(site=>site.site))),
+    documents:report.documents.filter(row=>matches(row.partner,row.pointCode,row.cui,row.number,...row.sites)),
+    unresolved:report.unresolved.filter(row=>matches(row.partner,row.cui,row.site)),
+  };
+}
+
+export const vodafoneBonusPageSize = 50;
+export type VodafoneBonusScreen = VodafoneBonusReport & {
+  preview?: {
+    counts: {points:number; documents:number; unresolved:number};
+    hasPartialPoints: boolean;
+    hasUnknownTopBonus: boolean;
+  };
+};
+
+export function vodafoneBonusPreview(report: VodafoneBonusReport): VodafoneBonusScreen {
+  const {points, documents, unresolved} = report;
+  const counts = {points:points.length, documents:documents.length, unresolved:unresolved.length};
+  if (Object.values(counts).every(count=>count<=vodafoneBonusPageSize)) return report;
+  return {
+    ...report,
+    points:points.slice(0,vodafoneBonusPageSize),
+    documents:documents.slice(0,vodafoneBonusPageSize),
+    unresolved:unresolved.slice(0,vodafoneBonusPageSize),
+    preview:{counts,hasPartialPoints:points.some(row=>row.partial),hasUnknownTopBonus:points.some(row=>row.topBonus===null)},
+  };
+}

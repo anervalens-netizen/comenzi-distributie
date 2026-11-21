@@ -1,3 +1,4 @@
+import {DatabaseSync} from 'node:sqlite';
 import assert from 'node:assert/strict';
 import {mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
@@ -6,10 +7,10 @@ import {setTimeout as wait} from 'node:timers/promises';
 import {build} from 'esbuild';
 
 const {outputFiles} = await build({
-  entryPoints: ['lib/vodafone-focus-runtime-node.ts'],
+  stdin: {resolveDir: process.cwd(), contents: "export * from './lib/vodafone-focus-runtime-node'; export {focusSlipRevision,readFocusSlips} from './lib/vodafone-focus-documents-node'; export {activationPublicationVersion} from './lib/activation-publication-node';"},
   bundle: true, platform: 'node', format: 'esm', write: false,
 });
-const {readDigiOverview,readVodafoneFocus} = await import('data:text/javascript;base64,' + Buffer.from(outputFiles[0].text).toString('base64'));
+const {activationPublicationVersion,focusSlipRevision,readFocusSlips,readDigiOverview,readVodafoneFocus} = await import('data:text/javascript;base64,' + Buffer.from(outputFiles[0].text).toString('base64'));
 const cwd = process.cwd();
 const root = mkdtempSync(join(tmpdir(), 'focus-worker-deadline-'));
 const realTimeout = globalThis.setTimeout;
@@ -26,12 +27,27 @@ try {
     }
     symlinkSync('generations/one',join(store,'current'));
   }
+  writeFileSync(join(root,'slip-proof.mjs'),outputFiles[0].text);
   writeFileSync(join(root, 'vodafone-focus-worker.mjs'), `
     import {parentPort,workerData} from 'node:worker_threads';
+    import {focusSlipRevision} from './slip-proof.mjs';
     import {appendFileSync,existsSync,readFileSync} from 'node:fs';
     import {join} from 'node:path';
     const {month,query,provider,sites} = workerData;
-    if(month.startsWith('ordinary-phase-')){
+    if (month.startsWith('cache-')) {
+      appendFileSync('cache-starts', 'x');
+      const publication = readFileSync('worker-publication', 'utf8');
+      const slipRevision = workerData.captureSlipRevision&&!existsSync('mismatch-pinned') ? focusSlipRevision(join(process.env.MOBIUP_DATA_DIR,'mobiup.sqlite')) : null;
+      const base = {publication, available: true, totals: {total: 7}, commissionCoverage: 'unavailable'};
+      parentPort.postMessage({type: 'overviewBase', report: base});
+      if (month === 'cache-race') {
+        while (!existsSync('release-race')) await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      const focusCards = query.focusSummaries.map(focus => ({territory: focus.territory}));
+      const complete = {...base, focusCards, commissionCoverage: 'partial', totals: {total: 7, eligible: 5}};
+      if (month === 'cache-failure') complete.focusUnavailable = ['sud'];
+      parentPort.postMessage({type: 'report', report: complete, slipRevision});
+    } else if(month.startsWith('ordinary-phase-')){
       const waitForRelease=async name=>{
         while(!existsSync('release-'+name))await new Promise(resolve=>setTimeout(resolve,10));
       };
@@ -133,6 +149,118 @@ try {
   const missingCards=await readVodafoneFocus('failure',null,{focusSummaries:[{territory:'sud'}],returnFocusCards:true});
   assert.deepEqual(missingCards.focusUnavailable,['sud']);
   assert.equal(missingCards.totals.eligible,undefined);
+
+  // A repeat UI selection may reuse only a fully resolved pair from the same
+  // activation publication, slip database and requested authorization scope.
+  process.env.MOBIUP_DATA_DIR = root;
+  writeFileSync(join(root, 'mobiup.sqlite'), 'slips');
+  const setPublication = () => writeFileSync('worker-publication', activationPublicationVersion('vodafone'));
+  setPublication();
+  const cachedQuery = {focusSummaries: [{territory: 'sud'}], progressiveTotals: true, returnFocusCards: true};
+  const cachedRead = (month = 'cache-panel', sites = null, query = cachedQuery, totals = false) =>
+    readVodafoneFocus(month, sites, query, totals);
+  const calls = () => readFileSync('cache-starts', 'utf8').length;
+  const full = await cachedRead();
+  full.totals.total = 42;
+  assert.deepEqual((await cachedRead()).totals, {total: 7, eligible: 5});
+  assert.deepEqual((await cachedRead('cache-panel', null, cachedQuery, true)).totals, {total: 7});
+  assert.equal(calls(), 1, 'cached phases preserve the original totals response and caller isolation');
+  await cachedRead('cache-panel', ['A']);
+  await cachedRead('cache-panel', null, {...cachedQuery, policy:'north'});
+  assert.equal(calls(), 3, 'different sites and policies cannot share results');
+  writeFileSync(join(root, 'mobiup.sqlite-wal'), 'finalized order');
+  await cachedRead();
+  assert.equal(calls(), 4, 'slip changes invalidate completed attribution');
+  writeFileSync(join(stores, 'current', 'activation-report.sqlite-wal'), 'updated projection');
+  setPublication();
+  await cachedRead();
+  assert.equal(calls(), 5, 'activation changes invalidate completed attribution');
+  for (let i=0; i<2; i++) await cachedRead('cache-failure');
+  assert.equal(calls(), 7, 'failure of any territory remains retryable');
+  const pendingTotals = cachedRead('cache-race', null, cachedQuery, true);
+  const pendingComplete = cachedRead('cache-race');
+  await pendingTotals;
+  writeFileSync(join(root, 'mobiup.sqlite-wal'), 'changed while calculating');
+  writeFileSync('release-race', '');
+  await pendingComplete;
+  await cachedRead('cache-race');
+  assert.equal(calls(), 9, 'in-flight source changes leave no reusable result');
+  const detailQuery = {...cachedQuery, focusSummaries:[{territory:'sud', detail:'attributed'}]};
+  for (let i=0; i<2; i++) await cachedRead('cache-detail',null,detailQuery);
+  assert.equal(calls(), 11, 'serial-bearing detail is never retained');
+
+  // Session writes share the application WAL with orders. Only order rows and
+  // agent mappings can change the attribution of a finalized slip.
+  const sqlFile=join(root,'logical.sqlite');
+  function createDatabase(path) {
+    const database=new DatabaseSync(path);
+    database.exec("CREATE TABLE sessions(id TEXT PRIMARY KEY,expires_at INTEGER); CREATE TABLE users(id TEXT PRIMARY KEY,role TEXT,site_code TEXT,warehouse_id TEXT); CREATE TABLE orders(id TEXT PRIMARY KEY,created_at TEXT,user_id TEXT,kind TEXT,status TEXT,finalized_at TEXT,warehouse_id TEXT,number TEXT,payload TEXT);");
+    database.exec(readFileSync(join(cwd,'drizzle','0010_order_list_revision.sql'),'utf8'));
+    database.exec("INSERT INTO sessions VALUES('demo',0); INSERT INTO users VALUES('a','agent','A','w');");
+    return database;
+  }
+  const database=createDatabase(sqlFile);
+  let revision=focusSlipRevision(sqlFile);
+  assert.match(revision,/^[a-f0-9]{64}$/);
+  database.exec("UPDATE sessions SET expires_at=1");
+  assert.equal(focusSlipRevision(sqlFile),revision,'session renewal preserves the certified financial generation');
+  for(const mutation of [
+    "INSERT INTO orders(id) VALUES('demo')","UPDATE orders SET status='finalized' WHERE id='demo'","DELETE FROM orders WHERE id='demo'",
+    "UPDATE users SET site_code='B' WHERE id='a'","UPDATE users SET warehouse_id='other' WHERE id='a'",
+    "INSERT INTO users VALUES('b','agent','B','other')","UPDATE users SET role='manager' WHERE id='a'",
+  ]) {
+    database.exec(mutation);
+    const next=focusSlipRevision(sqlFile);
+    assert.notEqual(next,revision,mutation);
+    revision=next;
+  }
+  database.exec("DROP TRIGGER order_list_revision_update; CREATE TRIGGER order_list_revision_update AFTER UPDATE ON orders BEGIN SELECT 1; END;");
+  const fallbackRevision=focusSlipRevision(sqlFile);
+  assert.ok(fallbackRevision&&!/^[a-f0-9]{64}$/.test(fallbackRevision));
+  database.exec("UPDATE sessions SET expires_at=2");
+  assert.notEqual(focusSlipRevision(sqlFile),fallbackRevision,'uncertified order triggers fall back to the physical stamp');
+  database.close();
+  const firstPath=join(root,'original.sqlite'), secondPath=join(root,'replacement.sqlite');
+  createDatabase(firstPath).close();createDatabase(secondPath).close();
+  const originalRevision=focusSlipRevision(firstPath);
+  renameSync(secondPath,firstPath);
+  assert.notEqual(focusSlipRevision(firstPath),originalRevision,'replacement with identical counters invalidates');
+  // The fake worker reports its own pinned generation. Even a completed set
+  // of panels is uncachable when it observed an intermediate attribution map.
+  const startCalls=calls();
+  writeFileSync('mismatch-pinned','');
+  await cachedRead('cache-pin');
+  rmSync('mismatch-pinned');
+  await cachedRead('cache-pin');await cachedRead('cache-pin');
+  assert.equal(calls()-startCalls,2);
+
+
+  const pinnedRoot=join(root,'pinned');
+  mkdirSync(pinnedRoot);
+  const appFile=join(pinnedRoot,'mobiup.sqlite');
+  const writer=createDatabase(appFile);
+  writer.exec("PRAGMA journal_mode=WAL;INSERT INTO orders(id,kind,status,finalized_at,user_id,warehouse_id,number,payload) VALUES('sim','sim','finalized','2026-10-10','a','w','n','{\"serials\":[\"123456789012345678\"]}')");
+  process.env.MOBIUP_DATA_DIR=pinnedRoot;
+  try {
+    const expected=focusSlipRevision(appFile);
+    const proof=readFocusSlips(stamp=>{
+      assert.equal(stamp,expected);
+      writer.exec("UPDATE users SET site_code='CHANGED' WHERE id='a'");
+    });
+    assert.equal(proof['123456789012345678'][0].site,'A','attribution reads the same snapshot as its recorded revision');
+    assert.equal(readFocusSlips()['123456789012345678'][0].site,'CHANGED');
+    const initialCalls=calls();
+    await cachedRead('cache-logical');
+    writer.exec("UPDATE sessions SET expires_at=42");
+    await cachedRead('cache-logical');
+    assert.equal(calls(),initialCalls+1,'normal session renewal preserves the complete cached report');
+    writer.exec("UPDATE orders SET number='replacement'");
+    await cachedRead('cache-logical');
+    assert.equal(calls(),initialCalls+2,'financial order changes invalidate the cached report');
+  } finally {
+    writer.close();
+    process.env.MOBIUP_DATA_DIR=root;
+  }
 
   globalThis.setTimeout = (run, ms, ...args) => realTimeout(run, ms === 17_000 ? testDeadlineMs : ms, ...args);
   const slow = readVodafoneFocus('slow', null, overview);

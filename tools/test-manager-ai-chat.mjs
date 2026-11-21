@@ -45,7 +45,7 @@ try {
       export const managerAiReader=()=>Object.assign(async query=>{
         if (query.dataset!=='salesByPoint') throw Error('unexpected data tool');
         return {rows:[{franchise:'FIX-42',units:3}],coverage:[{month:'2026-06',source:'Synthetic',available:true}]};
-      },{checkBillingScope:async()=>{}});
+      },{checkSourceScope:async()=>{}});
     `,
     './server':`
       import {createHash} from 'node:crypto';

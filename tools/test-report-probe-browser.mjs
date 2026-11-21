@@ -29,7 +29,7 @@ const fixture = await build({stdin:{contents:`
 `,loader:'tsx',resolveDir:process.cwd()},bundle:true,platform:'browser',format:'esm',jsx:'automatic',
   define:{'process.env.NODE_ENV':'"production"'},loader:{'.css':'empty','.woff2':'empty'},write:false});
 
-let mode = 'good', role = 'manager', bonusReads = 0;
+let mode = 'good', role = 'manager', bonusReads = 0, fullBonusReads = 0;
 const script = '/_next/static/fixture-pilot.js';
 const shellVersion = 'a'.repeat(16);
 const ref = {release:'a'.repeat(40),shellVersion,referenceId:'b'.repeat(32),role:'manager'};
@@ -51,14 +51,18 @@ function activation(p) {
   }
   return report;
 }
-function register(month) {
+function register(params) {
+  const month = params.get('month');
   const months = mode === 'blank_register' ? [] : [{month,publishedOn:mode === 'open_month' ? null : '2026-08-03',sourceThrough:'2026-07-31',activations:0,unresolvedActivations:0}];
   const points = mode === 'empty' ? [] : Array.from({length:51},(_,i) => ({
     month,pointCode:'EXAMPLE-' + i,cui:'EXAMPLE',partner:'Fixture partner',sites:[],activations:5,confirmedActivations:5,
     target:5,topBonus:0,sim0Bonus:i === 50 && mode !== 'zero' ? 5 : 0,totalBonus:i === 50 ? 8 : 0,partial:false,givenOnDocuments:0,
     candidateOnDocuments:0,applied:0,remaining:0,simulatedRemaining:0,
   }));
-  return {months,selectedMonth:month,points,documents:[],unresolved:[],fiscalKindsComplete:true};
+  const report = {months,selectedMonth:month,points,documents:[],unresolved:[],fiscalKindsComplete:true};
+  if (params.get('view') === 'preview') return {...report,points:points.slice(0,50),preview:{counts:{points:points.length,documents:0,unresolved:0}}};
+  fullBonusReads++;
+  return mode === 'short_full' ? {...report,points:points.slice(0,50)} : report;
 }
 const server = createServer((req,res) => {
   const url = new URL(req.url,'http://fixture.invalid');
@@ -83,7 +87,7 @@ const server = createServer((req,res) => {
       }
       case '/api/vodafone/bonuses':
         bonusReads++;
-        return json(register(url.searchParams.get('month')));
+        return json(register(url.searchParams));
       default: res.statusCode = 503; return json({error:'Synthetic unused view'});
     }
   } else {
@@ -140,7 +144,13 @@ try {
   mode = 'wrong_period';
   error(await probe(annual),'trend_months_mismatch');
   mode = 'good';
+  const initialFullReads = fullBonusReads;
   pass(await probe(bonus));
+  assert.equal(fullBonusReads, initialFullReads + 1, 'the reference point beyond page one requires the full scoped request');
+  error(await probe(bonus,{scope:{projects:['vodafone_sud']}}),'report_scope_mismatch');
+  mode = 'short_full';
+  error(await probe(bonus,{},1100),'bonus_pagination_stalled');
+  mode = 'good';
   error(await cli({...bonus,expected:{...bonus.expected,sim0Bonus:4}},1),'bonus_amount_mismatch');
   pass(await probe(bonus,{expected:{...bonus.expected,totalBonus:8}}));
   mode = 'blank_register';

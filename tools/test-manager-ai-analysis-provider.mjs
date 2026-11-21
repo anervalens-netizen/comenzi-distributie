@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { build } from 'esbuild';
@@ -22,7 +23,7 @@ const bundle=await build({
       }
       export function fail(status,message){throw new AppError(status,message);}
       export function sha256(value){return createHash('sha256').update(value).digest('hex');}
-      export const db=()=>({prepare:()=>({bind:()=>({all:async()=>({results:[]})})})});
+      export const db=()=>({prepare:()=>({bind:()=>({all:async()=>({results:[]})}),first:async()=>null})});
       export async function readLimited(){throw Error('Unexpected request body read');}
     `}));
     plugin.onResolve({filter:/^\.\/(manager-ai-sandbox|manager-ai-analysis-data|manager-ai-analysis-database)$/},
@@ -168,6 +169,25 @@ try{
   };
   await assert.rejects(capability.run(activationRequest),{status:409});
   assert.equal(executions,1,'a changed analytical source must never reach the sandbox');
+  const priorData=process.env.MOBIUP_DATA_DIR;
+  const catalog=new DatabaseSync(join(activationRoot,'mobiup.sqlite'));
+  try {
+    process.env.MOBIUP_DATA_DIR=activationRoot;
+    catalog.exec(`CREATE TABLE users(id,role,site_code,warehouse_id,active); CREATE TABLE customers(id,warehouse_id,active,data);
+      CREATE TABLE orders(id,number,user_id,warehouse_id,finalized_at,payload,kind,status);
+      CREATE TABLE crm_companies(partner_id,partner_code,cif,name);
+      INSERT INTO crm_companies VALUES ('a','a','000','Synthetic');`);
+    const requestSim0={...activationRequest,tables:[{table:'activation_sim0_clients',fromMonth:'2026-01',toMonth:'2026-06'}]};
+    globalThis.syntheticAnalysisTable=async()=>({table:'activation_sim0_clients',rows:[],coverage:[]});
+    globalThis.syntheticAnalysisSandbox=()=>{
+      catalog.exec("UPDATE crm_companies SET name='Synthetic rename'");
+      return {exitCode:0,stdout:'',stderr:'',artifacts:[]};
+    };
+    await assert.rejects(capability.run(requestSim0),{status:409});
+  } finally {
+    catalog.close();
+    if (priorData===undefined) delete process.env.MOBIUP_DATA_DIR; else process.env.MOBIUP_DATA_DIR=priorData;
+  }
 }finally{
   if(priorActivationRoot===undefined)delete process.env.MOBIUP_ACTIVATIONS_DIR;
   else process.env.MOBIUP_ACTIVATIONS_DIR=priorActivationRoot;
