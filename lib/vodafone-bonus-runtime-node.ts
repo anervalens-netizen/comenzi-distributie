@@ -1,3 +1,4 @@
+import {VodafoneBonusPreparing} from './vodafone-bonus-preparing';
 import {createHash} from 'node:crypto';
 import {existsSync} from 'node:fs';
 import {resolve} from 'node:path';
@@ -11,8 +12,13 @@ type Result = VodafoneBonusReport | VodafoneSim0Ranking;
 type Job = {key:string;ranking:boolean;script:string;options:Read;promise:Promise<Result>;resumed:boolean;expired:boolean;
   accept:(result:Result)=>void;reject:(error:Error)=>void;timer:ReturnType<typeof setTimeout>};
 const jobs=new Map<string,Job>();
+const recentRegisterErrors=new Map<string,{until:number;error:Error}>();
+function rememberRegisterError(key:string,error:Error){
+  recentRegisterErrors.set(key,{until:Date.now()+15_000,error});
+  if(recentRegisterErrors.size>4)recentRegisterErrors.delete(recentRegisterErrors.keys().next().value!);
+}
 const paused=new Error('Foreground Vodafone report requested');
-const registerDeadlineMs=42_000;
+const registerDeadlineMs=120_000;
 const rankingDeadlineMs=75_000;
 const foregroundGraceMs=2_000;
 let current:Job|undefined;
@@ -44,11 +50,12 @@ function run(job:Job):Promise<Result> {
       void worker.terminate().then(()=>reject(error),reject);
     }
     function onExit(){stop(new Error('Vodafone bonus worker exited'));}
-    function onMessage(result:Result|null) {
+    function onMessage(result:Result|{state:'preparing'}|null) {
       if (!result) {stop(new Error('Vodafone bonus sources are unavailable'));return;}
       detach();
       worker.unref();
-      accept(result);
+      if('state' in result)reject(new VodafoneBonusPreparing());
+      else accept(result);
     }
     interrupt=stop;
     worker.once('message',onMessage);
@@ -74,6 +81,7 @@ function next() {
   },(error:Error)=>{
     if (error===paused && !job.resumed && !job.expired) {job.resumed=true;return;}
     release(job);
+    if(!job.ranking && !(error instanceof VodafoneBonusPreparing))rememberRegisterError(job.key,error);
     job.reject(error);
   }).finally(()=>{
     clearTimeout(grace);
@@ -89,6 +97,10 @@ async function requestWorker(options:Read):Promise<Result> {
   if (!script && process.env.NODE_ENV==='development') return ranking ? readVodafoneSim0Ranking(options) : readVodafoneBonus(options);
   if (!script) throw new Error('Vodafone bonus worker is unavailable');
   const key=createHash('sha256').update(JSON.stringify(options)).digest('hex');
+  const now=Date.now();
+  for(const [id,failure] of recentRegisterErrors)if(failure.until<=now)recentRegisterErrors.delete(id);
+  const failure=recentRegisterErrors.get(key);
+  if(failure)throw failure.error;
   const existing=jobs.get(key);
   if (existing) return existing.promise;
   if (jobs.size>=4 || ranking && [...jobs.values()].filter(job=>job.ranking).length>=2) throw new Error('Vodafone bonus worker queue is full');
@@ -97,6 +109,9 @@ async function requestWorker(options:Read):Promise<Result> {
   const timer=setTimeout(()=>{
     const error=new Error('Vodafone calculation timed out');
     job.expired=true;
+    // A polling observer must receive a terminal timeout instead of silently
+    // restarting the same long build between polls. The recent set is bounded.
+    if(!ranking)rememberRegisterError(key,error);
     reject(error);
     if (current===job) interrupt?.(error); else release(job);
   },ranking?rankingDeadlineMs:registerDeadlineMs);

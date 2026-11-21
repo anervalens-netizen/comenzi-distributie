@@ -521,10 +521,16 @@ function readSnapshot<T>(
       }
       return {app,history,source,report,sales};
     }
-    const value=read(openSources,key);
-    verifySources();
-    disk?.save(directory,key,value);
-    return {key,value};
+    const release=disk?.acquire?.(directory);
+    try {
+      // The prewarm service may have published after our first disk lookup.
+      const concurrent=release && disk?.load(directory,key);
+      if(concurrent!==undefined){verifySources();return {key,value:concurrent};}
+      const value=read(openSources,key);
+      verifySources();
+      disk?.save(directory,key,value);
+      return {key,value};
+    } finally {release?.();}
   } finally {
     for (const database of databases.reverse()) database.close();
   }
@@ -569,7 +575,7 @@ function readLedger(input:VodafoneBonusRead,previous:Snapshot<BonusLedgerInput>|
 /** Warm the shared pre-scope ledger. Maintenance must fail if its private cache could not be persisted. */
 export function warmVodafoneBonusLedger(input:VodafoneBonusRead) {
   let status='current';
-  readLedger(input,undefined,{load:ledgerCache.load,save:(directory,key,value)=>{
+  readLedger(input,undefined,{load:ledgerCache.load,acquire:ledgerCache.acquire,save:(directory,key,value)=>{
     if (!ledgerCache.save(directory,key,value)) throw new Error('Cannot persist private Vodafone ledger cache');
     status='rebuilt';
     return true;

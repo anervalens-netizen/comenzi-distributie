@@ -6,6 +6,23 @@ import {bucharestMonthKey} from '@/lib/bucharest-month';
 import {filterVodafoneBonusRows,firstVodafoneBonusMonth,vodafoneBonusPageSize,vodafoneBonusReasonLabels,type VodafoneBonusScreen} from '@/lib/vodafone-bonus-types';
 import './vodafone-bonus.css';
 
+type Pending={state:'preparing'};
+async function readBonus<T extends object>(url:string,signal:AbortSignal,onPreparing?:()=>void):Promise<T>{
+  for(let attempt=0;attempt<24;attempt++){
+    const response=await api<T|Pending>(url+'&progressive=1','GET',undefined,signal);
+    if(!('state' in response && response.state==='preparing'))return response as T;
+    onPreparing?.();
+    if(attempt===23)break;
+    await new Promise<void>((resolve,reject)=>{
+      const done=()=>{signal.removeEventListener('abort',abort);resolve();};
+      const timer=setTimeout(done,5000);
+      const abort=()=>{clearTimeout(timer);reject(signal.reason);};
+      if(signal.aborted)abort();else signal.addEventListener('abort',abort,{once:true});
+    });
+  }
+  throw new Error('Registrul este încă în pregătire. Apasă Reîncarcă pentru a verifica din nou.');
+}
+
 type View = 'points' | 'documents' | 'unresolved';
 const labels: Record<View,string> = {points:'Registru pe punct',documents:'Facturi și stingeri',unresolved:'De identificat'};
 const count = (n: number|null) => n===null ? '—' : n.toLocaleString('ro-RO');
@@ -19,7 +36,7 @@ export function VodafoneBonus({scopeQuery}: {scopeQuery: string}) {
   const [wantFull,setWantFull] = useState(false);
   const [find,setFind] = useState('');
   const [reload,setReload] = useState(0);
-  const [read,setRead] = useState<{key: string; report?: VodafoneBonusScreen; error?: string}>();
+  const [read,setRead] = useState<{key: string; report?: VodafoneBonusScreen; error?: string; preparing?:boolean}>();
   const [exporting,setExporting] = useState(false);
   const [exportError,setExportError] = useState('');
   const exportRequest = useRef<AbortController|undefined>(undefined);
@@ -40,7 +57,7 @@ export function VodafoneBonus({scopeQuery}: {scopeQuery: string}) {
   useEffect(()=>{
     const request = new AbortController();
     const url='vodafone/bonuses?'+key+(wantFull?'':'&view=preview');
-    api<VodafoneBonusScreen>(url,'GET',undefined,request.signal)
+    readBonus<VodafoneBonusScreen>(url,request.signal,()=>{if(!request.signal.aborted)setRead({key,preparing:true});})
       .then(report=>{if(!request.signal.aborted)setRead({key,report});})
       .catch(error=>{
         if(!request.signal.aborted)setRead(previous=>({key,report:previous?.key===key ? previous.report : undefined,error:errorMessage(error)}));
@@ -61,7 +78,7 @@ export function VodafoneBonus({scopeQuery}: {scopeQuery: string}) {
     if (find.trim()) params.set('q',find.trim());
     if (report?.revision) params.set('revision',report.revision);
     try {
-      const {workbook} = await api<{workbook: string}>('vodafone/bonuses?'+params,'GET',undefined,request.signal);
+      const {workbook} = await readBonus<{workbook: string}>('vodafone/bonuses?'+params,request.signal);
       if (request.signal.aborted) return;
       const bytes=Uint8Array.from(atob(workbook),char=>char.charCodeAt(0));
       const file=URL.createObjectURL(new Blob([bytes],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));
@@ -100,7 +117,7 @@ export function VodafoneBonus({scopeQuery}: {scopeQuery: string}) {
     </div>
     {visible?.error && <p className="error-banner" role="alert">{visible.error}</p>}
     {exportError && <p className="error-banner" role="alert">{exportError}</p>}
-    {!visible && <output className="commerce-loading">Se încarcă registrul Vodafone…</output>}
+    {!report && !visible?.error && <output className="commerce-loading">{visible?.preparing?'Se pregătește registrul din datele actualizate. Pagina se actualizează automat.':'Se încarcă registrul Vodafone…'}</output>}
     {coverage && <>
       <p className="commerce-source">{coverage.publishedOn ? 'Raport final din '+dateLabel(coverage.publishedOn) : 'Raportul final nu este disponibil'} · Date până la {dateLabel(coverage.sourceThrough)} · {count(coverage.activations)} activări partenere · {count(coverage.unresolvedActivations)} fără franciză identificată</p>
       {!report?.fiscalKindsComplete && <p className="commerce-source-warning">Tipul fiscal lipsește pentru unele documente. Acestea pot apărea în simulare când vânzarea sau factura la zero se reconciliază între surse.</p>}

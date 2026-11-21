@@ -54,3 +54,8 @@ Unitățile `deploy/mobiup-vodafone-bonus-warmup.service` și `.timer` pornesc v
 La actualizarea unei instalări existente, operatorul poate aplica indexurile de factură și produse gratuite prin `python3 tools/client_sales_history.py --database /cale/configurată/client-history/client-sales-history.sqlite --ensure-schema`. Aceeași schemă se aplică la importurile următoare. După prima actualizare de schemă, reconstruiește proiecția de activitate din aceeași sursă cu procedura din [client-sales.md](client-sales.md). Repetarea comenzii păstrează indexurile existente.
 
 Registrul păstrează o copie derivată privată în `.vodafone-bonus-cache/current.bin` din directorul de date. Refolosirea cere aceeași versiune de worker, aceleași surse și aceleași reguli. Accesul și gestiunile vizibile se verifică pentru fiecare solicitare. O copie absentă sau deteriorată se reconstruiește automat. Într-un director fără drept de scriere aplicația folosește memoria procesului.
+
+
+Cererea ecranului și exportul folosesc `progressive=1`. Dacă registrul încă se pregătește, API-ul răspunde cu HTTP 202 și `Retry-After: 5`. Pagina verifică automat de cel mult 24 de ori și oprește verificarea la schimbarea selecției. Fiecare cerere reverifică permisiunile. Apelurile fără acest parametru păstrează contractul sincron.
+
+Serviciul periodic și workerul aplicației folosesc aceeași rezervare SQLite în directorul privat de cache pentru calculul registrului. Închiderea procesului eliberează rezervarea. Publicarea rămâne atomică și verifică generația datelor înainte de salvare.

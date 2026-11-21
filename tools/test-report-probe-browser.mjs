@@ -29,7 +29,7 @@ const fixture = await build({stdin:{contents:`
 `,loader:'tsx',resolveDir:process.cwd()},bundle:true,platform:'browser',format:'esm',jsx:'automatic',
   define:{'process.env.NODE_ENV':'"production"'},loader:{'.css':'empty','.woff2':'empty'},write:false});
 
-let mode = 'good', role = 'manager', bonusReads = 0, fullBonusReads = 0;
+let mode = 'good', role = 'manager', bonusReads = 0, fullBonusReads = 0, pendingReads = 0;
 const script = '/_next/static/fixture-pilot.js';
 const shellVersion = 'a'.repeat(16);
 const ref = {release:'a'.repeat(40),shellVersion,referenceId:'b'.repeat(32),role:'manager'};
@@ -87,6 +87,9 @@ const server = createServer((req,res) => {
       }
       case '/api/vodafone/bonuses':
         bonusReads++;
+        if(mode==='pending_register' && !pendingReads && url.searchParams.get('view')==='preview' && url.searchParams.get('progressive')==='1'){
+          pendingReads++;res.statusCode=202;res.setHeader('Retry-After','5');return json({state:'preparing'});
+        }
         return json(register(url.searchParams));
       default: res.statusCode = 503; return json({error:'Synthetic unused view'});
     }
@@ -144,6 +147,10 @@ try {
   mode = 'wrong_period';
   error(await probe(annual),'trend_months_mismatch');
   mode = 'good';
+  mode='pending_register';
+  pass(await probe(bonus,{},15000));
+  assert.equal(pendingReads,1,'a browser opens the completed register automatically after a cold source');
+  mode='good';
   const initialFullReads = fullBonusReads;
   pass(await probe(bonus));
   assert.equal(fullBonusReads, initialFullReads + 1, 'the reference point beyond page one requires the full scoped request');

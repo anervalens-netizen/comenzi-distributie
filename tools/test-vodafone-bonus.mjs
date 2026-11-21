@@ -4,7 +4,7 @@ import {once} from 'node:events';
 import {Worker} from 'node:worker_threads';
 import {deserialize} from 'node:v8';
 import assert from 'node:assert/strict';
-import {existsSync,mkdtempSync,mkdirSync,readFileSync,rmSync,statSync,writeFileSync} from 'node:fs';
+import {chmodSync,existsSync,mkdtempSync,mkdirSync,readFileSync,rmSync,statSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {pathToFileURL} from 'node:url';
 import {join} from 'node:path';
@@ -240,6 +240,19 @@ try {
       assert.equal(result.status,0,result.error?.message||result.stderr);
       return JSON.parse(result.stdout).vodafoneLedger;
     }
+    mkdirSync(cacheDir,{recursive:true,mode:0o700});
+    const lockName=join(cacheDir,'build-lock.sqlite'),lock=new DatabaseSync(lockName);chmodSync(lockName,0o600);
+    lock.exec('BEGIN IMMEDIATE');
+    try {
+      assert.equal(status(),'preparing','the installed timer must not duplicate an existing foreground rebuild');
+      const cwd=process.cwd();process.chdir(packaged);
+      const screen=new Worker(workerFile);
+      try {
+        const result=once(screen,'message');screen.postMessage({...options,preview:true,month:'2026-06'});
+        assert.deepEqual((await result)[0],{state:'preparing'},'the foreground waits if another process holds the canonical ledger lock');
+        assert.equal(existsSync(ledger),false);
+      } finally {await screen.terminate();process.chdir(cwd);}
+    } finally {lock.close();}
     assert.equal(status(),'rebuilt');
     assert.equal(statSync(ledger).mode&0o777,0o600);
     assert.equal(statSync(cacheDir).mode&0o777,0o700);

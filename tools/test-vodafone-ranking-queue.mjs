@@ -10,7 +10,7 @@ const cwd=process.cwd(),dir=mkdtempSync(join(tmpdir(),'vodafone-scheduler-'));
 try {
   const modulePath=join(dir,'runtime.mjs');
   const code=readFileSync('lib/vodafone-bonus-runtime-node.ts','utf8')
-    .replace('registerDeadlineMs=42_000','registerDeadlineMs=1200')
+    .replace('registerDeadlineMs=120_000','registerDeadlineMs=1200')
     .replace('rankingDeadlineMs=75_000','rankingDeadlineMs=2400')
     .replace('foregroundGraceMs=2_000','foregroundGraceMs=60');
   await build({stdin:{resolveDir:join(cwd,'lib'),contents:code,loader:'ts'},bundle:true,format:'esm',platform:'node',outfile:modulePath});
@@ -23,7 +23,7 @@ try {
       const tag=job.scope[0];
       const duplicate=readFileSync('events','utf8').includes('start '+tag+' ');
       appendFileSync('events','start '+tag+' '+threadId+'\\n');
-      const delay=tag==='hung'||tag==='twice'||(tag==='ranking'&&!duplicate)?9000:10;
+      const delay=tag==='cold'?220:tag==='hung'||tag==='twice'||(tag==='ranking'&&!duplicate)?9000:10;
       setTimeout(()=>{
         appendFileSync('events','done '+tag+' '+threadId+'\\n');
         parentPort.postMessage('kind' in job?{rows:[tag]}:{points:[tag]});
@@ -41,6 +41,14 @@ try {
     }
   }
 
+  const cold=readUi(ui('cold'));await starts('cold');
+  const pending=join(dir,'pending.mjs');
+  await build({entryPoints:[join(cwd,'lib/vodafone-bonus-preparing.ts')],platform:'node',format:'esm',outfile:pending});
+  const {observeVodafoneBonus,VodafoneBonusPreparing}=await import(pathToFileURL(pending));
+  await assert.rejects(observeVodafoneBonus(cold,5),VodafoneBonusPreparing);
+  assert.deepEqual(await readUi(ui('cold')),{points:['cold']});assert.deepEqual(await cold,{points:['cold']});
+  assert.equal(events().filter(line=>line.startsWith('start cold ')).length,1,'polling joins the unexpired foreground job');
+  writeFileSync('events','');
   const ranking=readRank(rank('ranking')),sameRanking=readRank(rank('ranking'));
   await starts('ranking');
   const other=readRank(rank('alternate'));

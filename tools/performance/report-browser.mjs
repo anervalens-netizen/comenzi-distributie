@@ -98,7 +98,8 @@ export async function observeReport(config, checkReference) {
     const filters = ['managerId','agentId','siteCode'];
     if (filters.some(key => (p.get(key) ?? null) !== (config.scope[key] || null))) return false;
     if (p.has('projects') !== (role === 'manager') || p.has('months') !== annual) return false;
-    if (!annual && [...p.keys()].some(key => !['month','view','projects',...filters].includes(key))) return false;
+    if (!annual && p.has('progressive') && p.get('progressive')!=='1') return false;
+    if (!annual && [...p.keys()].some(key => !['month','view','projects','progressive',...filters].includes(key))) return false;
     return (p.get('projects') || '').split(',').filter(Boolean).sort().join() === config.scope.projects.join();
   }
   function freshness(event) {
