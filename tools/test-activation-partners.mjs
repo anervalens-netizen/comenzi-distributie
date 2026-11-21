@@ -66,6 +66,9 @@ try{
  assert.equal(read({view:'detail',point:'generic:'+JSON.stringify(['ExampleCo','S'])}).detail.total,0,'forged personal-sales group never broadens authenticated seller access');
  assert.equal(read({view:'detail',point:'unassigned:'+JSON.stringify(['ExampleCo','EXAMPLE','','S'])}).detail.total,0);
  assert.equal(read({view:'detail',point:'unresolved:6'}).detail.total,1,'previous unresolved bookmark remains supported');
+ assert.equal(read({view:'detail',point:'unresolved:4'}).detail.total,0,'a historical unresolved bookmark cannot turn a consumer into a partner');
+ assert.equal(read({view:'detail',point:'unassigned:'+JSON.stringify(['ExampleCo','GENERICPARTENER','','N'])}).detail.total,0);
+
  assert.equal(read({view:'detail',company:JSON.stringify(['ExampleCo','CLIENTGEN'])}).detail.total,3,'company drilldown retains authorized generic sales');
  assert.equal(read({q:'CLIENTGEN',portfolio}).partners.realPointCount,0,'filtered denominators exclude unrelated real points');
  assert.equal(read({q:'CLIENTGEN',portfolio}).partners.genericActivations,4);

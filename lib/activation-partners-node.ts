@@ -68,16 +68,26 @@ export function activationPartnerView(db:DatabaseSync,result:ActivationReport,wh
  let selectionIndex='';
  let selectedArgs:string[]=[];
  if(query.point){
-   if(query.point.startsWith('unresolved:')){selection="id=? AND point_key=''";selectedArgs=[query.point.slice('unresolved:'.length)];}
+   if(query.point.startsWith('unresolved:')){selection=`id=? AND point_key='' AND NOT (${consumerAccount})`;selectedArgs=[query.point.slice('unresolved:'.length)];}
    else if(query.point.startsWith('generic:')||query.point.startsWith('unassigned:')){
      const generic=query.point.startsWith('generic:');
      let identity:string[];
      try{const value=JSON.parse(query.point.slice(generic?'generic:'.length:'unassigned:'.length));if(!Array.isArray(value)||value.length!==(generic?2:4)||value.some(v=>typeof v!=='string'))throw new Error();identity=value;}catch{throw new Error('Invalid activation group');}
-     selection=generic?`company=? AND ${consumerAccount} AND site=?`:"company=? AND client_code=? AND point_code=? AND site=? AND point_key='' AND client_code<>'CLIENTGEN'";
+     selection=generic?`company=? AND ${consumerAccount} AND site=?`:`company=? AND client_code=? AND point_code=? AND site=? AND point_key='' AND NOT (${consumerAccount})`;
      selectedArgs=identity;
      selectionIndex='detail_company_scope';
    }
-   else if(!query.point.startsWith('portfolio:')){selection=`point_key=? AND NOT (${consumerAccount})`;selectionIndex='detail_point';selectedArgs=[query.point];}
+   else if(!query.point.startsWith('portfolio:')){
+     // Published point keys encode [company, client code, work point]. Reject
+     // personal accounts before SQL so regular points retain covering-index reads.
+     let identity:unknown;
+     try{identity=JSON.parse(query.point);}catch{/* Older opaque keys require the row-level check. */}
+     const client=Array.isArray(identity)&&identity.length===3&&identity.every(value=>typeof value==='string')?String(identity[1]):undefined;
+     if(client===undefined||!isConsumerAccountCode(client)){
+       selection=client!==undefined?'point_key=?':`point_key=? AND NOT (${consumerAccount})`;
+       selectionIndex='detail_point';selectedArgs=[query.point];
+     }
+   }
  }else if(query.company){
    try{const v=JSON.parse(query.company);if(!Array.isArray(v)||v.length!==2||v.some(v=>typeof v!=='string'))throw new Error();selectedArgs=v;}catch{throw new Error('Invalid company selection');}
    if(!db.prepare("SELECT 1 FROM sqlite_master WHERE type='index' AND name='detail_company_scope'").get())throw new Error('Company projection index requires rebuild');
