@@ -8,6 +8,12 @@ Pentru 3–4 activări SIM 0 premiul calculat este un SIM 5. Pentru 5–9 se cal
 
 Sunt eligibile documentele complete cu SIM 5 și vouchere Vodafone la preț și valoare zero, reconciliate în exporturile pe client și pe gestiune. Conturile generice și mișcările tehnice identificate sunt excluse. Documentele mixte, retururile și diferențele dintre surse rămân vizibile pentru reconciliere. Stingerile merg către cea mai veche lună eligibilă a aceleiași francize și păstrează numărul facturii, data și luna dreptului.
 
+## Vânzări către persoane fizice
+
+În rapoartele de activări și vânzări, codurile ERP `CLIENTGEN` și `GENERICPARTENER` reprezintă vânzări către persoane fizice. Aceste vânzări nu necesită cod de punct de lucru. În „Pe partener” apar separat și sunt excluse din numărul de puncte comerciale și din clasamentele partenerilor.
+
+În Focus, o activare generică eligibilă pentru totalul regional contribuie și la „Realizare TR” numai dacă județul activării figurează între județele alocate agentului. Cu județ lipsă sau atribuit altui agent, activarea rămâne doar în regional. Ecranul, detaliul și exportul Excel folosesc aceeași atribuire. Pentru o firmă cu mai multe puncte, identificarea CUI-ului singur nu stabilește magazinul.
+
 ## Publicarea și dovada fiscală
 
 O lună are raport final când o sursă Vodafone acoperă întreaga lună și are dată de publicare în luna următoare sau mai târziu. Perioadele fără raport final au valori de calcul provizorii. Soldul confirmat cere dovada fiscală a documentelor și un premiu Top Locații stabilit pentru punct și lună. Documentele fără tip fiscal pot contribui la simularea SIM 0 după reconcilierea surselor. În această simulare soldul de deschidere la 1 iunie este zero. O perioadă anterioară fără raport final, cu activări atribuite neconfirmate fiscal sau fără decont Top Locații pe punct păstrează soldul lunilor următoare neconfirmat. Un bonus zero explicit în decont confirmă că punctul nu are drepturi Top Locații pentru luna respectivă.
