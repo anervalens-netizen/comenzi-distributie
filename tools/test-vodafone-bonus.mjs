@@ -1,5 +1,6 @@
+import {deserialize} from 'node:v8';
 import assert from 'node:assert/strict';
-import {existsSync,mkdtempSync,mkdirSync,rmSync,statSync,writeFileSync} from 'node:fs';
+import {existsSync,mkdtempSync,mkdirSync,readFileSync,rmSync,statSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {pathToFileURL} from 'node:url';
 import {join} from 'node:path';
@@ -15,6 +16,7 @@ try {
     export * from './lib/vodafone-bonus-types';
     export * from './lib/vodafone-bonus-ledger';
     export * from './lib/vodafone-bonus-node';
+    export * from './lib/vodafone-activation-ranking-node';
     export * from './lib/vodafone-bonus-evidence';
     export * from './lib/vodafone-bonus-export';
   `,resolveDir:process.cwd()},outfile:bundle,bundle:true,format:'esm',platform:'node'});
@@ -312,6 +314,42 @@ try {
   assert.equal(rank.companies.get('SYNTHETIC'),'Legal Example Company');
   assert.deepEqual(rank.coverage.map(m=>[m.month,m.reported]),[['2026-01',false],['2026-02',true],['2026-03',false],['2026-04',false],['2026-05',false],['2026-06',true]]);
   assert.equal(rank.coverage.at(-1).sourceThrough,'2026-06-30');
+  const previousCwd=process.cwd();
+  try {
+    process.chdir(root);
+    const loadRanking=async(instance,scope,fromMonth='2026-01')=>(await import(pathToFileURL(bundle).href+'?ranking='+instance)).readVodafoneSim0Ranking({
+      ...options,fromMonth,toMonth:'2026-06',scope,kind:'sim0-clients',
+    });
+    const ranked=await loadRanking('initial',['SITE-A']);
+    const rankingPath=join(root,'.vodafone-bonus-cache','ranking.bin');
+    const ledgerPath=join(root,'.vodafone-bonus-cache','current.bin');
+    const ledgerFile=statSync(ledgerPath).ino;
+    const initialFile=statSync(rankingPath);
+    assert.equal(initialFile.mode&0o777,0o600);
+    const stored=deserialize(readFileSync(rankingPath).subarray(160));
+    assert.equal(stored.key,ranked.revision);
+    assert.deepEqual(Object.keys(stored.value).sort(),['coverage','revision','rows'],'persist only scoped aggregates');
+    const originalPrepare=DatabaseSync.prototype.prepare;
+    try {
+      DatabaseSync.prototype.prepare=function(sql) {
+        if (sql.includes('FROM details WHERE provider=')) throw new Error('Aggregate restart crossed into raw activation reads');
+        return originalPrepare.call(this,sql);
+      };
+      assert.deepEqual(await loadRanking('restart',['SITE-A']),ranked);
+      assert.equal(statSync(rankingPath).ino,initialFile.ino);
+    } finally {DatabaseSync.prototype.prepare=originalPrepare;}
+    const other=await loadRanking('other',['SITE-B']);
+    assert.notEqual(other.revision,ranked.revision,'scope changes cannot reuse an aggregate');
+    assert.notEqual((await loadRanking('period',['SITE-B'],'2026-02')).revision,other.revision);
+    assert.equal(statSync(ledgerPath).ino,ledgerFile,'ranking never evicts the ledger');
+    writeFileSync(rankingPath,'corrupted synthetic ranking');
+    assert.deepEqual(await loadRanking('recovery',['SITE-A']),ranked);
+    const beforeRelease=statSync(rankingPath).ino;
+    writeFileSync('vodafone-bonus-worker.mjs','// next synthetic ranking release');
+    assert.deepEqual(await loadRanking('release',['SITE-A']),ranked);
+    assert.notEqual(statSync(rankingPath).ino,beforeRelease,'release changes force fresh aggregation');
+  } finally {process.chdir(previousCwd);}
+
   let projects=0;
   const compact=rows=>{projects++;return rows.activation.length;};
   const first=projectVodafoneSim0Rows(options,'2026-01','2026-06',['SITE-A'],compact);

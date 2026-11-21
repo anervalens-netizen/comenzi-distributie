@@ -9,7 +9,7 @@ import {activationFactsVersion} from './activation-semantics';
 import {firstVodafoneBonusMonth, vodafoneBonusPreview, type VodafoneBonusScreen, type VodafoneBonusReason, type VodafoneBonusReport, type VodafoneBonusScope, type VodafoneTopLocation} from './vodafone-bonus-types';
 import {bonusDate,bonusMonth,bonusEvidenceIdentity,type VodafoneBonusEvidence} from './vodafone-bonus-evidence';
 import {isVodafoneGenericPartner,vodafoneDocumentKind} from './vodafone-bonus-rules';
-import {createVodafoneDiskCache,readBonusCache,writeBonusCache} from './vodafone-bonus-cache-node';
+import {createVodafoneDiskCache,type VodafoneDiskCache} from './vodafone-bonus-cache-node';
 import {vodafoneBonusLedger,type BonusActivation,type BonusLedgerInput} from './vodafone-bonus-ledger';
 
 type DocFields = {date: string; site: string; number: string};
@@ -23,6 +23,7 @@ type HistoryLine = {
 };
 type CommercialLine = {company: string; site_code: string; date: string; location: string; order_number: string; item_code: string; quantity: number; price_cents: number; value_cents: number};
 type Point = BonusLedgerInput['portfolios'][number];
+const ledgerCache=createVodafoneDiskCache<BonusLedgerInput>('ledger');
 let cached: Snapshot<BonusLedgerInput> | undefined;
 let cachedPreview: Snapshot<VodafoneBonusScreen> | undefined;
 const previewDisk=createVodafoneDiskCache<VodafoneBonusScreen>('preview');
@@ -457,7 +458,7 @@ function readSnapshot<T>(
   input: BonusSourceInput, selection: readonly unknown[], withPayments: boolean,
   read: (openSources: ()=>BonusSources, key: string)=>T,
   previous?: Snapshot<T>,
-  disk?: {load:(directory:string,key:string)=>T|undefined; save:(directory:string,key:string,value:T)=>void},
+  disk?: VodafoneDiskCache<T>,
 ): Snapshot<T> {
   const directory = resolve(input.directory || process.env.MOBIUP_DATA_DIR || './work/server-data');
   const base = resolve(input.activationDirectory || process.env.MOBIUP_ACTIVATIONS_DIR || directory);
@@ -547,7 +548,7 @@ function readFullVodafoneBonus(input: VodafoneBonusRead): VodafoneBonusReport {
     const documents=paymentDocuments(history,sales!,identity,[...new Set([...sim5,...knownVoucherCodes])],input.today,evidence);
     const coverage=monthCoverage(source,activations,input.today,input.evidence);
     return {activation,documents,coverage,targets:input.targets,portfolios:identity.portfolios,revision};
-  },cached,{load:readBonusCache,save:writeBonusCache});
+  },cached,ledgerCache);
   const snapshot=cached.value;
   const revision=createHash('sha256').update(JSON.stringify([snapshot.revision,input.scope])).digest('hex');
   return vodafoneBonusLedger({...snapshot,revision},input.scope,input.month);
@@ -557,7 +558,7 @@ function readFullVodafoneBonus(input: VodafoneBonusRead): VodafoneBonusReport {
 type Sim0SourceRows = {activation:BonusActivation[];companies:Map<string,string>;revision:string;
   coverage:{month:string;sourceThrough:string|null;reported:boolean}[]};
 export function projectVodafoneSim0Rows<T>(input:BonusSourceInput,fromMonth:string,toMonth:string,scope:VodafoneBonusScope,
-  project:(source:Sim0SourceRows)=>T, previous?:Snapshot<T>) {
+  project:(source:Sim0SourceRows)=>T, previous?:Snapshot<T>,disk?:VodafoneDiskCache<T>) {
   if (!bonusMonth(fromMonth) || !bonusMonth(toMonth) || fromMonth>toMonth || toMonth>input.today.slice(0,7)) throw new Error('Invalid activation period');
   return readSnapshot(input,[fromMonth,toMonth,scope],false,(openSources,revision)=>{
     const {app,history,source,report}=openSources();
@@ -589,7 +590,7 @@ export function projectVodafoneSim0Rows<T>(input:BonusSourceInput,fromMonth:stri
       coverage.push({month,sourceThrough:through||null,reported:!!through});
     }
     return project({activation,revision,coverage,companies});
-  },previous);
+  },previous,disk);
 }
 
 export function readVodafoneSim0ActivationRows(input:BonusSourceInput,fromMonth:string,toMonth:string) {

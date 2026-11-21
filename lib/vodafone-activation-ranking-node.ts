@@ -1,3 +1,4 @@
+import {createVodafoneDiskCache} from './vodafone-bonus-cache-node';
 import {validAnafCui} from './anaf-types';
 import {isVodafoneGenericPartner} from './vodafone-bonus-rules';
 import {projectVodafoneSim0Rows,type VodafoneBonusRead} from './vodafone-bonus-node';
@@ -58,9 +59,10 @@ export function groupVodafoneSim0Clients(source:{
 }
 
 // Keep only the last scoped aggregate. The source verifies all revisions before every reuse.
+const rankingCache=createVodafoneDiskCache<VodafoneSim0Ranking>('ranking');
 let cached:{key:string;value:VodafoneSim0Ranking}|undefined;
 export function readVodafoneSim0Ranking(input:VodafoneSim0RankingRead) {
   cached=projectVodafoneSim0Rows(input,input.fromMonth,input.toMonth,input.scope,
-    source=>groupVodafoneSim0Clients(source,input.scope),cached);
+    source=>groupVodafoneSim0Clients(source,input.scope),cached,rankingCache);
   return cached.value;
 }
