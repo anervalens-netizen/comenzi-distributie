@@ -26,9 +26,8 @@ export function reference(input) {
   requireConfig(Object.keys(scope).every(key => ['managerId','agentId','siteCode','projects'].includes(key)));
   requireConfig(!input.scope || role === 'manager');
   for (const key of ['managerId','agentId','siteCode']) requireConfig(!(key in scope) || typeof scope[key] === 'string');
-  const selected = scope.projects ?? (role === 'manager' && scenario === 'annual' ? projects : []);
+  const selected = scope.projects ?? (role === 'manager' ? projects : []);
   requireConfig(Array.isArray(selected) && selected.every(p => projects.includes(p)) && new Set(selected).size === selected.length);
-  requireConfig(scenario === 'annual' || !selected.length);
   scope.projects = [...selected].sort((a,b) => a.localeCompare(b));
   const months = [month];
   if (scenario === 'annual') {

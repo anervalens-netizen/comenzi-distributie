@@ -87,15 +87,19 @@ export async function observeReport(config, checkReference) {
       if (p.get('provider') === 'digi') return 'digi';
       if (p.get('provider') === 'vodafone' && ['totals','panels','cards'].includes(p.get('overviewPhase'))) return p.get('overviewPhase');
     }
-    if (!annual && url.pathname === '/api/vodafone/bonuses' && !p.has('view')) return 'bonus';
+    if (!annual && url.pathname === '/api/vodafone/bonuses') {
+      if (p.get('view') === 'preview') return 'bonus';
+      if (!p.has('view')) return 'bonusFull';
+    }
   }
   function matchesScope(p) {
     if (p.get('month') !== months[0] || (annual && p.get('months') !== months.join(','))) return false;
     if ([...p.keys()].some(key => p.getAll(key).length !== 1)) return false;
     const filters = ['managerId','agentId','siteCode'];
     if (filters.some(key => (p.get(key) ?? null) !== (config.scope[key] || null))) return false;
-    if (p.has('projects') !== (annual && role === 'manager') || p.has('months') !== annual) return false;
-    return !annual || (p.get('projects') || '').split(',').filter(Boolean).sort().join() === config.scope.projects.join();
+    if (p.has('projects') !== (role === 'manager') || p.has('months') !== annual) return false;
+    if (!annual && [...p.keys()].some(key => !['month','view','projects',...filters].includes(key))) return false;
+    return (p.get('projects') || '').split(',').filter(Boolean).sort().join() === config.scope.projects.join();
   }
   function freshness(event) {
     const detail = event.detail;
@@ -172,7 +176,7 @@ export async function observeReport(config, checkReference) {
       const before = rows.length;
       if (before >= expected.rows) fail('bonus_row_count_mismatch');
       more.click();
-      await until(() => rows.length > before, 'bonus_pagination_stalled');
+      await until(() => fresh.has('bonusFull') && rows.length > before, 'bonus_pagination_stalled');
     }
     // Match only the point code locally. Never return or log point/partner text.
     const matches = [...rows].filter(row => row.cells[0].querySelector('small')?.textContent.split(' · ')[0] === expected.pointCode);
