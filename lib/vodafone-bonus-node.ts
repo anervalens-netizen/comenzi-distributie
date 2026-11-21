@@ -60,7 +60,7 @@ function fingerprint(path: string) {
   return files.map(file => {
     const stat = statSync(file,{bigint:true,throwIfNoEntry:false});
     // Opening a WAL database for reading may create an empty sidecar without changing any rows.
-    return !stat || (file!==path && stat.size===BigInt(0)) ? '-' : [stat.dev,stat.ino,stat.size,stat.mtimeNs].join(':');
+    return !stat || (file!==path && stat.size===BigInt(0)) ? '-' : [stat.dev,stat.ino,stat.size,stat.mtimeNs,stat.ctimeNs].join(':');
   }).join('|');
 }
 function hasTable(app: DatabaseSync, name: string) {
@@ -474,9 +474,12 @@ function readSnapshot<T>(
     };
     const initialApp=fingerprint(appPath);
     const app=open(appPath);
-    const memo=appRevisions.get(withPayments);
+    // BEGIN is deferred: pin the catalog before trusting a previously calculated digest.
+    app.prepare('PRAGMA schema_version').get();
+    const unchangedAtPin=fingerprint(appPath)===initialApp;
+    const memo=unchangedAtPin ? appRevisions.get(withPayments) : undefined;
     const appIdentity=memo?.stamp===initialApp ? memo.digest : applicationIdentity(app,appPath,!withPayments);
-    if (!memo || memo.stamp!==initialApp) appRevisions.set(withPayments,{stamp:initialApp,digest:appIdentity});
+    if (unchangedAtPin && memo?.stamp!==initialApp) appRevisions.set(withPayments,{stamp:initialApp,digest:appIdentity});
     const key=createHash('sha256').update(JSON.stringify([appIdentity,before,generation,input.today,input.rules,input.evidence,selection])).digest('hex');
     function verifySources() {
       if (generation!==activationsDirectory(base) || paths.some((path,i)=>fingerprint(path)!==before[i]) ||

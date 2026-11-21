@@ -218,6 +218,33 @@ try {
   ]}});
   assert.equal(certified.points.find(row=>row.month==='2026-06').remaining,0);
   assert.equal(certified.documents.find(doc=>doc.number==='payment').allocations.filter(row=>row.status==='confirmed').length,1);
+  // A transient CRM edit reverted during a cold query must never be attributed to the previous revision.
+  const crmWriter=new DatabaseSync(join(root,'mobiup.sqlite'));
+  const prepare=DatabaseSync.prototype.prepare;
+  let crmStage=0;
+  try {
+    crmWriter.exec('PRAGMA journal_mode=WAL');
+    const original=crmWriter.prepare("SELECT data FROM customers WHERE id='pointA'").get().data;
+    const update=crmWriter.prepare("UPDATE customers SET data=? WHERE id='pointA'");
+    const baseline=readVodafoneBonus({...options,today:'2026-08-18'});
+    DatabaseSync.prototype.prepare=function(sql) {
+      if (crmStage===0 && sql.includes('FROM details WHERE provider=')) {
+        update.run(JSON.stringify({...JSON.parse(original),cui:'another fictional owner'}));
+        crmStage=1;
+      }
+      if (crmStage===1 && sql.includes('r.price_cents=0')) {
+        update.run(original);
+        crmStage=2;
+      }
+      return prepare.call(this,sql);
+    };
+    const observed=readVodafoneBonus({...options,today:'2026-08-19'});
+    assert.equal(crmStage,2);
+    assert.equal(observed.months[0].confirmedActivations,baseline.months[0].confirmedActivations,'use one pinned CRM version');
+  } finally {
+    DatabaseSync.prototype.prepare=prepare;
+    crmWriter.close();
+  }
   // A real WAL commit during a pinned multi-source read must still fail.
   const originalPrepare=DatabaseSync.prototype.prepare;
   let changed=false;
