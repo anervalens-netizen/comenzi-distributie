@@ -452,6 +452,7 @@ try{
   await waitFor(()=>browser.evaluate('!!document.querySelector(".agent-commerce .prepay-sales")'),'agent Prepay sales '+id);
   await browser.evaluate('[...document.querySelectorAll(".prepay-workspace .commerce-tabs button")].find(button=>button.textContent==="Activări").click()');
   await waitFor(()=>browser.evaluate('document.querySelector(".activation-primary strong")?.textContent==='+JSON.stringify(String(october))),'agent activation policy '+id);
+  assert.equal(await browser.evaluate('[...document.querySelectorAll(".activation-workspace button")].some(button=>button.textContent==="Bonusuri Vodafone")'),false,'manager-only bonus register is hidden for agents');
   assert.equal(await browser.evaluate('document.querySelectorAll(".agent-commerce .report-period").length'),1,'agent activation and sales share one period');
   assert(!(await browser.evaluate('!!document.querySelector(".activation-workspace input[type=month]")')),'shared agent period replaces the separate activation month');
   const control='.agent-report-scope [aria-label="septembrie 2026"]';
