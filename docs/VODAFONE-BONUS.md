@@ -36,3 +36,9 @@ Exemplul folosește identificatori fictivi.
 ```
 
 Sunt acceptate `source=activation` și `source=sales`, cu `kind=commercial` ori `kind=excluded`. Configurația trebuie păstrată în mediul privat. Rapoartele sunt derivate din versiunile active ale surselor. Corecțiile și înlocuirile de import recalculează alocările și păstrează luna activărilor și data documentului ca date distincte.
+
+## Acces la surse și actualizarea registrului
+
+La actualizarea unei instalări existente, operatorul poate aplica indexurile de factură și produse gratuite prin `python3 tools/client_sales_history.py --database /cale/configurată/client-history/client-sales-history.sqlite --ensure-schema`. Aceeași schemă se aplică la importurile următoare. După prima actualizare de schemă, reconstruiește proiecția de activitate din aceeași sursă cu procedura din [client-sales.md](client-sales.md). Repetarea comenzii păstrează indexurile existente.
+
+Registrul păstrează o copie derivată privată în `.vodafone-bonus-cache/current.bin` din directorul de date. Refolosirea cere aceeași versiune de worker, aceleași surse și aceleași reguli. Accesul și gestiunile vizibile se verifică pentru fiecare solicitare. O copie absentă sau deteriorată se reconstruiește automat. Într-un director fără drept de scriere aplicația folosește memoria procesului.

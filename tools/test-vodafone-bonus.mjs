@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {mkdtempSync,mkdirSync,rmSync} from 'node:fs';
+import {existsSync,mkdtempSync,mkdirSync,rmSync,statSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {pathToFileURL} from 'node:url';
 import {join} from 'node:path';
@@ -195,7 +195,13 @@ try {
       {source:'sales',company:'ERP',date:'2026-08-05',site:'S-A',number:'adjust',kind:'commercial',evidence:'Fictional approved receipt'},
     ]})),targets:[{pointCode:'FR-A',month:'2026-06',target:4,bonus:0}],
   };
+  const historyFile=join(root,'client-history','client-sales-history.sqlite');
+  const walSetup=new DatabaseSync(historyFile);
+  walSetup.exec('PRAGMA journal_mode=WAL');
+  walSetup.close();
+  assert.equal(existsSync(historyFile+'-wal'),false);
   const computed=readVodafoneBonus(options);
+  assert.equal(computed.points.filter(row=>row.month==='2026-06').length,1,'first read may create an empty WAL');
   assert.deepEqual(computed.documents.map(doc=>doc.number).sort(),['mixed','payment']);
   assert.equal(computed.months[0].activations,3);
   assert.equal(computed.months[0].publishedOn,'2026-07-03');
@@ -212,7 +218,62 @@ try {
   ]}});
   assert.equal(certified.points.find(row=>row.month==='2026-06').remaining,0);
   assert.equal(certified.documents.find(doc=>doc.number==='payment').allocations.filter(row=>row.status==='confirmed').length,1);
-  console.log('PASS: Vodafone registry thresholds, fiscal/generic exclusions, private scope, source joins, FIFO and XLSX');
+  // A real WAL commit during a pinned multi-source read must still fail.
+  const originalPrepare=DatabaseSync.prototype.prepare;
+  let changed=false;
+  const writer=new DatabaseSync(historyFile);
+  try {
+    DatabaseSync.prototype.prepare=function(sql) {
+      if (!changed && sql.includes('FROM details WHERE provider=')) {
+        writer.exec("INSERT INTO history_rows SELECT * FROM history_rows WHERE document_number='payment' LIMIT 1");
+        changed=true;
+      }
+      return originalPrepare.call(this,sql);
+    };
+    assert.throws(()=>readVodafoneBonus({...options,today:'2026-08-20'}),/source updated during read/);
+  } finally {
+    DatabaseSync.prototype.prepare=originalPrepare;
+    writer.close();
+  }
+  assert.ok(changed);
+  assert.notEqual(readVodafoneBonus(options).revision,computed.revision);
+  const cwd=process.cwd();
+  try {
+    process.chdir(root);
+    writeFileSync('vodafone-bonus-worker.mjs','// Synthetic packaged worker identity');
+    const fresh=key=>import(pathToFileURL(bundle).href+'?instance='+key);
+    const first=(await fresh('one')).readVodafoneBonus(options);
+    const saved=join(root,'.vodafone-bonus-cache','current.bin');
+    const beforeInode=statSync(saved).ino;
+    assert.deepEqual((await fresh('two')).readVodafoneBonus(options),first,'worker restart safely reuses source-keyed snapshot');
+    assert.equal(statSync(saved).ino,beforeInode);
+    writeFileSync(saved,'damaged synthetic cache');
+    assert.deepEqual((await fresh('three')).readVodafoneBonus(options),first);
+    assert.notEqual(statSync(saved).ino,beforeInode,'damaged cache was rebuilt');
+    assert.equal(statSync(saved).mode&0o777,0o600);
+    writeFileSync('vodafone-bonus-worker.mjs','// Different synthetic release');
+    const previousRelease=statSync(saved).ino;
+    assert.deepEqual((await fresh('four')).readVodafoneBonus(options),first);
+    assert.notEqual(statSync(saved).ino,previousRelease,'another release recalculates before reusing');
+  } finally {
+    process.chdir(cwd);
+  }
+  const legal=new DatabaseSync(join(root,'mobiup.sqlite'));
+  legal.exec(`CREATE TABLE crm_companies(partner_id,partner_code,cif,name);
+    INSERT INTO crm_companies VALUES('company-example','SYNTHETIC','SYNTHETIC','Legal Example Company')`);
+  legal.close();
+  const earlier=new DatabaseSync(join(root,'activation-report.sqlite'));
+  earlier.exec("INSERT INTO details SELECT '2026-02','2026-02-05',distribution_date,company,serial,client_code,point_code,item_code,label,site,contradictory,provider,is_tr,item_type FROM details WHERE serial='serial-1'");
+  earlier.close();
+  rmSync(join(root,'sales.sqlite'));
+  const {readVodafoneSim0ActivationRows}=await import(pathToFileURL(bundle).href);
+  const rank=readVodafoneSim0ActivationRows(options,'2026-01','2026-06');
+  assert.equal(rank.activation.filter(row=>row.month==='2026-02' && row.pointCode==='FR-A' && row.reason==='commercial').length,1);
+  assert.equal(rank.activation.filter(row=>row.month==='2026-06' && row.reason!=='excluded').length,3);
+  assert.equal(rank.companies.get('SYNTHETIC'),'Legal Example Company');
+  assert.deepEqual(rank.coverage.map(m=>[m.month,m.reported]),[['2026-01',false],['2026-02',true],['2026-03',false],['2026-04',false],['2026-05',false],['2026-06',true]]);
+  assert.equal(rank.coverage.at(-1).sourceThrough,'2026-06-30');
+  console.log('PASS: Vodafone reward attribution, source changes, restart-safe cache, YTD activation source and XLSX');
 } finally {
   rmSync(root,{recursive:true,force:true});
 }
