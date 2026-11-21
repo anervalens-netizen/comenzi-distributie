@@ -3,7 +3,7 @@
 import {useEffect,useRef,useState} from 'react';
 import {api,errorMessage} from '@/lib/client-api';
 import {bucharestMonthKey} from '@/lib/bucharest-month';
-import {firstVodafoneBonusMonth,vodafoneBonusReasonLabels,type VodafoneBonusReport} from '@/lib/vodafone-bonus-types';
+import {filterVodafoneBonusRows,firstVodafoneBonusMonth,vodafoneBonusPageSize,vodafoneBonusReasonLabels,type VodafoneBonusScreen} from '@/lib/vodafone-bonus-types';
 import './vodafone-bonus.css';
 
 type View = 'points' | 'documents' | 'unresolved';
@@ -15,10 +15,11 @@ const dateLabel = (date: string|null) => date ? date.split('-').reverse().join('
 export function VodafoneBonus({scopeQuery}: {scopeQuery: string}) {
   const [choice,setChoice] = useState('');
   const [view,setView] = useState<View>('points');
-  const [limit,setLimit] = useState(50);
+  const [limit,setLimit] = useState(vodafoneBonusPageSize);
+  const [wantFull,setWantFull] = useState(false);
   const [find,setFind] = useState('');
   const [reload,setReload] = useState(0);
-  const [read,setRead] = useState<{key: string; report?: VodafoneBonusReport; error?: string}>();
+  const [read,setRead] = useState<{key: string; report?: VodafoneBonusScreen; error?: string}>();
   const [exporting,setExporting] = useState(false);
   const [exportError,setExportError] = useState('');
   const exportRequest = useRef<AbortController|undefined>(undefined);
@@ -38,12 +39,15 @@ export function VodafoneBonus({scopeQuery}: {scopeQuery: string}) {
   const coverage = report?.months.find(row=>row.month===month);
   useEffect(()=>{
     const request = new AbortController();
-    api<VodafoneBonusReport>('vodafone/bonuses?'+key,'GET',undefined,request.signal)
+    const url='vodafone/bonuses?'+key+(wantFull?'':'&view=preview');
+    api<VodafoneBonusScreen>(url,'GET',undefined,request.signal)
       .then(report=>{if(!request.signal.aborted)setRead({key,report});})
-      .catch(error=>{if(!request.signal.aborted)setRead({key,error:errorMessage(error)});});
+      .catch(error=>{
+        if(!request.signal.aborted)setRead(previous=>({key,report:previous?.key===key ? previous.report : undefined,error:errorMessage(error)}));
+      });
     return ()=>request.abort();
-  },[key,reload]);
-  useEffect(()=>()=>exportRequest.current?.abort(),[key]);
+  },[key,reload,wantFull]);
+  useEffect(()=>()=>exportRequest.current?.abort(),[key,find]);
 
   async function download(all: boolean) {
     const request = new AbortController();
@@ -54,6 +58,7 @@ export function VodafoneBonus({scopeQuery}: {scopeQuery: string}) {
     const params = new URLSearchParams(key);
     params.set('view','export');
     if (all) params.set('all','1');
+    if (find.trim()) params.set('q',find.trim());
     if (report?.revision) params.set('revision',report.revision);
     try {
       const {workbook} = await api<{workbook: string}>('vodafone/bonuses?'+params,'GET',undefined,request.signal);
@@ -71,21 +76,21 @@ export function VodafoneBonus({scopeQuery}: {scopeQuery: string}) {
       if (exportRequest.current===request) setExporting(false);
     }
   }
-  const query = find.toLocaleLowerCase('ro').trim();
-  const matches = (...options: (string|null)[]) => options.some(item=>item?.toLocaleLowerCase('ro').includes(query));
-  const points = report?.points.filter(row=>matches(row.partner,row.pointCode,row.cui,...row.sites.map(site=>site.site))) || [];
-  const documents = report?.documents.filter(row=>matches(row.partner,row.pointCode,row.cui,row.number,...row.sites)) || [];
-  const unresolved = report?.unresolved.filter(row=>matches(row.partner,row.cui,row.site)) || [];
-  const selectedRows = view==='points' ? points : view==='documents' ? documents : unresolved;
+  const {points,documents,unresolved} = report ? filterVodafoneBonusRows(report,find) : {points:[],documents:[],unresolved:[]};
+  const selectedRows = {points,documents,unresolved}[view];
+  const rowCount = report?.preview?.counts[view] ?? selectedRows.length;
+  const incompleteSearch = !!(report?.preview && find.trim());
+  const loadingFull = wantFull && !!report?.preview && !visible?.error;
+
 
   return <section className="panel distribution-card vodafone-bonus" aria-label="Registru bonus Vodafone">
     <div className="panel-heading"><h2>Bonusuri Vodafone</h2></div>
     <div className="vodafone-bonus-actions">
-      {report && <label>Luna <select value={month} onChange={event=>{setChoice(event.target.value);setLimit(50);}}>
+      {report && <label>Luna <select value={month} onChange={event=>{setChoice(event.target.value);setLimit(vodafoneBonusPageSize);}}>
         {[...report.months].reverse().map(row=><option key={row.month} value={row.month}>{monthLabel(row.month)}</option>)}
       </select></label>}
-      <button type="button" className="secondary" disabled={!report || exporting} onClick={()=>void download(false)}>Excel luna selectată</button>
-      <button type="button" className="secondary" disabled={!report || exporting} onClick={()=>void download(true)}>Excel tot istoricul</button>
+      <button type="button" className="secondary" disabled={!report || exporting} onClick={()=>void download(false)}>{find.trim()?'Excel selecția din lună':'Excel luna selectată'}</button>
+      <button type="button" className="secondary" disabled={!report || exporting} onClick={()=>void download(true)}>{find.trim()?'Excel selecția din istoric':'Excel tot istoricul'}</button>
       <button type="button" className="secondary" onClick={()=>{setRead(undefined);setReload(x=>x+1);}}>Reîncarcă</button>
     </div>
     {visible?.error && <p className="error-banner" role="alert">{visible.error}</p>}
@@ -94,14 +99,15 @@ export function VodafoneBonus({scopeQuery}: {scopeQuery: string}) {
     {coverage && <>
       <p className="commerce-source">{coverage.publishedOn ? 'Raport final din '+dateLabel(coverage.publishedOn) : 'Raportul final nu este disponibil'} · Date până la {dateLabel(coverage.sourceThrough)} · {count(coverage.activations)} activări partenere · {count(coverage.unresolvedActivations)} fără franciză identificată</p>
       {!report?.fiscalKindsComplete && <p className="commerce-source-warning">Tipul fiscal lipsește pentru unele documente. Acestea pot apărea în simulare când vânzarea sau factura la zero se reconciliază între surse.</p>}
-      {report?.points.some(row=>row.partial) && <p className="commerce-source-warning">Punctele comune cu alte gestiuni arată numai contribuțiile accesibile. Sumele pe punct apar când selecția include întreaga lui activitate.</p>}
+      {(report?.preview?.hasPartialPoints ?? report?.points.some(row=>row.partial)) && <p className="commerce-source-warning">Punctele comune cu alte gestiuni arată numai contribuțiile accesibile. Sumele pe punct apar când selecția include întreaga lui activitate.</p>}
       <div className="vodafone-bonus-actions">
         <div className="vodafone-bonus-views" aria-label="Vederi registru">
-          {(['points','documents','unresolved'] as const).map(item=><button type="button" className="secondary" aria-pressed={view===item} key={item} onClick={()=>{setView(item);setLimit(50);}}>{labels[item]}</button>)}
+          {(['points','documents','unresolved'] as const).map(item=><button type="button" className="secondary" aria-pressed={view===item} key={item} onClick={()=>{setView(item);setLimit(vodafoneBonusPageSize);}}>{labels[item]}</button>)}
         </div>
-        <input aria-label="Caută în registru" type="search" placeholder="Partener, franciză, CUI sau TR" value={find} onChange={event=>{setFind(event.target.value);setLimit(50);}}/>
+        <input aria-label="Caută în registru" type="search" maxLength={180} placeholder="Partener, franciză, CUI sau TR" value={find} onChange={event=>{setFind(event.target.value);setLimit(vodafoneBonusPageSize);if (report?.preview && event.target.value.trim()) setWantFull(true);}}/>
       </div>
-      <div className="distribution-table-scroll">
+      {loadingFull && <output className="commerce-loading">Se încarcă detaliile registrului…</output>}
+      {!incompleteSearch && <div className="distribution-table-scroll">
         {view==='points' && <table className="distribution-table"><thead><tr>
           <th>Partener / punct</th><th>TR</th><th>SIM 0</th><th>Target</th><th>Top Locații</th><th>Bonus SIM 0 calculat</th><th>Total calculat</th><th>Acordat în lună</th><th>Stins confirmat</th><th>Rest confirmat</th><th>Rest SIM 0 simulat</th>
         </tr></thead><tbody>{points.slice(0,limit).map(row=><tr key={row.pointCode}>
@@ -125,10 +131,13 @@ export function VodafoneBonus({scopeQuery}: {scopeQuery: string}) {
         </tr></thead><tbody>{unresolved.slice(0,limit).map(row=><tr key={JSON.stringify([row.month,row.site,row.cui,row.reason])}>
           <th>{row.partner}</th><td>{row.cui}</td><td>{row.site}</td><td>{vodafoneBonusReasonLabels[row.reason]}</td><td>{count(row.count)}</td>
         </tr>)}</tbody></table>}
-      </div>
-      {view==='points' && points.some(row=>row.topBonus===null) && <p className="commerce-source">Totalul combinat și restul confirmat necesită decontul Top Locații pentru punct și lună.</p>}
-      {!selectedRows.length && <p className="commerce-empty">Niciun rezultat pentru selecția curentă.</p>}
-      {selectedRows.length>limit && <button type="button" className="secondary" onClick={()=>setLimit(value=>value+50)}>Arată încă {Math.min(50,selectedRows.length-limit)}</button>}
+      </div>}
+      {view==='points' && !incompleteSearch && (report?.preview?.hasUnknownTopBonus ?? points.some(row=>row.topBonus===null)) && <p className="commerce-source">Totalul combinat și restul confirmat necesită decontul Top Locații pentru punct și lună.</p>}
+      {!incompleteSearch && !selectedRows.length && <p className="commerce-empty">Niciun rezultat pentru selecția curentă.</p>}
+      {!incompleteSearch && rowCount>limit && <button type="button" className="secondary" disabled={loadingFull} onClick={()=>{
+        if (report?.preview) setWantFull(true);
+        setLimit(value=>value+vodafoneBonusPageSize);
+      }}>Arată încă {Math.min(vodafoneBonusPageSize,rowCount-limit)}</button>}
     </>}
   </section>;
 }

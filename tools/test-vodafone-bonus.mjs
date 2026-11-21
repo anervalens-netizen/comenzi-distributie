@@ -5,18 +5,20 @@ import {pathToFileURL} from 'node:url';
 import {join} from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
 import {build} from 'esbuild';
+import XLSX from 'xlsx';
 
 const root=mkdtempSync(join(tmpdir(),'synthetic-vodafone-bonus-'));
 try {
   const bundle=join(root,'bonus.mjs');
   await build({stdin:{contents:`
     export * from './lib/vodafone-bonus-rules';
+    export * from './lib/vodafone-bonus-types';
     export * from './lib/vodafone-bonus-ledger';
     export * from './lib/vodafone-bonus-node';
     export * from './lib/vodafone-bonus-evidence';
     export * from './lib/vodafone-bonus-export';
   `,resolveDir:process.cwd()},outfile:bundle,bundle:true,format:'esm',platform:'node'});
-  const {bonusProjectSites,isVodafoneGenericPartner,vodafoneDocumentKind,vodafoneSim0Bonus,vodafoneBonusLedger,readVodafoneBonus,parseVodafoneBonusEvidence,vodafoneBonusWorkbook}
+  const {vodafoneBonusPreview,filterVodafoneBonusRows,bonusProjectSites,isVodafoneGenericPartner,vodafoneDocumentKind,vodafoneSim0Bonus,vodafoneBonusLedger,readVodafoneBonus,parseVodafoneBonusEvidence,vodafoneBonusWorkbook}
     =await import(pathToFileURL(bundle).href);
   const scopedRules={assignments:[{siteCode:'test-n',projectId:'vodafone_nord'},{siteCode:'test-s',projectId:'vodafone_sud'}]};
   const allProjects=new Set(['vodafone_sud','vodafone_nord','non_exclusiv']);
@@ -95,6 +97,23 @@ try {
     assert.equal(unresolvedCampaign.documents[0].allocations[0].month,'2026-07');
     assert.equal(unresolvedCampaign.points.find(row=>row.month==='2026-07'&&row.pointCode==='P1').remaining,null);
   }
+  const full=vodafoneBonusLedger(input,null,null);
+  assert.equal(vodafoneBonusPreview(full),full,'small reports are already complete');
+  const expanded={...full,points:Array.from({length:53},(_,i)=>({...full.points[0],pointCode:'sample-'+i,topBonus:i===52?null:3,partial:i===52}))};
+  const preview=vodafoneBonusPreview(expanded);
+  assert.equal(preview.points.length,50);
+  assert.deepEqual(preview.months,full.months);
+  assert.equal(preview.preview.counts.points,53);
+  assert.equal(preview.preview.hasPartialPoints,true);
+  assert.equal(preview.preview.hasUnknownTopBonus,true);
+  assert.equal(filterVodafoneBonusRows(expanded,' sample-52 ').points.length,1);
+  const filteredBook=XLSX.read(vodafoneBonusWorkbook(expanded,' SAMPLE-52 '),{type:'base64'});
+  const workbookRows=name=>XLSX.utils.sheet_to_json(filteredBook.Sheets[name],{header:1}).slice(1);
+  assert.deepEqual(workbookRows('Registru pe punct').map(row=>row[1]),['sample-52']);
+  assert.equal(workbookRows('Documente').length,0);
+  assert.equal(workbookRows('Stingeri FIFO').length,0);
+  assert.equal(workbookRows('Luni').length,input.coverage.length);
+
   const provisional={...input,documents:[doc('2026-08-08','pending','P1',3,'document-unknown')],coverage:input.coverage.map(m=>({...m,publishedOn:null}))};
   const p=vodafoneBonusLedger(provisional,null,null);
   assert.equal(p.fiscalKindsComplete,false);

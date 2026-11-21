@@ -202,6 +202,8 @@ try{
  assert(!regionalTargets.data.partners.rows.some(p=>p.vodafoneTargets),'national activation browsing does not grant private targets');
  assert.equal((await request('vodafone/bonuses','north')).status,403);
  assert.equal((await request('vodafone/bonuses?projects=unrecognized','manager')).status,400);
+ assert.equal((await request('vodafone/bonuses?view=preview&all=1','manager')).status,400);
+ assert.equal((await request('vodafone/bonuses?view=preview&q=sample','manager')).status,400);
  assert.equal((await request('manager-ai','north')).status,403);
  const selected=list.data.partners.rows.find(p=>p.total>0);const point=encodeURIComponent(selected.key);
  assert.equal((await request('activations?month=2026-10&view=detail&point='+point,'north')).data.detail.total,selected.total);
@@ -388,7 +390,7 @@ try{
  for(const [width,height] of [[1280,900],[820,1180],[390,844]]){await browser.send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:width<700});assert(await browser.evaluate('document.documentElement.scrollWidth<=innerWidth'),'no overflow '+width);mkdirSync('work/evidence',{recursive:true});const screenshot=await browser.send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});writeFileSync('work/evidence/distribution-'+width+'.png',Buffer.from(screenshot.data,'base64'));}
  await browser.evaluate(`window.bonusRequests=[];window.bonusOriginalFetch=window.fetch;window.fetch=(...args)=>{window.bonusRequests.push(String(args[0]));return window.bonusOriginalFetch(...args);};true`);
  await browser.evaluate('[...document.querySelectorAll(".activation-workspace button")].find(button=>button.textContent==="Bonusuri Vodafone").click()');
- await waitFor(()=>browser.evaluate(`window.bonusRequests.some(path=>path.startsWith('/api/vodafone/bonuses?')&&new URL(path,location.origin).searchParams.get('month')==='2026-10')`),'bonus report uses historical reporting month on opening');
+ await waitFor(()=>browser.evaluate(`window.bonusRequests.some(path=>path.startsWith('/api/vodafone/bonuses?')&&new URL(path,location.origin).searchParams.get('month')==='2026-10'&&new URL(path,location.origin).searchParams.get('view')==='preview')`),'bonus report previews the historical reporting month on opening');
  await browser.evaluate(`document.querySelector('[aria-label="octombrie 2026"]').click()`);
  await waitFor(()=>browser.evaluate(`window.bonusRequests.some(path=>path.startsWith('/api/vodafone/bonuses?')&&new URL(path,location.origin).searchParams.get('month')==='2026-09')`),'bonus report follows changes to the reporting month');
  const projectToggle="[...document.querySelectorAll('.distribution-projects button')].find(button=>button.textContent==='Vodafone Nord')";

@@ -8,7 +8,7 @@ import {db,fail,isGlobalManager,response} from './server';
 import {salesSiteKey} from './sales-location';
 import {bonusMonth,parseVodafoneBonusEvidence,vodafoneBonusEvidenceSetting} from './vodafone-bonus-evidence';
 import {readVodafoneTopLocations} from './vodafone-top-locations';
-import {firstVodafoneBonusMonth,type VodafoneBonusReport,type VodafoneBonusScope} from './vodafone-bonus-types';
+import {firstVodafoneBonusMonth,vodafoneBonusPreview,type VodafoneBonusReport,type VodafoneBonusScope} from './vodafone-bonus-types';
 import {vodafoneBonusWorkbook} from './vodafone-bonus-export';
 import type {User} from './types';
 
@@ -45,13 +45,16 @@ export async function readVodafoneBonusForManager(
   const permittedSites = await authorizedScope(user,params);
   const keys = new Set<string>();
   for (const key of params.keys()) {
-    if (!['managerId','agentId','siteCode','projects','month','all','view','revision'].includes(key) || keys.has(key)) fail(400,'Filtru necunoscut sau duplicat.');
+    if (!['managerId','agentId','siteCode','projects','month','all','view','revision','q'].includes(key) || keys.has(key)) fail(400,'Filtru necunoscut sau duplicat.');
     keys.add(key);
   }
   const today=calendar.format(new Date()), chosenMonth=params.get('month') || today.slice(0,7);
   if (!bonusMonth(chosenMonth) || chosenMonth<firstVodafoneBonusMonth || chosenMonth>today.slice(0,7)) fail(400,'Alege o lună disponibilă.');
   const all=params.get('all'), view=params.get('view'), revision=params.get('revision');
-  if ((all!==null && all!=='1') || (view!==null && view!=='export') || (revision!==null && !/^[0-9a-f]{64}$/.test(revision))) fail(400,'Selecția registrului este invalidă.');
+  if ((all!==null && all!=='1') || (view!==null && view!=='export' && view!=='preview') || (revision!==null && !/^[0-9a-f]{64}$/.test(revision))) fail(400,'Selecția registrului este invalidă.');
+  const search=params.get('q');
+  if (search!==null && (view!=='export' || search.length>180)) fail(400,'Căutarea pentru export este invalidă.');
+  if (view==='preview' && all!==null) fail(400,'Alege o lună pentru afișarea registrului.');
   const projects=new Set(params.get('projects')?.split(',').filter(Boolean) ?? projectIds);
   if ([...projects].some(project=>!(projectIds as readonly string[]).includes(project))) fail(400,'Proiect necunoscut.');
   const [rules,targets,raw] = await Promise.all([readDistributionRules(),readVodafoneTopLocations(),getEvidence()]).catch(()=>{
@@ -76,5 +79,7 @@ export async function readVodafoneBonusForManager(
 
 export async function vodafoneBonusResponse(user: User, params: URLSearchParams, revalidate: ()=>Promise<User>) {
   const report = await readVodafoneBonusForManager(user,params,revalidate);
-  return params.get('view')==='export' ? response({workbook:vodafoneBonusWorkbook(report)}) : response(report);
+  const view=params.get('view');
+  if (view==='export') return response({workbook:vodafoneBonusWorkbook(report,params.get('q') || '')});
+  return response(view==='preview' ? vodafoneBonusPreview(report) : report);
 }
