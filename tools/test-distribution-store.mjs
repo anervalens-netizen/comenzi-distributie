@@ -40,6 +40,16 @@ try{
  assert.equal(Object.values(north.productBreakdown).reduce((a,b)=>a+b,0),north.totals.total);
  const south=read(['S'],'south');assert.equal(south.totals.total,1);assert.equal(south.totals.eligible,1);assert.equal(south.totals.ineligible||0,0);
  assert.equal(south.ineligibleSourceTypes,undefined,'restricted south policy does not expose ineligible source data');
+ // Certified overview products can be grouped more tightly than legacy source
+ // reasons, but must include precisely the same scoped activation rows.
+ for(const [sites,policy] of [[null,'manager'],[['N'],'north'],[['S'],'south'],[['X'],'nonexclusive'],[[],'north']]){
+   const selection={months:['2026-08','2026-09','2026-10']};
+   const legacy=read(sites,policy,selection);
+   const certified=read(sites,policy,{...selection,focusSummaries:[]});
+   assert.deepEqual(certified.productBreakdown,legacy.productBreakdown);
+   assert.deepEqual(certified.monthly.map(m=>m.productBreakdown),legacy.monthly.map(m=>m.productBreakdown));
+   assert.equal(certified.ineligibleSourceTypes,undefined);
+ }
  assert.equal(read(['X'],'nonexclusive').totals.total,0);assert.equal(read([],'north').totals.total,0);
  assert.equal(read(null,'manager',{months:['2026-09','2026-10']}).totals.total,9);
  assert.equal(read(null,'manager',{projects:['vodafone_sud','vodafone_nord']}).totals.total,7);

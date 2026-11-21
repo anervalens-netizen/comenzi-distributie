@@ -1,7 +1,8 @@
 import {existsSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {Worker} from 'node:worker_threads';
-import {activationPublicationStamp} from './activation-publication-node';
+import {activationPublicationStamp,activationPublicationVersion} from './activation-publication-node';
+import {createReadProjectionCache} from './read-projection-cache';
 import {historyFileGeneration} from './history-source-generation';
 import {readActivations} from './activation-store-node';
 import type {ActivationQuery} from './activation-distribution';
@@ -19,6 +20,8 @@ const baseOverviewQueue = createQueue(3, 24);
 const digiOverviewQueue = createQueue(2, 12);
 const inFlightDigi = new Map<string, Promise<ActivationReport>>();
 const inFlightOverviews = new Map<string, {totals: Promise<ActivationReport>; complete: Promise<ActivationReport>}>();
+type OverviewPhases = {totals: ActivationReport; complete: ActivationReport};
+const completedOverviews = createReadProjectionCache(4 * 1024 * 1024, 16);
 const focusDeadlineMs = 17_000;
 type WorkerMessage = {type: 'overviewBase' | 'report'; report: ActivationReport} | null;
 
@@ -97,13 +100,28 @@ export async function readVodafoneFocus(month: string, sites: string[] | null, q
   if (!query.focusSummaries || query.focusCardsOnly) return runFocus(detailQueue, month, sites, query);
   // Both subscribers share the pinned worker. Each HTTP request revalidates
   // its own session and authorized scope before releasing either response.
-  const slips = query.focusSummaries.length
-    ? historyFileGeneration(resolve(process.env.MOBIUP_DATA_DIR||'./work/server-data','mobiup.sqlite')) : null;
-  const key = JSON.stringify([month,sites,query,activationPublicationStamp('vodafone'),slips]);
+  const app = resolve(process.env.MOBIUP_DATA_DIR || './work/server-data', 'mobiup.sqlite');
+  const slips = query.focusSummaries.length ? historyFileGeneration(app) : null;
+  const publication = activationPublicationStamp('vodafone');
+  const selection = JSON.stringify([month, sites, query]);
+  const version = JSON.stringify([publication, slips]);
+  // Complete panel results and their original first paint share the exact request
+  // scope. The app stamp includes changes to finalized slips and assignments.
+  const reusable = query.progressiveTotals && query.returnFocusCards && !query.view &&
+    query.analysisLimit === undefined && query.focusSummaries.length > 0 &&
+    query.focusSummaries.every(focus => !focus.detail && !focus.exportAll) && publication !== null && slips !== null;
+  if (reusable) {
+    const cached = completedOverviews.get<OverviewPhases>(selection, version);
+    if (cached) return earlyTotals ? cached.totals : cached.complete;
+  }
+  const key = JSON.stringify([selection, version]);
   const pending = inFlightOverviews.get(key);
   if (pending) return earlyTotals ? pending.totals : pending.complete;
   let publishBase!: (report: ActivationReport) => void;
-  const base = new Promise<ActivationReport>(resolve => { publishBase = resolve; });
+  let first: ActivationReport | undefined;
+  const base = new Promise<ActivationReport>(resolve => {
+    publishBase = report => { first ??= report; resolve(report); };
+  });
   const complete = (!query.focusSummaries.length
     ? runFocus(baseOverviewQueue, month, sites, query, publishBase)
     : pendingCount(overviewQueue)
@@ -111,6 +129,17 @@ export async function readVodafoneFocus(month: string, sites: string[] | null, q
       : runFocus(overviewQueue, month, sites, query, publishBase))
     .then(report=>query.returnFocusCards&&report.commissionCoverage==='unavailable'&&!report.focusUnavailable
       ? {...report,focusUnavailable:query.focusSummaries!.map(focus=>focus.territory)} : report)
+    .then(report => {
+      if (reusable && first?.publication && first.publication === report.publication &&
+          report.available && !report.focusUnavailable?.length &&
+          report.focusCards?.length === query.focusSummaries!.length &&
+          (report.commissionCoverage === 'complete' || report.commissionCoverage === 'partial') &&
+          publication === activationPublicationStamp('vodafone') && slips === historyFileGeneration(app) &&
+          report.publication === activationPublicationVersion('vodafone')) {
+        completedOverviews.put(selection, version, {totals: first, complete: report});
+      }
+      return report;
+    })
     .finally(() => inFlightOverviews.delete(key));
   const totals = Promise.race([base, complete]);
   // A caller may subscribe only to the complete report.

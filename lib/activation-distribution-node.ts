@@ -69,20 +69,24 @@ export function distributionReport(report:DatabaseSync,base:ActivationReport,met
  // Use the same authorized scope and selected activation months; raw product codes
  // already exist in details, so no projection migration or reimport is required.
  if(provider==='vodafone'&&!query.view){
-   const selected=report.prepare(`SELECT month,item_code,item_type,county,handset,contradictory,site,COUNT(*) count FROM details WHERE ${where} AND ${monthWhere} GROUP BY month,item_code,item_type,county,handset,contradictory,site`).all(...args,...query.months) as (Dimension & {item_code:string})[];
+   // Only the legacy source breakdown classifies each county/handset/site.
+   // Visibility stays in WHERE before either grouping, including for agents.
+   const sourceTypes=countLegacyEligibility&&query.policy!=='south';
+   const dimensions=sourceTypes?'month,item_code,item_type,county,handset,contradictory,site':'month,item_code,item_type';
+   const selected=report.prepare(`SELECT ${dimensions},COUNT(*) count FROM details WHERE ${where} AND ${monthWhere} GROUP BY ${dimensions}`).all(...args,...query.months) as (Dimension & {item_code:string})[];
    const products={zero:0,credit:0,packages:0,other:0,unknown:0},sources:Record<string,number>={};
    for(const row of selected){
      const group=rules.products[row.item_code];
      const key=row.item_type==='TELSIM'?'packages':group==='vodafone_0'?'zero':['vodafone_3','vodafone_5','vodafone_credit'].includes(group)?'credit':!row.item_code?'unknown':'other';
      products[key]+=row.count;const monthly=monthlyProducts.get(row.month)||blankProducts();monthly[key]+=row.count;monthlyProducts.set(row.month,monthly);
-     if(countLegacyEligibility&&query.policy!=='south'){
+     if(sourceTypes){
        const assignment=rules.assignments.find(a=>a.siteCode.toUpperCase()===row.site.toUpperCase());
        const eligibility=vodafoneEligibility(row.county,row.handset,assignment?.territoryId||null,!!row.contradictory);
        if(!eligibility.eligible){const source=row.handset?.trim()||'-';sources[source]=(sources[source]||0)+row.count;}
      }
    }
    result.productBreakdown=products;
-   if(countLegacyEligibility&&query.policy!=='south')result.ineligibleSourceTypes=sources;
+   if(sourceTypes)result.ineligibleSourceTypes=sources;
  }
  // Distribution cohort is independent of activation month. Apply only the authorized seller/project scope.
  const cohortClauses=['provider=?'],cohortArgs:(string|number)[]=[provider];

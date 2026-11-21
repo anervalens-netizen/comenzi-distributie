@@ -6,10 +6,10 @@ import {setTimeout as wait} from 'node:timers/promises';
 import {build} from 'esbuild';
 
 const {outputFiles} = await build({
-  entryPoints: ['lib/vodafone-focus-runtime-node.ts'],
+  stdin: {resolveDir: process.cwd(), contents: "export * from './lib/vodafone-focus-runtime-node'; export {activationPublicationVersion} from './lib/activation-publication-node';"},
   bundle: true, platform: 'node', format: 'esm', write: false,
 });
-const {readDigiOverview,readVodafoneFocus} = await import('data:text/javascript;base64,' + Buffer.from(outputFiles[0].text).toString('base64'));
+const {activationPublicationVersion,readDigiOverview,readVodafoneFocus} = await import('data:text/javascript;base64,' + Buffer.from(outputFiles[0].text).toString('base64'));
 const cwd = process.cwd();
 const root = mkdtempSync(join(tmpdir(), 'focus-worker-deadline-'));
 const realTimeout = globalThis.setTimeout;
@@ -31,7 +31,19 @@ try {
     import {appendFileSync,existsSync,readFileSync} from 'node:fs';
     import {join} from 'node:path';
     const {month,query,provider,sites} = workerData;
-    if(month.startsWith('ordinary-phase-')){
+    if (month.startsWith('cache-')) {
+      appendFileSync('cache-starts', 'x');
+      const publication = readFileSync('worker-publication', 'utf8');
+      const base = {publication, available: true, totals: {total: 7}, commissionCoverage: 'unavailable'};
+      parentPort.postMessage({type: 'overviewBase', report: base});
+      if (month === 'cache-race') {
+        while (!existsSync('release-race')) await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      const focusCards = query.focusSummaries.map(focus => ({territory: focus.territory}));
+      const complete = {...base, focusCards, commissionCoverage: 'partial', totals: {total: 7, eligible: 5}};
+      if (month === 'cache-failure') complete.focusUnavailable = ['sud'];
+      parentPort.postMessage({type: 'report', report: complete});
+    } else if(month.startsWith('ordinary-phase-')){
       const waitForRelease=async name=>{
         while(!existsSync('release-'+name))await new Promise(resolve=>setTimeout(resolve,10));
       };
@@ -133,6 +145,45 @@ try {
   const missingCards=await readVodafoneFocus('failure',null,{focusSummaries:[{territory:'sud'}],returnFocusCards:true});
   assert.deepEqual(missingCards.focusUnavailable,['sud']);
   assert.equal(missingCards.totals.eligible,undefined);
+
+  // A repeat UI selection may reuse only a fully resolved pair from the same
+  // activation publication, slip database and requested authorization scope.
+  process.env.MOBIUP_DATA_DIR = root;
+  writeFileSync(join(root, 'mobiup.sqlite'), 'slips');
+  const setPublication = () => writeFileSync('worker-publication', activationPublicationVersion('vodafone'));
+  setPublication();
+  const cachedQuery = {focusSummaries: [{territory: 'sud'}], progressiveTotals: true, returnFocusCards: true};
+  const cachedRead = (month = 'cache-panel', sites = null, query = cachedQuery, totals = false) =>
+    readVodafoneFocus(month, sites, query, totals);
+  const calls = () => readFileSync('cache-starts', 'utf8').length;
+  const full = await cachedRead();
+  full.totals.total = 42;
+  assert.deepEqual((await cachedRead()).totals, {total: 7, eligible: 5});
+  assert.deepEqual((await cachedRead('cache-panel', null, cachedQuery, true)).totals, {total: 7});
+  assert.equal(calls(), 1, 'cached phases preserve the original totals response and caller isolation');
+  await cachedRead('cache-panel', ['A']);
+  await cachedRead('cache-panel', null, {...cachedQuery, policy:'north'});
+  assert.equal(calls(), 3, 'different sites and policies cannot share results');
+  writeFileSync(join(root, 'mobiup.sqlite-wal'), 'finalized order');
+  await cachedRead();
+  assert.equal(calls(), 4, 'slip changes invalidate completed attribution');
+  writeFileSync(join(stores, 'current', 'activation-report.sqlite-wal'), 'updated projection');
+  setPublication();
+  await cachedRead();
+  assert.equal(calls(), 5, 'activation changes invalidate completed attribution');
+  for (let i=0; i<2; i++) await cachedRead('cache-failure');
+  assert.equal(calls(), 7, 'failure of any territory remains retryable');
+  const pendingTotals = cachedRead('cache-race', null, cachedQuery, true);
+  const pendingComplete = cachedRead('cache-race');
+  await pendingTotals;
+  writeFileSync(join(root, 'mobiup.sqlite-wal'), 'changed while calculating');
+  writeFileSync('release-race', '');
+  await pendingComplete;
+  await cachedRead('cache-race');
+  assert.equal(calls(), 9, 'in-flight source changes leave no reusable result');
+  const detailQuery = {...cachedQuery, focusSummaries:[{territory:'sud', detail:'attributed'}]};
+  for (let i=0; i<2; i++) await cachedRead('cache-detail',null,detailQuery);
+  assert.equal(calls(), 11, 'serial-bearing detail is never retained');
 
   globalThis.setTimeout = (run, ms, ...args) => realTimeout(run, ms === 17_000 ? testDeadlineMs : ms, ...args);
   const slow = readVodafoneFocus('slow', null, overview);
