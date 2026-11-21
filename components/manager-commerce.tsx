@@ -80,7 +80,7 @@ export function ManagerAccessories({userId,query,scopeQuery,scopeLabel,initialVi
 }
 export type ManagerPrepayContext={section:string;period:string};
 const prepayViewLabels={sales:'Vânzări',activations:'Activări',verify:'Verificare SIM'};
-export function ManagerPrepay({manager,userId,query,scopeLabel,distributionConfigured,canViewActivations,month:controlledMonth,onMonthChange,onContextChange}:{manager:boolean;userId:string;query:string;scopeLabel:string;distributionConfigured:boolean;canViewActivations:boolean;month?:string;onMonthChange?:(month:string)=>void;onContextChange?:(context:ManagerPrepayContext)=>void}){
+export function ManagerPrepay({manager=true,userId,query,scopeLabel,distributionConfigured,canViewActivations,month:controlledMonth,onMonthChange,onContextChange}:{manager?:boolean;userId:string;query:string;scopeLabel:string;distributionConfigured:boolean;canViewActivations:boolean;month?:string;onMonthChange?:(month:string)=>void;onContextChange?:(context:ManagerPrepayContext)=>void}){
   const [localMonth,setLocalMonth]=useState(()=>new URLSearchParams(query).get('month')||bucharestReportingMonthKey(new Date()));
   const month=controlledMonth??localMonth;
   function selectMonth(next:string){if(controlledMonth===undefined)setLocalMonth(next);onMonthChange?.(next);}

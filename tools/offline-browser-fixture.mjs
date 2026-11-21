@@ -40,7 +40,7 @@ export async function browserFixture(origin){
   };
   await send('Runtime.enable');await send('Page.enable');await send('Network.enable');await send('Page.navigate',{url});
   await waitFor(()=>evaluate('document.readyState==="complete"'),'page load');
-  const tab={evaluate,send,close:async()=>{socket.close();for(const p of pending.values())clearTimeout(p.timer);await fetch(`http://127.0.0.1:${port}/json/close/${target.id}`).catch(()=>{});}};
+  const tab={evaluate,send,debuggerUrl:target.webSocketDebuggerUrl,close:async()=>{socket.close();for(const p of pending.values())clearTimeout(p.timer);await fetch(`http://127.0.0.1:${port}/json/close/${target.id}`).catch(()=>{});}};
   tabs.push(tab);return tab;
   };
   const first=await newTab();return {...first,newTab,closeTab:first.close,close};
