@@ -104,7 +104,7 @@ assert.deepEqual(managerAiModels,['gpt-6.1-terra','gpt-6.2-sol']);
 
 const syntheticCui = n => {
   const digits=String(n).padStart(9,'0');
-  const sum=[...digits].reduce((value,digit,i)=>value+Number(digit)*Number('753217532'[i]),0);
+  const sum=digits.split('').reduce((value,digit,i)=>value+Number(digit)*Number('753217532'[i]),0);
   return String(n)+String((sum*10%11)%10);
 };
 const cuiA=syntheticCui(800001),cuiB=syntheticCui(800002);

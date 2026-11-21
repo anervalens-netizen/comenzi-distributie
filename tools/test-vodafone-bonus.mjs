@@ -220,7 +220,7 @@ try {
   assert.equal(certified.documents.find(doc=>doc.number==='payment').allocations.filter(row=>row.status==='confirmed').length,1);
   // A transient CRM edit reverted during a cold query must never be attributed to the previous revision.
   const crmWriter=new DatabaseSync(join(root,'mobiup.sqlite'));
-  const prepare=DatabaseSync.prototype.prepare;
+  const originalPrepare=Object.getOwnPropertyDescriptor(DatabaseSync.prototype,'prepare').value;
   let crmStage=0;
   try {
     crmWriter.exec('PRAGMA journal_mode=WAL');
@@ -236,17 +236,16 @@ try {
         update.run(original);
         crmStage=2;
       }
-      return prepare.call(this,sql);
+      return originalPrepare.call(this,sql);
     };
     const observed=readVodafoneBonus({...options,today:'2026-08-19'});
     assert.equal(crmStage,2);
     assert.equal(observed.months[0].confirmedActivations,baseline.months[0].confirmedActivations,'use one pinned CRM version');
   } finally {
-    DatabaseSync.prototype.prepare=prepare;
+    DatabaseSync.prototype.prepare=originalPrepare;
     crmWriter.close();
   }
   // A real WAL commit during a pinned multi-source read must still fail.
-  const originalPrepare=DatabaseSync.prototype.prepare;
   let changed=false;
   const writer=new DatabaseSync(historyFile);
   try {
