@@ -1,6 +1,6 @@
 import {validAnafCui} from './anaf-types';
 import {isVodafoneGenericPartner} from './vodafone-bonus-rules';
-import {readVodafoneSim0ActivationRows,type VodafoneBonusRead} from './vodafone-bonus-node';
+import {projectVodafoneSim0Rows,type VodafoneBonusRead} from './vodafone-bonus-node';
 import type {BonusActivation} from './vodafone-bonus-ledger';
 import type {VodafoneBonusScope} from './vodafone-bonus-types';
 
@@ -57,7 +57,10 @@ export function groupVodafoneSim0Clients(source:{
   return {revision:source.revision,rows:[...points.values()],coverage:[...coverage.values()]};
 }
 
+// Keep only the last scoped aggregate. The source verifies all revisions before every reuse.
+let cached:{key:string;value:VodafoneSim0Ranking}|undefined;
 export function readVodafoneSim0Ranking(input:VodafoneSim0RankingRead) {
-  const source=readVodafoneSim0ActivationRows(input,input.fromMonth,input.toMonth);
-  return groupVodafoneSim0Clients(source,input.scope);
+  cached=projectVodafoneSim0Rows(input,input.fromMonth,input.toMonth,input.scope,
+    source=>groupVodafoneSim0Clients(source,input.scope),cached);
+  return cached.value;
 }

@@ -538,9 +538,12 @@ export function readVodafoneBonus(input: VodafoneBonusRead): VodafoneBonusReport
 }
 
 /** Activation analytics is independent of the reward campaign's opening month and payment sources. */
-export function readVodafoneSim0ActivationRows(input: BonusSourceInput, fromMonth: string, toMonth: string) {
+type Sim0SourceRows = {activation:BonusActivation[];companies:Map<string,string>;revision:string;
+  coverage:{month:string;sourceThrough:string|null;reported:boolean}[]};
+export function projectVodafoneSim0Rows<T>(input:BonusSourceInput,fromMonth:string,toMonth:string,scope:VodafoneBonusScope,
+  project:(source:Sim0SourceRows)=>T, previous?:Snapshot<T>) {
   if (!bonusMonth(fromMonth) || !bonusMonth(toMonth) || fromMonth>toMonth || toMonth>input.today.slice(0,7)) throw new Error('Invalid activation period');
-  return readSnapshot(input,[fromMonth,toMonth],false,({app,history,source,report},_sales,revision)=>{
+  return readSnapshot(input,[fromMonth,toMonth,scope],false,({app,history,source,report},_sales,revision)=>{
     const details=readSim0Details(report,input,fromMonth,toMonth);
     const {activation}=matchActivations(source,history,app,details,fiscalEvidence(input),new Set());
     const companies=new Map<string,string>();
@@ -568,6 +571,10 @@ export function readVodafoneSim0ActivationRows(input: BonusSourceInput, fromMont
       }
       coverage.push({month,sourceThrough:through||null,reported:!!through});
     }
-    return {activation,revision,coverage,companies};
-  }).value;
+    return project({activation,revision,coverage,companies});
+  },previous);
+}
+
+export function readVodafoneSim0ActivationRows(input:BonusSourceInput,fromMonth:string,toMonth:string) {
+  return projectVodafoneSim0Rows(input,fromMonth,toMonth,null,source=>source).value;
 }

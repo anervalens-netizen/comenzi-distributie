@@ -43,6 +43,7 @@ node tools/test-commercial-focus.mjs
 node tools/test-vodafone-focus-runtime.mjs
 node tools/test-vodafone-top-locations.mjs
 node tools/test-vodafone-bonus.mjs
+node tools/test-vodafone-ranking-queue.mjs
 node tools/test-manager-ai.mjs
 node tools/test-manager-ai-media.mjs
 node tools/test-manager-ai-analysis-provider.mjs

@@ -292,13 +292,26 @@ try {
   earlier.exec("INSERT INTO details SELECT '2026-02','2026-02-05',distribution_date,company,serial,client_code,point_code,item_code,label,site,contradictory,provider,is_tr,item_type FROM details WHERE serial='serial-1'");
   earlier.close();
   rmSync(join(root,'sales.sqlite'));
-  const {readVodafoneSim0ActivationRows}=await import(pathToFileURL(bundle).href);
+  const {readVodafoneSim0ActivationRows,projectVodafoneSim0Rows}=await import(pathToFileURL(bundle).href);
   const rank=readVodafoneSim0ActivationRows(options,'2026-01','2026-06');
   assert.equal(rank.activation.filter(row=>row.month==='2026-02' && row.pointCode==='FR-A' && row.reason==='commercial').length,1);
   assert.equal(rank.activation.filter(row=>row.month==='2026-06' && row.reason!=='excluded').length,3);
   assert.equal(rank.companies.get('SYNTHETIC'),'Legal Example Company');
   assert.deepEqual(rank.coverage.map(m=>[m.month,m.reported]),[['2026-01',false],['2026-02',true],['2026-03',false],['2026-04',false],['2026-05',false],['2026-06',true]]);
   assert.equal(rank.coverage.at(-1).sourceThrough,'2026-06-30');
+  let projects=0;
+  const compact=rows=>{projects++;return rows.activation.length;};
+  const first=projectVodafoneSim0Rows(options,'2026-01','2026-06',['SITE-A'],compact);
+  const repeat=projectVodafoneSim0Rows(options,'2026-01','2026-06',['SITE-A'],compact,first);
+  assert.equal(repeat,first);
+  const filtered=projectVodafoneSim0Rows(options,'2026-01','2026-06',['SITE-B'],compact,repeat);
+  assert.notEqual(filtered.key,first.key);
+  const update=new DatabaseSync(join(root,'mobiup.sqlite'));
+  update.exec("UPDATE crm_companies SET name='Synthetic updated name'");
+  update.close();
+  const refreshed=projectVodafoneSim0Rows(options,'2026-01','2026-06',['SITE-B'],compact,filtered);
+  assert.notEqual(refreshed.key,filtered.key);
+  assert.equal(projects,3);
   console.log('PASS: Vodafone reward attribution, source changes, restart-safe cache, YTD activation source and XLSX');
 } finally {
   rmSync(root,{recursive:true,force:true});
