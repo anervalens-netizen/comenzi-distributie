@@ -20,6 +20,6 @@ export function AgentCommerce({user,mode,initialView,onViewChange}:{user:User;mo
   const query=new URLSearchParams(configured?{months:months.join(',')}:{month:months[0]||bucharestReportingMonthKey(new Date())}).toString();
   return <div className="agent-commerce">
     {configured&&(mode==='activations'||view!=='clients')&&<div className="agent-report-scope"><ReportPeriod selected={months} onChange={selectMonths}/></div>}
-    {mode==='sales'?<ManagerAccessories manager={false} userId={user.id} query={query} scopeQuery="" scopeLabel="Portofoliul meu" initialView={initialView} onViewChange={next=>{setView(next);onViewChange(next);}} onMonthChange={month=>selectMonths([month])}/>:<ManagerPrepay userId={user.id} query={query} scopeLabel="Activitatea mea" distributionConfigured={configured} canViewActivations={!!user.canViewActivations} month={configured?undefined:months[0]||bucharestReportingMonthKey(new Date())} onMonthChange={month=>selectMonths([month])}/>}
+    {mode==='sales'?<ManagerAccessories manager={false} userId={user.id} query={query} scopeQuery="" scopeLabel="Portofoliul meu" initialView={initialView} onViewChange={next=>{setView(next);onViewChange(next);}} onMonthChange={month=>selectMonths([month])}/>:<ManagerPrepay manager={false} userId={user.id} query={query} scopeLabel="Activitatea mea" distributionConfigured={configured} canViewActivations={!!user.canViewActivations} month={configured?undefined:months[0]||bucharestReportingMonthKey(new Date())} onMonthChange={month=>selectMonths([month])}/>}
   </div>;
 }

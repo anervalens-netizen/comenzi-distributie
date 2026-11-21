@@ -1,6 +1,6 @@
 # Synthetic performance LAB
 
-These tools create their own temporary SQLite databases and remove them on exit.
+The synthetic benchmarks create their own temporary SQLite databases and remove them on exit.
 They never accept a production URL, credentials or an existing data directory.
 Use the repository's supported Node version and installed dependencies. All
 fixtures are fictional. Generated artifacts belong only in ignored
@@ -115,3 +115,47 @@ this decision reviewable at larger workloads. Exact measurements and host contex
 belong in ignored artifacts/private run records. Mobile rendering, physical
 scanner focus and slow-network acceptance remain unmeasured here; this disposition
 is not a mobile SLA. No delta protocol, virtualization or receipt change is made.
+
+## Operator browser probe
+
+Use a dedicated, signed-in Chrome tab in the foreground. Set `PRIVATE_PAGE_WS` to
+its loopback CDP WebSocket (`/devtools/page/…`). Keep reference and result files
+in private operator storage. The probe restores the original months after each sample while the same account and build remain active.
+
+```sh
+umask 077
+REPORT_PAGE_WS="$PRIVATE_PAGE_WS" node tools/probe-report-browser.mjs < "$PRIVATE_REFERENCE" > "$PRIVATE_RESULT"
+```
+
+This fictional annual reference covers 12 consecutive months starting in August 2025.
+
+```json
+{
+  "scenario": "annual", "role": "manager", "origin": "https://example.invalid",
+  "release": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "shellVersion": "bbbbbbbbbbbbbbbb",
+  "referenceId": "cccccccccccccccccccccccccccccccc", "month": "2025-08", "samples": 1,
+  "expected": {"vodafone": 1234, "digi": 2, "simZero": 275, "simCredit": 842, "coverage": "partial", "eligible": 0}
+}
+```
+
+Supply an independently verified release SHA, the 16-hex version from that build's
+`sw.js` cache name and a stable 32-hex reference ID. The probe checks the served
+shell and loaded JS before and after each sample. Use independent expected values
+for the signed-in account. Optional `accountId` pins that account. Managers default
+to all projects and no personnel filter. Optional `scope` fields `projects`,
+`managerId`, `agentId` and `siteCode` pin existing filters. Agents use their native
+scope. For `complete` or `partial` commission coverage, supply a numeric `eligible`.
+For `outside_scope` or `missing`, omit it.
+
+For the manager ledger use `"scenario":"bonus"`, a known closed `month` and, for
+example, `"expected":{"rows":51,"pointCode":"EXAMPLE-50","sim0Bonus":5}`. Supply
+the authorized point count and the reference row's **Bonus SIM 0 calculat**,
+**Total calculat** (`totalBonus`), or both. A zero is compared as a numeric value.
+Use `{"rows":0,"sim0Bonus":0}` for an independently confirmed empty register.
+
+Each sample times visible values from the Activări or Bonusuri Vodafone click.
+Annual checks also open both trends and verify every selected month. Bonus checks
+verify final publication and paginate to check the reference row. JSON includes
+observed fetch durations, UI timings and a failure stage/code on nonzero exit.
+Compare the same reference and tab conditions across releases. UI p95 requires
+30 successful samples per phase. The default phase timeout is 60000 ms (`timeoutMs`).
