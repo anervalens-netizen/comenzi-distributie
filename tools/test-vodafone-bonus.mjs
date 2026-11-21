@@ -1,3 +1,7 @@
+import {spawnSync} from 'node:child_process';
+import {createHash} from 'node:crypto';
+import {once} from 'node:events';
+import {Worker} from 'node:worker_threads';
 import {deserialize} from 'node:v8';
 import assert from 'node:assert/strict';
 import {existsSync,mkdtempSync,mkdirSync,readFileSync,rmSync,statSync,writeFileSync} from 'node:fs';
@@ -198,6 +202,70 @@ try {
       {source:'sales',company:'ERP',date:'2026-08-05',site:'S-A',number:'adjust',kind:'commercial',evidence:'Fictional approved receipt'},
     ]})),targets:[{pointCode:'FR-A',month:'2026-06',target:4,bonus:0}],
   };
+  // Exercise the installed entrypoint in fresh processes and then request a normal restricted screen.
+  const packaged=join(root,'packaged'),workerFile=join(packaged,'vodafone-bonus-worker.mjs');
+  mkdirSync(packaged);
+  await build({entryPoints:['lib/vodafone-bonus-worker.ts'],outfile:workerFile,bundle:true,platform:'node',format:'esm',packages:'external'});
+  const settings=new DatabaseSync(join(root,'mobiup.sqlite'));
+  settings.exec('CREATE TABLE settings(key TEXT PRIMARY KEY,value TEXT)');
+  const set=settings.prepare('INSERT INTO settings VALUES(?,?)');
+  set.run('distribution-rules-v1',JSON.stringify(options.rules));
+  set.run('vodafone-bonus-evidence-v1',JSON.stringify(options.evidence));
+  settings.close();
+  const campaign=join(root,'campaign.json');
+  const updateCampaign=rows=>writeFileSync(campaign,JSON.stringify({version:1,rows}));
+  updateCampaign(options.targets);
+  const env={...process.env,MOBIUP_DATA_DIR:root,MOBIUP_ACTIVATIONS_DIR:root,MOBIUP_VODAFONE_TOP_LOCATIONS:campaign};
+  const runWarm=()=>spawnSync(process.execPath,['--max-old-space-size=192','--max-semi-space-size=8',workerFile,'--warm-ledger'],
+    {cwd:root,env,encoding:'utf8',timeout:15000});
+  const checksum=path=>createHash('sha256').update(readFileSync(join(root,path))).digest('hex');
+  const sources=['mobiup.sqlite','client-history/client-sales-history.sqlite','sales.sqlite','activations.sqlite','activation-report.sqlite'];
+  const initialSources=sources.map(checksum);
+  const cacheDir=join(root,'.vodafone-bonus-cache'),ledger=join(cacheDir,'current.bin');
+  if (process.getuid?.()) {
+    function status() {
+      const result=runWarm();
+      assert.equal(result.status,0,result.error?.message||result.stderr);
+      return JSON.parse(result.stdout).vodafoneLedger;
+    }
+    assert.equal(status(),'rebuilt');
+    assert.equal(statSync(ledger).mode&0o777,0o600);
+    assert.equal(statSync(cacheDir).mode&0o777,0o700);
+    const firstInode=statSync(ledger).ino;
+    assert.equal(status(),'current');
+    assert.equal(statSync(ledger).ino,firstInode);
+    assert.equal(existsSync(join(cacheDir,'preview.bin')),false);
+    assert.equal(existsSync(join(cacheDir,'ranking.bin')),false);
+    const beforeDirectory=process.cwd();
+    process.chdir(packaged);
+    const pageWorker=new Worker(workerFile);
+    try {
+      const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Bucharest',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+      const targets=options.targets.map(({month,pointCode,target,bonus})=>({month,pointCode,target,bonus}));
+      const response=once(pageWorker,'message');
+      pageWorker.postMessage({...options,today,targets,scope:['A'],month:'2026-06',preview:true});
+      const [screen]=await response;
+      assert.ok(screen && screen.months.some(row=>row.month==='2026-06' && row.activations===3));
+      assert.equal(statSync(ledger).ino,firstInode,'the restricted web request reused the prewarmed canonical ledger');
+      assert.equal(existsSync(join(cacheDir,'preview.bin')),true);
+    } finally {await pageWorker.terminate();process.chdir(beforeDirectory);}
+    updateCampaign(options.targets.map(row=>({...row,target:row.target+1})));
+    assert.equal(status(),'rebuilt');
+    const nextInode=statSync(ledger).ino;
+    assert.notEqual(nextInode,firstInode);
+    assert.equal(status(),'current');
+    writeFileSync(campaign,'{}');
+    assert.equal(runWarm().status,1,'unusable inputs do not certify a refresh');
+    assert.equal(statSync(ledger).ino,nextInode);
+    rmSync(cacheDir,{recursive:true});
+    writeFileSync(cacheDir,'intentionally blocked derived output');
+    updateCampaign(options.targets);
+    assert.equal(runWarm().status,1,'a failed private write cannot report success');
+    rmSync(cacheDir);
+  } else {
+    assert.equal(runWarm().status,1,'unsupported identities cannot create private caches');
+  }
+  assert.deepEqual(sources.map(checksum),initialSources,'maintenance and scoped reads preserve every authoritative source');
   const historyFile=join(root,'client-history','client-sales-history.sqlite');
   const walSetup=new DatabaseSync(historyFile);
   walSetup.exec('PRAGMA journal_mode=WAL');

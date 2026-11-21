@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh Vodafone bonus data after startup and source changes
+
+[Timer]
+OnBootSec=90s
+OnUnitInactiveSec=2min
+AccuracySec=10s
+Unit=mobiup-vodafone-bonus-warmup.service
+
+[Install]
+WantedBy=timers.target

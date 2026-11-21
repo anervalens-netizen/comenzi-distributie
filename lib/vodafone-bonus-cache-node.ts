@@ -5,7 +5,7 @@ import {deserialize,serialize} from 'node:v8';
 
 const filenames={ledger:'current.bin',ranking:'ranking.bin',preview:'preview.bin'} as const;
 type Slot=keyof typeof filenames;
-export type VodafoneDiskCache<T>={load:(directory:string,key:string)=>T|undefined;save:(directory:string,key:string,value:T)=>void};
+export type VodafoneDiskCache<T>={load:(directory:string,key:string)=>T|undefined;save:(directory:string,key:string,value:T)=>boolean};
 export function createVodafoneDiskCache<T>(slot:Slot): VodafoneDiskCache<T> {
   return {load:(directory,key)=>readCached<T>(slot,directory,key),save:(directory,key,value)=>writeCached(slot,directory,key,value)};
 }
@@ -47,23 +47,23 @@ function readCached<T>(slot:Slot,directory:string,key:string): T|undefined {
   }
 }
 
-function writeCached<T>(slot:Slot,directory:string,key:string,value:T) {
+function writeCached<T>(slot:Slot,directory:string,key:string,value:T):boolean {
   let temporary: string | undefined;
   let fd: number | undefined;
   try {
     const release=releaseIdentity(slot);
-    if (!release) return;
+    if (!release) return false;
     const folder=join(directory,'.vodafone-bonus-cache');
     mkdirSync(folder,{recursive:true,mode:0o700});
     const info=lstatSync(folder);
-    if (!info.isDirectory() || (info.mode&0o077)!==0 || info.uid!==process.getuid?.()) return;
+    if (!info.isDirectory() || (info.mode&0o077)!==0 || info.uid!==process.getuid?.()) return false;
     for (const entry of readdirSync(folder)) {
       if (!/^\.[0-9a-f-]{36}\.tmp$/.test(entry)) continue;
       const path=join(folder,entry), file=lstatSync(path,{throwIfNoEntry:false});
       if (file?.isFile() && Date.now()-file.mtimeMs>3600000) unlinkSync(path);
     }
     const bytes=serialize({key,value});
-    if (bytes.length+160>maxBytes) return;
+    if (bytes.length+160>maxBytes) return false;
     temporary=join(folder,'.'+randomUUID()+'.tmp');
     fd=openSync(temporary,constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL,0o600);
     writeFileSync(fd,Buffer.from(release+key,'ascii'));
@@ -73,8 +73,10 @@ function writeCached<T>(slot:Slot,directory:string,key:string,value:T) {
     fd=undefined;
     renameSync(temporary,join(folder,filenames[slot]));
     temporary=undefined;
+    return true;
   } catch {
     // Read-only deployments continue with the in-memory snapshot.
+    return false;
   } finally {
     if (fd!==undefined) closeSync(fd);
     if (temporary) try { unlinkSync(temporary); } catch {}

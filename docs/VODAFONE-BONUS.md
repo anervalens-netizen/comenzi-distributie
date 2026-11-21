@@ -37,6 +37,12 @@ Exemplul folosește identificatori fictivi.
 
 Sunt acceptate `source=activation` și `source=sales`, cu `kind=commercial` ori `kind=excluded`. Configurația trebuie păstrată în mediul privat. Rapoartele sunt derivate din versiunile active ale surselor. Corecțiile și înlocuirile de import recalculează alocările și păstrează luna activărilor și data documentului ca date distincte.
 
+## Pregătirea registrului după import
+
+Workerul din release acceptă comanda `node --max-old-space-size=192 --max-semi-space-size=8 ./vodafone-bonus-worker.mjs --warm-ledger`. Citește configurația instalată și pregătește registrul comun tuturor gestiunilor. Rezultatul `current` confirmă că fișierul existent a trecut verificările. Rezultatul `rebuilt` confirmă că workerul a publicat o copie nouă. Jurnalul conține starea și durata.
+
+Unitățile `deploy/mobiup-vodafone-bonus-warmup.service` și `.timer` pornesc verificarea după boot și la două minute după ultima execuție. La instalare folosește contul aplicației, executabilul Node, release-ul și directoarele de date ale serviciului web. Transmite și `MOBIUP_VODAFONE_TOP_LOCATIONS` dacă aplicația folosește un fișier personalizat. Creează directorul `.vodafone-bonus-cache` în directorul de date cu proprietarul aplicației și modul `0700`. Setează `ReadWritePaths` la acel director, apoi activează timerul cu `systemctl enable --now mobiup-vodafone-bonus-warmup.timer`. O execuție manuală a serviciului după import sau după activarea unui release reduce intervalul până la prima citire rapidă.
+
 ## Acces la surse și actualizarea registrului
 
 La actualizarea unei instalări existente, operatorul poate aplica indexurile de factură și produse gratuite prin `python3 tools/client_sales_history.py --database /cale/configurată/client-history/client-sales-history.sqlite --ensure-schema`. Aceeași schemă se aplică la importurile următoare. După prima actualizare de schemă, reconstruiește proiecția de activitate din aceeași sursă cu procedura din [client-sales.md](client-sales.md). Repetarea comenzii păstrează indexurile existente.

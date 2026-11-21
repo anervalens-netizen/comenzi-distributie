@@ -553,8 +553,8 @@ export function readVodafoneBonus(input: VodafoneBonusRead): VodafoneBonusScreen
   return cachedPreview.value;
 }
 
-function readFullVodafoneBonus(input: VodafoneBonusRead): VodafoneBonusReport {
-  cached=readSnapshot(input,[input.targets],true,(openSources,revision)=>{
+function readLedger(input:VodafoneBonusRead,previous:Snapshot<BonusLedgerInput>|undefined,disk:VodafoneDiskCache<BonusLedgerInput>) {
+  return readSnapshot(input,[input.targets],true,(openSources,revision)=>{
     const {app,history,source,report,sales}=openSources();
     const activations=readSim0Details(report,input,firstVodafoneBonusMonth,input.today.slice(0,7));
     const evidence=fiscalEvidence(input);
@@ -563,7 +563,22 @@ function readFullVodafoneBonus(input: VodafoneBonusRead): VodafoneBonusReport {
     const documents=paymentDocuments(history,sales!,identity,[...new Set([...sim5,...knownVoucherCodes])],input.today,evidence);
     const coverage=monthCoverage(source,activations,input.today,input.evidence);
     return {activation,documents,coverage,targets:input.targets,portfolios:identity.portfolios,revision};
-  },cached,ledgerCache);
+  },previous,disk);
+}
+
+/** Warm the shared pre-scope ledger. Maintenance must fail if its private cache could not be persisted. */
+export function warmVodafoneBonusLedger(input:VodafoneBonusRead) {
+  let status='current';
+  readLedger(input,undefined,{load:ledgerCache.load,save:(directory,key,value)=>{
+    if (!ledgerCache.save(directory,key,value)) throw new Error('Cannot persist private Vodafone ledger cache');
+    status='rebuilt';
+    return true;
+  }});
+  return status;
+}
+
+function readFullVodafoneBonus(input: VodafoneBonusRead): VodafoneBonusReport {
+  cached=readLedger(input,cached,ledgerCache);
   const snapshot=cached.value;
   const revision=createHash('sha256').update(JSON.stringify([snapshot.revision,input.scope])).digest('hex');
   return vodafoneBonusLedger({...snapshot,revision},input.scope,input.month);
