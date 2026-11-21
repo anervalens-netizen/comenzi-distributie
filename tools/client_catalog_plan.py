@@ -5,7 +5,7 @@ County/agent assignments must come from a complete, explicit current roster.
 """
 from __future__ import annotations
 import argparse, collections, json, pathlib, re, sqlite3
-from client_sales_history import cui_key, code_key, norm, place, master_place, dump, sha, now
+from client_sales_history import cui_key, is_consumer_code, code_key, norm, place, master_place, dump, sha, now
 
 COUNTIES = {
 'AB':'Alba','AR':'Arad','AG':'Arges','BC':'Bacau','BH':'Bihor','BN':'Bistrita-Nasaud',
@@ -86,7 +86,7 @@ def build_plan(snapshot,identities,master,roster=None):
   return next(iter(options)) if len(options)==1 else key
  source_codes=collections.defaultdict(set)
  for i in identities:
-  if i['franchise_code']:source_codes[company(i['client_code'])].add(code_key(i['franchise_code']))
+  if i['franchise_code'] and not is_consumer_code(i['client_code']):source_codes[company(i['client_code'])].add(code_key(i['franchise_code']))
  def create(i,cui,franchise,location=None,kind='work_point'):
   identity=[cui,franchise] if franchise else [cui,'company']
   key='hist-'+sha(dump(identity).encode())[:32]
@@ -106,7 +106,7 @@ def build_plan(snapshot,identities,master,roster=None):
   client=cui_key(i['client_code']);franchise=code_key(i['franchise_code']);cui=company(client)
   link={'identityId':i['id'],'clientCode':i['client_code'],'franchiseCode':franchise,'companyKey':cui,
         'rowCount':i['row_count'],'partnerIds':[],'status':'reconcile','reason':''}
-  if client=='CLIENTGEN' and not franchise:
+  if is_consumer_code(client):
    link.update(status='consumer',reason='Generic fiscal receipts are not a business partner')
    links.append(link);continue
   if not client:

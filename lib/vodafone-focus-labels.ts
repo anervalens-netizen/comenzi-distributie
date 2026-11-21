@@ -11,6 +11,7 @@ const focusCategoryLabels: Record<FocusCategory, string> = {
 };
 export const focusKindLabels: Record<FocusRow['kind'], string> = {
   attributed: 'Realizare TR', possibleStock: 'Stoc posibil',
+  consumerCountyUnconfirmed: 'Persoană fizică · județ neconfirmat pentru agent',
   otherTR: 'Alt TR', otherChannel: 'Alt canal', unassigned: 'Fără atribuire sigură',
 };
 export const focusCountyLabel = (county: string) => county === '<UNASSIGNED>' ? 'Județ nealocat' : countyLabel(county);

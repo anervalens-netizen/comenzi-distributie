@@ -12,7 +12,7 @@ const {vodafoneFocusReport, focusCategory, focusAttribution, vodafoneFocusWorkbo
 
 const ledger = new DatabaseSync(':memory:');
 const rules = {revision: 'synthetic', assignments: [
-  {siteCode: 'S', territoryId: 'sud'},
+  {siteCode: 'S', territoryId: 'sud', counties: ['Argeș']},
   {siteCode: 'T', territoryId: 'sud'},
   {siteCode: 'N', territoryId: 'nord_a'},
 ]};
@@ -116,7 +116,7 @@ try {
     ledger, new Map([['H', 'Synthetic closed warehouse']]), sites, {...query, focus: {...options, ...override}}, 'generation', slips,
   );
   const manager = result(null, {detail: 'regional', exportAll: true});
-  assert.deepEqual(manager.regional, {total: 7, otherTR: 1, otherChannels: 1, unassigned: 3, unassignedCounty: 1, sourceConflicts: 2});
+  assert.deepEqual(manager.regional, {total: 7, otherTR: 1, otherChannels: 1, unassigned: 3, unassignedCounty: 1, consumerCountyUnconfirmed: 0, sourceConflicts: 2});
   assert.equal(manager.attributed, 2);
   assert.equal(manager.possibleStock, 1);
   assert.deepEqual(manager.months.map(m => [m.complete, m.coveredThrough]), [[false, null], [true, '2026-10-31'], [false, '2026-11-11']]);
@@ -182,6 +182,20 @@ try {
   assert.equal(bulk.regional.total,manager.regional.total+300);
   assert.equal(bulk.attributed,manager.attributed+298);
   for (const n of [1000,1299]) assert.equal(bulk.detail.rows.find(row=>row.serial===serial(n)).kind,'unassigned');
+  for(const [n,county,code] of [[1501,'AG','CLIENTGEN'],[1502,'PH','GENERIC PARTENER'],[1503,'<UNASSIGNED>','CLIENTGEN'],[1504,'PH','RO1234567']]){
+    observe(2,n,county,credit,'SIM5',0);addSale(n,n,'S',1,'2026-10-10');
+    ledger.prepare("UPDATE activation_effective_movements SET raw_json=json_set(raw_json,'$.CIF',?,'$.CodPunctDeLucru','') WHERE movement_id=?").run(code,n);
+  }
+  const checked=result(null,{detail:'regional',exportAll:true});
+  assert.equal(checked.regional.total,bulk.regional.total+4);
+  assert.equal(checked.regional.consumerCountyUnconfirmed,2);
+  assert.equal(checked.attributed,bulk.attributed+2);
+  for(const n of [1502,1503])assert.equal(checked.detail.rows.find(row=>row.serial===serial(n)).kind,'consumerCountyUnconfirmed');
+  const individual=result(['S'],{detail:'attributed',exportAll:true});
+  const picked=individual.detail.rows.filter(row=>[1501,1502,1503,1504].some(n=>serial(n)===row.serial));
+  assert.deepEqual(picked.map(row=>row.serial).sort(),[serial(1501),serial(1504)]);
+  const excel=read(vodafoneFocusWorkbook(individual),{type:'base64'});
+  assert.equal(utils.sheet_to_json(excel.Sheets['Detaliu activări']).length,individual.attributed);
   console.log('Vodafone Focus source precedence, commercial attribution, history, scope and workbook passed.');
 } finally {
   ledger.close();

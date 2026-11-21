@@ -1,6 +1,6 @@
 import {DatabaseSync} from 'node:sqlite';
 import {historyFileGeneration} from './history-source-generation';
-import {normalizedCui,companyIdentityIndex,type CompanyAlias} from './partner-company-identity';
+import {normalizedCui,isConsumerAccountCode,companyIdentityIndex,type CompanyAlias} from './partner-company-identity';
 
 type ReferencePartner={id:string;cui?:string;historyFranchises?:string[];historyCatalog?:{franchiseCode?:string}};
 type Master=CompanyAlias&{Cod_Franciza?:string};
@@ -20,18 +20,18 @@ function buildCompanyLinks(c:DatabaseSync,reference:string){
   const index=companyIdentityIndex(master,universe);
   const owners=new Map<string,Set<string>>();
   for(const [company,codes] of index.codesByCompany)for(const code of codes){const set=owners.get(code)||new Set<string>();set.add(company);owners.set(code,set);}
-  for(const row of master){const code=normalizedCui(String(row.PartnerCode||'')),company=normalizedCui(String(row.CIF||''));if(!code||!company||code==='CLIENTGEN')continue;const set=owners.get(code)||new Set<string>();set.add(company);owners.set(code,set);}
+  for(const row of master){const code=normalizedCui(String(row.PartnerCode||'')),company=normalizedCui(String(row.CIF||''));if(!code||!company||isConsumerAccountCode(code)||isConsumerAccountCode(company))continue;const set=owners.get(code)||new Set<string>();set.add(company);owners.set(code,set);}
   const legalCompanies=new Set([...master.map(p=>normalizedCui(String(p.CIF||''))),...partners.map(p=>normalizedCui(String(p.cui||'')))]);
-  for(const company of legalCompanies){if(!company||company==='CLIENTGEN')continue;const set=owners.get(company)||new Set<string>();set.add(company);owners.set(company,set);}
+  for(const company of legalCompanies){if(!company||isConsumerAccountCode(company))continue;const set=owners.get(company)||new Set<string>();set.add(company);owners.set(company,set);}
   const explicitCodes=new Set([...legalCompanies,...master.map(p=>normalizedCui(String(p.PartnerCode||'')))]);
   const points=new Map<string,Set<string>>();
-  const add=(id:string,company:string)=>{if(!id||!company||company==='CLIENTGEN')return;const set=points.get(id)||new Set<string>();set.add(company);points.set(id,set);};
+  const add=(id:string,company:string)=>{if(!id||!company||isConsumerAccountCode(company))return;const set=points.get(id)||new Set<string>();set.add(company);points.set(id,set);};
   for(const p of partners){const company=normalizedCui(String(p.cui||''));add(p.id,company);for(const code of [...p.historyFranchises||[],p.historyCatalog?.franchiseCode||''])add(codeKey(String(code)),company);}
   for(const p of master)add(codeKey(String(p.Cod_Franciza||'')),normalizedCui(String(p.CIF||'')));
   const links:Record<string,string>={},incomplete=new Set(index.ambiguousCompanies),known=new Set<string>(index.ambiguousCompanies);
   const unresolved:{identityId:number;companies:string[];reason:string}[]=[];
   for(const row of allocations){
-    if(row.status==='consumer')continue;
+    if(row.status==='consumer'||isConsumerAccountCode(String(row.client_code||'')))continue;
     const client=normalizedCui(String(row.client_code||'')),candidates=new Set(owners.get(client)||[]);
     const ids=[...JSON.parse(String(row.partner_ids_json||'[]')),...JSON.parse(String(row.candidates_json||'[]')),String(row.franchise_code||'')];
     const pointEvidence=new Set<string>();

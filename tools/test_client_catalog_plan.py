@@ -31,8 +31,14 @@ class CatalogTests(unittest.TestCase):
   p=build_plan(self.snapshot(),[self.identity(franchise='')],[])
   self.assertEqual(p['summary']['newCompanyOnly'],1);self.assertEqual(p['identityLinks'][0]['status'],'reconcile')
  def test_generic_consumer_not_company(self):
-  p=build_plan(self.snapshot(),[self.identity(client='CLIENTGEN',franchise='')],[])
-  self.assertEqual(p['summary']['additions'],0);self.assertEqual(p['identityLinks'][0]['status'],'consumer')
+  for code in ['CLIENTGEN','GENERICPARTENER','GENERIC PARTENER']:
+   p=build_plan(self.snapshot(),[self.identity(client=code,franchise='')],[])
+   self.assertEqual(p['summary']['additions'],0);self.assertEqual(p['identityLinks'][0]['status'],'consumer')
+  coded=build_plan(self.snapshot(),[self.identity(client='GENERICPARTENER',franchise='F1')],[])
+  self.assertEqual(coded['summary']['newWorkPoints'],0);self.assertEqual(coded['identityLinks'][0]['status'],'consumer')
+  identity={**self.identity(client='RO123',franchise=''),'name':'GENERIC PARTENER SRL'}
+  actual=build_plan(self.snapshot(),[identity],[])
+  self.assertEqual(actual['summary']['newCompanyOnly'],1)
  def test_membership_only_no_address_changes(self):
   snapshot=self.snapshot([self.customer()])
   roster={'reviewed':True,'agents':[{'agentId':'a','warehouseId':'w','counties':['IS']}]}

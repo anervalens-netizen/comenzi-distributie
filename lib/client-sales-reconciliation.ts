@@ -7,7 +7,7 @@ import {clientSalesParams} from './client-sales-api';
 import {clientPortfolioVersion} from './client-sales-portfolio';
 import {fileGeneration,cooperativeStamp} from './history-source-stamp';
 import {activityVersion,bucharestToday} from './partner-activity-snapshot';
-import {normalizedCui} from './partner-company-identity';
+import {normalizedCui,isConsumerAccountCode} from './partner-company-identity';
 import {coverageIntervals,monthlyWindow} from './client-sales-store';
 import {salesYield} from './client-sales-cooperative';
 import {createReadProjectionCache} from './read-projection-cache';
@@ -64,15 +64,16 @@ export async function clientSalesReconciliation(user:User,params:URLSearchParams
   const current=new Map<string,boolean>();let cursor='';
   for(;;){
     const rows=(await db().prepare("SELECT id,active,data->'$.cui' cui FROM customers WHERE id>? ORDER BY id LIMIT 512").bind(cursor).all<{id:string;active:number;cui:string|null}>()).results;
-    for(const r of rows){const cui=normalizedCui(String(JSON.parse(r.cui??'null')||''));if(cui&&cui!=='CLIENTGEN')current.set(cui,!!r.active||current.get(cui)===true);}
+    for(const r of rows){const cui=normalizedCui(String(JSON.parse(r.cui??'null')||''));if(cui&&!isConsumerAccountCode(cui))current.set(cui,!!r.active||current.get(cui)===true);}
     if(rows.length<512)break;cursor=rows.at(-1)!.id;await salesYield();
   }
   const buckets={raw:empty(),consumer:empty(),linkedCompany:empty(),currentPortfolio:empty(),absent:empty(),inactive:empty(),identity:empty()},exceptions=new Map<string,RevenueException>();
   const add=(bucket:RevenueBucket,r:Fact)=>{bucket.knownCents+=r.cents??0;bucket.missingValues+=r.missing;bucket.sourceRows+=r.rows;if(!Number.isSafeInteger(bucket.knownCents))fail(503,'Totalul depășește precizia permisă.');};
   for(let i=0;i<facts.rows.length;i++){
     const r=facts.rows[i];add(buckets.raw,r);
-    const category=r.category==='consumer'?'consumer':r.category==='identity'?'identity':current.get(r.company_id!)===true?'currentPortfolio':current.has(r.company_id!)?'inactive':'absent';
-    add(buckets[category],r);if(r.category==='company')add(buckets.linkedCompany,r);
+    const consumer=r.category==='consumer'||isConsumerAccountCode(r.client_code);
+    const category=consumer?'consumer':r.category==='identity'?'identity':current.get(r.company_id!)===true?'currentPortfolio':current.has(r.company_id!)?'inactive':'absent';
+    add(buckets[category],r);if(!consumer&&r.category==='company')add(buckets.linkedCompany,r);
     if(category==='absent'||category==='inactive'||category==='identity'){
       const key=category==='identity'?'identity:'+r.identity_id:'company:'+r.company_id;
       const item=exceptions.get(key)||{key,category,companyId:category==='identity'?null:r.company_id,clientCode:category==='identity'?r.client_code:'',reason:category==='identity'?r.reason:category==='inactive'?'Only inactive current CRM points':'No current CRM point',...empty()};
@@ -83,7 +84,7 @@ export async function clientSalesReconciliation(user:User,params:URLSearchParams
   if(version!==await clientPortfolioVersion()||generation!==fileGeneration(directory))fail(params.has('revision')?409:503,'Portofoliul sau sursa s-au actualizat. Reîncearcă.');
   const explanation='Reconciliere națională, în bani întregi. Sursă = consumatori + firme asociate + identități neasociate; firme asociate = portofoliu activ actual + firme inactive + firme absente. Istoricul tuturor vânzătorilor, nu vânzări personale ale responsabilului actual. PL ambiguu nu este alocat forțat. Sumele cunoscute exclud valorile lipsă, raportate separat. Absența unei luni importate nu înseamnă zero vânzări.';
   const portfolioRevision=version===null?null:sha256(version);
-  const revision=paginationRevision(params,[generation,version,user.id,user.role,user.managerScope,input.month,bucharestToday(now),facts.source,[...current]]);
+  const revision=paginationRevision(params,['personal-sales-v2',generation,version,user.id,user.role,user.managerScope,input.month,bucharestToday(now),facts.source,[...current]]);
   const rows=[...exceptions.values()],result={revision,state:'ready' as const,scope:'national' as const,month:input.month,window:facts.window,source:facts.source,portfolioRevision,explanation,buckets,total:rows.length,page:input.page,hasMore:(input.page+1)*100<rows.length,exceptions:rows.slice(input.page*100,(input.page+1)*100)};
   if(params.get('format')==='csv'){
     const cell=(s:string|number|null|undefined)=>'"'+(typeof s==='number'?String(s):String(s??'').replace(/^[=+@-]/,"'$&")).replaceAll('"','""')+'"';

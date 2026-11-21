@@ -30,6 +30,10 @@ export function parseDistributionRules(value:unknown):DistributionRules {
   for(const [code,group] of Object.entries(r.products))if(!text(code)||!groups.includes(group))throw new Error('Invalid product mapping');
   return r;
 }
+export function assignedActivationCounty(county:string,assignment:DistributionAssignment|undefined) {
+  const id=canonicalCounty(county).id;
+  return !!id && !!assignment?.counties.some(candidate=>canonicalCounty(candidate).id===id);
+}
 export function assignmentFor(rules:DistributionRules,userId:string,siteCode:string){return rules.assignments.find(a=>a.userId===userId&&a.siteCode.toUpperCase()===siteCode.trim().toUpperCase());}
 export function productGroup(rules:DistributionRules,code:string):ProductGroup{return Object.hasOwn(rules.products,code)?rules.products[code]:'unmapped';}
 export function vodafoneEligibility(county:string,handset:string,territory:Territory|null,contradictory=false){
