@@ -86,7 +86,12 @@ export function VodafoneBonus({scopeQuery}: {scopeQuery: string}) {
   return <section className="panel distribution-card vodafone-bonus" aria-label="Registru bonus Vodafone">
     <div className="panel-heading"><h2>Bonusuri Vodafone</h2></div>
     <div className="vodafone-bonus-actions">
-      {report && <label>Luna <select value={month} onChange={event=>{setChoice(event.target.value);setLimit(vodafoneBonusPageSize);}}>
+      {report && <label>Luna <select value={month} onChange={event=>{
+        setChoice(event.target.value);
+        setFind('');
+        setLimit(vodafoneBonusPageSize);
+        setWantFull(false);
+      }}>
         {[...report.months].reverse().map(row=><option key={row.month} value={row.month}>{monthLabel(row.month)}</option>)}
       </select></label>}
       <button type="button" className="secondary" disabled={!report || exporting} onClick={()=>void download(false)}>{find.trim()?'Excel selecția din lună':'Excel luna selectată'}</button>
@@ -104,7 +109,7 @@ export function VodafoneBonus({scopeQuery}: {scopeQuery: string}) {
         <div className="vodafone-bonus-views" aria-label="Vederi registru">
           {(['points','documents','unresolved'] as const).map(item=><button type="button" className="secondary" aria-pressed={view===item} key={item} onClick={()=>{setView(item);setLimit(vodafoneBonusPageSize);}}>{labels[item]}</button>)}
         </div>
-        <input aria-label="Caută în registru" type="search" maxLength={180} placeholder="Partener, franciză, CUI sau TR" value={find} onChange={event=>{setFind(event.target.value);setLimit(vodafoneBonusPageSize);if (report?.preview && event.target.value.trim()) setWantFull(true);}}/>
+        <input aria-label="Caută în registru" type="search" maxLength={180} placeholder="Partener, franciză, CUI sau TR" value={find} onChange={event=>{setFind(event.target.value);setLimit(vodafoneBonusPageSize);setWantFull(Boolean(event.target.value.trim()));}}/>
       </div>
       {loadingFull && <output className="commerce-loading">Se încarcă detaliile registrului…</output>}
       {!incompleteSearch && <div className="distribution-table-scroll">

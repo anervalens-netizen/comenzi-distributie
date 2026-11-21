@@ -392,7 +392,7 @@ try{
  await browser.evaluate('[...document.querySelectorAll(".activation-workspace button")].find(button=>button.textContent==="Bonusuri Vodafone").click()');
  await waitFor(()=>browser.evaluate(`window.bonusRequests.some(path=>path.startsWith('/api/vodafone/bonuses?')&&new URL(path,location.origin).searchParams.get('month')==='2026-10'&&new URL(path,location.origin).searchParams.get('view')==='preview')`),'bonus report previews the historical reporting month on opening');
  await browser.evaluate(`document.querySelector('[aria-label="octombrie 2026"]').click()`);
- await waitFor(()=>browser.evaluate(`window.bonusRequests.some(path=>path.startsWith('/api/vodafone/bonuses?')&&new URL(path,location.origin).searchParams.get('month')==='2026-09')`),'bonus report follows changes to the reporting month');
+ await waitFor(()=>browser.evaluate(`window.bonusRequests.some(path=>path.startsWith('/api/vodafone/bonuses?')&&new URL(path,location.origin).searchParams.get('month')==='2026-09'&&new URL(path,location.origin).searchParams.get('view')==='preview')`),'bonus report previews the changed reporting month');
  const projectToggle="[...document.querySelectorAll('.distribution-projects button')].find(button=>button.textContent==='Vodafone Nord')";
  const northSelected=await browser.evaluate(projectToggle+'.getAttribute("aria-pressed")')==='true';
  await browser.evaluate('window.bonusRequests=[];'+projectToggle+'.click()');
