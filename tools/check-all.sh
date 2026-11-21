@@ -111,6 +111,7 @@ node tools/test-source-guards.mjs
 node tools/test-partner-detail-remediation.mjs
 node tools/test-partner-detail-http.mjs
 node tools/test-performance-lab.mjs
+node tools/test-report-probe.mjs
 node tools/test-client-sales-performance.mjs
 node tools/bench-inventory.mjs
 node tools/test-pwa-preparation.mjs
@@ -221,6 +222,7 @@ if [ -n "$CHROME_BIN" ]; then
   CHROME_BIN="$CHROME_BIN" node tools/test-stock-coverage-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-imports-journal-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-activation-publication-browser.mjs
+  CHROME_BIN="$CHROME_BIN" node tools/test-report-probe-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-client-sales-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-report-error-recovery-browser.mjs
   CHROME_BIN="$CHROME_BIN" node tools/test-client-history-import-browser.mjs
