@@ -330,7 +330,6 @@ try {
     const stored=deserialize(readFileSync(rankingPath).subarray(160));
     assert.equal(stored.key,ranked.revision);
     assert.deepEqual(Object.keys(stored.value).sort(),['coverage','revision','rows'],'persist only scoped aggregates');
-    const originalPrepare=DatabaseSync.prototype.prepare;
     try {
       DatabaseSync.prototype.prepare=function(sql) {
         if (sql.includes('FROM details WHERE provider=')) throw new Error('Aggregate restart crossed into raw activation reads');
