@@ -104,6 +104,18 @@ try {
     assert.equal(unresolvedCampaign.documents[0].allocations[0].month,'2026-07');
     assert.equal(unresolvedCampaign.points.find(row=>row.month==='2026-07'&&row.pointCode==='P1').remaining,null);
   }
+  // Without the earlier campaign statement, a later balance cannot be certified.
+  const incompleteCampaign={
+    ...input,
+    activation:[act('2026-06','A','P1'),...input.activation.filter(row=>row.month==='2026-07')],
+    targets:[input.targets[1]],
+  };
+  const gap=vodafoneBonusLedger(incompleteCampaign,null,null);
+  const july=gap.points.find(row=>row.month==='2026-07' && row.pointCode==='P1');
+  assert.equal(july.remaining,null,'missing June campaign must keep the July balance unconfirmed');
+  assert.equal(july.simulatedApplied,2,'SIM 0 simulation remains available');
+  assert.ok(gap.documents.every(row=>row.allocations.every(allocation=>allocation.status==='simulation')));
+
   const full=vodafoneBonusLedger(input,null,null);
   assert.equal(vodafoneBonusPreview(full),full,'small reports are already complete');
   const expanded={...full,points:Array.from({length:53},(_,i)=>({...full.points[0],pointCode:'sample-'+i,topBonus:i===52?null:3,partial:i===52}))};

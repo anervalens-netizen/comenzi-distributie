@@ -1,6 +1,6 @@
 # Registrul de bonusuri Vodafone
 
-Managerii cu acces la Activări găsesc **Bonusuri Vodafone** în secțiunea Activări. Registrul grupează activările pe lună și franciză și păstrează contribuțiile pe gestiune. Excelul poate fi descărcat pe lună sau pentru toată perioada de la iunie 2026.
+Managerii cu acces la Activări găsesc **Bonusuri Vodafone** în secțiunea Activări. Registrul grupează activările pe lună și franciză și păstrează contribuțiile pe gestiune. Excelul poate fi descărcat pe lună sau pentru toată perioada de la iunie 2026. Căutarea după partener, franciză, CUI, TR sau număr de document filtrează aceleași rânduri în ecran și în Excel. Foaia Luni păstrează acoperirea surselor pentru portofoliul selectat.
 
 Registrul folosește proiectele, regiunea, agentul și luna selectate. La prima deschidere afișează primele 50 de rânduri din fiecare vedere. Căutarea și butonul „Arată încă” consultă lista completă. Dacă ai introdus un text de căutare, exporturile includ toate rândurile care corespund căutării, inclusiv pe cele din afara primei pagini. Foaia „Luni” păstrează acoperirea întregului portofoliu selectat.
 
@@ -10,7 +10,7 @@ Sunt eligibile documentele complete cu SIM 5 și vouchere Vodafone la preț și 
 
 ## Publicarea și dovada fiscală
 
-O lună are raport final când o sursă Vodafone acoperă întreaga lună și are dată de publicare în luna următoare sau mai târziu. Perioadele fără raport final au valori de calcul provizorii. Soldul confirmat cere dovada fiscală a documentelor și un premiu Top Locații stabilit pentru punct și lună. Documentele fără tip fiscal pot contribui la simularea SIM 0 după reconcilierea surselor. În această simulare soldul de deschidere la 1 iunie este zero.
+O lună are raport final când o sursă Vodafone acoperă întreaga lună și are dată de publicare în luna următoare sau mai târziu. Perioadele fără raport final au valori de calcul provizorii. Soldul confirmat cere dovada fiscală a documentelor și un premiu Top Locații stabilit pentru punct și lună. Documentele fără tip fiscal pot contribui la simularea SIM 0 după reconcilierea surselor. În această simulare soldul de deschidere la 1 iunie este zero. O perioadă anterioară fără raport final, cu activări atribuite neconfirmate fiscal sau fără decont Top Locații pe punct păstrează soldul lunilor următoare neconfirmat. Un bonus zero explicit în decont confirmă că punctul nu are drepturi Top Locații pentru luna respectivă.
 
 Când sursa principală fiscală există în afara exporturilor, operatorul poate înregistra dovezile exacte în cheia privată `vodafone-bonus-evidence-v1` din configurația aplicației. Cheia are câmpurile `published` și `documents`. Intrările trebuie susținute de o referință de audit în câmpul `evidence`. Un document de acordare este legat prin emitent, data documentului, SiteId ERP și numărul facturii. În cazul activărilor, emitentul și SiteId se citesc din mișcarea de distribuție. O etichetă explicită de bon de consum sau reglare de gestiune din sursă exclude documentul.
 

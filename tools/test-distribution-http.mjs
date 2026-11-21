@@ -194,6 +194,8 @@ try{
  const list=await request('activations?month=2026-10&provider=both&view=partners','north');assert.equal(list.status,200);assert(list.data.partners.rows.some(p=>p.total===0));assert.equal(list.data.partners.rows.reduce((n,p)=>n+p.total,0),3);
  assert.deepEqual(list.data.partners.rows.find(p=>p.pointCode==='A').vodafoneTargets,[{month:'2026-10',units:6}]);
  assert.deepEqual(list.data.partners.rows.find(p=>p.pointCode==='B').vodafoneTargets,[{month:'2026-10',units:0}]);
+ assert.equal((await request('activations?month=invalid&provider=both&view=partners','north')).status,400);
+ assert.equal((await request('activations?month=2026-10&provider=both&view=partners&agentId=south','north')).status,403);
  const targetQuery='activations?months=2026-09,2026-10&provider=both&view=partners';
  const globalTargets=await request(targetQuery);
  assert.deepEqual(globalTargets.data.partners.rows.find(p=>p.pointCode==='A').vodafoneTargets,[{month:'2026-09',units:4},{month:'2026-10',units:6}]);

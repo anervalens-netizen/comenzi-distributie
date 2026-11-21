@@ -6,6 +6,18 @@
 .manager-shell .internal-label{display:none}
 .manager-shell .manager-settings[aria-pressed=true],
 .manager-shell .manager-ai-trigger[aria-expanded=true]{color:var(--manager-accent);background:var(--manager-soft)}
+.manager-ai-label {
+  display: inline-grid;
+  place-items: center;
+  min-width: 32px;
+  height: 26px;
+  border-radius: 8px;
+  background: #4f46e5;
+  color: white;
+  font-size: 13px;
+  font-weight: 750;
+  line-height: 1;
+}
 .manager-scope-bar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:0 0 26px;position:relative;z-index:25}
 .manager-scope-choice{position:relative;min-width:190px;max-width:360px;flex:1;background:var(--card);border:1px solid var(--manager-line);border-radius:10px}
 .manager-scope-choice>summary{display:flex;align-items:center;justify-content:space-between;gap:12px;cursor:pointer;padding:10px 13px;list-style:none;min-height:60px}
