@@ -286,7 +286,7 @@ try{
       build.onLoad({filter:/.*/,namespace:'fixture'},()=>({contents:
         'export function readActivations(month,sites,provider,query){return {available:true,revision:query.portfolioRevision,partners:{rows:[]}}}'}));
     }}]});
-  process.env.MOBIUP_DATA_DIR=temporary;process.env.MOBIUP_ACTIVATIONS_DIR=temporary;
+  process.env.MOBIUP_DATA_DIR=temporary;process.env.MOBIUP_ACTIVATIONS_DIR=sourceRoot;
   process.chdir(temporary);fixture.worker=true;
   const first=await report({});
   assert(first.partners.hasMore,'the worker served a multi-page portfolio');
