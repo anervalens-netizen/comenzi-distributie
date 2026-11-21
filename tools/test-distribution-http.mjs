@@ -201,6 +201,7 @@ try{
  assert.equal(regionalTargets.status,200);assert(regionalTargets.data.partners.rows.some(p=>p.pointCode==='A'));
  assert(!regionalTargets.data.partners.rows.some(p=>p.vodafoneTargets),'national activation browsing does not grant private targets');
  assert.equal((await request('vodafone/bonuses','north')).status,403);
+ assert.equal((await request('vodafone/bonuses?projects=unrecognized','manager')).status,400);
  assert.equal((await request('manager-ai','north')).status,403);
  const selected=list.data.partners.rows.find(p=>p.total>0);const point=encodeURIComponent(selected.key);
  assert.equal((await request('activations?month=2026-10&view=detail&point='+point,'north')).data.detail.total,selected.total);
@@ -390,6 +391,11 @@ try{
  await waitFor(()=>browser.evaluate(`window.bonusRequests.some(path=>path.startsWith('/api/vodafone/bonuses?')&&new URL(path,location.origin).searchParams.get('month')==='2026-10')`),'bonus report uses historical reporting month on opening');
  await browser.evaluate(`document.querySelector('[aria-label="octombrie 2026"]').click()`);
  await waitFor(()=>browser.evaluate(`window.bonusRequests.some(path=>path.startsWith('/api/vodafone/bonuses?')&&new URL(path,location.origin).searchParams.get('month')==='2026-09')`),'bonus report follows changes to the reporting month');
+ const projectToggle="[...document.querySelectorAll('.distribution-projects button')].find(button=>button.textContent==='Vodafone Nord')";
+ const northSelected=await browser.evaluate(projectToggle+'.getAttribute("aria-pressed")')==='true';
+ await browser.evaluate('window.bonusRequests=[];'+projectToggle+'.click()');
+ await waitFor(()=>browser.evaluate(`window.bonusRequests.some(path=>{const q=new URL(path,location.origin).searchParams;return path.startsWith('/api/vodafone/bonuses?')&&q.has('projects')&&q.get('projects').split(',').includes('vodafone_nord')===${!northSelected}})`),'bonus report follows selected projects');
+ await browser.evaluate(projectToggle+'.click()');
  await browser.evaluate(`document.querySelector('[aria-label="octombrie 2026"]').click();window.fetch=window.bonusOriginalFetch;true`);
  await browser.evaluate('[...document.querySelectorAll(".main-nav [role=tab]")].find(button=>button.textContent==="Accesorii").click()');
  await waitFor(()=>browser.evaluate('document.querySelectorAll(".commerce-category-card").length===3'),'accessory categories');

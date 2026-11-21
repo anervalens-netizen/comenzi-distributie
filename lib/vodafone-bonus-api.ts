@@ -2,6 +2,8 @@ import {readVodafoneBonusAsync} from '#mobiup-activation-store';
 import {canViewActivations} from './activation-access';
 import {readDistributionRules} from './distribution-config';
 import {managerFilter} from './manager-scope';
+import {projectIds} from './distribution-rules';
+import {bonusProjectSites} from './vodafone-bonus-rules';
 import {db,fail,isGlobalManager,response} from './server';
 import {salesSiteKey} from './sales-location';
 import {bonusMonth,parseVodafoneBonusEvidence,vodafoneBonusEvidenceSetting} from './vodafone-bonus-evidence';
@@ -40,27 +42,30 @@ async function getEvidence() {
 export async function readVodafoneBonusForManager(
   user: User, params: URLSearchParams, revalidate?: ()=>Promise<User>,
 ): Promise<VodafoneBonusReport> {
-  const scope = await authorizedScope(user,params);
+  const permittedSites = await authorizedScope(user,params);
   const keys = new Set<string>();
   for (const key of params.keys()) {
-    if (!['managerId','agentId','siteCode','month','all','view','revision'].includes(key) || keys.has(key)) fail(400,'Filtru necunoscut sau duplicat.');
+    if (!['managerId','agentId','siteCode','projects','month','all','view','revision'].includes(key) || keys.has(key)) fail(400,'Filtru necunoscut sau duplicat.');
     keys.add(key);
   }
   const today=calendar.format(new Date()), chosenMonth=params.get('month') || today.slice(0,7);
   if (!bonusMonth(chosenMonth) || chosenMonth<firstVodafoneBonusMonth || chosenMonth>today.slice(0,7)) fail(400,'Alege o lună disponibilă.');
   const all=params.get('all'), view=params.get('view'), revision=params.get('revision');
   if ((all!==null && all!=='1') || (view!==null && view!=='export') || (revision!==null && !/^[0-9a-f]{64}$/.test(revision))) fail(400,'Selecția registrului este invalidă.');
+  const projects=new Set(params.get('projects')?.split(',').filter(Boolean) ?? projectIds);
+  if ([...projects].some(project=>!(projectIds as readonly string[]).includes(project))) fail(400,'Proiect necunoscut.');
   const [rules,targets,raw] = await Promise.all([readDistributionRules(),readVodafoneTopLocations(),getEvidence()]).catch(()=>{
     fail(503,'Sursele de configurare ale registrului nu sunt disponibile.');
   });
   if (!rules) fail(503,'Lipsește clasificarea produselor Vodafone.');
+  const scope=bonusProjectSites(permittedSites,rules,projects);
   let evidence;
   try { evidence=parseVodafoneBonusEvidence(raw); } catch { fail(503,'Dovezile fiscale ale registrului necesită verificare.'); }
   const report=await readVodafoneBonusAsync({today,rules,targets,evidence,scope,month:all==='1'?null:chosenMonth})
     .catch(()=>fail(503,'Registrul Vodafone nu este disponibil momentan. Reîncarcă raportul.'));
   const current = revalidate ? await revalidate() : user;
   if (current.id!==user.id || current.profileVersion!==user.profileVersion || current.managerScope!==user.managerScope ||
-      JSON.stringify(scope)!==JSON.stringify(await authorizedScope(current,params))) fail(409,'Accesul la registru s-a schimbat.');
+      JSON.stringify(permittedSites)!==JSON.stringify(await authorizedScope(current,params))) fail(409,'Accesul la registru s-a schimbat.');
   const [updatedRules,updatedTargets,updatedEvidence]=await Promise.all([readDistributionRules(),readVodafoneTopLocations(),getEvidence()]).catch(()=>{
     fail(503,'Configurarea registrului nu a putut fi reverificată.');
   });

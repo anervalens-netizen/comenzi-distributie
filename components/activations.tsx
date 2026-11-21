@@ -123,7 +123,7 @@ export function ActivationOperatorCard({userId,query,provider,reload}:{userId:st
 export function ActivationsPanel({userId,scopeQuery='',scopeLabel='Activările mele',compact=false,embedded=false,distributionConfigured=false,refreshVersion=0,manager=false,onContextChange}:{userId:string;scopeQuery?:string;scopeLabel?:string;compact?:boolean;embedded?:boolean;distributionConfigured?:boolean;refreshVersion?:number;manager?:boolean;onContextChange?:(context:{section:string;period:string})=>void}){
  const [selected,setSelected]=useState(()=>bucharestMonthKey(new Date())),[reload,setReload]=useState(0),[view,setView]=useState<'general'|'partners'|'bonuses'>('general');
  const params=new URLSearchParams(scopeQuery);params.set('month',params.get('months')?.split(',')[0]||selected);const query=params.toString(),shared=params.has('months');
- const bonusParams=new URLSearchParams([...params].filter(([key])=>['managerId','agentId','siteCode'].includes(key)));
+ const bonusParams=new URLSearchParams([...params].filter(([key])=>['managerId','agentId','siteCode','projects'].includes(key)));
  const lastSelectedMonth=params.get('months')?.split(',').filter(Boolean).sort().at(-1) || selected;
  bonusParams.set('month',lastSelectedMonth);
  const bonusScope=bonusParams.toString();

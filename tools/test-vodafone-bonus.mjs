@@ -16,8 +16,15 @@ try {
     export * from './lib/vodafone-bonus-evidence';
     export * from './lib/vodafone-bonus-export';
   `,resolveDir:process.cwd()},outfile:bundle,bundle:true,format:'esm',platform:'node'});
-  const {isVodafoneGenericPartner,vodafoneDocumentKind,vodafoneSim0Bonus,vodafoneBonusLedger,readVodafoneBonus,parseVodafoneBonusEvidence,vodafoneBonusWorkbook}
+  const {bonusProjectSites,isVodafoneGenericPartner,vodafoneDocumentKind,vodafoneSim0Bonus,vodafoneBonusLedger,readVodafoneBonus,parseVodafoneBonusEvidence,vodafoneBonusWorkbook}
     =await import(pathToFileURL(bundle).href);
+  const scopedRules={assignments:[{siteCode:'test-n',projectId:'vodafone_nord'},{siteCode:'test-s',projectId:'vodafone_sud'}]};
+  const allProjects=new Set(['vodafone_sud','vodafone_nord','non_exclusiv']);
+  assert.equal(bonusProjectSites(null,scopedRules,allProjects),null);
+  assert.deepEqual(bonusProjectSites(['HISTORICAL-SITE'],scopedRules,allProjects),['HISTORICAL-SITE']);
+  assert.deepEqual(bonusProjectSites(null,scopedRules,new Set(['vodafone_nord'])),['TEST-N']);
+  assert.deepEqual(bonusProjectSites(['TEST-S'],scopedRules,new Set(['vodafone_nord'])),[]);
+  assert.deepEqual(bonusProjectSites(null,scopedRules,new Set()),[]);
   for (const alias of ['clientgeneric','PARTENER  generic', '<Generic partner>', 'CLIENT GEN. 001','PARTENER GENERIC NEIDENTIFICAT',
     '(géneric client default)','Partener client generic','clientul generic','GenericClient','<GENERIC PARTNER>']) assert.equal(isVodafoneGenericPartner(alias),true,alias);
   for (const company of ['Generic Example SRL','Super Generic Partner LLC','Factory Consum SRL','Client Genesis SRL','S.C. PARTENER GENERIC SRL']) {

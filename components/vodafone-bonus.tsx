@@ -24,9 +24,9 @@ export function VodafoneBonus({scopeQuery}: {scopeQuery: string}) {
   const exportRequest = useRef<AbortController|undefined>(undefined);
   const params = new URLSearchParams();
   const scope = new URLSearchParams(scopeQuery);
-  for (const key of ['agentId','managerId','siteCode']) {
+  for (const key of ['agentId','managerId','siteCode','projects']) {
     const value=scope.get(key);
-    if(value)params.set(key,value);
+    if(value!==null)params.set(key,value);
   }
   const suppliedMonth = scope.get('months')?.split(',')[0] || scope.get('month') || '';
   const currentMonth = bucharestMonthKey(new Date());
