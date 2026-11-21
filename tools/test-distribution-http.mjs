@@ -75,6 +75,14 @@ writeFileSync(providerFixture,`
 const child=spawn(process.execPath,['--import',providerFixture,'dist/standalone/server.js'],{env:{...process.env,MOBIUP_MANAGER_AI_OPENAI_API_KEY:'synthetic-provider-key',MOBIUP_DATA_DIR:root,MOBIUP_ACTIVATIONS_DIR:root,MOBIUP_ACTIVATIONS_PILOT_MANAGER_ID:'manager',MOBIUP_ACTIVATIONS_PILOT_ADDITIONAL_MANAGER_IDS:'regional',MOBIUP_ACTIVATIONS_PILOT_AGENT_ID:'north',MOBIUP_ACTIVATIONS_PILOT_ADDITIONAL_AGENT_IDS:'south,non',MOBIUP_USAGE_DISABLED:'1',HOST:'127.0.0.1',PORT:'3096'},stdio:'ignore'});
 let browser;const cookies={};
 async function request(path,id='manager'){const r=await fetch(origin+'/api/'+path,{headers:{Cookie:'mobiup_session='+cookies[id]}});return {status:r.status,data:await r.json()};}
+async function checkReportingProfile(expected) {
+ for(const role of ['manager','north','denied'])for(const path of ['auth/session','bootstrap?compact=1','orders?page=1','orders']) {
+  const {status,data}=await request(path,role);
+  assert.equal(status,200,role+' '+path);
+  assert.equal(data.user.distributionConfigured,expected,role+' '+path+' reporting configuration');
+  assert.equal(data.user.canViewActivations,role!=='denied',role+' '+path+' activation access');
+ }
+}
 try{
  await waitFor(async()=>{try{return (await fetch(origin+'/api/bootstrap')).ok;}catch{return false;}},'distribution server');
  const db=new DatabaseSync(root+'/mobiup.sqlite');
@@ -84,6 +92,7 @@ try{
  }
  db.exec("UPDATE users SET manager_scope='assigned' WHERE id='regional'; INSERT INTO manager_agents(manager_id,agent_id) VALUES('regional','south')");
  db.prepare('INSERT INTO settings VALUES(?,?)').run('distribution-rules-v1',readFileSync(join(root,'rules.json'),'utf8'));
+ await checkReportingProfile(true);
  const points=[['P-A','A'],['P-B','B'],['P-Z','C']];for(const [id,code] of points)db.prepare('INSERT INTO customers(id,warehouse_id,data,active) VALUES(?,?,?,1)').run(id,'WN',JSON.stringify({id,name:'Synthetic point '+code,cui:'EXAMPLE',warehouseId:'WN',warehouseIds:['WN'],county:'CV',city:'Synthetic city',address:'Synthetic address',historyFranchises:[code]}));
  const addSlip=db.prepare("INSERT INTO orders(id,number,user_id,warehouse_id,kind,status,payload,created_at,finalized_at,revision) VALUES(?,?,?,?,'sim','finalized',?,?,?,1)");
  for(const [n,day,agent,warehouse] of [[5,'2026-10-01','south','WS'],[40,'2026-10-18','south','WS'],[1,'2026-10-01','north','WN'],[44,'2026-10-01','north-b','WB'],[45,'2026-11-01','north-b','WB']]){
@@ -459,6 +468,22 @@ try{
   assert.equal(await browser.evaluate('[...document.querySelectorAll(".activation-workspace button")].some(button=>button.textContent==="Bonusuri Vodafone")'),false,'manager-only bonus register is hidden for agents');
   assert.equal(await browser.evaluate('document.querySelectorAll(".agent-commerce .report-period").length'),1,'agent activation and sales share one period');
   assert(!(await browser.evaluate('!!document.querySelector(".activation-workspace input[type=month]")')),'shared agent period replaces the separate activation month');
+  // One previously cached order page omitted the current user's reporting flag.
+  await browser.evaluate(`window.agentOrderRead=false;window.onlineAgentFetch=window.fetch;window.fetch=async(...args)=>{
+   const response=await window.onlineAgentFetch(...args);
+   if(!String(args[0]).startsWith('/api/orders?'))return response;
+   const data=await response.json();delete data.user.distributionConfigured;window.agentOrderRead=true;
+   return new Response(JSON.stringify(data),{status:response.status,headers:response.headers});
+  }`);
+  await browser.evaluate('[...document.querySelectorAll(".main-nav [role=tab]")].find(button=>button.textContent==="Comenzi").click()');
+  await waitFor(()=>browser.evaluate(`!!document.querySelector('[aria-label="Actualizează comenzile"]')`),'agent order refresh available');
+  await browser.evaluate(`document.querySelector('[aria-label="Actualizează comenzile"]').click()`);
+  await waitFor(()=>browser.evaluate('window.agentOrderRead'),'agent refreshed order list');
+  await browser.evaluate('[...document.querySelectorAll(".main-nav [role=tab]")].find(button=>button.textContent==="Prepay").click()');
+  await waitFor(()=>browser.evaluate('!!document.querySelector(".prepay-workspace .commerce-tabs")'),'agent prepay after order refresh');
+  await browser.evaluate('[...document.querySelectorAll(".prepay-workspace .commerce-tabs button")].find(button=>button.textContent==="Activări").click()');
+  await waitFor(()=>browser.evaluate('[...document.querySelectorAll(".activation-workspace button")].some(button=>button.textContent==="Pe partener")'),'agent keeps partner breakdown after order refresh');
+  await browser.evaluate('window.fetch=window.onlineAgentFetch');
   const control='.agent-report-scope [aria-label="septembrie 2026"]';
   await waitFor(()=>browser.evaluate(`document.querySelector(${JSON.stringify(control)})?.getAttribute('aria-pressed')==='false'`),'agent restored October-only selection '+id);
   await browser.evaluate(`document.querySelector(${JSON.stringify(control)}).click()`);
@@ -491,6 +516,7 @@ try{
   await waitFor(()=>browser.evaluate('[...document.querySelectorAll(".main-nav [role=tab]")].some(button=>button.textContent==="Stocul meu"&&button.getAttribute("aria-selected")==="true")'),'agent stock navigation '+id);
  }
  db.prepare("DELETE FROM settings WHERE key='distribution-rules-v1'").run();
+ await checkReportingProfile(false);
  await browser.send('Emulation.setDeviceMetricsOverride',{width:1280,height:900,deviceScaleFactor:1,mobile:false});
  await browser.send('Network.setCookie',{name:'mobiup_session',value:cookies.manager,url:origin});
  await browser.evaluate('location.reload()');
