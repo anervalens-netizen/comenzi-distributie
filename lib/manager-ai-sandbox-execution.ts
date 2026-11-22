@@ -3,7 +3,7 @@ import { once } from 'node:events';
 import { accessSync, constants, realpathSync, statSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { basename, dirname, extname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import workerSource from '../tools/run-manager-ai-sandbox.py?raw';
 import type { ManagerAiPreparedArtifact } from './manager-ai-media-contract';
 export class SandboxFailure extends Error {
