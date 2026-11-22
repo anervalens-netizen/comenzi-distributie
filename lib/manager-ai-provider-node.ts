@@ -172,8 +172,9 @@ export async function runManagerAi({
       await authorize();
       const parsed = parsePresentation(raw);
       if (!parsed) return JSON.stringify({error:'Fișă invalidă. Simplifică rândurile și verifică numărul de coloane.'});
+      const replaced = presentation !== undefined;
       presentation = parsed;
-      return JSON.stringify({displayed:true});
+      return JSON.stringify({prepared:true,replaced});
     }
     if (++reads > maxDataReads)
       fail(

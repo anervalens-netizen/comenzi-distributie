@@ -1,4 +1,4 @@
-import {z} from 'zod';
+import {z} from 'zod-a2ui';
 
 const label = z.string().trim().min(1).max(96);
 const cell = z.string().max(360);
@@ -15,7 +15,7 @@ export type ManagerPresentation = z.infer<typeof presentationSchema>;
 
 export const presentationTool = {
   name: 'present_information',
-  description: 'Prezintă informații într-o fișă vizuală în chat, independent de subiect sau de export. Folosește table pentru comparații, steps pentru pași și facts pentru indicatori sau perechi etichetă–valoare. Pentru steps și facts trimite două coloane. Fiecare rând are același număr de celule ca antetul. O fișă per răspuns.',
+  description: 'Prezintă informații într-o fișă vizuală în chat, independent de subiect sau de export. Folosește table pentru comparații, steps pentru pași și facts pentru indicatori sau perechi etichetă–valoare. Pentru steps și facts trimite două coloane. Fiecare rând are același număr de celule ca antetul. Ultimul apel valid actualizează fișa aceluiași răspuns.',
   parameters: {
     type: 'object' as const,
     properties: {

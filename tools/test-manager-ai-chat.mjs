@@ -124,7 +124,17 @@ try {
     providerOptions.push({model:body.model,effort:body.reasoning.effort});
     assert(body.tools.some(tool=>tool.name==='present_information'));
     if(toolOutput&&body.input.at(-1).call_id==='test-steps'){
-      assert.deepEqual(JSON.parse(body.input.at(-1).output),{displayed:true});
+      assert.deepEqual(JSON.parse(body.input.at(-1).output),{prepared:true,replaced:false});
+      return Promise.resolve(responseEvents([
+        {type:'response.completed',response:{id:'resp_revised',model:body.model,status:'completed',output:[{
+          type:'function_call',name:'present_information',call_id:'revised-steps',arguments:JSON.stringify({
+            layout:'steps',title:'Plan final',columns:['Pas','Detaliu'],rows:[['Verifică','Compară sursele'],['Salvează','Notează rezultatul']],
+          }),
+        }]}},
+      ]));
+    }
+    if(toolOutput&&body.input.at(-1).call_id==='revised-steps'){
+      assert.deepEqual(JSON.parse(body.input.at(-1).output),{prepared:true,replaced:true});
       return Promise.resolve(answer(body,'Verifică și salvează.'));
     }
     if(typeof text==='string'&&text==='Cum organizez verificarea?'){
@@ -290,7 +300,9 @@ try {
   assert.equal(historical.has_presentation,true);
   assert.doesNotMatch(JSON.stringify(historical),/Compară sursele/);
   const surfacePath=other+'/messages/'+final.id+'/presentation';
-  assert.equal((await (await call(surfacePath)).json()).rows.length,2);
+  const storedPresentation=await (await call(surfacePath)).json();
+  assert.equal(storedPresentation.title,'Plan final');
+  assert.equal(storedPresentation.rows.length,2);
   await assert.rejects(call(surfacePath+'?agentId=another'),{status:403});
   await assert.rejects(call(surfacePath,{token:'beta-token'}),{status:404});
   db.prepare('UPDATE manager_ai_presentations SET body=? WHERE message_id=?').run('{"layout":"steps","unknown":true}',final.id);
