@@ -56,6 +56,7 @@ try{
  const release=join(stagedSource,'dist/standalone');
  if(!existsSync(join(release,'server.js')))throw new Error('Build did not produce the server entry point.');
  const metadata={sha,builtAt:new Date().toISOString(),resourceMode:'private',resourceSchema:1,sourceMaps:{schema:1},resourceDigest:createHash('sha256').update(JSON.stringify(hashes)).digest('hex')};
+ metadata.analysisBroker={schema:1,sha256:createHash('sha256').update(readFileSync(join(release,'comenzi-analysis-broker.mjs'))).digest('hex')};
  writeFileSync(join(release,'RELEASE.json'),JSON.stringify(metadata)+'\n',{mode:0o600});
  if(existsSync(out))throw new Error('Output was created concurrently; refusing to replace it.');
  renameSync(release,out);published=true;

@@ -249,8 +249,10 @@ Pentru un serviciu web cu protecții systemd, instalează brokerul din același 
 ca aplicația, într-un director de release administrat de root. Unitatea
 `mobiup-comenzi-analysis.socket` admite conexiuni de la utilizatorul serviciului web.
 Configurează local `SocketUser`, calea executabilului Node și
-`MOBIUP_MANAGER_AI_SANDBOX_SOCKET` în serviciul web. Actualizează atomic
-`broker-current` la publicare și la revenirea la versiunea precedentă.
+`MOBIUP_MANAGER_AI_SANDBOX_SOCKET` în serviciul web. Instalează `deploy/analysis-broker-release.py` și indică executabilul în configurația
+privată `/etc/mobiup-comenzi-analysis-broker-gate`. Activatorul verifică și pregătește
+artefactele prin SHA-256 atât pentru versiunea nouă, cât și pentru revenire. La
+fiecare conexiune, systemd transmite serviciului manifestul versiunii active.
 Fiecare conexiune pornește un proces sub o identitate separată, fără acces la
 datele persistente ale aplicației. Brokerul rulează același worker Bubblewrap.
 

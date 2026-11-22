@@ -41,6 +41,14 @@ cat > "$root/source-sync" <<'EOF'
 printf '%s\n' "$1" >> "$MOBIUP_TEST_SOURCE_SYNC_LOG"
 [[ "${MOBIUP_TEST_SOURCE_SYNC_FAIL:-0}" != 1 ]]
 EOF
+cat > "$root/broker-gate" <<'EOF'
+#!/usr/bin/env bash
+[[ "$1" == prepare ]] || exit 2
+printf '%s\n' "$2" >> "$MOBIUP_TEST_BROKER_GATE_LOG"
+[[ "$2" != "${MOBIUP_TEST_BROKER_DENY:-}" ]]
+EOF
+chmod +x "$root/broker-gate"
+export MOBIUP_ANALYSIS_BROKER_GATE="$root/broker-gate" MOBIUP_TEST_BROKER_GATE_LOG="$root/broker-gate.log"
 chmod +x "$root/source-sync"
 export MOBIUP_SOURCE_SYNC_GATE="$root/source-sync" MOBIUP_TEST_SOURCE_SYNC_LOG="$root/source-sync.log"
 export MOBIUP_RUNTIME_ROOT="$runtime" MOBIUP_CURRENT_LINK="$runtime/current"
@@ -57,6 +65,12 @@ check "$(grep -c '^http://10.44.0.9:39222/api/bootstrap$' "$curl_log")" "1" 'rea
 check "$(readlink "$runtime/current")" "$releases/$new" 'SHA activation uses absolute symlink'
 check "$(readlink -f "$runtime/current")" "$releases/$new" 'SHA activation selects requested release'
 check "$(tail -1 "$MOBIUP_TEST_SOURCE_SYNC_LOG")" "$new" 'canonical source gate receives requested release identity'
+check "$(cat "$MOBIUP_TEST_BROKER_GATE_LOG")" "$releases/$old"$'\n'"$releases/$new" 'both broker payloads are checked before publication'
+before_restarts="$(wc -l < "$log")"
+set +e; MOBIUP_TEST_BROKER_DENY="$releases/$old" "$script" "$old" >/dev/null 2>&1; rc=$?; set -e
+check "$rc" "2" 'mismatched broker refuses candidate activation'
+check "$(readlink -f "$runtime/current")" "$releases/$new" 'broker validation preserves the live release'
+check "$(wc -l < "$log")" "$before_restarts" 'broker validation happens before service interruption'
 export MOBIUP_TEST_SOURCE_SYNC_FAIL=1
 before_restarts="$(wc -l < "$log")"
 set +e; "$script" "$old" >/dev/null 2>&1; rc=$?; set -e
@@ -253,4 +267,5 @@ check "$(find "$releases" -mindepth 1 -maxdepth 1 -type d | wc -l)" "2" 'success
 check "$(test -d "$releases/$new" && echo yes)" "yes" 'retention preserves active release'
 check "$(test -d "$releases/$old" && echo yes)" "yes" 'retention preserves rollback release'
 check "$(test ! -e "$releases/$extra" && echo yes)" "yes" 'retention removes obsolete releases'
+python3 -IB "$(dirname "$script")/../tools/test-analysis-broker-release.py"
 printf 'PASS: %s activation/rollback checks.\n' "$checks"

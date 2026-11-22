@@ -3,7 +3,8 @@ Description=Run one manager analysis request in the isolated sandbox
 
 [Service]
 Type=exec
-ExecStart=/usr/bin/node /opt/mobiup-analysis-runtime/broker-current/comenzi-analysis-broker.mjs
+LoadCredential=active-release:/opt/Mobiup/comenzi-distributie/runtime/current/RELEASE.json
+ExecStart=/usr/bin/python3 -IB /opt/mobiup-analysis-runtime/analysis-broker-release.py launch %d/active-release /usr/bin/node
 StandardInput=socket
 StandardOutput=null
 StandardError=journal
