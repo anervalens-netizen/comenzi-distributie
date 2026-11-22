@@ -27,6 +27,14 @@ await build({entryPoints:['lib/vodafone-bonus-worker.ts'],outfile:'dist/standalo
 writeFileSync('dist/standalone/vodafone-bonus-warmup-v1','1\n');
 for(const name of ['client_sales_history.py','client_history_upload.py','client_catalog_plan.py','activation_versions.py','activation_projection.py','activation_focus_evidence.py','activations.py','activation_report.py','activation_job.py','distribution_configure.py','import_engine_history.py','import_engine_sim.py','import-engine-executor.mjs'])copyFileSync('tools/'+name,'dist/standalone/'+name);
 
+// The dedicated broker runs without application credentials or package dependencies.
+// The trusted Python worker is embedded from the same release as the application.
+await build({entryPoints:['lib/manager-ai-sandbox-broker-main.ts'],outfile:'dist/standalone/comenzi-analysis-broker.mjs',
+  bundle:true,platform:'node',format:'esm',plugins:[{name:'embedded-analysis-worker',setup(plugin){
+    plugin.onResolve({filter:/run-manager-ai-sandbox\.py\?raw$/},()=>({path:resolve('tools/run-manager-ai-sandbox.py'),namespace:'analysis-worker'}));
+    plugin.onLoad({filter:/.*/,namespace:'analysis-worker'},args=>({contents:readFileSync(args.path,'utf8'),loader:'text'}));
+  }}]});
+
 // Workers must be emitted before tracing so their dependencies are included.
 const {packageRuntime} = await import('./package-runtime.mjs');
 await packageRuntime('dist/standalone');
