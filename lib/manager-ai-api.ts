@@ -1,6 +1,5 @@
 import { managerAiReader, managerAiScope } from './manager-ai-data';
 import { defaultManagerAiModel, managerAiModels, managerAiNotConfiguredMessage, type ManagerAiModel, type ManagerAiTurn } from './manager-ai';
-import { runManagerAi } from './manager-ai-provider';
 import { AppError, assertOrigin, fail, readLimited, requireManager, requireUser, response } from './server';
 import { runtimeKind } from './runtime';
 import type {User} from './types';
@@ -65,6 +64,7 @@ export async function managerAi(req:Request,user:User) {
   const signal = AbortSignal.any([req.signal,AbortSignal.timeout(90_000)]);
   try {
     const readSource=managerAiReader(req,scope,check);
+    const {runManagerAi}=await import('#mobiup-manager-ai-provider');
     const result = await runManagerAi({...input,key,signal,readSource,check:async()=>{
       await readSource.checkSourceScope(await check());
     }});

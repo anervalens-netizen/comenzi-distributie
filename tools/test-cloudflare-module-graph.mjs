@@ -12,12 +12,12 @@ async function files(root) {
   return result;
 }
 
-const forbidden=['node:worker_threads','stock-parser-node'];
+const forbidden=['node:worker_threads','stock-parser-node','openai-agents-js','maxFunctionToolConcurrency'];
 const hits=[];
 for(const file of await files('dist/server')) {
   const source=await readFile(file,'utf8');
   for(const token of forbidden)if(source.includes(token))hits.push(file+': '+token);
 }
 
-assert.deepEqual(hits,[],`Cloudflare server bundle must not include the Node stock worker path:\n${hits.join('\n')}`);
-console.log('PASS: Cloudflare server module graph excludes node:worker_threads and stock-parser-node.');
+assert.deepEqual(hits,[],`Cloudflare server bundle must not include Node stock processing or the manager Agents SDK:\n${hits.join('\n')}`);
+console.log('PASS: Cloudflare server module graph excludes the Node stock worker and manager Agents SDK.');

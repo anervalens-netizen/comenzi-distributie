@@ -14,7 +14,6 @@ import {
   managerAiArtifactResponse, managerAiMediaParts, managerAiTranscriptionKey, prepareManagerAiInputs,
   prepareManagerAiReport, transcribeManagerAi, type ManagerAiPreparedArtifact,
 } from './manager-ai-media';
-import { runManagerAi } from './manager-ai-provider';
 import { runtimeKind } from './runtime';
 import { AppError, assertOrigin, db, fail, jsonBody, readLimited, requireManager, requireUser, response, sha256 } from './server';
 import type { User } from './types';
@@ -193,6 +192,7 @@ async function processRun(req:Request,start:AiAccount,scope:AiScope,conversation
           return user;
         };
         const analysis=analysisModule?.createManagerAiAnalysis({scope,check:authorize,signal,files:work.sandboxFiles,readSource});
+        const {runManagerAi}=await import('#mobiup-manager-ai-provider');
         const answer=await runManagerAi({
           key,...work.options,turns:[],signal,readSource,check:authorize,analysis,
           content:work.recent.map(turn=>{

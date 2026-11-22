@@ -16,7 +16,8 @@
     "jsx": "react-jsx",
     "incremental": true,
     "paths": {
-      "@/*": ["./*"]
+      "@/*": ["./*"],
+      "#mobiup-manager-ai-provider": ["./lib/manager-ai-provider.ts"]
     }
   },
   "include": [
