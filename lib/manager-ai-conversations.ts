@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import type {ManagerPresentation} from './manager-ai-presentation';
 import {reportCardMessages} from './manager-ai-report-card';
 import { importAuthorization } from './import-write-authorization';
 import { managerAiProviderKey } from './manager-ai-api';
@@ -6,7 +7,7 @@ import { defaultManagerAiModel, managerAiModels, managerAiNotConfiguredMessage, 
 import { managerAiEfforts, type ManagerAiChatEvent, type ManagerAiEffort } from './manager-ai-chat-contract';
 import {
   aiRunEvent, aiRunInputs, aiSubmissionStatus, beginAiSubmission, createAiConversation, endAiRun,
-  getAiArtifact, getAiReportCard, listAiConversations, listAiMessages, managerAiRunTimeoutMs, readAiConversation, readAiEvents, removeAiArtifact, stopAiRun, withAiAccount,
+  getAiArtifact, getAiPresentation, getAiReportCard, listAiConversations, listAiMessages, managerAiRunTimeoutMs, readAiConversation, readAiEvents, removeAiArtifact, stopAiRun, withAiAccount,
   type AiAccount,
 } from './manager-ai-chat-store';
 import { managerAiReader, managerAiScope, type AiScope } from './manager-ai-data';
@@ -180,6 +181,7 @@ async function processRun(req:Request,start:AiAccount,scope:AiScope,conversation
       const {account}=await current();
       const work=conversationTxn(account,conversationId,false,connection=>aiRunInputs(connection,account.owner,conversationId,runId,!!analysisModule));
       if(work.r.state!=='running')return;
+      let presentation:ManagerPresentation | undefined;
       let text:string,files:ManagerAiPreparedArtifact[]=[],failed=false;
       try {
         if(!work.options)fail(409,'Setările analizei nu mai sunt disponibile. Trimite o analiză nouă.');
@@ -194,7 +196,7 @@ async function processRun(req:Request,start:AiAccount,scope:AiScope,conversation
         const analysis=analysisModule?.createManagerAiAnalysis({scope,check:authorize,signal,files:work.sandboxFiles,readSource});
         const {runManagerAi}=await import('#mobiup-manager-ai-provider');
         const answer=await runManagerAi({
-          key,...work.options,turns:[],signal,readSource,check:authorize,analysis,
+          key,...work.options,turns:[],signal,readSource,check:authorize,analysis,presentationEnabled:true,
           content:work.recent.map(turn=>{
             if(turn.role==='assistant')return {role:'assistant',content:turn.content};
             const attachments=managerAiMediaParts(work.files.filter(file=>file.ordinal===turn.ordinal).map(file=>file.file));
@@ -208,6 +210,7 @@ async function processRun(req:Request,start:AiAccount,scope:AiScope,conversation
           },
         });
         text=answer.answer;
+        presentation=answer.presentation;
         const format=/\bcsv\b/i.test(work.recent.at(-1)?.content??'')?'csv':'xlsx';
         files=[...(answer.analysisArtifacts??[]),...answer.reports.map(report=>prepareManagerAiReport(report,format))];
       } catch(error) {
@@ -218,13 +221,13 @@ async function processRun(req:Request,start:AiAccount,scope:AiScope,conversation
       const {account:finalAccount}=await current();
       let complete;
       try {
-        complete=conversationTxn(finalAccount,conversationId,true,connection=>endAiRun(connection,finalAccount.owner,conversationId,runId,work.order,{text,files,failed}));
+        complete=conversationTxn(finalAccount,conversationId,true,connection=>endAiRun(connection,finalAccount.owner,conversationId,runId,work.order,{text,files,failed,presentation}));
       } catch(error) {
         if(!(error instanceof AppError))throw error;
         const noExportSpace=error.status===413&&!failed&&files.length>0;
         const savedText=noExportSpace?text+'\n\nSpațiul pentru fișiere AI este plin. Eliberează spațiu și cere din nou exportul.':error.message;
         complete=conversationTxn(finalAccount,conversationId,true,connection=>endAiRun(connection,finalAccount.owner,conversationId,runId,work.order,
-          {text:savedText,files:[],failed:!noExportSpace}));
+          {text:savedText,files:[],failed:!noExportSpace,presentation}));
       }
       if(complete!=='retry')return;
     }
@@ -268,6 +271,11 @@ export async function managerAiConversations(req:Request,user:User,path:string[]
   if(path.length===3&&path[2]==='messages'&&method==='GET') {
     const limit=boundedNumber(params,'limit',30,1,200),before=boundedNumber(params,'before_ordinal',Number.MAX_SAFE_INTEGER,1,Number.MAX_SAFE_INTEGER);
     return response(transact(false,db=>listAiMessages(db,conversationId,limit,before)));
+  }
+  if(path.length===5&&path[2]==='messages'&&path[4]==='presentation'&&method==='GET') {
+    const id=identity(path[3]);
+    const scopeKey=sha256(JSON.stringify([selectedScope.signature,selectedScope.params.toString()]));
+    return response(transact(false,db=>getAiPresentation(db,account.owner,conversationId,id,scopeKey)));
   }
   if(path[2]==='artifacts'&&path[4]==='report-card'&&path.length===5&&method==='GET') {
     const id=identity(path[3]);

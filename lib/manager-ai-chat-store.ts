@@ -9,6 +9,7 @@ import type {
   ManagerAiArtifact, ManagerAiChatEvent, ManagerAiChatMessage, ManagerAiConversation,
   ManagerAiEffort, ManagerAiRunState, ManagerAiSubmissionStatus,
 } from './manager-ai-chat-contract';
+import {parsePresentation, type ManagerPresentation} from './manager-ai-presentation';
 import {AppError, fail} from './server';
 
 export type AiAccount = { auth:ImportAuthorization; owner:string; scopeRevision:number };
@@ -25,7 +26,8 @@ type Submit = {
   id:string; digest:string; text:string; context:string; scopeKey:string; files:readonly ManagerAiPreparedArtifact[];
   model:ManagerAiModel|null; effort:ManagerAiEffort|null;
 };
-type MessageRow = Omit<ManagerAiChatMessage,'attachments'> & {attachments:string};
+type MessageRow = Omit<ManagerAiChatMessage,'attachments' | 'has_presentation'> & {attachments:string; has_presentation?:number};
+const messageFields = 'id,ordinal,role,text,status,created_at,attachments, EXISTS(SELECT 1 FROM manager_ai_presentations p WHERE p.message_id=manager_ai_messages.id) has_presentation';
 const leaseGraceMs=10_000;
 export const managerAiRunTimeoutMs=180_000;
 const maxMessages=500;
@@ -105,11 +107,12 @@ function publicAttachment({reportCard,...metadata}:StoredAttachment):ManagerAiAr
 }
 
 function message(row:MessageRow):ManagerAiChatMessage {
-  return {...row,attachments:(JSON.parse(row.attachments) as StoredAttachment[]).map(publicAttachment)};
+  const {has_presentation, ...fields} = row;
+  return {...fields,...(has_presentation ? {has_presentation:true as const} : {}),attachments:(JSON.parse(row.attachments) as StoredAttachment[]).map(publicAttachment)};
 }
 
 export function listAiMessages(db:DatabaseSync,id:string,limit:number,before:number) {
-  const rows=many<MessageRow>(db,'SELECT id,ordinal,role,text,status,created_at,attachments FROM manager_ai_messages WHERE conversation_id=? AND ordinal<? ORDER BY ordinal DESC LIMIT ?',id,before,limit+1);
+  const rows=many<MessageRow>(db,'SELECT '+messageFields+' FROM manager_ai_messages WHERE conversation_id=? AND ordinal<? ORDER BY ordinal DESC LIMIT ?',id,before,limit+1);
   return {items:rows.slice(0,limit).reverse().map(message),has_more:rows.length>limit};
 }
 
@@ -158,6 +161,19 @@ export function getAiReportCard(db:DatabaseSync,owner:string,conversationId:stri
   const result=one<{scope_key:string}>(db,'SELECT scope_key FROM manager_ai_runs WHERE conversation_id=? AND terminal_message_id=?',conversationId,link.id);
   if(result?.scope_key!==scopeKey)fail(403,'Deschide fișa în selecția în care a fost generat raportul.');
   return entry.reportCard;
+}
+
+export function getAiPresentation(db:DatabaseSync, owner:string, conversationId:string, id:string, scopeKey:string) {
+  const row=one<{body:string;scope_key:string}>(db,`SELECT p.body,r.scope_key
+    FROM manager_ai_presentations p JOIN manager_ai_messages m ON m.id=p.message_id
+    JOIN manager_ai_conversations c ON c.id=m.conversation_id
+    JOIN manager_ai_runs r ON r.conversation_id=c.id AND r.terminal_message_id=m.id
+    WHERE p.message_id=? AND c.id=? AND c.owner=?`,id,conversationId,owner);
+  if(!row) fail(404,'Fișa nu a fost găsită.');
+  if(row.scope_key!==scopeKey) fail(403,'Deschide fișa în selecția în care a fost creată.');
+  const data=parsePresentation(row.body);
+  if(!data) fail(422,'Fișa nu mai este disponibilă.');
+  return data;
 }
 
 function removeAiInputExcerpt(db:DatabaseSync,messageId:string,artifacts:ManagerAiArtifact[],id:string) {
@@ -245,7 +261,7 @@ export function beginAiSubmission(db:DatabaseSync,account:AiAccount,conversation
   const previous=getSubmission(db,conversationId,input.id);
   if(previous) {
     if(previous.digest!==input.digest||previous.mode!==mode) fail(409,'Identificatorul trimiterii este folosit de alt mesaj.');
-    const existing=one<MessageRow>(db,'SELECT id,ordinal,role,text,status,created_at,attachments FROM manager_ai_messages WHERE id=?',previous.message_id)!;
+    const existing=one<MessageRow>(db,'SELECT '+messageFields+' FROM manager_ai_messages WHERE id=?',previous.message_id)!;
     return {created:false,message:message(existing),status:submissionStatus(input.id,getRun(db,previous.run_id),previous)};
   }
   if(one(db,'SELECT id FROM manager_ai_messages WHERE id=?',input.id))fail(409,'Identificatorul trimiterii este folosit de alt mesaj.');
@@ -350,7 +366,7 @@ export function aiRunEvent(db:DatabaseSync,runId:string,order:number,event:Manag
   return true;
 }
 
-export function endAiRun(db:DatabaseSync,owner:string,conversationId:string,runId:string,order:number,result:{text:string;files:readonly ManagerAiPreparedArtifact[];failed:boolean}) {
+export function endAiRun(db:DatabaseSync,owner:string,conversationId:string,runId:string,order:number,result:{text:string;files:readonly ManagerAiPreparedArtifact[];failed:boolean;presentation?:ManagerPresentation}) {
   const r=getRun(db,runId);
   const latest=one<{ord:number}>(db,'SELECT MAX(order_key) ord FROM manager_ai_submissions WHERE run_id=?',runId)!.ord;
   if(r.state!=='running'||latest!==order) return r.state==='running'?'retry':'closed';
@@ -358,6 +374,10 @@ export function endAiRun(db:DatabaseSync,owner:string,conversationId:string,runI
   try {
     db.exec('SAVEPOINT ai_terminal');
     terminal=addMessage(db,owner,conversationId,'assistant',result.text,result.files,result.failed?'error':'complete');
+    if (result.presentation && !result.failed) {
+      run(db,'INSERT INTO manager_ai_presentations(message_id,body) VALUES(?,?)',terminal.id,JSON.stringify(result.presentation));
+      terminal.has_presentation=true;
+    }
     db.exec('RELEASE ai_terminal');
   } catch(error) {
     db.exec('ROLLBACK TO ai_terminal; RELEASE ai_terminal');
@@ -387,7 +407,7 @@ export function stopAiRun(db:DatabaseSync,account:AiAccount,conversationId:strin
 }
 
 function readAiMessage(db:DatabaseSync,conversationId:string,id:string) {
-  const row=one<MessageRow>(db,'SELECT id,ordinal,role,text,status,created_at,attachments FROM manager_ai_messages WHERE conversation_id=? AND id=?',conversationId,id);
+  const row=one<MessageRow>(db,'SELECT '+messageFields+' FROM manager_ai_messages WHERE conversation_id=? AND id=?',conversationId,id);
   return row&&message(row);
 }
 
