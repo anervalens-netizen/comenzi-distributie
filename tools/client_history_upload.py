@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Cumulative monthly uploads. Private inputs stay outside the source repository."""
-import calendar, collections, datetime as dt, fcntl, hashlib, json, os, pathlib, sqlite3, sys, time, unicodedata, uuid, zipfile
+import calendar, collections, contextlib, datetime as dt, fcntl, hashlib, json, os, pathlib, sqlite3, sys, time, unicodedata, uuid, zipfile
 from zoneinfo import ZoneInfo
 import client_sales_history as h
 
@@ -80,16 +80,45 @@ def validate_empty_period(path,meta):
  if declarations!={'Data Start':1,'Data Stop':1} or not meta['start'] or not meta['end']:
   raise UploadError('Un raport gol necesită o perioadă lunară declarată explicit și neambiguă.')
 
+class WorkbookRows:
+ """Replay a private, immutable staged workbook one row at a time."""
+ def __init__(self,path):
+  self.path=pathlib.Path(path)
+  self.identity=self.stamp()
+ def stamp(self):
+  st=self.path.stat()
+  return (st.st_dev,st.st_ino,st.st_size,st.st_mtime_ns,st.st_ctime_ns)
+ def records(self):
+  if self.stamp()!=self.identity:raise UploadError('Fișierul s-a schimbat în timpul procesării.')
+  with contextlib.closing(h.workbook(self.path,allow_inferred_period=True)) as stream:
+   yield from stream
+  if self.stamp()!=self.identity:raise UploadError('Fișierul s-a schimbat în timpul procesării.')
+ def __iter__(self):
+  for kind,value in self.records():
+   if kind=='row':yield value
+
 def parse_upload(path):
  with zipfile.ZipFile(path) as z:
-  if len(z.infolist())>4096 or sum(x.file_size for x in z.infolist())>512*1024*1024:
-   raise UploadError('Fișierul Excel este prea mare după decomprimare.')
+  entries=z.infolist()
+  if len(entries)>4096 or len(z.namelist())!=len(set(z.namelist())) or sum(x.file_size for x in entries)>512*1024*1024:
+   raise UploadError('Fișierul Excel este prea mare sau are componente duplicate.')
+  # These XML members are held in memory by the XLSX reader.
+  limits={'xl/workbook.xml':2<<20,'xl/_rels/workbook.xml.rels':2<<20,'xl/styles.xml':8<<20,'xl/sharedStrings.xml':32<<20}
+  if any(x.filename in limits and x.file_size>limits[x.filename] for x in entries):
+   raise UploadError('Metadatele fișierului Excel depășesc limita permisă.')
+ rows=WorkbookRows(path)
+ count=missing=cents=quantity=0
+ first=last=''
  try:
-  stream=h.workbook(path,allow_inferred_period=True);_,meta=next(stream)
-  rows=[]
-  for _,r in stream:
-   rows.append(r)
-   if len(rows)>500000:raise UploadError('Maximum 500.000 de rânduri per import lunar.')
+  with contextlib.closing(rows.records()) as stream:
+   _,meta=next(stream)
+   for _,r in stream:
+    count+=1
+    if count>500000:raise UploadError('Maximum 500.000 de rânduri per import lunar.')
+    first=min(first or r['date'],r['date']);last=max(last,r['date'])
+    cents+=r['value_cents'] or 0
+    missing+=r['value_cents'] is None
+    quantity+=r['quantity_micros']
  except ValueError as error:
   messages={
    'Header not found':'Fișier incompatibil cu vânzările pe clienți. Lipsește antetul așteptat: Data, Denumire Client, Cod Client, Cod_Franciza. Alege raportul detaliat pe clienți. Datele existente nu au fost modificate.',
@@ -98,9 +127,8 @@ def parse_upload(path):
   message=messages.get(str(error))
   if message:raise UploadError(message) from error
   raise
- if not rows:validate_empty_period(path,meta)
+ if not count:validate_empty_period(path,meta)
  # Empty strings preserve the wire date type without inventing transaction dates.
- first=min((r['date'] for r in rows),default='');last=max((r['date'] for r in rows),default='')
  month=(first or meta['start'])[:7]
  if last and last[:7]!=month:raise UploadError('Încarcă un singur raport cumulativ lunar. Fișierul conține mai multe luni.')
  start=month+'-01';year,number=map(int,month.split('-'))
@@ -110,9 +138,8 @@ def parse_upload(path):
  through=meta['end'] or last
  today=dt.datetime.now(ZoneInfo('Europe/Bucharest')).date().isoformat()
  if last>today or through>today:raise UploadError('Raportul conține o perioadă din viitor.')
- cents=sum(r['value_cents'] or 0 for r in rows);quantity=sum(r['quantity_micros'] for r in rows)
  if max(abs(cents),abs(quantity))>9007199254740991:raise UploadError('Totalurile depășesc limita numerică acceptată.')
- summary={'month':month,'from':start,'through':through,'firstDate':first,'lastDate':last,'rows':len(rows),'valueCents':cents,'quantityMicros':quantity,'missingValues':sum(r['value_cents'] is None for r in rows),'inferredPeriod':not bool(meta['start']),'fileHash':h.file_sha(path)}
+ summary={'month':month,'from':start,'through':through,'firstDate':first,'lastDate':last,'rows':count,'valueCents':cents,'quantityMicros':quantity,'missingValues':missing,'inferredPeriod':not bool(meta['start']),'fileHash':h.file_sha(path)}
  return rows,summary,month_end
 
 def preview(c,rows,summary,month_end):
@@ -132,34 +159,29 @@ def preview_pinned(c,rows,summary,month_end):
  # Compare stored values as well as raw payload: manual numeric corrections may
  # legitimately leave row_hash unchanged. Such replacements still need consent.
  query='SELECT r.raw_json,r.date,r.quantity_micros,r.price_cents,r.value_cents,r.quality_issue'+active
- def signature(values):return h.sha(h.dump(list(values)).encode())
- def values(r):return [h.dump(r['raw']),r['date'],r['quantity_micros'],r['price_cents'],r['value_cents'],r['quality_issue']]
- old=collections.Counter(signature(r) for r in c.execute(query,args))
- incoming=collections.Counter(signature(values(r)) for r in rows)
- previous=c.execute('SELECT COUNT(*) rows,COALESCE(SUM(r.value_cents),0) valueCents,MAX(r.date) lastDate'+active,args).fetchone()
- removed_rows=old-incoming;added_rows=incoming-old
- removed=sum(removed_rows.values());added=sum(added_rows.values())
- name_only=0
- if removed and added:
-  def name_signature(record):
-   raw=json.loads(record[0]);name=raw.get('Denumire Client')
-   # Display spelling only. Every code, other raw field and stored numeric
-   # value still has to match exactly; incomplete identities get no exemption.
-   if raw.get('Cod Client') and raw.get('SiteId') and isinstance(name,str):
-    raw['Denumire Client']=''.join(x for x in unicodedata.normalize('NFD',name) if not unicodedata.combining(x))
-    return signature([h.dump(raw),*record[1:]])
-   return signature(record)
-  before=collections.Counter()
-  for record in c.execute(query,args):
-   key=signature(record)
-   if removed_rows[key]>0:
-    before[name_signature(record)]+=1;removed_rows[key]-=1
-  after=collections.Counter()
+ def signatures(record):
+  exact=hashlib.sha256(h.dump(list(record)).encode()).digest()
+  raw=json.loads(record[0]);name=raw.get('Denumire Client')
+  if raw.get('Cod Client') and raw.get('SiteId') and isinstance(name,str):
+   folded=''.join(x for x in unicodedata.normalize('NFD',name) if not unicodedata.combining(x))
+   if folded!=name:
+    raw['Denumire Client']=folded
+    return exact,hashlib.sha256(h.dump([h.dump(raw),*record[1:]]).encode()).digest()
+  return exact,exact
+ # An unnamed SQLite file is private and automatically removed on close.
+ # Keep multiplicity and name-only comparisons on disk even for large months.
+ with contextlib.closing(sqlite3.connect('')) as counts:
+  counts.execute('PRAGMA temp_store=FILE')
+  counts.execute('CREATE TABLE delta(exact BLOB PRIMARY KEY, name_key BLOB, n INTEGER NOT NULL) WITHOUT ROWID')
+  def add(record,change):
+   exact,name=signatures(record)
+   counts.execute('INSERT INTO delta VALUES(?,?,?) ON CONFLICT(exact) DO UPDATE SET n=n+excluded.n',(exact,name,change))
+  for record in c.execute(query,args):add(record,-1)
   for r in rows:
-   record=values(r);key=signature(record)
-   if added_rows[key]>0:
-    after[name_signature(record)]+=1;added_rows[key]-=1
-  name_only=sum((before&after).values())
+   add([h.dump(r['raw']),r['date'],r['quantity_micros'],r['price_cents'],r['value_cents'],r['quality_issue']],1)
+  removed,added,name_only=counts.execute("""SELECT COALESCE(SUM(missing),0),COALESCE(SUM(extra),0),COALESCE(SUM(MIN(missing,extra)),0)
+    FROM (SELECT SUM(MAX(-n,0)) missing,SUM(MAX(n,0)) extra FROM delta WHERE n<>0 GROUP BY name_key)""").fetchone()
+ previous=c.execute('SELECT COUNT(*) rows,COALESCE(SUM(r.value_cents),0) valueCents,MAX(r.date) lastDate'+active,args).fetchone()
  end=c.execute("SELECT MAX(MIN(period_end,?)) FROM history_imports WHERE state='active' AND period_start<=? AND period_end>=?",(month_end,month_end,summary['from'])).fetchone()[0]
  shorter=bool(end and summary['through']<end)
  return {**summary,'revision':revision(c,summary['from'],month_end),'previous':dict(previous),'addedOccurrences':added,'removedOccurrences':removed,'clientNameOnlyOccurrences':name_only,'coverageShorter':shorter,'requiresAcknowledgement':bool(removed>name_only or shorter),'alreadyImported':bool(existing)}
@@ -284,11 +306,13 @@ def apply(c,rows,summary,month_end,request,root):
    partners=json.loads(ref['partners_json'])
    fields=('id','cui','county','city','address','historyFranchises','historyCatalog','active')
    compact={'partners':[{k:p[k] for k in fields if k in p} for p in partners['partners']]}
+   del partners
    master_fields=('Cod_Franciza','CIF','PartnerCode','Judet','Oras','Street')
    master=[{k:p[k] for k in master_fields if k in p} for p in json.loads(ref['master_json'])]
    temp=pathlib.Path(request['source']).parent
    partner_path=temp/'reference-partners.json';master_path=temp/'reference-master.json'
    partner_path.write_text(h.dump(compact));master_path.write_text(h.dump(master))
+   del compact,master,ref,identities
    new_ref,_=h.store_reference(c,partner_path,master_path)
    c.execute('UPDATE history_imports SET reference_id=? WHERE id=?',(new_ref,imp))
    partner_path.unlink();master_path.unlink()

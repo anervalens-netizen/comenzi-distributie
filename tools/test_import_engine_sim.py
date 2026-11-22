@@ -176,7 +176,20 @@ class SimExecutorTests(unittest.TestCase):
  def test_streaming_operator_json_rejects_trailing_comma(self):
   path=self.base/'bad.json.gz'
   with gzip.open(path,'wt') as stream:stream.write('[{"synthetic":1},]')
-  with self.assertRaises(ValueError):list(import_engine_sim.json_records(path))
+  with self.assertRaises(ValueError):list(activations.versions.json_records(path))
+ def test_gzip_byte_budget_includes_trailing_space_and_unicode(self):
+  path=self.base/'normal.json.gz'
+  raw='[{"label":"Țară"}]  '
+  with gzip.open(path,'wt',encoding='utf-8') as stream:stream.write(raw)
+  with patch.object(activations.versions,'MAX_OPERATOR_JSON_BYTES',len(raw.encode())):
+   self.assertEqual(list(activations.versions.operator_records(path,activations.workbook)),[(1,{'label':'Țară'})])
+  with patch.object(activations.versions,'MAX_OPERATOR_JSON_BYTES',len(raw.encode())-1):
+   with self.assertRaisesRegex(ValueError,'size limit'):list(activations.versions.operator_records(path,activations.workbook))
+ def test_metadata_budget_is_checked_before_preview(self):
+  path=self.base/'normal.xlsx'
+  fixture(path,[row()])
+  with patch.dict(activations.MAX_METADATA_XML_BYTES,{'xl/workbook.xml':1}):
+   with self.assertRaisesRegex(ValueError,'metadata size limit'):import_engine_sim.metadata_period(path)
  def test_declared_period_matches_optional_workbook_metadata(self):
   job=self.source('sim_sales_vodafone');path=self.data/'import-engine-spool'/job['id']/'source.xlsx'
   with zipfile.ZipFile(path) as z:parts={name:z.read(name) for name in z.namelist()}

@@ -57,8 +57,9 @@ def xlsx_rows(z,path,formats=None):
      strings.append(''.join(t.text or '' for t in e.iter() if t.tag.endswith('}t')))
      e.clear();root.clear()
  with z.open(path) as f:
-  context=ET.iterparse(f,events=('start','end'));_,root=next(context)
+  context=ET.iterparse(f,events=('start','end'));sheet_data=None
   for event,e in context:
+   if event=='start' and e.tag.endswith('}sheetData'):sheet_data=e
    if event!='end' or not e.tag.endswith('}row'):continue
    cells={}
    for c in e:
@@ -81,7 +82,8 @@ def xlsx_rows(z,path,formats=None):
      else:raise ValueError('Unsupported identifier number format '+ref)
     cells[i-1]=v
    yield int(e.get('r')), [cells.get(i,'') for i in range(max(cells,default=-1)+1)]
-   e.clear();root.clear()
+   e.clear()
+   if sheet_data is not None:sheet_data.remove(e)
 def workbook(path,allow_inferred_period=False):
  with zipfile.ZipFile(path) as z:
   if sum(x.file_size for x in z.infolist())>2_000_000_000:raise ValueError('Workbook uncompressed size limit')

@@ -13,7 +13,14 @@ let input='';for await(const chunk of process.stdin){input+=chunk;if(input.lengt
 const request=JSON.parse(input);
 const sales=['sales_agent','stock_tr'].includes(request.job?.kind);
 const sim=String(request.job?.kind||'').startsWith('sim_');
-const child=spawn(sales?process.execPath:'python3',[join(import.meta.dirname,sales?'import-engine-sales.mjs':sim?'import_engine_sim.py':'import_engine_history.py')],{stdio:['pipe','pipe','inherit',lockFd]});
+// The Python child inherits the serial admission lock. Both bounds survive
+// a wrapper exit and leave room for the engine inside its service cgroup.
+const domain = join(import.meta.dirname, sales ? 'import-engine-sales.mjs' : sim ? 'import_engine_sim.py' : 'import_engine_history.py');
+const seconds = request.action === 'commit' ? 3600 : 900;
+const python = ['--as=' + (sim ? 3 * 1024 : 768) * 1024 * 1024, '--', 'python3', domain];
+const child = sales
+  ? spawn(process.execPath, [domain], {stdio:['pipe','pipe','inherit',lockFd]})
+  : spawn('timeout', ['--foreground','--preserve-status','--kill-after=15s',String(seconds),'prlimit',...python], {stdio:['pipe','pipe','inherit',lockFd]});
 const completion=new Promise((resolve,reject)=>{child.on('error',reject);child.on('close',resolve);});
 child.stdin.end(input);let output='';for await(const chunk of child.stdout){output+=chunk;if(output.length>1024*1024){child.kill();throw Error('Output limit exceeded');}}
 const code=await completion;

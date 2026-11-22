@@ -26,6 +26,6 @@ const filename = filePath.split(/[\\/]/).pop() || 'sales.xlsx';
 const rows = parseSalesFile(bytes, filename);
 const month = rows[0].month;
 const fileHash = salesHash(bytes);
-const originalPath = await store.saveSalesOriginal(fileHash, filename, bytes);
-const result = store.importSalesRows({ rows, month, fileHash, filename, importedBy: 'cli', originalPath, expectedRevision: store.salesRevision(), expectedMappingHash: 'cli', currentMappingHash: 'cli', historicalAcknowledged: args.has('allow-historical'), regressionAcknowledged: args.has('allow-regression') });
+const originalPath = store.salesOriginalPath(fileHash, filename);
+const result = store.importSalesRows({ rows, month, fileHash, filename, importedBy: 'cli', sourceBytes: bytes, expectedRevision: store.salesRevision(), expectedMappingHash: 'cli', currentMappingHash: 'cli', historicalAcknowledged: args.has('allow-historical'), regressionAcknowledged: args.has('allow-regression') });
 console.log(JSON.stringify({ ...result, source: filePath, originalPath }));

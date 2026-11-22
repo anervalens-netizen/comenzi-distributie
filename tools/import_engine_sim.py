@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Read-only SIM previews and receipt-backed atomic activation publication."""
-import contextlib,datetime,fcntl,gzip,hashlib,json,os,shutil,sqlite3,sys,time,uuid,zipfile,xml.etree.ElementTree as ET
+import contextlib,datetime,fcntl,hashlib,json,os,shutil,sqlite3,sys,time,uuid,zipfile,xml.etree.ElementTree as ET
 from pathlib import Path
 import activations
 import activation_job
@@ -15,6 +15,7 @@ def digest(path):
 def metadata_period(path,sheet_name='SIM'):
  # Metadata is optional, but a partial declaration is rejected.
  with zipfile.ZipFile(path) as z:
+  activations.validate_workbook_inventory(z)
   book=ET.fromstring(z.read('xl/workbook.xml'))
   sheets=[s for s in book.findall(NS+'sheets/'+NS+'sheet') if s.get('name')==sheet_name]
   if len(sheets)!=1:raise ValueError('Source worksheet missing')
@@ -52,42 +53,6 @@ def metadata_period(path,sheet_name='SIM'):
   if start!=end:raise ValueError('Incomplete period metadata')
   if not start:return None
   return datetime.date.fromisoformat(cells.get('B1','')).isoformat(),datetime.date.fromisoformat(cells.get('B2','')).isoformat()
-
-def json_records(path):
- # Incremental JSON array decoder; bounded single-record buffer and no full extraction.
- decoder=json.JSONDecoder();buffer='';started=False;expect_value=True;ended=False;index=0;after_comma=False
- with gzip.open(path,'rt',encoding='utf8') as stream:
-  eof=False
-  while True:
-   if not eof and len(buffer)<1048576:
-    chunk=stream.read(65536);eof=not chunk;buffer+=chunk
-   buffer=buffer.lstrip()
-   if not started:
-    if not buffer and not eof:continue
-    if not buffer.startswith('['):raise ValueError('Invalid operator array')
-    started=True;buffer=buffer[1:];continue
-   if ended:
-    if buffer.strip():raise ValueError('Trailing operator data')
-    if eof:return
-    continue
-   if not buffer:
-    if eof:raise ValueError('Incomplete operator array')
-    continue
-   if expect_value:
-    if buffer[0]==']':
-     if after_comma:raise ValueError('Invalid array')
-     ended=True;buffer=buffer[1:];continue
-    try:value,pos=decoder.raw_decode(buffer)
-    except json.JSONDecodeError:
-     if eof or len(buffer)>16*1024*1024:raise ValueError('Invalid operator record')
-     chunk=stream.read(65536);eof=not chunk;buffer+=chunk;continue
-    if not isinstance(value,dict):raise ValueError('Invalid operator record')
-    index+=1
-    if index>1_000_000:raise ValueError('Operator row limit')
-    yield index,value;buffer=buffer[pos:];expect_value=False;after_comma=False
-   elif buffer[0]==',':buffer=buffer[1:];expect_value=True;after_comma=True
-   elif buffer[0]==']':ended=True;buffer=buffer[1:]
-   else:raise ValueError('Invalid operator separator')
 
 def published(root):
  pointer=root/'current'
@@ -166,7 +131,7 @@ def run(request):
     if json.loads(values[15]):issues+=1
     count+=1
   else:
-   records=json_records(path) if suffix=='.json.gz' else activations.versions.operator_records(path,activations.workbook,provider)
+   records=activations.versions.operator_records(path,activations.workbook,provider)
    for _,record in records:
     serial,observed,_,_=activations.versions.operator_values(record,provider,company)
     if provider=='digi':digi_serials.add(serial)
@@ -274,6 +239,10 @@ def run(request):
  return {'state':'completed','receipt':json.loads(saved[0]),'result':{'generation':active.name,'provider':provider}}
 
 if __name__=='__main__':
+ import signal
+ def deadline(signum,frame):
+  raise TimeoutError('Import processing deadline exceeded')
+ signal.signal(signal.SIGTERM,deadline)
  value=None
  try:
   value=json.load(sys.stdin)

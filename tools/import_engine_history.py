@@ -63,6 +63,10 @@ def run(request):
    finally:c.close()
 
 if __name__=='__main__':
+ import signal
+ def deadline(signum,frame):
+  raise TimeoutError('Import processing deadline exceeded')
+ signal.signal(signal.SIGTERM,deadline)
  value=None
  try:
   value=json.load(sys.stdin);out=run(value);print(json.dumps(out,ensure_ascii=False,separators=(',',':')))

@@ -9,7 +9,7 @@ import type { User } from './types';
 import { readCatalog } from './catalog';
 import { salesHash, SALES_FILE_LIMIT } from './sales-file';
 import { parseSalesFileRuntime } from './sales-parser-runtime';
-import { currentSalesImport, importSalesRows, latestSalesImport, latestSalesMonth, salesCoverageChange, salesRevision, saveSalesOriginal } from './sales-store';
+import { currentSalesImport, importSalesRows, latestSalesImport, latestSalesMonth, salesCoverageChange, salesRevision } from './sales-store';
 import { getSalesViewRuntime } from './sales-view-runtime';
 import { managerFilter } from './manager-scope';
 import type { SalesView } from './sales-types';
@@ -297,13 +297,20 @@ export async function salesUpload(req: Request, user: User, apply: boolean, inte
   const { requiresRegressionAcknowledgement } = coverageChange;
   const currentRevision = salesRevision();
   if (!apply) {
-    const sitesInCents = rows.reduce((result, row) => {
-      const found = result.find(item => salesPairKey(item) === salesPairKey(row));
-      if (found) { found.rows++; found.quantity += row.quantity; found.valueCents += row.valueCents; }
-      else result.push({ siteCode: row.siteCode, location: row.location, agent: mappings.find(m => salesPairKey({ siteCode: m.siteCode, location: m.location || '' }) === salesPairKey(row))?.name || '', rows: 1, quantity: row.quantity, valueCents: row.valueCents });
-      return result;
-    }, [] as { siteCode: string; location: string; agent: string; rows: number; quantity: number; valueCents: number }[]);
-    const sites = sitesInCents.sort((a, b) => b.valueCents - a.valueCents || a.siteCode.localeCompare(b.siteCode)).map(({ valueCents, ...site }) => ({ ...site, value: valueCents / 100 }));
+    const agents = new Map(mappings.map(mapping => [salesPairKey({ siteCode: mapping.siteCode, location: mapping.location || '' }), mapping.name || '']));
+    const totals = new Map<string, {siteCode: string; location: string; agent: string; rows: number; quantity: number; valueCents: number}>();
+    for (const row of rows) {
+      const key = salesPairKey(row);
+      let site = totals.get(key);
+      if (!site) {
+        site = { siteCode: row.siteCode, location: row.location, agent: agents.get(key) || '', rows: 0, quantity: 0, valueCents: 0 };
+        totals.set(key, site);
+      }
+      site.rows++;
+      site.quantity += row.quantity;
+      site.valueCents += row.valueCents;
+    }
+    const sites = [...totals.values()].sort((a, b) => b.valueCents - a.valueCents || a.siteCode.localeCompare(b.siteCode)).map(({ valueCents, ...site }) => ({ ...site, value: valueCents / 100 }));
     return response({ month, firstDate, lastDate, fileHash, filename, revision: currentRevision, mappingHash: snapshot.hash, rowCount: rows.length, summary: { rows: rows.length, quantity: rows.reduce((sum, row) => sum + row.quantity, 0), value: rows.reduce((sum, row) => sum + row.valueCents, 0) / 100 }, sites, mappings, historical, requiresHistoricalAcknowledgement: historical, requiresRegressionAcknowledgement, coverageChange });
   }
   const expectedRevision = Number(req.headers.get('X-Sales-Revision') || req.headers.get('X-Sales-Version') || NaN);
@@ -323,8 +330,7 @@ export async function salesUpload(req: Request, user: User, apply: boolean, inte
       const aliases=connection.prepare("SELECT value FROM settings WHERE key='sales-agent-aliases-v1'").get();
       if(JSON.stringify([actors,aliases?.value??null])!==finalSnapshot.sourceStamp)fail(409,'Maparea agenților s-a modificat. Reîncarcă previzualizarea.');
       internal?.onMutationStart?.();
-      const originalPath=saveSalesOriginal(fileHash,filename,bytes);
-      return importSalesRows({ rows, month, fileHash, filename, importedBy: user.id, originalPath, expectedRevision, expectedMappingHash: snapshot.hash, currentMappingHash: finalSnapshot.hash, historicalAcknowledged: req.headers.get('X-Sales-Allow-Historical') === '1', regressionAcknowledged: req.headers.get('X-Sales-Allow-Regression') === '1', authorizeCommit:check,action:internal?.action });
+      return importSalesRows({ rows, month, fileHash, filename, importedBy: user.id, sourceBytes: bytes, expectedRevision, expectedMappingHash: snapshot.hash, currentMappingHash: finalSnapshot.hash, historicalAcknowledged: req.headers.get('X-Sales-Allow-Historical') === '1', regressionAcknowledged: req.headers.get('X-Sales-Allow-Regression') === '1', authorizeCommit:check,action:internal?.action });
     };
     const result=internal?withCapturedImportAuthorization(internal.authorization,write):withImportAuthorization(req,user,write);
     if('idempotent' in result&&result.idempotent&&'importedBy' in result&&typeof result.importedBy==='string'&&result.importedBy!==user.id)fail(409,await duplicateImportMessage('Vânzările',result.importedBy));

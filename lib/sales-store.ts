@@ -1,6 +1,6 @@
 import {historicalSalesView} from './historical-sales';
 import { DatabaseSync } from 'node:sqlite';
-import { mkdirSync, existsSync, unlinkSync, renameSync, writeFileSync } from 'node:fs';
+import { mkdirSync, existsSync, unlinkSync, linkSync, writeFileSync, openSync, closeSync, fsyncSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import type { SalesAggregate, SalesCardsSim, SalesDaily, SalesMonthly, SalesProduct, SalesRow, SalesSegment, SalesSegments, SalesSite, SalesView, SalesCoverageChange } from './sales-types';
@@ -259,25 +259,39 @@ export function getSalesViewSnapshot(month: string, siteCode?: SalesScope, fromM
   }
 }
 
-/** Writes an immutable copy of the source before it can become a durable audit record. */
-export function saveSalesOriginal(fileHash: string, filename: string, bytes: Uint8Array) {
-  mkdirSync(salesOriginalsDirectory, { recursive: true, mode: 0o700 });
-  const extension = /\.xlsx$/i.test(filename) ? '.xlsx' : '.xls';
-  const relative = `sales-imports/${fileHash}${extension}`;
-  const path = resolve(salesOriginalsDirectory, `${fileHash}${extension}`);
-  if (existsSync(path)) return relative;
-  const temporary = `${path}.${randomUUID()}.tmp`;
-  writeFileSync(temporary, bytes, { mode: 0o600, flag: 'wx' });
-  try { renameSync(temporary, path); } catch (error) {
-    try { if (existsSync(temporary)) unlinkSync(temporary); } catch { /* best effort cleanup */ }
-    if (existsSync(path)) return relative;
-    throw error;
-  }
-  return relative;
+export function salesOriginalPath(fileHash: string, filename: string) {
+  if (!/^[a-f0-9]{64}$/.test(fileHash)) throw new Error('Invalid source digest');
+  return `sales-imports/${fileHash}${/\.xlsx$/i.test(filename) ? '.xlsx' : '.xls'}`;
 }
 
-export function importSalesRows(args: { rows: SalesRow[]; month: string; fileHash: string; filename: string; importedBy: string; originalPath: string; expectedRevision: number; expectedMappingHash: string; currentMappingHash: string; historicalAcknowledged: boolean; regressionAcknowledged?: boolean; authorizeCommit?: () => void; action?:{id:string;actor:unknown;period:unknown}; }) {
+function publishOriginal(path: string, bytes: Uint8Array) {
+  mkdirSync(salesOriginalsDirectory, { recursive: true, mode: 0o700 });
+  if (existsSync(path)) return false;
+  const temporary = `${path}.${randomUUID()}.tmp`;
+  try {
+    writeFileSync(temporary, bytes, { mode: 0o600, flag: 'wx', flush: true });
+    try { linkSync(temporary, path); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false;
+      throw error;
+    }
+    try {
+      const directory = openSync(salesOriginalsDirectory, 'r');
+      try { fsyncSync(directory); } finally { closeSync(directory); }
+    } catch (error) {
+      unlinkSync(path);
+      throw error;
+    }
+    return true;
+  } finally {
+    if (existsSync(temporary)) unlinkSync(temporary);
+  }
+}
+
+export function importSalesRows(args: { rows: SalesRow[]; month: string; fileHash: string; filename: string; importedBy: string; expectedRevision: number; expectedMappingHash: string; currentMappingHash: string; historicalAcknowledged: boolean; regressionAcknowledged?: boolean; authorizeCommit?: () => void; action?:{id:string;actor:unknown;period:unknown}; } & ({ originalPath: string } | { sourceBytes: Uint8Array })) {
   const db = database();
+  const originalPath = 'sourceBytes' in args ? salesOriginalPath(args.fileHash, args.filename) : args.originalPath;
+  let newlyPublished: string | undefined;
   db.exec('BEGIN IMMEDIATE;');
   try {
     const revision = salesRevision();
@@ -288,11 +302,18 @@ export function importSalesRows(args: { rows: SalesRow[]; month: string; fileHas
       db.prepare('INSERT INTO sales_meta(key,value) VALUES(?,?)').run('import_action_receipt:'+args.action.id,JSON.stringify(value));
       return value;
     };
-    const existing = db.prepare('SELECT m.month,m.imported_at AS importedAt,m.revision,i.imported_by AS importedBy FROM sales_months m JOIN sales_imports i ON i.id=m.import_id WHERE m.month=? AND m.file_hash=?').get(args.month, args.fileHash) as Record<string, unknown> | undefined;
+    const existing = db.prepare('SELECT m.month,m.imported_at AS importedAt,m.revision,i.imported_by AS importedBy,i.original_path AS originalPath FROM sales_months m JOIN sales_imports i ON i.id=m.import_id WHERE m.month=? AND m.file_hash=?').get(args.month, args.fileHash) as Record<string, unknown> | undefined;
     if (existing) {
       const result={ ok: true, idempotent: true, month: args.month, importedAt: String(existing.importedAt), importedBy: String(existing.importedBy), revision: Number(existing.revision), rows: args.rows.length, fileHash: args.fileHash };
       const proof=receipt('no_change',result);
       args.authorizeCommit?.();
+      if ('sourceBytes' in args) {
+        // Retry can restore a missing original. Use the already audited extension.
+        const archive = existing.originalPath;
+        if (archive === salesOriginalPath(args.fileHash, 'report.xls') || archive === salesOriginalPath(args.fileHash, 'report.xlsx')) {
+          publishOriginal(resolve(dataDirectory, archive), args.sourceBytes);
+        }
+      }
       db.exec('COMMIT;');
       return {...result,...(proof?{receipt:proof}:{})};
     }
@@ -304,7 +325,7 @@ export function importSalesRows(args: { rows: SalesRow[]; month: string; fileHas
     const nextRevision = revision + 1;
     const importedAt = new Date().toISOString();
     const insert = db.prepare('INSERT INTO sales_imports(month,file_hash,filename,imported_at,imported_by,row_count,original_path,revision) VALUES(?,?,?,?,?,?,?,?)');
-    insert.run(args.month, args.fileHash, args.filename, importedAt, args.importedBy, args.rows.length, args.originalPath, nextRevision);
+    insert.run(args.month, args.fileHash, args.filename, importedAt, args.importedBy, args.rows.length, originalPath, nextRevision);
     const importId = Number(db.prepare('SELECT last_insert_rowid() id').get()?.id);
     db.prepare('DELETE FROM sales_rows WHERE month=?').run(args.month);
     const add = db.prepare('INSERT INTO sales_rows(import_id,row_number,date,month,site_code,item_code,item_name,quantity,brand,price_cents,value_cents,location,company,asm,regional,order_number,category,sub_category,agent) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
@@ -314,9 +335,26 @@ export function importSalesRows(args: { rows: SalesRow[]; month: string; fileHas
     const result={ ok: true, month: args.month, importedAt, revision: nextRevision, rows: args.rows.length, fileHash: args.fileHash };
     const proof=receipt('published',result);
     args.authorizeCommit?.();
+    if ('sourceBytes' in args) {
+      // Publish after every validation, while the sales writer lock is held.
+      const path = resolve(dataDirectory, originalPath);
+      if (publishOriginal(path, args.sourceBytes)) newlyPublished = path;
+      args.authorizeCommit?.();
+    }
     db.exec('COMMIT;');
     return {...result,...(proof?{receipt:proof}:{})};
-  } catch (error) { try { db.exec('ROLLBACK;'); } catch { /* already rolled back */ } throw error; }
+  } catch (error) {
+    if (db.isTransaction) {
+      try {
+        if (newlyPublished) {
+          // Preserve a repaired historical archive if an earlier import uses this hash.
+          const prior = db.prepare('SELECT 1 FROM sales_imports WHERE original_path=? AND revision<=? LIMIT 1').get(originalPath, args.expectedRevision);
+          if (!prior) unlinkSync(newlyPublished);
+        }
+      } finally { db.exec('ROLLBACK;'); }
+    }
+    throw error;
+  }
 }
 
 export function salesAudit(month?: string) {
