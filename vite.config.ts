@@ -59,7 +59,7 @@ export default defineConfig(async ({mode}) => {
     },
     css: { postcss: { plugins: [tailwindcss()] } },
     resolve: { alias: {
-      '#mobiup-manager-ai-provider': resolve(nodeTarget ? 'lib/manager-ai-provider.ts' : 'lib/manager-ai-provider-cloudflare.ts'),
+      '#mobiup-manager-ai-provider': resolve(nodeTarget ? 'lib/manager-ai-provider-node.ts' : 'lib/manager-ai-provider-cloudflare.ts'),
       '#mobiup-import-engine': resolve(nodeTarget ? 'lib/import-engine-node.ts' : 'lib/import-engine-cloudflare.ts'), '#mobiup-activation-store': resolve(nodeTarget ? 'lib/activation-store-node.ts' : 'lib/activation-store-cloudflare.ts'), '#mobiup-usage-store': resolve(nodeTarget ? 'lib/usage-store-node.ts' : 'lib/usage-store-cloudflare.ts'), '#mobiup-client-history-import': resolve(nodeTarget ? 'lib/client-history-import-node.ts' : 'lib/client-history-import-cloudflare.ts'), '#mobiup-runtime': resolve(nodeTarget ? 'lib/runtime-node.ts' : 'lib/runtime-cloudflare.ts'), '#mobiup-sales-parser': resolve(nodeTarget ? 'lib/sales-parser-node.ts' : 'lib/sales-parser-cloudflare.ts'), '#mobiup-stock-parser': resolve(nodeTarget ? 'lib/stock-parser-node.ts' : 'lib/stock-parser-cloudflare.ts'), '#mobiup-sales-view': resolve(nodeTarget ? 'lib/sales-view-node.ts' : 'lib/sales-view-direct.ts'), '#mobiup-commercial-focus-runtime': resolve(nodeTarget ? 'lib/commercial-focus-runtime-node.ts' : 'lib/commercial-focus-runtime-cloudflare.ts') } },
     server: isCodexSeatbeltSandbox
       ? { watch: { useFsEvents: false, usePolling: true } }

@@ -9,7 +9,7 @@ import { read, utils, write } from 'xlsx';
 
 const bundle=await build({
   stdin:{resolveDir:process.cwd(),contents:`
-    export * from './lib/manager-ai-provider.ts';
+    export * from './lib/manager-ai-provider-node.ts';
     export * from './lib/manager-ai-analysis-tool.ts';
     export * from './lib/manager-ai-analysis.ts';
     export * from './lib/manager-ai-sandbox-artifacts.ts';

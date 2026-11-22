@@ -10,7 +10,7 @@ import {join} from 'node:path';
 const {outputFiles} = await build({
   stdin:{resolveDir:process.cwd(),contents:`
     export {groupVodafoneSim0Clients} from './lib/vodafone-activation-ranking-node.ts';
-    export * from './lib/manager-ai-provider.ts';
+    export * from './lib/manager-ai-provider-node.ts';
     export * from './lib/manager-ai-query.ts';
     export * from './lib/manager-ai.ts';
     export * from './lib/manager-ai-operations.ts';
