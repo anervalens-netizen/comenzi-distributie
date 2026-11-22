@@ -9,6 +9,12 @@ export type ProviderEvent =
   | { type: 'status'; message: string };
 type Emit = (event: ProviderEvent) => Promise<void>;
 
+function rawProgress(event: unknown): boolean {
+  if (!event || typeof event !== 'object' || !('type' in event) || typeof event.type !== 'string') return false;
+  if (event.type.endsWith('.delta')) return 'delta' in event && typeof event.delta === 'string' && event.delta.length > 0;
+  return event.type.startsWith('response.') && (event.type.endsWith('.added') || event.type.endsWith('.done'));
+}
+
 function boundedFetch(send: typeof fetch): typeof fetch {
   return async (url, options) => {
     const reply = await send(url, { ...options, redirect: 'error' });
@@ -57,6 +63,7 @@ export class ManagerAiModelAdapter extends OpenAIResponsesModel {
     private readonly callLimit: number,
     private readonly allowedTools: ReadonlySet<string>,
     private readonly emit?: Emit,
+    private readonly progress?: () => void,
   ) {
     super(
       new OpenAI({
@@ -136,6 +143,7 @@ export class ManagerAiModelAdapter extends OpenAIResponsesModel {
     this.calls++;
     const response = await super.getResponse(request);
     this.verifyTerminal(response.providerData, response.output);
+    this.progress?.();
     return response;
   }
 
@@ -160,6 +168,9 @@ export class ManagerAiModelAdapter extends OpenAIResponsesModel {
         completed = true;
         if (pending) await this.emit?.({ type: 'delta', text: pending });
       }
+      // Reasoning or tool progress can precede visible text. A transport keepalive
+      // or a repeated in_progress notice does not advance a model operation.
+      if (event.type !== 'model' || rawProgress(event.event)) this.progress?.();
       yield event;
     }
     if (!completed) fail(502, 'Analiza AI este incompletă.');

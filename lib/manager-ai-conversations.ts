@@ -1,3 +1,4 @@
+import { managerAiActivity } from './manager-ai-activity';
 import { createHash } from 'node:crypto';
 import {reportCardMessages} from './manager-ai-report-card';
 import { importAuthorization } from './import-write-authorization';
@@ -193,14 +194,20 @@ async function processRun(req:Request,start:AiAccount,scope:AiScope,conversation
     for (;;) {
       const attempt=new AbortController();
       active.set(runId,attempt);
-      const signal=AbortSignal.any([attempt.signal,leaseLost.signal]);
       const {account}=await current();
       const work=conversationTxn(account,conversationId,false,connection=>aiRunInputs(connection,account.owner,conversationId,runId,!!analysisModule));
       if(work.r.state!=='running')return;
+      const activity=managerAiActivity(AbortSignal.any([attempt.signal,leaseLost.signal]));
+      const {signal,progress}=activity;
       let text:string,files:ManagerAiPreparedArtifact[]=[],failed=false;
       try {
         if(!work.options)fail(409,'Setările analizei nu mai sunt disponibile. Trimite o analiză nouă.');
-        const readSource=managerAiReader(req,scope,async()=>(await current()).user);
+        const readSource=managerAiReader(req,scope,async()=>{
+          signal.throwIfAborted();
+          const {user}=await current();
+          signal.throwIfAborted();
+          return user;
+        },undefined,progress);
         const authorize=async()=>{
           signal.throwIfAborted();
           const {user}=await current();
@@ -208,10 +215,11 @@ async function processRun(req:Request,start:AiAccount,scope:AiScope,conversation
           signal.throwIfAborted();
           return user;
         };
-        const analysis=analysisModule?.createManagerAiAnalysis({scope,check:authorize,signal,files:work.sandboxFiles,readSource});
+        const analysis=analysisModule?.createManagerAiAnalysis({scope,check:authorize,signal,files:work.sandboxFiles,readSource,progress});
         const {runManagerAi}=await import('#mobiup-manager-ai-provider');
-        const answer=await runManagerAi({
-          key,...work.options,turns:[],signal,readSource,check:authorize,analysis,
+        const options=work.options;
+        const answer=await activity.wait(()=>runManagerAi({
+          key,...options,turns:[],signal,readSource,check:authorize,analysis,progress,
           content:work.recent.map(turn=>{
             if(turn.role==='assistant')return {role:'assistant',content:turn.content};
             const attachments=managerAiMediaParts(work.files.filter(file=>file.ordinal===turn.ordinal).map(file=>file.file));
@@ -223,7 +231,7 @@ async function processRun(req:Request,start:AiAccount,scope:AiScope,conversation
             const {account}=await current();
             if(!conversationTxn(account,conversationId,true,connection=>aiRunEvent(connection,runId,work.order,event)))attempt.abort();
           },
-        });
+        }));
         text=answer.answer;
         const format=/\bcsv\b/i.test(work.recent.at(-1)?.content??'')?'csv':'xlsx';
         files=[...(answer.analysisArtifacts??[]),...answer.reports.map(report=>prepareManagerAiReport(report,format))];
@@ -231,7 +239,7 @@ async function processRun(req:Request,start:AiAccount,scope:AiScope,conversation
         failed=true;
         if(leaseLost.signal.aborted)return;
         text=error instanceof AppError?error.message:'Furnizorul AI nu este accesibil momentan.';
-      }
+      } finally { activity.close(); }
       const {account:finalAccount}=await current();
       let complete;
       try {

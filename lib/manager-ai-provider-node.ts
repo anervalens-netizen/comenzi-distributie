@@ -124,6 +124,7 @@ export async function runManagerAi({
   check,
   signal,
   send = fetch,
+  progress,
   effort = 'low',
   onEvent,
   content,
@@ -136,6 +137,7 @@ export async function runManagerAi({
   check: () => Promise<unknown>;
   signal: AbortSignal;
   send?: typeof fetch;
+  progress?: () => void;
   effort?: ManagerAiEffort;
   content?: ConversationTurn[];
   onEvent?: (event: ProviderEvent) => Promise<void>;
@@ -169,6 +171,7 @@ export async function runManagerAi({
         'Analiza a depășit limita de rapoarte. Restrânge perioada sau selecția.',
       );
     await authorize();
+    progress?.();
     let result;
     try {
       if (name === managerAiAnalysisToolName && analysis) {
@@ -205,6 +208,7 @@ export async function runManagerAi({
       result = { error: managerAiToolError(error) };
     }
     await authorize();
+    progress?.();
     return JSON.stringify(result);
   }
 
@@ -236,6 +240,7 @@ export async function runManagerAi({
     callLimit,
     new Set(tools.map((tool) => tool.name)),
     onEvent,
+    progress,
   );
   const agent = new Agent({
     name: 'Comenzi',

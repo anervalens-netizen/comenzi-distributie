@@ -43,13 +43,14 @@ function selectableName(filename:string, isTaken:(name:string)=>boolean) {
 }
 
 export function createManagerAiAnalysis({
-  scope,check,signal,files,readSource,
+  scope,check,signal,files,readSource,progress,
 }:{
   scope:AiScope;
   check:()=>Promise<User>;
   signal:AbortSignal;
   files:readonly ManagerAiPreparedArtifact[];
   readSource?:ReturnType<typeof managerAiReader>;
+  progress?:()=>void;
 }):ManagerAiAnalysisCapability{
   const inputs=new Map<string,ManagerAiPreparedArtifact>();
   const originals=new Set(files.map(file=>file.filename));
@@ -87,14 +88,16 @@ export function createManagerAiAnalysis({
           signal.throwIfAborted();
           const table=await readManagerAiAnalysisTable(scope,{
             ...selection,table:selection.table as ManagerAiAnalysisDataset,
-          },check,signal,readSource?.rememberSim0Access);
+          },check,signal,readSource?.rememberSim0Access,progress);
           totalRows+=table.rows.length;
           if(totalRows>managerAiAnalysisLimits.rows)fail(413,'Restrânge selecția la cel mult 80.000 de rânduri sursă.');
           tables.push(table);
+          progress?.();
         }
         await check();
         signal.throwIfAborted();
         const database=tables.length?await materializeManagerAiDatabase(tables,signal):undefined;
+        progress?.();
         if(sourceRevision!==await managerAiAnalysisRevision(requestedTables)){
           fail(409,'Sursele de date s-au actualizat în timpul selecției. Reia analiza.');
         }

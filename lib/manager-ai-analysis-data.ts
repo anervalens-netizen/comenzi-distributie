@@ -104,6 +104,7 @@ async function partnerRows(user:User, scope:AiScope, remaining:number) {
 export async function readManagerAiAnalysisTable(
   scope:AiScope, request:ManagerAiAnalysisRequest, revalidate:()=>Promise<User>, signal?:AbortSignal,
   rememberSim0Access?:ReturnType<typeof managerAiReader>['rememberSim0Access'],
+  progress?:()=>void,
 ):Promise<ManagerAiAnalysisTable> {
   const current=bucharestMonthKey(new Date());
   const selection=monthSelection(request,current);
@@ -128,6 +129,7 @@ export async function readManagerAiAnalysisTable(
     });
     if (rows.length>=managerAiAnalysisLimits.rows) limit();
     rows.push(cells);
+    if (rows.length%512===0) progress?.();
   }
   function limit():never { fail(413,'Sursa depășește limita pentru analiză. Restrânge perioada sau portofoliul.'); }
   function remaining(){return managerAiAnalysisLimits.rows-rows.length;}
