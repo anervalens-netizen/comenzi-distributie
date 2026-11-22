@@ -60,9 +60,9 @@ writeFileSync(providerFixture,`
    const paused=request.input.some(item=>item.role==='user'&&typeof item.content==='string'&&item.content.includes('Verifică oprirea'));
    const text=paused?'**Fragment păstrat** '+'proba '.repeat(24):'**Răspuns sintetic verificat**';
    const events=[
-     {type:'response.created',response:{model:request.model}},
+     {type:'response.created',response:{id:'resp_browser_fixture',model:request.model,status:'in_progress',output:[]}},
      {type:'response.output_text.delta',delta:text},
-     {type:'response.completed',response:{model:request.model,status:'completed',output:[{type:'message',role:'assistant',content:[{type:'output_text',text}]}]}},
+     {type:'response.completed',response:{id:'resp_browser_fixture',model:request.model,status:'completed',output:[{type:'message',id:'msg_browser_fixture',role:'assistant',status:'completed',content:[{type:'output_text',text}]}]}},
    ];
    if(paused)return new Response(new ReadableStream({start(controller){
      const first=events.slice(0,2).map(event=>'data: '+JSON.stringify(event)+'\\n\\n').join('');
