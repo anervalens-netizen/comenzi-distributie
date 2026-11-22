@@ -223,6 +223,29 @@ try {
   sql.prepare('DELETE FROM users WHERE id=?').run('second-region');
   sql.prepare('DELETE FROM manager_agents WHERE agent_id=?').run('agent-c');
   sql.prepare('DELETE FROM users WHERE id=?').run('agent-c');
+  const allTeams=await m.managerAiScope(globals,new URLSearchParams());
+  const teamRequest={table:'sales_team_monthly',fromMonth:'2026-08',toMonth:'2026-08'};
+  const national=data(await m.readManagerAiAnalysisTable(allTeams,teamRequest,async()=>globals));
+  const unassigned=national.find(row=>row.agent==='Synthetic Agent B'&&row.product_group==='accessories');
+  assert.equal(unassigned.manager,null);
+  assert.equal(unassigned.manager_ref,null);
+  assert.equal(unassigned.value_cents,999999);
+  let checks=0;
+  await assert.rejects(m.readManagerAiAnalysisTable(allTeams,teamRequest,async()=>{
+    if(++checks===3) sql.prepare('INSERT INTO manager_agents VALUES(?,?)').run('regional','agent-b');
+    return globals;
+  }),{status:409});
+  sql.prepare('DELETE FROM manager_agents WHERE agent_id=?').run('agent-b');
+  sql.prepare('UPDATE users SET warehouse_name=?,site_code=? WHERE id=?').run('TR Current A','CURRENT-A','agent-a');
+  sql.prepare('INSERT INTO settings VALUES(?,?)').run('sales-agent-aliases-v1',JSON.stringify([
+    {userId:'agent-a',siteCode:'SITE-A',warehouseName:'TR Example A'},
+  ]));
+  const renamed=await m.managerAiScope(manager,new URLSearchParams());
+  const historicalAlias=data(await m.readManagerAiAnalysisTable(renamed,teamRequest,async()=>manager))
+    .find(row=>row.agent==='Synthetic Agent A'&&row.product_group==='accessories');
+  assert.equal(historicalAlias.value_cents,24099);
+  sql.prepare('DELETE FROM settings WHERE key=?').run('sales-agent-aliases-v1');
+  sql.prepare('UPDATE users SET warehouse_name=?,site_code=? WHERE id=?').run('TR Example A','SITE-A','agent-a');
   const partners=await read('partners');
   assert.deepEqual(data(partners).map(row=>[row.partner,row.franchise_code,row.last_visit_date]),
     [['Synthetic Partner A [contact]','F-01','2026-07-21']]);

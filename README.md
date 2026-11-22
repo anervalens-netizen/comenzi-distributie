@@ -262,7 +262,8 @@ atașamentele selectate și un spațiu temporar de lucru, cu un singur proces de
 simultan pe instanță. Accesul la rețea și la fișierele aplicației de pe gazdă este izolat.
 Verifică pornirea în condițiile serviciului și o analiză SQL/Python cu date fictive înainte de activare.
 
-Tabelul `sales_team_monthly` permite comparații pe manager, proiect și agent. Folosește portofoliul autorizat curent, asocierile vânzătorilor (inclusiv aliasurile istorice), grupele comerciale și sursa lunară din rapoartele de vânzări. Pentru medii se numără agenții eligibili distincți, inclusiv cei fără vânzări observate. Tabelul distinge valorile necunoscute de zero și indică acoperirea sursei și ultima vânzare a agentului. La cumularea echipelor cu agenți comuni, deduplicați agenții și valorile lor.
+Tabelul `sales_team_monthly` permite comparații pe manager, proiect și agent. Folosește portofoliul autorizat curent, asocierile vânzătorilor (inclusiv aliasurile istorice), grupele comerciale și sursa lunară din rapoartele de vânzări. Pentru medii se numără agenții eligibili distincți, inclusiv cei fără vânzări observate. Tabelul distinge valorile necunoscute de zero și indică acoperirea sursei și ultima vânzare a agentului. La cumularea echipelor cu agenți comuni, deduplicați agenții și valorile lor. În vederea globală, agenții fără echipă au câmpul `manager` nul. Tabelul include fiecare grupă comercială pentru fiecare agent și lună. Dacă un portofoliu mare depășește bugetul de analiză, selectați o regiune sau o perioadă mai scurtă.
+
 Pentru un serviciu web cu protecții systemd, instalează brokerul din același build
 ca aplicația, într-un director de release administrat de root. Unitatea
 `mobiup-comenzi-analysis.socket` admite conexiuni de la utilizatorul serviciului web.
