@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 import subprocess
 import tempfile
 
@@ -33,15 +34,26 @@ def private_directory(path):
 
 
 @contextmanager
-def plaintext(archive, identity, decrypt_scratch):
+def pinned_archive(path):
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ValueError('Expected a regular local recovery archive')
+        yield Path('/proc/self/fd') / str(fd)
+    finally:
+        os.close(fd)
+
+
+@contextmanager
+def plaintext(archive, pinned, stored_digest, identity, decrypt_scratch):
     if archive.suffix != '.age':
-        yield archive
+        yield pinned, stored_digest
         return
     if identity is None or decrypt_scratch is None:
         raise ValueError('Encrypted archive requires an age identity and local decryption scratch')
     # An authenticated age stream is never longer than its encrypted input.
     private_directory(decrypt_scratch)
-    size = archive.stat().st_size
+    size = pinned.stat().st_size
     available = next(int(line.split()[1]) * 1024 for line in Path('/proc/meminfo').read_text().splitlines()
                      if line.startswith('MemAvailable:'))
     if available < size + 2 * GIB:
@@ -49,20 +61,27 @@ def plaintext(archive, identity, decrypt_scratch):
     with storage.Scratch(decrypt_scratch, size, tag='receiver-decrypt',
                          min_free_bytes=GIB, max_used_ratio=0.75) as work:
         output = work.path / archive.stem
-        with output.open('xb') as dst, subprocess.Popen(
-                ['age', '--decrypt', '--identity', str(identity), str(archive)],
-                stdout=subprocess.PIPE) as child:
+        with pinned.open('rb') as source, output.open('xb') as dst, subprocess.Popen(
+                ['age', '--decrypt', '--identity', str(identity)], stdin=subprocess.PIPE, stdout=dst) as child:
+            consumed = hashlib.sha256()
             try:
-                with child.stdout as stream:
-                    while chunk := stream.read(1024 * 1024):
+                with child.stdin as sink:
+                    while chunk := source.read(1024 * 1024):
                         work.consume(len(chunk))
-                        dst.write(chunk)
+                        sink.write(chunk)
+                        consumed.update(chunk)
+            except BrokenPipeError:
+                child.wait()
+                raise RuntimeError('Receiver could not decrypt the stored archive') from None
             except BaseException:
                 child.kill()
                 raise
             if child.wait():
                 raise RuntimeError('Receiver could not decrypt the stored archive')
-        yield output
+            if consumed.hexdigest() != stored_digest:
+                raise RuntimeError('Stored ciphertext changed during decryption')
+        yield output, restore.digest(output)
+
 
 
 def verify(folder, receipt, scratch, *, identity=None, decrypt_scratch=None, max_used_ratio=0.75):
@@ -74,33 +93,38 @@ def verify(folder, receipt, scratch, *, identity=None, decrypt_scratch=None, max
     if len(candidates) != 1 or candidates[0].is_symlink() or not candidates[0].is_file():
         raise ValueError('Expected exactly one local regular recovery archive')
     archive = candidates[0]
-    stored_digest = restore.digest(archive)
-    identity_hash = None
-    if archive.suffix == '.age':
-        if identity is None:
-            raise ValueError('Encrypted archive requires an age identity')
-        public_identity = subprocess.check_output(['age-keygen', '-y', str(identity)], timeout=15)
-        identity_hash = hashlib.sha256(public_identity.strip()).hexdigest()
-    try:
-        known = json.loads(receipt.read_text())
-    except FileNotFoundError:
-        known = {}
-    if (known.get('schema') == 1 and known.get('status') == 'restored_not_started'
-            and known.get('archive') == archive.name and known.get('stored_sha256') == stored_digest
-            and known.get('identity_sha256') == identity_hash):
-        return {**known, 'reused': True}
+    with pinned_archive(archive) as pinned:
+        stored_digest = restore.digest(pinned)
+        identity_hash = None
+        if archive.suffix == '.age':
+            if identity is None:
+                raise ValueError('Encrypted archive requires an age identity')
+            public_identity = subprocess.check_output(['age-keygen', '-y', str(identity)], timeout=15)
+            identity_hash = hashlib.sha256(public_identity.strip()).hexdigest()
+        try:
+            known = json.loads(receipt.read_text())
+        except FileNotFoundError:
+            known = {}
+        if (known.get('schema') == 2 and known.get('status') == 'restored_not_started'
+                and known.get('archive') == archive.name and known.get('stored_sha256') == stored_digest
+                and known.get('identity_sha256') == identity_hash):
+            if not archive.samefile(pinned):
+                raise RuntimeError('Receiver archive was replaced during verification')
+            return {**known, 'reused': True}
 
-    with plaintext(archive, identity, decrypt_scratch) as local:
-        size, members = restore.inspect_archive(local)
-        with storage.Scratch(scratch, size, tag='receiver-restore', max_used_ratio=max_used_ratio,
-                             overhead_bytes=64 * 1024 ** 2 + members * 8192) as work:
-            checksum = work.path / 'archive.sha256'
-            digest = restore.digest(local)
-            checksum.write_text(digest + '\n')
-            result = restore.restore(local, work.path / 'restored', checksum, scratch=work)
-    if result.get('status') != 'restored_not_started' or restore.digest(archive) != stored_digest:
-        raise RuntimeError('Stored archive changed or receiver restore failed')
-    record = {'schema': 1, 'archive': archive.name, 'stored_sha256': stored_digest, 'sha256': digest,
+        with plaintext(archive, pinned, stored_digest, identity, decrypt_scratch) as (local, digest):
+            size, members = restore.inspect_archive(local)
+            with storage.Scratch(scratch, size, tag='receiver-restore', max_used_ratio=max_used_ratio,
+                                 overhead_bytes=64 * 1024 ** 2 + members * 8192) as work:
+                checksum = work.path / 'archive.sha256'
+                checksum.write_text(digest + '\n')
+                result = restore.restore(local, work.path / 'restored', checksum, scratch=work,
+                                         expected_checksum=digest)
+        if result.get('status') != 'restored_not_started' or not archive.samefile(pinned):
+            raise RuntimeError('Stored archive changed or receiver restore failed')
+        if restore.digest(pinned) != stored_digest:
+            raise RuntimeError('Stored archive changed during verification')
+    record = {'schema': 2, 'archive': archive.name, 'stored_sha256': stored_digest, 'sha256': digest,
               'status': result['status'], 'release': result['sha'], 'databases': result['databases']}
     if identity_hash:
         record['identity_sha256'] = identity_hash

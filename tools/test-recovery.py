@@ -190,6 +190,10 @@ class RecoveryTests(unittest.TestCase):
             self.assertEqual(result['sha256'], backup.digest(archive))
             self.assertEqual(result['databases'], {'mobiup.sqlite': 'ok'})
             self.assertTrue(verify.verify(folder, receipt, scratch)['reused'])
+            previous = json.loads(receipt.read_text())
+            previous['schema'] = 1
+            receipt.write_text(json.dumps(previous))
+            self.assertFalse(verify.verify(folder, receipt, scratch)['reused'])
             trusted = receipt.read_bytes()
             with patch.object(verify.restore, 'restore', side_effect=RuntimeError('local restore failed')):
                 with stored.open('ab') as stream:
@@ -215,6 +219,30 @@ class RecoveryTests(unittest.TestCase):
                     verify.verify(folder, receipt, scratch, identity=rotated_key,
                                   decrypt_scratch=self.root / 'memory-scratch')
                 self.assertEqual(json.loads(receipt.read_text())['identity_sha256'], encrypted['identity_sha256'])
+
+    def test_portfolio_inputs_bind_verified_bytes_to_the_receiver_digest(self):
+        verifier = load('verify_received_generation')
+        archive = self.make_backup()
+        expected = backup.digest(archive)
+        with verifier.pinned_archive(archive) as pinned:
+            self.assertEqual(verifier.restore.digest(pinned), expected)
+            with verifier.plaintext(archive, pinned, expected, None, None) as (local, bound):
+                self.assertEqual(local, pinned)
+                self.assertEqual(bound, expected)
+                checksum = self.root / 'expected.sha256'
+                checksum.write_text(bound)
+                result = verifier.restore.restore(local, self.root / 'pinned-restore', checksum,
+                                                  expected_checksum=bound)
+                self.assertEqual(result['databases'], {'mobiup.sqlite': 'ok'})
+        if shutil.which('age') and shutil.which('age-keygen'):
+            key = self.root / 'cipher-key'
+            subprocess.run(['age-keygen', '-o', str(key)], check=True, capture_output=True)
+            public = subprocess.check_output(['age-keygen', '-y', str(key)], text=True).strip()
+            encrypted = Path(str(archive) + '.age')
+            subprocess.run(['age', '-r', public, '-o', str(encrypted), str(archive)], check=True)
+            with verifier.pinned_archive(encrypted) as pinned, self.assertRaisesRegex(RuntimeError, 'ciphertext'):
+                with verifier.plaintext(encrypted, pinned, '0' * 64, key, self.root / 'decrypt-fixture'):
+                    self.fail('An incorrect stored digest must prevent use of the plaintext')
 
     def test_receiver_without_validated_source_preserves_existing_copy(self):
         archive = self.make_backup()

@@ -73,8 +73,10 @@ def inspect_archive(archive):
 
 def restore(archive: Path, destination: Path, checksum: Path | None = None, *, scratch=None, expected_checksum=None) -> dict:
     max_bytes = max_restore_bytes()
-    archive = archive.resolve(strict=True)
-    checksum = checksum or archive.with_suffix(archive.suffix + '.sha256')
+    if checksum is None:
+        archive = archive.resolve(strict=True)
+        checksum = archive.with_suffix(archive.suffix + '.sha256')
+    # An explicitly supplied checksum allows callers to use a pinned /proc/self/fd path.
     expected = checksum.read_text().split()[0]
     if (len(expected) != 64 or (expected_checksum is not None and expected != expected_checksum)
             or digest(archive) != expected):
