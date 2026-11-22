@@ -197,6 +197,10 @@ try {
   assert.equal(db.prepare('SELECT id FROM manager_ai_conversations WHERE id=?').get(oldDraft),undefined);
   assert.ok(db.prepare('SELECT id FROM manager_ai_conversations WHERE id=?').get(oldMessageDraft));
   // Keep the pre-existing history fixture for the following pagination assertions.
+  const abandoned=randomUUID();
+  insertDraft.run(abandoned,betaOwner,'Sesiune nouă','low',olderTimestamp,olderTimestamp);
+  await assert.rejects(call('conversations',{token:'beta-token',body:{effort:'low'}}),{status:429});
+  assert.equal(db.prepare('SELECT id FROM manager_ai_conversations WHERE id=?').get(abandoned),undefined);
   const admitted=starts.find(s=>s.status==='fulfilled');
   prepared.push((await admitted.value.json()).id);
   db.prepare('DELETE FROM manager_ai_conversations WHERE id IN (SELECT value FROM json_each(?))').run(JSON.stringify(prepared));

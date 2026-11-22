@@ -9,7 +9,7 @@ import type {
   ManagerAiArtifact, ManagerAiChatEvent, ManagerAiChatMessage, ManagerAiConversation,
   ManagerAiEffort, ManagerAiRunState, ManagerAiSubmissionStatus,
 } from './manager-ai-chat-contract';
-import { fail } from './server';
+import {AppError, fail} from './server';
 
 export type AiAccount = { auth:ImportAuthorization; owner:string; scopeRevision:number };
 type Run = {
@@ -85,10 +85,10 @@ export function createAiConversation(db:DatabaseSync,owner:string,effort:Manager
   const recent=new Date(Date.now()-60_000).toISOString();
   const usage=one<{total:number; recent:number}>(db,`SELECT count(*) total,
     count(CASE WHEN created_at>=? THEN 1 END) recent FROM manager_ai_conversations WHERE owner=?`,recent,owner)!;
-  if(usage.recent>=12)fail(429,'Ai creat mai multe conversații într-un minut. Reîncearcă peste un minut.');
-  if(usage.total>=1000)fail(409,'Spațiul disponibil pentru conversațiile acestui cont este plin.');
+  if(usage.recent>=12)return new AppError(429,'Ai creat mai multe conversații într-un minut. Reîncearcă peste un minut.');
+  if(usage.total>=1000)return new AppError(409,'Spațiul disponibil pentru conversațiile acestui cont este plin.');
   if(one<{total:number}>(db,'SELECT count(*) total FROM manager_ai_conversations')!.total>=10000)
-    fail(503,'Spațiul disponibil pentru conversații este plin.');
+    return new AppError(503,'Spațiul disponibil pentru conversații este plin.');
   const id=randomUUID();
   run(db,'INSERT INTO manager_ai_conversations VALUES(?,?,?,?,?,?)',id,owner,'Sesiune nouă',effort,time,time);
   return readAiConversation(db,owner,id);
