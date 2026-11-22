@@ -246,11 +246,30 @@ try{
  })()`);
  assert(await browser.evaluate(`(()=>{
    const panel=document.querySelector('aside[aria-label="AI Comenzi"]');
-   const shell=document.querySelector('.manager-shell');
    return getComputedStyle(panel.parentElement).position==='sticky' &&
-     panel.getBoundingClientRect().width>460 && panel.getBoundingClientRect().width<=innerWidth*0.44 &&
-     shell.getBoundingClientRect().width>=document.documentElement.clientWidth*0.55;
- })()`),'desktop AI can resize while keeping the main shell and dock visible');
+     panel.getBoundingClientRect().width>=document.documentElement.clientWidth-24 &&
+     panel.getBoundingClientRect().right<=document.documentElement.clientWidth+1 &&
+     panel.getBoundingClientRect().left>=10 &&
+     document.documentElement.scrollWidth<=document.documentElement.clientWidth+1;
+ })()`),'desktop AI can expand close to full viewport without page overflow');
+ assert(await browser.evaluate(`(()=>{
+   const handle=document.querySelector('[aria-label="Redimensionează panoul AI"]');
+   const rect=handle.getBoundingClientRect();
+   return document.elementFromPoint(rect.left+rect.width/2,180)===handle;
+ })()`),'expanded AI resize handle stays above the fixed manager navigation');
+ await browser.evaluate(`document.querySelector('[aria-label="Resetează lățimea panoului"]').click()`);
+ await waitFor(()=>browser.evaluate(`Math.abs(document.querySelector('aside[aria-label="AI Comenzi"]').getBoundingClientRect().width-460)<2`),'AI width reset');
+ const handleBounds=await browser.evaluate(`(()=>{const r=document.querySelector('[aria-label="Redimensionează panoul AI"]').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+Math.min(180,r.height/2)};})()`);
+ const dragTarget=90;
+ await browser.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:handleBounds.x,y:handleBounds.y,buttons:0});
+ await browser.send('Input.dispatchMouseEvent',{type:'mousePressed',x:handleBounds.x,y:handleBounds.y,button:'left',buttons:1,clickCount:1});
+ await browser.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:dragTarget,y:handleBounds.y,button:'left',buttons:1});
+ await browser.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:dragTarget,y:handleBounds.y,button:'left',buttons:0,clickCount:1});
+ await waitFor(()=>browser.evaluate(`Math.abs(document.querySelector('aside[aria-label="AI Comenzi"]').getBoundingClientRect().width-(document.documentElement.clientWidth-${dragTarget}))<20`),'AI follows mouse drag beyond former 44% limit');
+ const draggedWidth=await browser.evaluate(`document.querySelector('aside[aria-label="AI Comenzi"]').getBoundingClientRect().width`);
+ await browser.evaluate(`document.querySelector('aside [aria-label="Închide AI Comenzi"]').click()`);
+ await browser.evaluate(`document.querySelector('.manager-ai-trigger').click()`);
+ await waitFor(()=>browser.evaluate(`Math.abs(document.querySelector('aside[aria-label="AI Comenzi"]').getBoundingClientRect().width-${draggedWidth})<2`),'AI remembers dragged width after closing and reopening');
  await browser.evaluate(`document.querySelector('[aria-label="Resetează lățimea panoului"]').click()`);
  await browser.send('Emulation.setDeviceMetricsOverride',{width:320,height:800,deviceScaleFactor:1,mobile:true});
  await waitFor(()=>browser.evaluate(`!!document.querySelector('[role=dialog][aria-label="AI Comenzi"]')`),'AI becomes a phone dialog');
