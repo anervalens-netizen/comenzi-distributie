@@ -110,6 +110,12 @@ function sdkInput(turn: ConversationTurn): AgentInputItem {
   );
 }
 
+async function drainRunEvents(events: AsyncIterator<unknown>) {
+  while (!(await events.next()).done) {
+    // The model adapter already delivered the verified deltas to the conversation.
+  }
+}
+
 export async function runManagerAi({
   model,
   key,
@@ -256,7 +262,11 @@ export async function runManagerAi({
         ...options,
         stream: true,
       });
-      await result.completed;
+      // Consume events during the run so the SDK can release its stream buffer.
+      await Promise.all([
+        drainRunEvents(result[Symbol.asyncIterator]()),
+        result.completed,
+      ]);
       if (result.error) throw result.error;
     } else {
       await runner.run(agent, input, options);

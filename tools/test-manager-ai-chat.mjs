@@ -7,6 +7,8 @@ import {join} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {DatabaseSync} from 'node:sqlite';
 import {build} from 'esbuild';
+import {mock} from 'node:test';
+import {Runner} from '@openai/agents-core';
 
 const directory=mkdtempSync(join(tmpdir(),'synthetic-distribution-ai-'));
 const db=new DatabaseSync(join(directory,'mobiup.sqlite'));
@@ -193,7 +195,17 @@ try {
   const [data,id]=form('Situația lunii',undefined,firstFiles());
   const page=JSON.stringify({tab:'Prepay',period:'2026-09, 2026-10',owner:'neautorizat'});
   data.set('current_view',page);
-  const result=await events(await call(base+'/turn',{body:data}));
+  const observedRun=mock.method(Runner.prototype,'run');
+  let result;
+  try {
+    result=await events(await call(base+'/turn',{body:data}));
+    assert.equal(observedRun.mock.callCount(),1);
+    const sdkResult=await observedRun.mock.calls[0].result;
+    const remaining=sdkResult[Symbol.asyncIterator]();
+    try {
+      assert.equal((await remaining.next()).done,true,'the web response must consume all SDK stream events');
+    } finally { await remaining.return?.(); }
+  } finally { observedRun.mock.restore(); }
   assert.equal(result[0].type,'submission_status');
   assert.equal(result[1].message.id,id);
   assert.match(JSON.stringify(accesses.at(-1)),/sku|bucati/);
