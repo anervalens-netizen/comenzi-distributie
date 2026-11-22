@@ -100,8 +100,10 @@ latest restore-validated fallback when different. Without any validated fallback
 it refuses to prune. Successful NAS restore validation publishes a hash-bound
 `.validated.json` receipt before older NAS generations are removed; the matching
 local archive receives the same validation identity. `deploy/receive_backup.py`
-receives only validated source bytes and publishes a receiver receipt before
-pruning. Its caller must check the source mount identity. A NAS or validation
+treats the source receipt as a completion marker. It verifies the copied bytes
+by restoring them in receiver-local scratch before publication or pruning. Older
+receipts are revalidated once. Its caller must check the source mount identity
+and configure local restore scratch with sufficient space. A NAS or validation
 failure preserves the last validated recovery generation and fails visibly.
 Keep the periodic scratch GC installed and the normal backup schedule enabled.
 

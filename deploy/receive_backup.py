@@ -1,10 +1,11 @@
-"""Receive only a hash-bound, restore-validated generation from a mounted source.
+"""Independently restore-check a candidate before promoting it on the receiver.
 
-The caller must verify the source mount identity. This copies existing backups;
-it never makes a new backup, restores data or starts application services.
+The caller must verify the source mount identity. Restores use local scratch;
+production data and application services are never touched.
 """
 import argparse
 import fcntl
+import hashlib
 import importlib.util
 import json
 import os
@@ -27,42 +28,66 @@ def receive(source, destination):
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         selected = None
         for archive in sorted(source.glob('mobiup-comenzi-????????T??????Z.tar.gz'), reverse=True):
-            if archive.is_symlink():
+            if archive.is_symlink() or not archive.is_file():
                 continue
             checksum_file = archive.with_suffix(archive.suffix + '.sha256')
             try:
-                if checksum_file.is_symlink():
+                expected = backup.read_metadata(checksum_file).split()
+                if (len(expected) != 2 or expected[1] != archive.name or len(expected[0]) != 64
+                        or any(c not in '0123456789abcdef' for c in expected[0])):
                     continue
-                expected = checksum_file.read_text().split()
-                if len(expected) != 2 or expected[1] != archive.name or len(expected[0]) != 64:
+                # The source marker signals a complete upload. Only the receiver's
+                # own restore can authorize publication and retention.
+                if not backup.validation_receipt(archive, expected[0]):
                     continue
-                receipt = backup.validation_receipt(archive, expected[0])
-                if receipt and backup.digest(archive) == expected[0]:
-                    selected = (archive, expected[0], receipt)
-                    break
+                with backup.regular_input(archive) as stream:
+                    if hashlib.file_digest(stream, 'sha256').hexdigest() != expected[0]:
+                        continue
+                selected = archive, expected[0]
+                break
             except (OSError, ValueError):
                 continue
         if selected is None:
             raise RuntimeError('No restore-validated source generation; existing recovery copies preserved')
-        archive, checksum, receipt = selected
+        archive, checksum = selected
         current = destination / archive.name
         if current.is_symlink():
             raise RuntimeError('Unsafe receiver generation')
-        if not current.exists() or backup.digest(current) != checksum:
-            copy_fd, temporary = tempfile.mkstemp(prefix=current.name + '.', suffix='.partial', dir=destination)
-            os.close(copy_fd)
-            try:
-                shutil.copyfile(archive, temporary)
-                if backup.digest(Path(temporary)) != checksum:
-                    raise RuntimeError('Receiver checksum mismatch; prior recovery preserved')
-                os.replace(temporary, current)
-            finally:
-                Path(temporary).unlink(missing_ok=True)
+        if current.exists() and backup.digest(current) != checksum:
+            raise RuntimeError('Receiver generation name already has different contents; prior recovery preserved')
+        receipt = backup.validation_receipt(current, checksum) if current.exists() else None
         sidecar = current.with_suffix(current.suffix + '.sha256')
-        sidecar.write_text(checksum + '  ' + current.name + '\n')
-        backup.record_validation(current, checksum, {'status': receipt['status'], 'sha': receipt['release']})
-        backup.prune_backups(destination, keep_count=1)
-        return {'archive': current.name, 'sha256': checksum, 'validation': 'copied-from-restore-validated-source'}
+        if (not receipt or receipt.get('validated_by') != 'receiver'
+                or not sidecar.is_file() or sidecar.is_symlink()
+                or backup.read_metadata(sidecar).split() != [checksum, current.name]):
+            with tempfile.TemporaryDirectory(prefix='.receive-', dir=destination) as staging_dir:
+                staged = Path(staging_dir) / current.name
+                # A legacy receipt from this directory can have originated on the source.
+                # Revalidate those bytes once, including when the archive already exists.
+                with backup.regular_input(archive) as source_file, staged.open('xb') as target:
+                    size = os.fstat(source_file.fileno()).st_size
+                    reserve = int(os.environ.get('MOBIUP_SCRATCH_MIN_FREE_BYTES', str(40 * 1024**3)))
+                    if shutil.disk_usage(destination).free - size < reserve:
+                        raise RuntimeError('Insufficient receiver space to stage the candidate')
+                    remaining = size
+                    while remaining:
+                        chunk = source_file.read(min(remaining, 1024 * 1024))
+                        if not chunk:
+                            raise RuntimeError('Source archive changed during transfer')
+                        target.write(chunk)
+                        remaining -= len(chunk)
+                    if source_file.read(1):
+                        raise RuntimeError('Source archive changed during transfer')
+                if backup.digest(staged) != checksum:
+                    raise RuntimeError('Receiver checksum mismatch; prior recovery preserved')
+                staged_sidecar = staged.with_suffix(staged.suffix + '.sha256')
+                staged_sidecar.write_text(checksum + '  ' + current.name + '\n')
+                backup.validate_archive(staged, destination, validated_by='receiver')
+                os.replace(staged, current)
+                os.replace(staged_sidecar, sidecar)
+                os.replace(backup.validation_path(staged), backup.validation_path(current))
+        backup.prune_backups(destination, keep_count=1, validated_by='receiver')
+        return {'archive': current.name, 'sha256': checksum, 'validation': 'restored-on-receiver'}
     finally:
         os.close(fd)
 

@@ -61,6 +61,8 @@ class BackupTests(unittest.TestCase):
         self.output = io.StringIO()
 
     def run_backup(self, mounted=True):
+        if mounted:
+            self.mount.mkdir(exist_ok=True)
         with mock.patch.object(backup.os.path, 'ismount', return_value=mounted) as check:
             with contextlib.redirect_stdout(self.output):
                 result = backup.run_backup(
@@ -392,7 +394,7 @@ class BackupTests(unittest.TestCase):
     def test_copy_failure_keeps_local_retention_and_does_not_prune_nas(self):
         old_local = self.old_generation(self.local, 20)
         old_nas = self.old_generation(self.nas, 20)
-        with mock.patch.object(backup.shutil, 'copyfile', side_effect=OSError('NAS write failed')):
+        with mock.patch.object(backup.shutil, 'copyfileobj', side_effect=OSError('NAS write failed')):
             with self.assertRaisesRegex(RuntimeError, 'Local backup verified:.*NAS write failed'):
                 self.run_backup()
         archive = self.assert_local_snapshot()
@@ -445,10 +447,23 @@ class BackupTests(unittest.TestCase):
         sidecar.write_text(backup.digest(good)+'  '+good.name+'\n')
         self.assertIsNone(backup.validation_receipt(good, backup.digest(good)))
 
+    def test_publication_replaces_entries_without_mutating_existing_files(self):
+        self.mount.mkdir()
+        for filename in ('generation.tar.gz', 'generation.tar.gz.sha256'):
+            with self.subTest(filename=filename):
+                source, destination = self.root / filename, self.mount / filename
+                source.write_bytes(b'new bytes')
+                destination.write_bytes(b'previous bytes')
+                with destination.open('rb') as previous:
+                    backup.publish_copy(source, destination, backup.digest(source))
+                    self.assertEqual(previous.read(), b'previous bytes')
+                self.assertEqual(destination.read_bytes(), b'new bytes')
+        self.assertEqual(list(self.mount.glob('*.partial')), [])
+
     def test_checksum_mismatch_never_publishes_corrupt_nas_archive(self):
-        def corrupt_copy(source, destination):
-            Path(destination).write_bytes(b'corrupted in transit')
-        with mock.patch.object(backup.shutil, 'copyfile', side_effect=corrupt_copy):
+        def corrupt_copy(source, destination, **kwargs):
+            destination.write(b'corrupted in transit')
+        with mock.patch.object(backup.shutil, 'copyfileobj', side_effect=corrupt_copy):
             with self.assertRaisesRegex(RuntimeError, 'NAS backup checksum mismatch'):
                 self.run_backup()
         archive = self.assert_local_snapshot()
@@ -456,12 +471,12 @@ class BackupTests(unittest.TestCase):
         self.assertFalse((self.nas / (archive.name + '.sha256')).exists())
 
     def test_sidecar_copy_failure_remains_failure_and_preserves_local(self):
-        original_copy = backup.shutil.copyfile
-        def fail_sidecar(source, destination):
-            if Path(source).name.endswith('.sha256'):
+        original_copy = backup.publish_copy
+        def fail_sidecar(source, destination, expected):
+            if source.name.endswith('.sha256'):
                 raise OSError('NAS checksum file write failed')
-            return original_copy(source, destination)
-        with mock.patch.object(backup.shutil, 'copyfile', side_effect=fail_sidecar):
+            return original_copy(source, destination, expected)
+        with mock.patch.object(backup, 'publish_copy', side_effect=fail_sidecar):
             with self.assertRaisesRegex(RuntimeError, 'NAS checksum file write failed'):
                 self.run_backup()
         archive = self.assert_local_snapshot()

@@ -5,6 +5,7 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import shutil
 import sqlite3
 import tarfile
 import tempfile
@@ -42,8 +43,18 @@ class RecoveryTests(unittest.TestCase):
         self.products=self.root/'products';self.products.mkdir();(self.products/'image.png').write_bytes(b'synthetic image')
         self.kwargs=dict(data=self.data,local=self.root/'local',nas=self.root/'nas',nas_mount=self.root/'nas',release=self.release,recovery={'runtime':self.runtime,'resources':self.resources,'products':self.products})
     def make_backup(self):
+        self.kwargs['nas_mount'].mkdir(exist_ok=True)
         with patch.object(backup.os.path,'ismount',return_value=True),contextlib.redirect_stdout(io.StringIO()):
             return backup.run_backup(**self.kwargs)
+    def test_latest_only_backup_validates_through_pinned_nas_directory(self):
+        self.kwargs['nas_latest_only'] = True
+        archive = self.make_backup()
+        receipt = backup.validation_receipt(archive, backup.digest(archive))
+        self.assertEqual(receipt['release'], 'a' * 40)
+        nas = self.kwargs['nas']
+        self.assertTrue(backup.validation_path(nas / archive.name).is_file())
+        self.assertEqual(list(nas.glob('*.partial')), [])
+
     def test_latest_nas_retention_preserves_current_and_unrelated_files(self):
         archive = self.make_backup()
         nas = self.root / 'nas'
@@ -95,13 +106,41 @@ class RecoveryTests(unittest.TestCase):
         backup.validate_archive(nas / archive.name)
         result = receiver.receive(nas, destination)
         self.assertEqual(result['sha256'], backup.digest(archive))
-        self.assertTrue(backup.validation_receipt(destination / archive.name, result['sha256']))
+        receipt = backup.validation_receipt(destination / archive.name, result['sha256'])
+        self.assertEqual(receipt['validated_by'], 'receiver')
+        self.assertEqual(receipt['release'], 'a' * 40)
         broken = nas / 'mobiup-comenzi-20990101T000000Z.tar.gz'
         broken.write_bytes(b'newer but not restorable')
         broken.with_suffix('.gz.sha256').write_text(backup.digest(broken) + '  ' + broken.name)
         result2 = receiver.receive(nas, destination)
         self.assertEqual(result2['archive'], archive.name)
         self.assertFalse((destination / broken.name).exists())
+
+    def test_receiver_requires_local_restore_before_promotion_or_pruning(self):
+        archive = self.make_backup()
+        nas = self.root / 'nas'
+        backup.validate_archive(nas / archive.name)
+        destination = self.root / 'receiver'
+        destination.mkdir()
+        fallback = destination / 'mobiup-comenzi-20000101T000000Z.tar.gz'
+        fallback.write_bytes(b'previous snapshot')
+        with patch.object(receiver.backup, 'validate_archive', side_effect=RuntimeError('local restore failed')):
+            with self.assertRaisesRegex(RuntimeError, 'local restore failed'):
+                receiver.receive(nas, destination)
+        self.assertEqual(fallback.read_bytes(), b'previous snapshot')
+        self.assertFalse((destination / archive.name).exists())
+        self.assertEqual(list(destination.glob('.receive-*')), [])
+
+    def test_receiver_revalidates_legacy_receipts_and_reuses_its_own(self):
+        archive = self.make_backup()
+        nas = self.root / 'nas'
+        backup.validate_archive(nas / archive.name)
+        destination = self.root / 'receiver'
+        shutil.copytree(nas, destination)
+        with patch.object(receiver.backup, 'validate_archive', wraps=receiver.backup.validate_archive) as validate:
+            receiver.receive(nas, destination)
+            receiver.receive(nas, destination)
+            self.assertEqual(validate.call_count, 1)
 
     def test_receiver_without_validated_source_preserves_existing_copy(self):
         archive = self.make_backup()

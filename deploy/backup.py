@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import shutil
 import sqlite3
+import stat
 import sys
 import tarfile
 import tempfile
@@ -29,13 +30,28 @@ def validation_path(archive):
     return Path(str(archive) + '.validated.json')
 
 
+@contextmanager
+def regular_input(path):
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, 'rb') as stream:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ValueError('Expected a regular backup file')
+        yield stream
+
+
+def read_metadata(path):
+    with regular_input(path) as stream:
+        data = stream.read(4097)
+    if len(data) > 4096:
+        raise ValueError('Backup metadata too large')
+    return data.decode('utf-8')
+
+
 def validation_receipt(archive, checksum):
     try:
         path = validation_path(archive)
-        if path.is_symlink():
-            return None
-        receipt = json.loads(path.read_text())
-        if (receipt.get('schema') == 1 and receipt.get('archive') == archive.name
+        receipt = json.loads(read_metadata(path))
+        if (isinstance(receipt, dict) and receipt.get('schema') == 1 and receipt.get('archive') == archive.name
                 and receipt.get('sha256') == checksum and receipt.get('status') == 'restored_not_started'):
             return receipt
     except (OSError, ValueError):
@@ -43,12 +59,14 @@ def validation_receipt(archive, checksum):
     return None
 
 
-def record_validation(archive, checksum, result):
+def record_validation(archive, checksum, result, *, validated_by=None):
     if result.get('status') != 'restored_not_started' or digest(archive) != checksum:
         raise RuntimeError('Recovery generation changed or was not restored')
     receipt = {'schema': 1, 'archive': archive.name, 'sha256': checksum,
                'status': result['status'], 'release': result.get('sha'),
                'verified_at': datetime.now(timezone.utc).isoformat()}
+    if validated_by:
+        receipt['validated_by'] = validated_by
     target = validation_path(archive)
     fd, temporary = tempfile.mkstemp(prefix=target.name + '.', suffix='.partial', dir=archive.parent)
     try:
@@ -67,7 +85,7 @@ def digest(path: Path) -> str:
         return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 
-def prune_backups(folder: Path, keep_count: int = 2) -> None:
+def prune_backups(folder: Path, keep_count: int = 2, *, validated_by=None) -> None:
     """Keep only the newest complete local generations for bounded recovery."""
     if keep_count < 1:
         raise ValueError('Backup retention must keep at least one generation')
@@ -80,15 +98,16 @@ def prune_backups(folder: Path, keep_count: int = 2) -> None:
             continue
         checksum_file = archive.with_suffix(archive.suffix + '.sha256')
         try:
-            expected = checksum_file.read_text().split()
-        except (OSError, UnicodeError):
+            expected = read_metadata(checksum_file).split()
+        except (OSError, ValueError):
             expected = []
         if (len(expected) != 2 or expected[1] != archive.name or len(expected[0]) != 64
                 or expected[0] != digest(archive)):
             invalid.append(archive)
             continue
         complete.append(archive)
-        if validation_receipt(archive, expected[0]):
+        receipt = validation_receipt(archive, expected[0])
+        if receipt and (validated_by is None or receipt.get('validated_by') == validated_by):
             validated.append(archive)
     if not validated:
         # A checksum alone is not authority to remove the last restorable copy.
@@ -100,7 +119,7 @@ def prune_backups(folder: Path, keep_count: int = 2) -> None:
         validation_path(old).unlink(missing_ok=True)
 
 
-def validate_archive(current: Path, validation_root: Path | None = None) -> dict:
+def validate_archive(current: Path, validation_root: Path | None = None, *, validated_by=None) -> dict:
     module = load_helper('restore')
     content_bytes, members = module.inspect_archive(current)
     root = (validation_root or current.parent).parent / '.managed-restore-work'
@@ -108,7 +127,7 @@ def validate_archive(current: Path, validation_root: Path | None = None) -> dict
     with storage.configured(root, content_bytes, tag='retention-verify',
                             overhead_bytes=64*1024**2 + members*8192) as work:
         result = module.restore(current, work.path / 'restored', scratch=work)
-    return record_validation(current, checksum, result)
+    return record_validation(current, checksum, result, validated_by=validated_by)
 
 
 def prune_nas_latest(folder: Path, current: Path, validation_root: Path | None = None) -> dict:
@@ -233,7 +252,8 @@ def prune_partials(folder: Path, cutoff: datetime) -> None:
     if not folder.exists():
         return
     root = folder.resolve()
-    for partial in folder.glob('mobiup-comenzi-*.tar.gz.partial'):
+    patterns = ('mobiup-comenzi-*.tar.gz.partial', 'mobiup-comenzi-*.tar.gz.*.partial')
+    for partial in (entry for pattern in patterns for entry in folder.glob(pattern)):
         if partial.is_symlink() or not partial.resolve().is_relative_to(root):
             continue
         try:
@@ -326,6 +346,47 @@ def verify_sqlite_snapshot(connection: sqlite3.Connection, label: str) -> None:
     foreign_keys = connection.execute('PRAGMA foreign_key_check').fetchall()
     if foreign_keys:
         raise RuntimeError(f'{label} foreign key check failed')
+
+
+@contextmanager
+def nas_directory(mount, folder):
+    """Pin the mounted destination and descend without following directory links."""
+    if not os.path.ismount(mount):
+        raise RuntimeError('NAS is not mounted')
+    relative = folder.absolute().relative_to(mount.absolute())
+    if '..' in relative.parts:
+        raise ValueError('NAS destination must stay inside its mount')
+    flags = os.O_DIRECTORY | os.O_NOFOLLOW | os.O_RDONLY
+    fd = os.open(mount, flags)
+    try:
+        for part in relative.parts:
+            try:
+                os.mkdir(part, mode=0o700, dir_fd=fd)
+            except FileExistsError:
+                pass
+            child = os.open(part, flags, dir_fd=fd)
+            os.close(fd)
+            fd = child
+        # Linux descriptor path keeps existing retention helpers on the pinned directory.
+        yield Path('/proc/self/fd') / str(fd)
+    finally:
+        os.close(fd)
+
+
+def publish_copy(source, target, expected):
+    """Verify through the exclusively opened file before replacing a directory entry."""
+    fd, name = tempfile.mkstemp(dir=target.parent, prefix=target.name + '.', suffix='.partial')
+    try:
+        with os.fdopen(fd, 'w+b') as output, regular_input(source) as stream:
+            shutil.copyfileobj(stream, output, length=1024 * 1024)
+            output.flush()
+            os.fsync(output.fileno())
+            output.seek(0)
+            if hashlib.file_digest(output, 'sha256').hexdigest() != expected:
+                raise RuntimeError('NAS backup checksum mismatch')
+        os.replace(name, target)
+    finally:
+        Path(name).unlink(missing_ok=True)
 
 
 def run_backup(
@@ -511,26 +572,18 @@ def run_backup(
     # Local retention must not depend on NAS availability or write permissions.
     prune_backups(local)
 
-    temporary_copy = nas / (name + '.partial')
     try:
-        # Check before mkdir/copy: do not write a fake NAS backup to local disk.
-        if not os.path.ismount(nas_mount):
-            raise RuntimeError('NAS is not mounted')
-        nas.mkdir(parents=True, exist_ok=True)
-        prune_partials(nas, now - timedelta(days=1))
-        shutil.copyfile(archive, temporary_copy)
-        if digest(temporary_copy) != checksum:
-            raise RuntimeError('NAS backup checksum mismatch')
-        temporary_copy.replace(nas / name)
-        shutil.copyfile(checksum_file, nas / checksum_file.name)
-        if nas_latest_only:
-            receipt = prune_nas_latest(nas, nas / name, local)
-            record_validation(archive, checksum, {'status': receipt['status'], 'sha': receipt['release']})
-            prune_backups(local)
-        else:
-            prune_backups(nas)
-    except (OSError, RuntimeError) as error:
-        temporary_copy.unlink(missing_ok=True)
+        with nas_directory(nas_mount, nas) as destination:
+            prune_partials(destination, now - timedelta(days=1))
+            publish_copy(archive, destination / name, checksum)
+            publish_copy(checksum_file, destination / checksum_file.name, digest(checksum_file))
+            if nas_latest_only:
+                receipt = prune_nas_latest(destination, destination / name, local)
+                record_validation(archive, checksum, {'status': receipt['status'], 'sha': receipt['release']})
+                prune_backups(local)
+            else:
+                prune_backups(destination)
+    except (OSError, RuntimeError, ValueError) as error:
         # Preserve the verified local generation, but let systemd report failure.
         raise RuntimeError(f'Local backup verified: {name}; NAS backup failed: {error}') from error
 
