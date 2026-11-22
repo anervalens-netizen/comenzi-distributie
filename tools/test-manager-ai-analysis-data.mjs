@@ -188,6 +188,64 @@ try {
   ]);
   assert.deepEqual(sales.coverage.map(row=>[row.month,row.available,row.through??null]),
     [['2026-07',true,'2026-07-31'],['2026-08',true,'2026-08-14'],['2026-09',false,null]]);
+  const teamSales=await read('sales_team_monthly','2026-07','2026-09');
+  const rows=data(teamSales);
+  const august=rows.find(row=>row.month==='2026-08'&&row.product_group==='accessories');
+  assert.equal(august.agent,'Synthetic Agent A');
+  assert.equal(august.manager,'Synthetic Manager');
+  assert.equal(august.project_id,'non_exclusiv');
+  assert.equal(august.units,2);
+  assert.equal(august.value_cents,24099);
+  assert.equal(august.agent_last_sale,'2026-08-14');
+  assert.equal(august.source_through,'2026-08-14');
+  assert.equal(rows.find(row=>row.month==='2026-07'&&row.product_group==='accessories').value_cents,null);
+  assert.equal(rows.find(row=>row.month==='2026-08'&&row.product_group==='vodafone_5').units,0);
+  assert.equal(rows.find(row=>row.month==='2026-09'&&row.product_group==='accessories').units,null);
+  assert(rows.every(row=>row.agent==='Synthetic Agent A'&&row.manager==='Synthetic Manager'));
+  insertUser.run('agent-c','private-c','Synthetic Agent C','agent','warehouse-c','TR Example C','SITE-C','assigned','synthetic-auth-marker');
+  sql.prepare('INSERT INTO manager_agents VALUES(?,?)').run('regional','agent-c');
+  const largerScope=await m.managerAiScope(manager,new URLSearchParams());
+  const enrolled=data(await m.readManagerAiAnalysisTable(largerScope,{table:'sales_team_monthly',fromMonth:'2026-08',toMonth:'2026-08'},async()=>manager));
+  const eligible=enrolled.filter(row=>row.product_group==='accessories');
+  assert.equal(new Set(eligible.map(row=>row.agent_ref)).size,2);
+  assert.equal(eligible.reduce((sum,row)=>sum+row.value_cents,0)/eligible.length,12049.5);
+  insertUser.run('second-region','private-m','Second Manager','manager',null,null,'','assigned','synthetic-auth-marker');
+  sql.prepare('INSERT INTO manager_agents VALUES(?,?)').run('second-region','agent-a');
+  const sharedScope=await m.managerAiScope(globals,new URLSearchParams({agentId:'agent-a'}));
+  const shared=data(await m.readManagerAiAnalysisTable(sharedScope,{table:'sales_team_monthly',fromMonth:'2026-08',toMonth:'2026-08'},async()=>globals));
+  const sharedSales=shared.filter(row=>row.product_group==='accessories');
+  assert.deepEqual(sharedSales.map(row=>row.manager),['Synthetic Manager','Second Manager']);
+  assert.equal(new Set(sharedSales.map(row=>row.agent_ref)).size,1);
+  assert.equal(new Set(sharedSales.map(row=>row.manager_ref)).size,2);
+  const regionalRows=data(await m.readManagerAiAnalysisTable(largerScope,{table:'sales_team_monthly',fromMonth:'2026-08',toMonth:'2026-08'},async()=>manager));
+  assert(regionalRows.every(row=>row.manager==='Synthetic Manager'));
+  sql.prepare('DELETE FROM manager_agents WHERE manager_id=?').run('second-region');
+  sql.prepare('DELETE FROM users WHERE id=?').run('second-region');
+  sql.prepare('DELETE FROM manager_agents WHERE agent_id=?').run('agent-c');
+  sql.prepare('DELETE FROM users WHERE id=?').run('agent-c');
+  const allTeams=await m.managerAiScope(globals,new URLSearchParams());
+  const teamRequest={table:'sales_team_monthly',fromMonth:'2026-08',toMonth:'2026-08'};
+  const national=data(await m.readManagerAiAnalysisTable(allTeams,teamRequest,async()=>globals));
+  const unassigned=national.find(row=>row.agent==='Synthetic Agent B'&&row.product_group==='accessories');
+  assert.equal(unassigned.manager,null);
+  assert.equal(unassigned.manager_ref,null);
+  assert.equal(unassigned.value_cents,999999);
+  let checks=0;
+  await assert.rejects(m.readManagerAiAnalysisTable(allTeams,teamRequest,async()=>{
+    if(++checks===3) sql.prepare('INSERT INTO manager_agents VALUES(?,?)').run('regional','agent-b');
+    return globals;
+  }),{status:409});
+  sql.prepare('DELETE FROM manager_agents WHERE agent_id=?').run('agent-b');
+  sql.prepare('UPDATE users SET warehouse_name=?,site_code=? WHERE id=?').run('TR Current A','CURRENT-A','agent-a');
+  sql.prepare('INSERT INTO settings VALUES(?,?)').run('sales-agent-aliases-v1',JSON.stringify([
+    {userId:'agent-a',siteCode:'SITE-A',warehouseName:'TR Example A'},
+  ]));
+  const renamed=await m.managerAiScope(manager,new URLSearchParams());
+  const historicalAlias=data(await m.readManagerAiAnalysisTable(renamed,teamRequest,async()=>manager))
+    .find(row=>row.agent==='Synthetic Agent A'&&row.product_group==='accessories');
+  assert.equal(historicalAlias.value_cents,24099);
+  sql.prepare('DELETE FROM settings WHERE key=?').run('sales-agent-aliases-v1');
+  sql.prepare('UPDATE users SET warehouse_name=?,site_code=? WHERE id=?').run('TR Example A','SITE-A','agent-a');
   const partners=await read('partners');
   assert.deepEqual(data(partners).map(row=>[row.partner,row.franchise_code,row.last_visit_date]),
     [['Synthetic Partner A [contact]','F-01','2026-07-21']]);

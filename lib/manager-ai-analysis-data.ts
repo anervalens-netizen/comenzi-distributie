@@ -8,6 +8,7 @@ import { readDistributionRules } from './distribution-config';
 import { productGroup, type DistributionRules } from './distribution-rules';
 import { historyFileGeneration } from './history-source-generation';
 import { historicalSalesGeneration } from './historical-sales';
+import {readTeamSalesMonth, teamSalesRoster} from './manager-ai-team-sales';
 import { scanManagerAiAnalysisSales } from './manager-ai-analysis-sales';
 import { managerAiAnalysisCatalog, managerAiAnalysisLimits,
   type ManagerAiAnalysisRequest, type ManagerAiAnalysisTable } from './manager-ai-analysis-schema';
@@ -144,7 +145,8 @@ export async function readManagerAiAnalysisTable(
 
   const currentUser=await check(), rules=await readDistributionRules();
   const readLegacy=managerAiReader(new Request('http://localhost/api/manager-ai'),scope,check,{cacheMonths:false});
-  const saleScope=table==='sales_lines' ? await managerSalesAnalysisScope(currentUser,scope.params) : null;
+  const saleScope=(table==='sales_lines'||table==='sales_team_monthly') ? await managerSalesAnalysisScope(currentUser,scope.params) : null;
+  const team=table==='sales_team_monthly' ? await teamSalesRoster(currentUser,scope) : null;
   const sourceStamp=()=>JSON.stringify([historyFileGeneration(salesDatabasePath),historicalSalesGeneration()]);
   const saleStamp=saleScope?sourceStamp():null;
   const pointVersion=table==='sales_partner_lines'?await clientPortfolioVersion():null;
@@ -170,7 +172,10 @@ export async function readManagerAiAnalysisTable(
   for (const month of months) {
     const user=await check();
     try {
-      if (table==='sales_lines') {
+      if (table==='sales_team_monthly') {
+        if(!rules) fail(503,'Configurația proiectelor nu este disponibilă.');
+        coverage.push(await readTeamSalesMonth(month,team!,saleScope!,rules,label,reference,push,signal));
+      } else if (table==='sales_lines') {
         coverage.push(await scanManagerAiAnalysisSales(month,saleScope!.scope,row=>push([month,row.date,
           textValue(row.site),label(row.warehouse),textValue(row.sku),label(row.product),label(row.brand),
           label(row.category),label(row.subcategory),groupFor(rules,row.sku),row.quantity,row.valueCents,row.source]),signal));
@@ -208,6 +213,7 @@ export async function readManagerAiAnalysisTable(
   const finalUser=await check();
   if (saleScope && (saleStamp!==sourceStamp() ||
       saleScope.revision!==(await managerSalesAnalysisScope(finalUser,scope.params)).revision)) fail(409,'Sursele vânzărilor s-au modificat. Reia analiza.');
+  if(team && JSON.stringify(team)!==JSON.stringify(await teamSalesRoster(finalUser,scope))) fail(409,'Componența echipei s-a modificat. Reia analiza.');
   if (pointVersion && pointVersion!==await clientPortfolioVersion()) fail(409,'Portofoliul punctelor s-a modificat. Reia analiza.');
   return {table,fromMonth:snapshot?current:selection.from,toMonth:snapshot?current:selection.to,columns:info.columns,rows,coverage};
 }
