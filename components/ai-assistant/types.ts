@@ -18,6 +18,7 @@ export interface AiArtifactAttachment {
   kind: 'input' | 'output';
   downloadUrl?: string;
   removed?: boolean;
+  hasReportCard?: boolean;
 }
 
 export interface AiChatMessage {

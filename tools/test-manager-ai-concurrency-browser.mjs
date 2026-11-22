@@ -7,6 +7,8 @@ import { browserFixture, delay, waitFor } from './offline-browser-fixture.mjs';
 const bundle = await build({
   stdin: { resolveDir: resolve('.'), loader: 'tsx', contents: String.raw`
 import {createRoot} from 'react-dom/client';
+import {ReportCard} from './components/ai-assistant/ReportCard';
+import {reportCardData,reportCardMessages} from './lib/manager-ai-report-card';
 import {AiApiContext} from './components/ai-assistant/api-context';
 import {AiPanelHeader} from './components/ai-assistant/AiPanelHeader';
 import {useAiAssistant} from './components/ai-assistant/useAiAssistant';
@@ -25,6 +27,7 @@ const status = (id, state, terminal_message_id = null) => ({submission_id:id, st
 const persisted = [];
 const fixture = window.fixture = {reads:[], probes:[], streams:{}, stops:[], newCount:0, settledB:false, chat:null, releaseA:null};
 const api = {
+  getReportCard:async()=>reportCardMessages('demo-report',reportCardData({dataset:'digiImports',id:'R1',columns:['sourceRows','matchingTR'],rows:[[7,null]],dimensions:[],totalRows:1,coverage:[]})),
   listAiConversations: async () => existing,
   createAiConversation: async () => { fixture.newCount += 1; return existing[1]; },
   listAiMessages: async (id) => {
@@ -84,7 +87,7 @@ function Chat() {
   return <AiPanelHeader {...chat} onSelectConversation={chat.selectConversation}
     onNewConversation={chat.newConversation} onResetWidth={()=>{}} onClose={()=>{}}/>;
 }
-createRoot(document.querySelector('#root')).render(<AiApiContext.Provider value={api}><Chat/></AiApiContext.Provider>);
+createRoot(document.querySelector('#root')).render(<AiApiContext.Provider value={api}><Chat/><ReportCard conversationId="demo" artifactId="demo-report"/></AiApiContext.Provider>);
 ` },
   write:false, bundle:true, format:'esm', platform:'browser', jsx:'automatic',
   define:{'process.env.NODE_ENV':'"production"'},
@@ -104,6 +107,11 @@ try {
   const wait = (expression, label) => waitFor(() => evaluate(expression), label);
   const locked = "document.querySelector('select').disabled && document.querySelector('button[aria-label=\"Sesiune nouă\"]').disabled";
   await wait("fixture.chat?.runStatus === 'idle'", 'initial conversation');
+  await evaluate("Array.from(document.querySelectorAll('button')).find(b=>b.textContent==='Vezi rândurile raportului').click()");
+  await wait("document.querySelector('tbody td')?.textContent === '7'", 'A2UI 1.0 report table through official React renderer');
+  assert.equal(await evaluate("document.querySelectorAll('tbody td')[1].textContent"),'—');
+  await evaluate("Array.from(document.querySelectorAll('button')).find(b=>b.textContent==='Ascunde fișa').click()");
+  await wait("!document.querySelector('tbody')", 'report table collapsed');
   await evaluate("fixture.ask('a')");
   await wait("!!fixture.streams.a", 'first delivery');
   await evaluate("fixture.progress('a', 'Partial A')");

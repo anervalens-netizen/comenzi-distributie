@@ -25,7 +25,7 @@ const schemaMonth = {type:'string', description:'Lună AAAA-LL. Lasă gol pentru
 export const managerAiReportTool = {
   type: 'function',
   name: 'read_report',
-  description: 'Citește un raport Vodafone autorizat, aplică filtre și grupează pe coloane. Catalogul câmpurilor este în instrucțiuni.',
+  description: 'Citește un raport de distribuție autorizat, aplică filtre și grupează pe coloane. Catalogul câmpurilor este în instrucțiuni.',
   strict: true,
   parameters: {
     type: 'object', additionalProperties: false,
@@ -77,6 +77,7 @@ export function parseManagerAiQuery(raw: string, current = bucharestMonthKey(new
   if (typeof site !== 'string' || site.length > 80 || (site && dataset !== 'sales' && dataset !== 'activations')) fail(400,'Filtrul SiteCode este invalid pentru această sursă.');
   const groupBy = q.groupBy ?? [];
   if (!Array.isArray(groupBy) || groupBy.length > 6 || groupBy.some(field=>!dimensions.includes(field as string)) || new Set(groupBy).size !== groupBy.length) fail(400,'Dimensiuni de grupare invalide.');
+  if (dataset === 'digiImports' && groupBy.length) fail(400,'Importurile pot acoperi aceleași activări. Păstrează un rând per operație.');
   const filters = q.filters ?? [];
   if (!Array.isArray(filters) || filters.length > 12 || !filters.every((f:unknown)=>{
     if (!f || typeof f !== 'object' || Array.isArray(f)) return false;

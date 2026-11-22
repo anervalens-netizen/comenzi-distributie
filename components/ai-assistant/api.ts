@@ -23,6 +23,7 @@ type RawArtifact = {
   kind: 'input' | 'output';
   download_url?: string | null;
   removed?: boolean;
+  has_report_card?: boolean;
   created_at: string;
 };
 
@@ -66,6 +67,7 @@ function mapArtifact(raw: RawArtifact): AiArtifactAttachment {
     sizeBytes: raw.size_bytes,
     kind: raw.kind,
     removed: raw.removed === true,
+    hasReportCard: raw.has_report_card === true && raw.kind === 'output' && !raw.removed,
     downloadUrl: !raw.removed && typeof raw.download_url === 'string' && /^\/api\/manager-ai\/conversations\/[A-Za-z0-9-]+\/artifacts\/[A-Za-z0-9-]+(?:\?[^#\\]*)?$/.test(raw.download_url) ? raw.download_url : undefined,
   };
 }
@@ -173,6 +175,10 @@ export function createAiApi(scopeQuery: string, ownerId: string) {
     }, undefined, undefined, ownerId);
   }
 
+  function getReportCard(id:string,artifactId:string) {
+    return networkApi<unknown>(endpoint(conversation(id)+'/artifacts/'+encodeURIComponent(artifactId)+'/report-card'),'GET',undefined,undefined,undefined,ownerId);
+  }
+
   async function removeAiArtifact(id: string, artifactId: string) {
     const path = endpoint(conversation(id) + '/artifacts/' + encodeURIComponent(artifactId));
     await networkApi(path, 'DELETE', {}, undefined, undefined, ownerId);
@@ -187,7 +193,7 @@ export function createAiApi(scopeQuery: string, ownerId: string) {
 
   return {
     listAiConversations, createAiConversation, getAiConversation, listAiMessages,
-    openAiTurnStream, steerAiTurn, getAiSubmissionStatus, stopAiTurn, transcribeAiAudio, removeAiArtifact,
+    openAiTurnStream, steerAiTurn, getAiSubmissionStatus, stopAiTurn, transcribeAiAudio, removeAiArtifact, getReportCard,
   };
 }
 

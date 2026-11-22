@@ -39,6 +39,7 @@ try {
     bundle:true,platform:'node',format:'esm',outfile:modulePath,
     alias:{
       '#mobiup-activation-store':activationApi,
+      '#mobiup-import-engine':resolve('lib/import-engine-node.ts'),
       '#mobiup-sales-parser':resolve('lib/sales-parser-node.ts'),
       '#mobiup-sales-view':resolve('lib/sales-view-direct.ts'),
       '#mobiup-commercial-focus-runtime':resolve('lib/commercial-focus-runtime-node.ts'),

@@ -10,7 +10,10 @@ export type ManagerAiMediaPart =
   | {type:'input_file';file_data:string;filename:string}
   | {type:'input_image';image_url:string;detail:'auto'};
 
+import type {ReportCardData} from './manager-ai-report-card';
+
 export type ManagerAiPreparedArtifact = {
+  reportCard?:ReportCardData;
   filename:string;
   mime_type:string;
   bytes:Uint8Array;
@@ -25,4 +28,5 @@ export type ManagerAiArtifact = {
   kind:'input'|'output';
   download_url:string;
   removed?:true;
+  has_report_card?:true;
 };
