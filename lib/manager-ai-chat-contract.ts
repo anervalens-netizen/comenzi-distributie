@@ -10,6 +10,7 @@ export type ManagerAiChatMessage = {
   text:string;
   created_at:string;
   attachments:ManagerAiArtifact[];
+  has_presentation?:true;
 };
 export type ManagerAiConversation = {
   id:string;

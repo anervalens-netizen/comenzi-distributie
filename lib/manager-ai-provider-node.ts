@@ -13,6 +13,7 @@ import {
   type AiReportQuery,
   type AiSource,
 } from './manager-ai-query';
+import {parsePresentation, presentationTool, type ManagerPresentation} from './manager-ai-presentation';
 import { fail } from './server';
 import type { ManagerAiEffort } from './manager-ai-chat-contract';
 import {
@@ -128,6 +129,7 @@ export async function runManagerAi({
   onEvent,
   content,
   analysis,
+  presentationEnabled = false,
 }: {
   model: ManagerAiModel;
   key: string;
@@ -140,8 +142,9 @@ export async function runManagerAi({
   content?: ConversationTurn[];
   onEvent?: (event: ProviderEvent) => Promise<void>;
   analysis?: ManagerAiAnalysisCapability;
+  presentationEnabled?: boolean;
 }): Promise<
-  ManagerAiAnswer & { analysisArtifacts?: ManagerAiPreparedArtifact[] }
+  ManagerAiAnswer & { analysisArtifacts?: ManagerAiPreparedArtifact[]; presentation?: ManagerPresentation }
 > {
   const today = new Intl.DateTimeFormat('en-CA', {
     year: 'numeric',
@@ -151,11 +154,13 @@ export async function runManagerAi({
   }).format(new Date());
   const guidance =
     instructions.replace('DATE', today) +
-    (analysis ? '\n\n' + analysis.instructions : '');
+    (analysis ? '\n\n' + analysis.instructions : '') +
+    (presentationEnabled ? '\nAlege present_information pentru orice subiect când o comparație, o succesiune de pași sau un grup de indicatori este mai ușor de urmărit în chat. Pentru o întrebare simplă sau dacă se cere numai text, răspunde direct. Folosește exclusiv informațiile din cerere, explicații generale sau rezultate deja autorizate. Un instrument de prezentare nu citește și nu verifică date. Păstrează concluzia și informațiile esențiale în răspunsul text.' : '');
   const reports: ManagerAiReport[] = [];
   const generatedArtifacts = new Map<string, ManagerAiPreparedArtifact>();
   const callLimit = analysis ? 8 : maxModelCalls;
   let reads = 0;
+  let presentation: ManagerPresentation | undefined;
 
   async function authorize() {
     signal.throwIfAborted();
@@ -163,6 +168,14 @@ export async function runManagerAi({
     signal.throwIfAborted();
   }
   async function dispatch(name: string, raw: string) {
+    if (name === presentationTool.name && presentationEnabled) {
+      await authorize();
+      const parsed = parsePresentation(raw);
+      if (!parsed) return JSON.stringify({error:'Fișă invalidă. Simplifică rândurile și verifică numărul de coloane.'});
+      const replaced = presentation !== undefined;
+      presentation = parsed;
+      return JSON.stringify({prepared:true,replaced});
+    }
     if (++reads > maxDataReads)
       fail(
         422,
@@ -211,7 +224,8 @@ export async function runManagerAi({
   const definitions = analysis
     ? [managerAiReportTool, managerAiAnalysisTool(analysis.tables)]
     : [managerAiReportTool];
-  const tools: FunctionTool[] = definitions.map(
+  const enabledDefinitions = presentationEnabled ? [...definitions, presentationTool] : definitions;
+  const tools: FunctionTool[] = enabledDefinitions.map(
     ({ name, description, parameters }) => ({
       type: 'function',
       name,
@@ -297,6 +311,7 @@ export async function runManagerAi({
   if (!provider.answer) fail(502, 'Furnizorul AI nu a returnat o analiză.');
   return {
     answer: provider.answer,
+    ...(presentation ? {presentation} : {}),
     model: provider.resolvedModel,
     reports,
     ...(generatedArtifacts.size
