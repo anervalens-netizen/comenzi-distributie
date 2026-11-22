@@ -257,7 +257,10 @@ export async function managerAiConversations(req:Request,user:User,path:string[]
   if(path.length===1&&method==='POST') {
     if(!key)fail(503,managerAiNotConfiguredMessage);
     const reasoning=effort((await jsonBody(req)).effort);
-    return response(withAiAccount(account,true,db=>createAiConversation(db,account.owner,reasoning)),201);
+    // Commit draft reclamation even if the new conversation exceeds a quota.
+    const created=withAiAccount(account,true,db=>createAiConversation(db,account.owner,reasoning));
+    if(created instanceof AppError)throw created;
+    return response(created,201);
   }
   const conversationId=identity(path[1]);
   const transact=<T>(write:boolean,action:Parameters<typeof withAiAccount<T>>[2])=>conversationTxn(account,conversationId,write,action);

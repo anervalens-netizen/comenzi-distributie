@@ -5,6 +5,8 @@ import {notificationCenter} from '@/lib/notification-center';
 import {lookupAnafCompany} from '@/lib/anaf';
 import {importsCatalog,importsJobs,importsJob} from '@/lib/import-engine-runtime';
 import {simVerification,simVerificationAccess} from '@/lib/sim-verification-api';
+import {captureRequestAuthority,assertRequestAuthority} from '@/lib/request-authority';
+import {writeAuthority} from '@/lib/request-write-context';
 import {operationalWriteGuard} from '@/lib/operational-write-guard';
 import {activationReport} from '@/lib/activation-api';
 import {applyVodafoneActivationTargets} from '@/lib/vodafone-activation-targets';
@@ -345,6 +347,16 @@ async function dispatch(req: Request) {
     return response({...common,products:(await readCatalog()).products,orders:await listOrders(user)},200,sessionHeaders);
   }
   const user=await requireUser(req,path[0]==='auth'||(path[0]==='admin'&&path[1]==='templates'));
+  if(runtimeKind==='node' && req.method!=='GET' && path[0]!=='auth'){
+    // Import clients distinguish lost authentication (401) from a stale preview (409).
+    const isImport=['admin/stock/import','sales/import','client-sales/import'].includes(path.join('/'));
+    const authority=await captureRequestAuthority(req,user,isImport?401:409);
+    return writeAuthority.run(authority,()=>authenticatedRoute(req,path,user));
+  }
+  return authenticatedRoute(req,path,user);
+}
+
+async function authenticatedRoute(req:Request,path:string[],user:User) {
   if(req.method==='GET'&&path.length===4&&path[0]==='catalog'&&path[1]==='photo')return readProductPhoto(path[2],path[3]);
   const readUser=nationalReadScope(user);
   if(path[0]==='leave'&&path.length<=3)return leaveApi(req,user,path);
@@ -449,9 +461,17 @@ async function dispatch(req: Request) {
     const month=new URL(req.url).searchParams.get('month');
     return response(await teamActivity(readUser,month));
   }
-  if(path.join('/')==='sales/clients/reconciliation'&&req.method==='GET')return clientSalesReconciliation(readUser,new URL(req.url).searchParams);
-  if(path.join('/')==='sales/clients'&&req.method==='GET')return response(await clientSalesOverview(readUser,new URL(req.url).searchParams));
-  if(path.join('/')==='sales'&&req.method==='GET')return salesView(req,readUser);
+  if(req.method==='GET'&&['sales','sales/clients','sales/clients/reconciliation'].includes(path.join('/'))){
+    const authority=await captureRequestAuthority(req,user);
+    const check=()=>assertRequestAuthority(authority);
+    const params=new URL(req.url).searchParams;
+    let result:Response;
+    if(path.length===1) result=await salesView(req,readUser,check);
+    else if(path.length===2)result=response(await clientSalesOverview(readUser,params,new Date(),check));
+    else result=await clientSalesReconciliation(readUser,params,new Date(),check);
+    await check();
+    return result;
+  }
   if(path.join('/')==='imports/catalog'&&req.method==='GET')return importsCatalog(req,user);
   if(path.join('/')==='imports/jobs'&&['GET','POST'].includes(req.method))return importsJobs(req,user);
   if(path[0]==='imports'&&path[1]==='jobs'&&path[2]&&path.length<=4)return importsJob(req,user,path[2],path[3]);

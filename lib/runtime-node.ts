@@ -4,8 +4,9 @@ import managerAiSchema from '@/drizzle/0014_manager_ai_conversations.sql?raw';
 import leaveNotificationsSchema from '@/drizzle/0012_leave_notifications.sql?raw';
 import portfolioReadModelSchema from '@/drizzle/0009_portfolio_read_model.sql?raw';
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
-import { mkdirSync } from 'node:fs';
-import { mkdir, readFile, writeFile, rename, rm } from 'node:fs/promises';
+import {writeAuthority} from './request-write-context';
+import { mkdirSync, renameSync } from 'node:fs';
+import { mkdir, readFile, writeFile, rm } from 'node:fs/promises';
 import { resolve, dirname, sep } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import initialSchema from '@/drizzle/0000_rare_hardball.sql?raw';
@@ -103,6 +104,21 @@ function sqlite() {
     throw error;
   }
 }
+/** Serialize authorization and publication with revocations on the same SQLite writer lock. */
+function writeTransaction<T>(action:()=>T):T {
+  const db=sqlite();
+  db.exec('BEGIN IMMEDIATE;');
+  try {
+    const authority=writeAuthority.getStore();
+    if(authority&&!db.prepare(authority.sql).get(...authority.args))authority.denied();
+    const result=action();
+    db.exec('COMMIT;');
+    return result;
+  } catch(error) {
+    if(db.isTransaction)db.exec('ROLLBACK;');
+    throw error;
+  }
+}
 class Statement {
   constructor(readonly sql: string, readonly parameters: SQLInputValue[] = []) {}
   bind(...parameters: SQLInputValue[]) { return new Statement(this.sql, parameters); }
@@ -117,7 +133,7 @@ class Statement {
     const row = sqlite().prepare(this.sql).get(...this.parameters);
     return (row ? (column ? row[column] : row) : null) as T | null;
   }
-  async run() { return this.execute(); }
+  async run() { return writeAuthority.getStore()?writeTransaction(()=>this.execute()):this.execute(); }
 }
 const database = {
   // data_version observes commits by other connections; total_changes observes all
@@ -129,10 +145,7 @@ const database = {
   async portfolioReadVersion(){return JSON.stringify(sqlite().prepare('SELECT data_revision,scope_revision FROM portfolio_revision WHERE id=1').get());},
   prepare: (sql: string) => new Statement(sql),
   async batch(statements: Statement[]) {
-    const db = sqlite();
-    db.exec('BEGIN IMMEDIATE;');
-    try { const result = statements.map(statement => statement.execute()); db.exec('COMMIT;'); return result; }
-    catch (error) { db.exec('ROLLBACK;'); throw error; }
+    return writeTransaction(()=>statements.map(statement=>statement.execute()));
   },
 };
 const excelMime = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
@@ -155,7 +168,10 @@ const files = {
     const path = objectPath(key), temporary = path + '.' + randomUUID() + '.tmp';
     await mkdir(dirname(path), { recursive: true, mode: 0o700 });
     await writeFile(temporary, new Uint8Array(value), { mode: 0o600 });
-    await rename(temporary, path);
+    try {
+      if(writeAuthority.getStore())writeTransaction(()=>renameSync(temporary,path));
+      else renameSync(temporary,path);
+    } finally { await rm(temporary,{force:true}); }
   },
   async delete(key: string) { await rm(objectPath(key), { force: true }); },
 };

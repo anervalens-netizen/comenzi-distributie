@@ -8,6 +8,8 @@ CREATE TABLE IF NOT EXISTS manager_ai_conversations (
 );
 CREATE INDEX IF NOT EXISTS manager_ai_conversation_owner ON manager_ai_conversations(owner,updated_at DESC,id DESC);
 
+CREATE INDEX IF NOT EXISTS manager_ai_conversation_updated ON manager_ai_conversations(updated_at);
+
 CREATE TABLE IF NOT EXISTS manager_ai_messages (
   id TEXT PRIMARY KEY NOT NULL,
   conversation_id TEXT NOT NULL REFERENCES manager_ai_conversations(id),
@@ -75,3 +77,6 @@ CREATE TABLE IF NOT EXISTS manager_ai_artifacts (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS manager_ai_artifact_owner ON manager_ai_artifacts(owner);
+
+CREATE INDEX IF NOT EXISTS manager_ai_run_conversation ON manager_ai_runs(conversation_id);
+CREATE INDEX IF NOT EXISTS manager_ai_artifact_conversation ON manager_ai_artifacts(conversation_id);

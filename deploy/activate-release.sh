@@ -88,34 +88,44 @@ map_mode="$(node -e 'const x=JSON.parse(require("fs").readFileSync(process.argv[
 if [[ "$map_mode" == "mapped" ]]; then
   [[ -n "${MOBIUP_SOURCE_MAP_GATE:-}" && -x "$MOBIUP_SOURCE_MAP_GATE" ]] || fail "private source-map gate is not provisioned"
   [[ -n "${MOBIUP_SOURCE_MAP_PROJECT:-}" && -n "${MOBIUP_PUBLIC_ORIGIN:-}" ]] || fail "source-map project and public origin are required"
-  backend_identified="$(node --input-type=module - "$release" "$release_sha" <<'JS'
+  # The activator and its reference modules are provisioned by the release
+  # administrator outside the candidate tree. Never load candidate JavaScript
+  # or resolve its dependencies in this privileged preflight.
+  activator="$(realpath -e -- "${BASH_SOURCE[0]}")" || fail "cannot locate installed activator"
+  reference_dir="$(dirname -- "$activator")"
+  [[ "$reference_dir" != "$releases_root" && "$reference_dir" != "$releases_root/"* ]] || fail "activation references must be installed outside runtime releases"
+  backend_identified="$(node --input-type=module - "$reference_dir" "$release" "$release_sha" <<'JS'
 import fs from 'node:fs';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
-const [root,release]=process.argv.slice(2);
-const helper=path.join(root,'backend-frame-identity.mjs');
-const manifestPath=path.join(root,'.private-source-maps/backend/manifest.json');
-const wrapper=path.join(root,'error-reporting.mjs');
-const manifest=fs.existsSync(manifestPath) ? JSON.parse(fs.readFileSync(manifestPath,'utf8')) : null;
-const needsHelper=fs.existsSync(wrapper) && fs.readFileSync(wrapper,'utf8').includes('backend-frame-identity.mjs');
-const identified=fs.existsSync(helper) || needsHelper || Object.values(manifest?.files??{}).some(entry=>entry?.debug_id);
+const [referenceDir, root, release] = process.argv.slice(2);
+
+function readRegular(file) {
+  const stat = fs.lstatSync(file, {throwIfNoEntry:false});
+  if (!stat) return null;
+  if (!stat.isFile() || fs.realpathSync(file) !== file) throw new Error('Unexpected artifact path');
+  return fs.readFileSync(file);
+}
+
+const helperName = 'backend-frame-identity.mjs';
+const wrapperName = 'error-reporting.mjs';
+const helper = readRegular(path.join(root, helperName));
+const wrapper = readRegular(path.join(root, wrapperName));
+const manifestBytes = readRegular(path.join(root, '.private-source-maps/backend/manifest.json'));
+const manifest = manifestBytes && JSON.parse(manifestBytes);
+const identified = helper !== null || wrapper?.includes(helperName)
+  || Object.values(manifest?.files ?? {}).some(entry => entry?.debug_id);
 if (identified) {
-  if (!needsHelper || !fs.existsSync(helper) || !Object.keys(manifest?.files??{}).length) throw new Error('Incomplete backend artifact identity');
-  const {createBackendFrameNormalizer}=await import(pathToFileURL(helper).href);
-  createBackendFrameNormalizer({root,release,manifest});
-  // Verify the actual wrapper; a stale file or a comment mentioning the helper
-  // cannot qualify a release which never attaches backend identities.
-  delete process.env.GLITCHTIP_DSN;
-  process.env.GLITCHTIP_RELEASE=release;
-  const {scrubErrorEvent}=await import(pathToFileURL(wrapper).href);
-  const name=Object.keys(manifest.files).find(name=>name.startsWith('dist/server/'));
-  const frame={filename:path.join(root,name),lineno:1,colno:1};
-  const event=scrubErrorEvent({release,exception:{values:[{stacktrace:{frames:[frame]}}]}});
-  const expected={filename:path.join(root,name),lineno:1,colno:1};
-  const image=createBackendFrameNormalizer({root,release,manifest})(expected);
-  if (!image || frame.abs_path!==image.code_file || frame.lineno!==1 || frame.colno!==1
-      || !event.debug_meta?.images?.some(i=>i.code_file===image.code_file && i.debug_id===image.debug_id))
-    throw new Error('Reporting wrapper does not attach backend identity');
+  const referenceHelper = path.join(referenceDir, helperName);
+  for (const [candidateBytes, referencePath] of [[helper, referenceHelper], [wrapper, path.join(referenceDir, wrapperName)]]) {
+    const expected = readRegular(referencePath);
+    if (!candidateBytes || !expected || !candidateBytes.equals(expected))
+      throw new Error('Backend reporting modules do not match the installed references');
+  }
+  if (!Object.keys(manifest?.files ?? {}).some(name => name.startsWith('dist/server/')))
+    throw new Error('Missing backend server artifact');
+  const {createBackendFrameNormalizer} = await import(pathToFileURL(referenceHelper).href);
+  createBackendFrameNormalizer({root, release, manifest});
 }
 process.stdout.write(identified ? '1' : '0');
 JS

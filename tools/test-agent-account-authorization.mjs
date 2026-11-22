@@ -37,7 +37,7 @@ try{
   await build({entryPoints:[routePath],outfile:output,bundle:true,platform:'node',format:'esm',plugins:[{
     name:'synthetic-agent-account-boundary',
     setup(build){
-      build.onResolve({filter:/^@\/lib\//},({path})=>path==='@/lib/request-timing'?{path:resolve('lib/request-timing.ts')}:{path,namespace:'agent-account-test'});
+      build.onResolve({filter:/^@\/lib\//},({path})=>['@/lib/request-timing','@/lib/request-authority','@/lib/request-write-context'].includes(path)?{path:resolve(path.slice(2)+'.ts')}:{path,namespace:'agent-account-test'});
       build.onLoad({filter:/.*/,namespace:'agent-account-test'},({path})=>{
         if(path==='@/lib/server')return {loader:'js',resolveDir:process.cwd(),contents:`import {verifyPassword as originalVerifyPassword} from ${JSON.stringify(serverPath)};export * from ${JSON.stringify(serverPath)};export const hashPassword=password=>globalThis.__agentAccountFixture.hash(password);export const verifyPassword=(...args)=>globalThis.__agentAccountFixture.verify?globalThis.__agentAccountFixture.verify(...args):originalVerifyPassword(...args);`};
         if(path==='@/lib/runtime')return {loader:'js',contents:`export const runtimeKind='node';export const env={DB:globalThis.__agentAccountFixture};export const operationalStatus=()=>({});`};
@@ -51,6 +51,7 @@ try{
   database.exec(`CREATE TABLE users(id TEXT PRIMARY KEY,username TEXT UNIQUE,name TEXT,role TEXT,manager_scope TEXT DEFAULT 'assigned',warehouse_id TEXT,warehouse_name TEXT,site_code TEXT DEFAULT '',password_hash TEXT,profile_revision INTEGER NOT NULL DEFAULT 1,must_change_password INTEGER DEFAULT 0,active INTEGER DEFAULT 1);
     CREATE TABLE sessions(token_hash TEXT PRIMARY KEY,user_id TEXT,expires_at INTEGER);
     CREATE TABLE manager_agents(manager_id TEXT,agent_id TEXT);
+    CREATE TABLE portfolio_revision(id INTEGER PRIMARY KEY,scope_revision INTEGER NOT NULL); INSERT INTO portfolio_revision VALUES(1,1);
     CREATE TABLE login_attempts(key TEXT PRIMARY KEY,attempts INTEGER,reset_at INTEGER);
     CREATE TABLE settings(key TEXT PRIMARY KEY,value TEXT);INSERT INTO settings VALUES('seed-v1','1');`);
   const digest=value=>createHash('sha256').update(value).digest('hex');

@@ -4,6 +4,7 @@ import datetime as dt
 import gzip
 import json
 import re
+import time
 
 ACTIVATION_FIELDS = ('Activat', 'DataActivare', 'HandSetType', 'JudetActivare', 'ItemCodeA', 'ItemNameA')
 COMMERCIAL_FIELDS = ('Firma', 'DataVDF', 'TR', 'SiteCode', 'ItemCode', 'ItemName', 'Cantitate', 'Pret', 'Valoare', 'PretFD', 'CIF', 'CodPunctDeLucru', 'PunctDeLucru', 'Denumire Client', 'Oras', 'Judet', 'Nr', 'TRVechi', 'ItemType', 'IMEI', 'Qtty', 'DocumentDetailId', 'DocumentId', 'SiteId')
@@ -97,12 +98,83 @@ def apply_observations(rows, official):
     return selected,refs,conflicts
 
 
+MAX_OPERATOR_JSON_BYTES = 512 << 20
+MAX_OPERATOR_RECORD_CHARS = 16 << 20
+OPERATOR_PARSE_SECONDS = 15 * 60
+
+
+def json_records(path):
+    """Read an array of operator records with the same limits in preview and commit."""
+    decoder = json.JSONDecoder()
+    deadline = time.monotonic() + OPERATOR_PARSE_SECONDS
+    total = count = position = 0
+    buffer = ''
+    eof = False
+    with gzip.open(path, 'rt', encoding='utf-8', newline='') as stream:
+        def check_time():
+            if time.monotonic() >= deadline:
+                raise ValueError('Operator extraction time limit exceeded')
+
+        def refill(size=65536):
+            nonlocal buffer, position, total, eof
+            check_time()
+            chunk = stream.read(size)
+            total += len(chunk.encode('utf-8'))
+            if total > MAX_OPERATOR_JSON_BYTES:
+                raise ValueError('Operator extraction size limit exceeded')
+            buffer = buffer[position:] + chunk
+            position = 0
+            eof = not chunk
+
+        def next_token():
+            nonlocal position
+            while True:
+                check_time()
+                while position < len(buffer) and buffer[position].isspace():
+                    position += 1
+                if position < len(buffer):
+                    return buffer[position]
+                if eof:
+                    return ''
+                refill()
+
+        if next_token() != '[':
+            raise ValueError('Invalid operator array')
+        position += 1
+        if next_token() != ']':
+            while True:
+                if next_token() != '{':
+                    raise ValueError('Invalid operator record')
+                while True:
+                    try:
+                        value, end = decoder.raw_decode(buffer, position)
+                        if end - position > MAX_OPERATOR_RECORD_CHARS:
+                            raise ValueError('Operator record size limit exceeded')
+                        position = end
+                        break
+                    except json.JSONDecodeError:
+                        size = len(buffer) - position
+                        if eof or size >= MAX_OPERATOR_RECORD_CHARS:
+                            raise ValueError('Invalid operator record') from None
+                        refill(min(max(65536, size), 1 << 20, MAX_OPERATOR_RECORD_CHARS - size))
+                count += 1
+                if count > 1_000_000:
+                    raise ValueError('Operator row limit exceeded')
+                yield count, value
+                separator = next_token()
+                if separator == ']':
+                    break
+                if separator != ',':
+                    raise ValueError('Invalid operator separator')
+                position += 1
+        position += 1
+        if next_token():
+            raise ValueError('Trailing operator data')
+
+
 def operator_records(path, workbook_reader, provider='vodafone'):
     if path.suffixes[-2:]==['.json','.gz']:
-        with gzip.open(path,'rt',encoding='utf-8') as f:
-            records=json.load(f)
-        if not isinstance(records,list) or len(records)>1_000_000:raise ValueError('Invalid operator extraction')
-        for i,r in enumerate(records,1):yield i,r
+        yield from json_records(path)
     elif provider=='digi':
         yield from workbook_reader(path,sheet_name='activari',required_headers=['Distribuitor','Seria SIM (iccid)','Data activare'],header_row=1)
     else:

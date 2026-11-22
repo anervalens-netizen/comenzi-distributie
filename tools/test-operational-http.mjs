@@ -83,6 +83,7 @@ def load(name):
     spec=importlib.util.spec_from_file_location(name,source/'deploy'/(name+'.py'))
     module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);return module
 backup,restore=load('backup'),load('restore')
+(root/'nas').mkdir()  # The synthetic mount must exist, like a real mounted volume.
 started=time.monotonic()
 with patch.object(backup.os.path,'ismount',return_value=True),contextlib.redirect_stdout(io.StringIO()):
     archive=backup.run_backup(data=root/'data',local=root/'local',nas=root/'nas',nas_mount=root/'nas',release=root/'runtime/RELEASE.json',recovery={name:root/name for name in ('runtime','resources','products')})

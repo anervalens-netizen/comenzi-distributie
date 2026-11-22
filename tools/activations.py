@@ -117,17 +117,31 @@ def date_style_ids(archive):
     return result
 
 
+MAX_METADATA_XML_BYTES = {
+    'xl/workbook.xml': 2 << 20,
+    'xl/_rels/workbook.xml.rels': 2 << 20,
+    'xl/styles.xml': 8 << 20,
+    'xl/sharedStrings.xml': 512_000_000,
+}
+
+
+def validate_workbook_inventory(archive):
+    entries = archive.infolist()
+    if len(entries) > 4096 or sum(e.file_size for e in entries) > 2_000_000_000:
+        raise ImportError('Workbook size limit exceeded')
+    if len({e.filename for e in entries}) != len(entries):
+        raise ImportError('Duplicate ZIP members')
+    for entry in entries:
+        limit = MAX_METADATA_XML_BYTES.get(entry.filename)
+        if limit is not None and entry.file_size > limit:
+            raise ImportError('Workbook metadata size limit exceeded')
+
+
 def workbook(path, *, sheet_name="SIM", required_headers=None, header_row=None):
     with zipfile.ZipFile(path) as archive:
-        entries = archive.infolist()
-        if len(entries) > 4096 or sum(e.file_size for e in entries) > 2_000_000_000:
-            raise ImportError('Workbook size limit exceeded')
-        if len({e.filename for e in entries}) != len(entries):
-            raise ImportError('Duplicate ZIP members')
+        validate_workbook_inventory(archive)
         strings = []
         if 'xl/sharedStrings.xml' in archive.namelist():
-            if archive.getinfo('xl/sharedStrings.xml').file_size > 512_000_000:
-                raise ImportError('Shared string size limit exceeded')
             with archive.open('xl/sharedStrings.xml') as stream:
                 context = ET.iterparse(stream, events=('start', 'end'))
                 _, root = next(context)

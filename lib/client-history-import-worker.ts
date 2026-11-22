@@ -20,7 +20,7 @@ if(!attempt||job.state!=='running')throw Error('Import launch is no longer curre
 function save(){job.pid=process.pid;job.processIdentity=processIdentity(process.pid);job.updatedAt=new Date().toISOString();const temp=path+'.'+randomUUID()+'.tmp';writeFileSync(temp,JSON.stringify(job),{mode:0o600});renameSync(temp,path);}
 async function parse(request:string){
  return new Promise<HistoryPreview>((resolve,reject)=>{
-  const child=spawn('python3',[join(import.meta.dirname,'client_history_upload.py'),request],{stdio:['ignore','pipe','ignore']});
+  const child=spawn('prlimit',['--as='+224*1024*1024,'--','python3',join(import.meta.dirname,'client_history_upload.py'),request],{stdio:['ignore','pipe','ignore']});
   let result:HistoryPreview|undefined,error='',size=0;
   const timer=setTimeout(()=>{error='Procesarea a depășit timpul permis.';child.kill('SIGKILL');},15*60*1000);
   const lines=createInterface({input:child.stdout});

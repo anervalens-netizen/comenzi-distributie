@@ -65,6 +65,13 @@ class UploadTests(unittest.TestCase):
   self.assertEqual([x[0] for x in self.facts()],['2024-01-01','2024-02-01','2024-02-02','2024-03-01'])
   for r in self.c.execute('SELECT sha256,original_path FROM history_imports'):self.assertEqual(h.file_sha(self.root/r['original_path']),r['sha256'])
   self.assertEqual(self.c.execute('SELECT COUNT(*) FROM history_import_projections').fetchone()[0],2)
+ def test_parsed_history_rows_are_replayable_and_pinned(self):
+  rows,summary,_,_,_=self.upload([row(Data='01.02.2024'),row(Data='02.02.2024')])
+  self.assertIsInstance(rows,u.WorkbookRows)
+  self.assertEqual([r['date'] for r in rows],['2024-02-01','2024-02-02'])
+  self.assertEqual(len(list(rows)),summary['rows'])
+  with rows.path.open('ab') as f:f.write(b' ')
+  with self.assertRaisesRegex(u.UploadError,'s-a schimbat'):list(rows)
  def test_cumulative_addition_and_repeat(self):
   self.commit(self.upload([row(Data='01.02.2024')]),True)
   data=self.upload([row(Data='01.02.2024'),row(Data='02.02.2024')]);self.assertFalse(data[-1]['requiresAcknowledgement']);self.commit(data)

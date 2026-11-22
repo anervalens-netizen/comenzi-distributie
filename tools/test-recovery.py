@@ -5,7 +5,9 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import shutil
 import sqlite3
+import subprocess
 import tarfile
 import tempfile
 import unittest
@@ -42,8 +44,18 @@ class RecoveryTests(unittest.TestCase):
         self.products=self.root/'products';self.products.mkdir();(self.products/'image.png').write_bytes(b'synthetic image')
         self.kwargs=dict(data=self.data,local=self.root/'local',nas=self.root/'nas',nas_mount=self.root/'nas',release=self.release,recovery={'runtime':self.runtime,'resources':self.resources,'products':self.products})
     def make_backup(self):
+        self.kwargs['nas_mount'].mkdir(exist_ok=True)
         with patch.object(backup.os.path,'ismount',return_value=True),contextlib.redirect_stdout(io.StringIO()):
             return backup.run_backup(**self.kwargs)
+    def test_latest_only_backup_validates_through_pinned_nas_directory(self):
+        self.kwargs['nas_latest_only'] = True
+        archive = self.make_backup()
+        receipt = backup.validation_receipt(archive, backup.digest(archive))
+        self.assertEqual(receipt['release'], 'a' * 40)
+        nas = self.kwargs['nas']
+        self.assertTrue(backup.validation_path(nas / archive.name).is_file())
+        self.assertEqual(list(nas.glob('*.partial')), [])
+
     def test_latest_nas_retention_preserves_current_and_unrelated_files(self):
         archive = self.make_backup()
         nas = self.root / 'nas'
@@ -88,6 +100,33 @@ class RecoveryTests(unittest.TestCase):
             backup.prune_nas_latest(nas, nas / archive.name)
         self.assertTrue(old.exists())
 
+    def test_nas_restore_cannot_promote_a_different_digest_to_local_validation(self):
+        archive = self.make_backup()
+        nas = self.root / 'nas'
+        current = nas / archive.name
+        checksum = backup.digest(archive)
+        with patch.object(backup, 'prune_backups') as prune:
+            with self.assertRaisesRegex(RuntimeError, 'checksum mismatch'):
+                backup.prune_nas_latest(nas, current, expected_checksum='0' * 64)
+            with patch.object(backup, 'validate_archive', return_value={'sha256': '0' * 64}):
+                with self.assertRaisesRegex(RuntimeError, 'receipt does not match'):
+                    backup.prune_nas_latest(nas, current, expected_checksum=checksum)
+            prune.assert_not_called()
+        self.assertFalse(backup.validation_path(archive).exists())
+
+    def test_restore_rejects_when_extraction_does_not_confirm_the_prechecked_digest(self):
+        archive = self.make_backup()
+        destination = self.root / 'restored'
+        real_reader = recovery.DigestReader
+        def inconsistent_verification(stream):
+            reader = real_reader(stream)
+            reader.hash.update(b'independent mismatch')
+            return reader
+        with patch.object(recovery, 'DigestReader', side_effect=inconsistent_verification):
+            with self.assertRaisesRegex(RuntimeError, 'changed during restore'):
+                recovery.restore(archive, destination)
+        self.assertFalse(destination.exists())
+
     def test_actual_restore_receipt_promotes_receiver_and_ignores_newer_unvalidated(self):
         archive = self.make_backup()
         nas = self.root / 'nas'
@@ -95,13 +134,115 @@ class RecoveryTests(unittest.TestCase):
         backup.validate_archive(nas / archive.name)
         result = receiver.receive(nas, destination)
         self.assertEqual(result['sha256'], backup.digest(archive))
-        self.assertTrue(backup.validation_receipt(destination / archive.name, result['sha256']))
+        receipt = backup.validation_receipt(destination / archive.name, result['sha256'])
+        self.assertEqual(receipt['validated_by'], 'receiver')
+        self.assertEqual(receipt['release'], 'a' * 40)
         broken = nas / 'mobiup-comenzi-20990101T000000Z.tar.gz'
         broken.write_bytes(b'newer but not restorable')
         broken.with_suffix('.gz.sha256').write_text(backup.digest(broken) + '  ' + broken.name)
         result2 = receiver.receive(nas, destination)
         self.assertEqual(result2['archive'], archive.name)
         self.assertFalse((destination / broken.name).exists())
+
+    def test_receiver_requires_local_restore_before_promotion_or_pruning(self):
+        archive = self.make_backup()
+        nas = self.root / 'nas'
+        backup.validate_archive(nas / archive.name)
+        destination = self.root / 'receiver'
+        destination.mkdir()
+        fallback = destination / 'mobiup-comenzi-20000101T000000Z.tar.gz'
+        fallback.write_bytes(b'previous snapshot')
+        with patch.object(receiver.backup, 'validate_archive', side_effect=RuntimeError('local restore failed')):
+            with self.assertRaisesRegex(RuntimeError, 'local restore failed'):
+                receiver.receive(nas, destination)
+        self.assertEqual(fallback.read_bytes(), b'previous snapshot')
+        self.assertFalse((destination / archive.name).exists())
+        self.assertEqual(list(destination.glob('.receive-*')), [])
+
+    def test_receiver_revalidates_legacy_receipts_and_reuses_its_own(self):
+        archive = self.make_backup()
+        nas = self.root / 'nas'
+        backup.validate_archive(nas / archive.name)
+        destination = self.root / 'receiver'
+        shutil.copytree(nas, destination)
+        with patch.object(receiver.backup, 'validate_archive', wraps=receiver.backup.validate_archive) as validate:
+            receiver.receive(nas, destination)
+            receiver.receive(nas, destination)
+            self.assertEqual(validate.call_count, 1)
+
+    def test_portfolio_verifies_plain_and_encrypted_receiver_bytes(self):
+        verify = load('verify_received_generation')
+        archive = self.make_backup()
+        folder = self.root / 'portfolio'
+        folder.mkdir()
+        stored = folder / archive.name
+        shutil.copyfile(archive, stored)
+        scratch = self.root / 'disk-scratch'
+        receipt = self.root / 'trusted' / 'local.json'
+        original_scratch = verify.storage.Scratch
+
+        def small_scratch(*args, **kwargs):
+            kwargs.update(min_free_bytes=0, max_used_ratio=1)
+            return original_scratch(*args, **kwargs)
+
+        with patch.object(verify.storage, 'Scratch', side_effect=small_scratch):
+            result = verify.verify(folder, receipt, scratch)
+            self.assertEqual(result['sha256'], backup.digest(archive))
+            self.assertEqual(result['databases'], {'mobiup.sqlite': 'ok'})
+            self.assertTrue(verify.verify(folder, receipt, scratch)['reused'])
+            previous = json.loads(receipt.read_text())
+            previous['schema'] = 1
+            receipt.write_text(json.dumps(previous))
+            self.assertFalse(verify.verify(folder, receipt, scratch)['reused'])
+            trusted = receipt.read_bytes()
+            with patch.object(verify.restore, 'restore', side_effect=RuntimeError('local restore failed')):
+                with stored.open('ab') as stream:
+                    stream.write(b'\x00')
+                with self.assertRaisesRegex(RuntimeError, 'local restore failed'):
+                    verify.verify(folder, receipt, scratch)
+            self.assertEqual(receipt.read_bytes(), trusted)
+            shutil.copyfile(archive, stored)
+            if shutil.which('age') and shutil.which('age-keygen'):
+                key = self.root / 'identity'
+                subprocess.run(['age-keygen', '-o', str(key)], check=True, capture_output=True)
+                public = subprocess.check_output(['age-keygen', '-y', str(key)], text=True).strip()
+                subprocess.run(['age', '-r', public, '-o', str(stored) + '.age', str(stored)], check=True)
+                stored.unlink()
+                encrypted = verify.verify(folder, receipt, scratch, identity=key,
+                                          decrypt_scratch=self.root / 'memory-scratch')
+                self.assertEqual(encrypted['sha256'], result['sha256'])
+                self.assertNotEqual(encrypted['stored_sha256'], result['stored_sha256'])
+                self.assertFalse(encrypted['reused'])
+                rotated_key = self.root / 'rotated-identity'
+                subprocess.run(['age-keygen', '-o', str(rotated_key)], check=True, capture_output=True)
+                with self.assertRaisesRegex(RuntimeError, 'could not decrypt'):
+                    verify.verify(folder, receipt, scratch, identity=rotated_key,
+                                  decrypt_scratch=self.root / 'memory-scratch')
+                self.assertEqual(json.loads(receipt.read_text())['identity_sha256'], encrypted['identity_sha256'])
+
+    def test_portfolio_inputs_bind_verified_bytes_to_the_receiver_digest(self):
+        verifier = load('verify_received_generation')
+        archive = self.make_backup()
+        expected = backup.digest(archive)
+        with verifier.pinned_archive(archive) as pinned:
+            self.assertEqual(verifier.restore.digest(pinned), expected)
+            with verifier.plaintext(archive, pinned, expected, None, None) as (local, bound):
+                self.assertEqual(local, pinned)
+                self.assertEqual(bound, expected)
+                checksum = self.root / 'expected.sha256'
+                checksum.write_text(bound)
+                result = verifier.restore.restore(local, self.root / 'pinned-restore', checksum,
+                                                  expected_checksum=bound)
+                self.assertEqual(result['databases'], {'mobiup.sqlite': 'ok'})
+        if shutil.which('age') and shutil.which('age-keygen'):
+            key = self.root / 'cipher-key'
+            subprocess.run(['age-keygen', '-o', str(key)], check=True, capture_output=True)
+            public = subprocess.check_output(['age-keygen', '-y', str(key)], text=True).strip()
+            encrypted = Path(str(archive) + '.age')
+            subprocess.run(['age', '-r', public, '-o', str(encrypted), str(archive)], check=True)
+            with verifier.pinned_archive(encrypted) as pinned, self.assertRaisesRegex(RuntimeError, 'ciphertext'):
+                with verifier.plaintext(encrypted, pinned, '0' * 64, key, self.root / 'decrypt-fixture'):
+                    self.fail('An incorrect stored digest must prevent use of the plaintext')
 
     def test_receiver_without_validated_source_preserves_existing_copy(self):
         archive = self.make_backup()

@@ -100,9 +100,18 @@ latest restore-validated fallback when different. Without any validated fallback
 it refuses to prune. Successful NAS restore validation publishes a hash-bound
 `.validated.json` receipt before older NAS generations are removed; the matching
 local archive receives the same validation identity. `deploy/receive_backup.py`
-receives only validated source bytes and publishes a receiver receipt before
-pruning. Its caller must check the source mount identity. A NAS or validation
+treats the source receipt as a completion marker. It verifies the copied bytes
+by restoring them in receiver-local scratch before publication or pruning. Older
+receipts are revalidated once. Its caller must check the source mount identity
+and configure local restore scratch with sufficient space. A NAS or validation
 failure preserves the last validated recovery generation and fails visibly.
+Portfolio receivers that already copy a daily set can run
+`deploy/verify_received_generation.py` on their locally staged Comenzi directory
+before promotion or pruning. Configure a private local receipt outside the
+incoming set and a local scratch directory. For an age-encrypted copy, supply
+the receiver identity and private local decryption scratch on tmpfs. The
+operation decrypts the stored bytes, runs the same full restore, records the
+verified digest, and always preserves at least 40 GiB on the restore disk.
 Keep the periodic scratch GC installed and the normal backup schedule enabled.
 
 `deploy/restore.py` remains the separate explicit recovery path to a new
@@ -122,6 +131,13 @@ Backend frame URLs use unique basenames derived from the Debug ID, so basename
 fallback cannot confuse RSC and SSR entries. Runtime filenames stay unchanged.
 Receiver uploads must also use those unique basenames for the private JS/map
 pairs and verify their bytes; matching names and Debug IDs alone is insufficient.
+
+Install the reviewed `deploy/activate-release.sh`, `backend-frame-identity.mjs`
+and `error-reporting.mjs` together in an administrator-controlled directory
+outside runtime releases. Update the references when the reporting modules
+change. Preflight compares the packaged modules to those references and checks
+the backend manifest and bundle bytes using the installed validator. The
+application service loads the packaged JavaScript after the release switch.
 
 Backend source maps remain private and use a release-bound Debug ID for each
 server bundle. Full relative paths distinguish RSC and SSR bundles sharing a

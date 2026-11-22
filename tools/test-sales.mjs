@@ -14,7 +14,7 @@ await build({ entryPoints: ['lib/sales-file.ts'], outfile: parserPath, bundle: t
 await build({ entryPoints: ['lib/sales-store.ts'], outfile: storePath, bundle: true, platform: 'node', format: 'esm', packages: 'external' });
 const { parseSalesFile, salesHash } = await import(pathToFileURL(parserPath));
 process.env.MOBIUP_DATA_DIR = qa;
-const { getSalesView, importSalesRows, saveSalesOriginal } = await import(pathToFileURL(storePath));
+const { getSalesView, importSalesRows, salesOriginalPath } = await import(pathToFileURL(storePath));
 
 const columns = ['Data', 'SiteCode', 'ItemCode', 'ItemName', 'Cantitate', 'Brand', 'Pret', 'Valoare', 'Locatie', 'Firma', 'ASM', 'Regional', 'Nr', 'Categorie', 'SubCategorie', 'Agent'];
 const rows = [
@@ -37,30 +37,35 @@ check(parseSalesFile(sparseBytes,'sparse-wide.xlsx').length===1&&performance.now
 assert.throws(() => parseSalesFile(fixture([['08.09.2026', 'A', 'P', 'P', 1, '', 1, 1, 'TR', '', '', '', '', '', '', ''], ['09.10.2026', 'A', 'P', 'P', 1, '', 1, 1, 'TR', '', '', '', '', '', '', '']]), 'mixed.xlsx'), /o singură lună/); checks++;
 assert.throws(() => parseSalesFile(fixture([rows[2]]), 'empty.xlsx'), /nu conține rânduri/); checks++;
 const hash = salesHash(bytes);
-const original = await saveSalesOriginal(hash, 'vanzari.xlsx', bytes);
+const original = salesOriginalPath(hash, 'vanzari.xlsx');
+const first = importSalesRows({ rows: parsed, month: '2026-09', fileHash: hash, filename: 'vanzari.xlsx', importedBy: 'qa-manager', sourceBytes: bytes, expectedRevision: 0, expectedMappingHash: 'map-1', currentMappingHash: 'map-1', historicalAcknowledged: false });
 check(original === `sales-imports/${hash}.xlsx` && existsSync(resolve(qa, original)), 'Original source is stored under relative immutable audit path');
-const first = importSalesRows({ rows: parsed, month: '2026-09', fileHash: hash, filename: 'vanzari.xlsx', importedBy: 'qa-manager', originalPath: original, expectedRevision: 0, expectedMappingHash: 'map-1', currentMappingHash: 'map-1', historicalAcknowledged: false });
 check(first.revision === 1, 'First month import increments revision');
 let view = getSalesView('2026-09');
 check(view.summary.rows === 2 && view.summary.quantity === 1 && view.summary.value === 10.5, 'Summary uses signed quantities and exact cents');
 const replacement = parseSalesFile(fixture([rows[0]]), 'replacement.xlsx');
 const replacementHash = salesHash(fixture([rows[0]]));
-const replacementOriginal = await saveSalesOriginal(replacementHash, 'replacement.xlsx', fixture([rows[0]]));
-assert.throws(() => importSalesRows({ rows: replacement, month: '2026-09', fileHash: replacementHash, filename: 'replacement.xlsx', importedBy: 'qa-manager', originalPath: replacementOriginal, expectedRevision: 1, expectedMappingHash: 'map-1', currentMappingHash: 'map-1', historicalAcknowledged: false }), /REGRESSION_ACK/); checks++;
-const second = importSalesRows({ rows: replacement, month: '2026-09', fileHash: replacementHash, filename: 'replacement.xlsx', importedBy: 'qa-manager', originalPath: replacementOriginal, expectedRevision: 1, expectedMappingHash: 'map-1', currentMappingHash: 'map-1', historicalAcknowledged: false, regressionAcknowledged: true });
+assert.throws(() => importSalesRows({ rows: replacement, month: '2026-09', fileHash: replacementHash, filename: 'replacement.xlsx', importedBy: 'qa-manager', sourceBytes: fixture([rows[0]]), expectedRevision: 1, expectedMappingHash: 'map-1', currentMappingHash: 'map-1', historicalAcknowledged: false }), /REGRESSION_ACK/); checks++;
+check(!existsSync(resolve(qa, salesOriginalPath(replacementHash, 'replacement.xlsx'))), 'Rejected coverage change creates no source archive');
+const replacementArgs = { rows: replacement, month: '2026-09', fileHash: replacementHash, filename: 'replacement.xlsx', importedBy: 'qa-manager', sourceBytes: fixture([rows[0]]), expectedRevision: 1, expectedMappingHash: 'map-1', currentMappingHash: 'map-1', historicalAcknowledged: false, regressionAcknowledged: true };
+assert.throws(() => importSalesRows({...replacementArgs, expectedRevision: 0}), /STALE_REVISION/);
+check(!existsSync(resolve(qa, salesOriginalPath(replacementHash, 'replacement.xlsx'))), 'Stale preview creates no source archive');
+let authorizationChecks = 0;
+assert.throws(() => importSalesRows({...replacementArgs, authorizeCommit() { if (++authorizationChecks === 2) throw Error('expired'); }}), /expired/);
+check(!existsSync(resolve(qa, salesOriginalPath(replacementHash, 'replacement.xlsx'))), 'Revoked import rolls back its newly published file');
+const second = importSalesRows({ rows: replacement, month: '2026-09', fileHash: replacementHash, filename: 'replacement.xlsx', importedBy: 'qa-manager', sourceBytes: fixture([rows[0]]), expectedRevision: 1, expectedMappingHash: 'map-1', currentMappingHash: 'map-1', historicalAcknowledged: false, regressionAcknowledged: true });
 view = getSalesView('2026-09');
 check(second.revision === 2 && view.summary.rows === 1 && view.summary.value === 21, 'Same month replacement requires acknowledgement and removes previous rows');
-const repeat = importSalesRows({ rows: replacement, month: '2026-09', fileHash: replacementHash, filename: 'replacement.xlsx', importedBy: 'qa-manager', originalPath: replacementOriginal, expectedRevision: 2, expectedMappingHash: 'map-1', currentMappingHash: 'map-1', historicalAcknowledged: false });
+const repeat = importSalesRows({ rows: replacement, month: '2026-09', fileHash: replacementHash, filename: 'replacement.xlsx', importedBy: 'qa-manager', sourceBytes: fixture([rows[0]]), expectedRevision: 2, expectedMappingHash: 'map-1', currentMappingHash: 'map-1', historicalAcknowledged: false });
 check(repeat.idempotent === true && repeat.revision === 2, 'Identical file import is idempotent');
 const regressionBytes = fixture([['07.09.2026', 'A001', 'P1', 'Produs 1', 1, 'Brand', 10.5, 10.5, 'TR DAVIDD', 'MobiUp', 'ASM', 'Regional', '4', 'Cat', 'Sub', 'DAVIDD']]);
 const regressionRows = parseSalesFile(regressionBytes, 'regression.xlsx');
 const regressionHash = salesHash(regressionBytes);
-const regressionOriginal = await saveSalesOriginal(regressionHash, 'regression.xlsx', regressionBytes);
-assert.throws(() => importSalesRows({ rows: regressionRows, month: '2026-09', fileHash: regressionHash, filename: 'regression.xlsx', importedBy: 'qa-manager', originalPath: regressionOriginal, expectedRevision: 2, expectedMappingHash: 'map-1', currentMappingHash: 'map-1', historicalAcknowledged: false }), /REGRESSION_ACK/); checks++;
-const regression = importSalesRows({ rows: regressionRows, month: '2026-09', fileHash: regressionHash, filename: 'regression.xlsx', importedBy: 'qa-manager', originalPath: regressionOriginal, expectedRevision: 2, expectedMappingHash: 'map-1', currentMappingHash: 'map-1', historicalAcknowledged: false, regressionAcknowledged: true });
+assert.throws(() => importSalesRows({ rows: regressionRows, month: '2026-09', fileHash: regressionHash, filename: 'regression.xlsx', importedBy: 'qa-manager', sourceBytes: regressionBytes, expectedRevision: 2, expectedMappingHash: 'map-1', currentMappingHash: 'map-1', historicalAcknowledged: false }), /REGRESSION_ACK/); checks++;
+const regression = importSalesRows({ rows: regressionRows, month: '2026-09', fileHash: regressionHash, filename: 'regression.xlsx', importedBy: 'qa-manager', sourceBytes: regressionBytes, expectedRevision: 2, expectedMappingHash: 'map-1', currentMappingHash: 'map-1', historicalAcknowledged: false, regressionAcknowledged: true });
 check(regression.revision === 3, 'Coverage regression requires explicit acknowledgement');
-assert.throws(() => importSalesRows({ rows: parsed, month: '2026-09', fileHash: hash, filename: 'vanzari.xlsx', importedBy: 'qa-manager', originalPath: original, expectedRevision: 1, expectedMappingHash: 'map-1', currentMappingHash: 'map-1', historicalAcknowledged: false }), /STALE_REVISION/); checks++;
-assert.throws(() => importSalesRows({ rows: parsed, month: '2026-09', fileHash: hash, filename: 'vanzari.xlsx', importedBy: 'qa-manager', originalPath: original, expectedRevision: 3, expectedMappingHash: 'map-1', currentMappingHash: 'map-2', historicalAcknowledged: false }), /STALE_MAPPING/); checks++;
+assert.throws(() => importSalesRows({ rows: parsed, month: '2026-09', fileHash: hash, filename: 'vanzari.xlsx', importedBy: 'qa-manager', sourceBytes: bytes, expectedRevision: 1, expectedMappingHash: 'map-1', currentMappingHash: 'map-1', historicalAcknowledged: false }), /STALE_REVISION/); checks++;
+assert.throws(() => importSalesRows({ rows: parsed, month: '2026-09', fileHash: hash, filename: 'vanzari.xlsx', importedBy: 'qa-manager', sourceBytes: bytes, expectedRevision: 3, expectedMappingHash: 'map-1', currentMappingHash: 'map-2', historicalAcknowledged: false }), /STALE_MAPPING/); checks++;
 const segmentBytes = fixture([
   ['01.10.2026', 'A001', 'CARD', 'Cartela prepaid', 2, 'Telco', 10, 20, 'TR DAVIDD', 'MobiUp', 'ASM', 'Regional', '5', 'Cartele', 'Cartela', 'DAVIDD'],
   ['01.10.2026', 'A001', 'SIM', 'SIM Vodafone', 3, 'Telco', 2, 6, 'TR DAVIDD', 'MobiUp', 'ASM', 'Regional', '6', 'SIM', 'SIM', 'DAVIDD'],
@@ -72,8 +77,7 @@ const segmentBytes = fixture([
 ]);
 const segmentRows = parseSalesFile(segmentBytes, 'segments.xlsx');
 const segmentHash = salesHash(segmentBytes);
-const segmentOriginal = await saveSalesOriginal(segmentHash, 'segments.xlsx', segmentBytes);
-importSalesRows({ rows: segmentRows, month: '2026-10', fileHash: segmentHash, filename: 'segments.xlsx', importedBy: 'qa-manager', originalPath: segmentOriginal, expectedRevision: 3, expectedMappingHash: 'map-1', currentMappingHash: 'map-1', historicalAcknowledged: false });
+importSalesRows({ rows: segmentRows, month: '2026-10', fileHash: segmentHash, filename: 'segments.xlsx', importedBy: 'qa-manager', sourceBytes: segmentBytes, expectedRevision: 3, expectedMappingHash: 'map-1', currentMappingHash: 'map-1', historicalAcknowledged: false });
 const segmentView = getSalesView('2026-10', undefined, '2026-09', '2026-10');
 check(segmentView.segments.cardsSim.summary.quantity === 9 && segmentView.segments.cardsSim.subsegments.sim.quantity === 3 && segmentView.segments.cardsSim.subsegments.cards.quantity === 2 && segmentView.segments.cardsSim.subsegments.valueVouchers.value === 6, 'Cards, SIM and value vouchers breakdown is separated');
 check(segmentView.segments.phones.summary.value === 300 && segmentView.segments.phones.summary.quantity === 3 && segmentView.segments.accessories.summary.rows === 1 && segmentView.segments.accessories.summary.value === 15, 'Phones and accessories segments are separated');

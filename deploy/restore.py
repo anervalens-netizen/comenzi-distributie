@@ -27,6 +27,19 @@ def digest(path: Path) -> str:
         return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 
+class DigestReader:
+    """Bind the compressed bytes actually consumed by extraction to the expected digest."""
+
+    def __init__(self, stream):
+        self.stream = stream
+        self.hash = hashlib.sha256()
+
+    def read(self, size):
+        data = self.stream.read(size)
+        self.hash.update(data)
+        return data
+
+
 def max_restore_bytes():
     # Count uncompressed bytes, including every archive member. Keep the default
     # conservative, while allowing explicitly sized full-history recoveries.
@@ -58,12 +71,15 @@ def inspect_archive(archive):
     return total, len(seen)
 
 
-def restore(archive: Path, destination: Path, checksum: Path | None = None, *, scratch=None) -> dict:
+def restore(archive: Path, destination: Path, checksum: Path | None = None, *, scratch=None, expected_checksum=None) -> dict:
     max_bytes = max_restore_bytes()
-    archive = archive.resolve(strict=True)
-    checksum = checksum or archive.with_suffix(archive.suffix + '.sha256')
+    if checksum is None:
+        archive = archive.resolve(strict=True)
+        checksum = archive.with_suffix(archive.suffix + '.sha256')
+    # An explicitly supplied checksum allows callers to use a pinned /proc/self/fd path.
     expected = checksum.read_text().split()[0]
-    if len(expected) != 64 or digest(archive) != expected:
+    if (len(expected) != 64 or (expected_checksum is not None and expected != expected_checksum)
+            or digest(archive) != expected):
         raise RuntimeError('Archive checksum mismatch')
     destination = destination.absolute()
     if destination.exists() or destination.is_symlink():
@@ -73,28 +89,35 @@ def restore(archive: Path, destination: Path, checksum: Path | None = None, *, s
     try:
         seen = set()
         total = 0
-        with tarfile.open(archive, 'r:gz') as source:
-            for member in source:
-                path = PurePosixPath(member.name)
-                if path.is_absolute() or '..' in path.parts or member.name in seen:
-                    raise RuntimeError('Unsafe or duplicate archive path')
-                if member.size < 0 or (not member.isfile() and not member.isdir()):
-                    raise RuntimeError('Only regular files and directories may be restored')
-                seen.add(member.name)
-                total += member.size
-                if len(seen) > 100000 or total > max_bytes:
-                    raise RuntimeError('Recovery archive exceeds the bounded restore budget')
-                target = temporary.joinpath(*path.parts)
-                if member.isdir():
-                    target.mkdir(parents=True, exist_ok=True, mode=0o700)
-                    continue
-                target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-                with source.extractfile(member) as src, target.open('xb') as dst:
-                    while chunk := src.read(1024*1024):
-                        if scratch is not None:
-                            scratch.consume(len(chunk))
-                        dst.write(chunk)
-                target.chmod(0o700 if member.mode & 0o111 else 0o600)
+        with archive.open('rb') as raw:
+            reader = DigestReader(raw)
+            with tarfile.open(fileobj=reader, mode='r|gz') as source:
+                for member in source:
+                    path = PurePosixPath(member.name)
+                    if path.is_absolute() or '..' in path.parts or member.name in seen:
+                        raise RuntimeError('Unsafe or duplicate archive path')
+                    if member.size < 0 or (not member.isfile() and not member.isdir()):
+                        raise RuntimeError('Only regular files and directories may be restored')
+                    seen.add(member.name)
+                    total += member.size
+                    if len(seen) > 100000 or total > max_bytes:
+                        raise RuntimeError('Recovery archive exceeds the bounded restore budget')
+                    target = temporary.joinpath(*path.parts)
+                    if member.isdir():
+                        target.mkdir(parents=True, exist_ok=True, mode=0o700)
+                        continue
+                    target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                    with source.extractfile(member) as src, target.open('xb') as dst:
+                        while chunk := src.read(1024*1024):
+                            if scratch is not None:
+                                scratch.consume(len(chunk))
+                            dst.write(chunk)
+                    target.chmod(0o700 if member.mode & 0o111 else 0o600)
+            # A tar reader can stop on its end marker before consuming trailing gzip bytes.
+            while reader.read(1024 * 1024):
+                pass
+            if reader.hash.hexdigest() != expected:
+                raise RuntimeError('Archive changed during restore')
         manifest = json.loads((temporary / 'recovery/manifest.json').read_text())
         if manifest.get('schema') != 1 or not manifest.get('files'):
             raise RuntimeError('Missing full-recovery manifest')
