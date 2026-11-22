@@ -55,6 +55,15 @@ try{
   assert.equal(done.receipt.verified,true);assert.equal(done.receipt.source_sha256,sha);assert.equal(done.receipt.action_id,done.action_id);assert.equal(done.receipt.actor.id,'m');assert.deepEqual(done.receipt.declared_period,{start:c.start,end:c.end});
   if(c.kind==='sim_sales_vodafone'){assert.equal(done.receipt.source_at,c.sourceAt);assert.equal(done.receipt.provider,'vodafone');}
   if(c.company)assert.equal(done.receipt.company,c.company);
+  if(c.kind==='sim_activations_digi'){
+   const journal=await call('imports/jobs?kind=sim_activations_digi&limit=50');
+   const listed=journal.jobs.find(job=>job.id===id);
+   assert.ok(listed,'Completed Digi import must appear in the journal');
+   for(const field of ['rows','rowsWithIssues','distinctSIMs','duplicateSourceRows','matchingTR','otherInternalChannel','withoutExactInternalMatch']){
+    assert.ok(Number.isSafeInteger(listed.preview[field])&&listed.preview[field]>=0,field);
+    assert.equal(listed.preview[field],ready.preview[field],field);
+   }
+  }
   if(c.kind==='sim_activations_vodafone')assert.equal(done.receipt.company,'Vodafone');
   await call('imports/jobs/'+id+'/commit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(commit)});
   console.log('PASS:',c.kind,'real application HTTP → engine → executor → receipt, same-ID retry');

@@ -22,6 +22,11 @@ const {outputFiles} = await build({
     build.onLoad({filter:/^import-engine$/,namespace:'test'},()=>({contents:`
       export function importsJobs(request,user) {
         if (user.managerScope!=='global' || new URL(request.url).searchParams.get('kind')!=='sim_activations_digi') throw Error('Invalid import read');
+        const before=new URL(request.url).searchParams.get('before');
+        if (globalThis.syntheticIncompleteJournal) return Response.json({jobs:[],next_cursor:String(Number(before||0)+1)});
+        if (!before) return Response.json({jobs:[],next_cursor:'prior-page'});
+        if (before!=='prior-page') throw Error('Unexpected journal cursor');
+        if (globalThis.syntheticMissingPreview) return Response.json({jobs:[{state:'completed'}]});
         return Response.json({jobs:[{id:'test-import',kind:'sim_activations_digi',state:'completed',source:{date_start:'2026-06-01',date_end:'2026-06-22'},preview:{rows:17,matchingTR:0}}]});
       }
       export const importsCatalog=undefined, importsJob=undefined;`}));
@@ -86,6 +91,12 @@ assert.equal(digi.rows.length,1);
 assert.equal(digi.rows[0].sourceRows,17);
 assert.equal(digi.rows[0].matchingTR,0);
 assert.equal(digi.rows[0].distinctSIMs,null);
+globalThis.syntheticIncompleteJournal=true;
+await assert.rejects(makeDigiReader('global')(digiQuery),{status:422});
+delete globalThis.syntheticIncompleteJournal;
+globalThis.syntheticMissingPreview=true;
+await assert.rejects(makeDigiReader('global')(digiQuery),/previzualizarea importului/);
+delete globalThis.syntheticMissingPreview;
 await assert.rejects(makeDigiReader('assigned')(digiQuery),{status:403});
 await assert.rejects(makeDigiReader('global',new URLSearchParams({agentId:'demo'}))(digiQuery),{status:403});
 assert.throws(()=>parseManagerAiQuery(JSON.stringify({...digiQuery,groupBy:['state']})),{status:400});
