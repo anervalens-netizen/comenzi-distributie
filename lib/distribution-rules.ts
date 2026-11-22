@@ -12,7 +12,7 @@ export type DistributionAssignment = {userId:string;siteCode:string;projectId:Di
 export type ProductGroup = 'vodafone_0'|'vodafone_3'|'vodafone_5'|'vodafone_credit'|'digi'|'accessories'|'varta'|'scent'|'unmapped';
 export type DistributionRules = {version:1;revision:string;history:'all';assignments:DistributionAssignment[];products:Record<string,ProductGroup>};
 export const rulesSetting = 'distribution-rules-v1';
-const groups:ProductGroup[]=['vodafone_0','vodafone_3','vodafone_5','vodafone_credit','digi','accessories','varta','scent','unmapped'];
+export const productGroups:readonly ProductGroup[]=['vodafone_0','vodafone_3','vodafone_5','vodafone_credit','digi','accessories','varta','scent','unmapped'];
 const text=(v:unknown):v is string=>typeof v==='string'&&!!v.trim()&&v===v.trim();
 /** Private owner-maintained identities and exact catalog codes. Invalid rules fail closed. */
 export function parseDistributionRules(value:unknown):DistributionRules {
@@ -27,7 +27,7 @@ export function parseDistributionRules(value:unknown):DistributionRules {
     users.add(a.userId);sites.add(site);
     if((a.projectId==='vodafone_sud'&&a.territoryId!=='sud')||(a.projectId==='vodafone_nord'&&!['nord_a','nord_b'].includes(a.territoryId||''))||(a.projectId==='non_exclusiv'&&a.territoryId!==null))throw new Error('Invalid project territory');
   }
-  for(const [code,group] of Object.entries(r.products))if(!text(code)||!groups.includes(group))throw new Error('Invalid product mapping');
+  for(const [code,group] of Object.entries(r.products))if(!text(code)||!productGroups.includes(group))throw new Error('Invalid product mapping');
   return r;
 }
 export function assignedActivationCounty(county:string,assignment:DistributionAssignment|undefined) {

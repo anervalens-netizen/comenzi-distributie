@@ -11,6 +11,11 @@ const allCategories = 'Include toate categoriile din sursă. product_group=unmap
 const provider = t('provider', false), note = t('source', false), catalogGroup = t('product_group');
 
 export const managerAiAnalysisCatalog = {
+  sales_team_monthly: {
+    label:'Vânzări și efectiv pe manager, proiect și agent',
+    grain:'Lună × apartenență curentă agent–manager × grupă comercială. Include agenții activi eligibili fără vânzări, cu zero numai când sursa este disponibilă. Un agent comun poate apărea la mai mulți manageri. Pentru total transversal deduplică pe agent_ref, lună și product_group. Proiectele sunt vodafone_sud, vodafone_nord, non_exclusiv; NULL indică atribuirea necunoscută. value_cents este valoarea cu TVA în bani, value_ex_vat_lei valoarea fără TVA în lei pentru accesorii, Varta și odorizante. _coverage și source_through indică acoperirea sursei. MAX(agent_last_sale) indică ultima vânzare observată în echipele selectate.',
+    columns:[month,t('manager_ref'),t('manager'),t('agent_ref',false),t('agent'),t('project_id'),t('product_group',false),units,n('value_cents'),n('value_ex_vat_lei'),n('missing_value_rows'),t('source_through'),t('agent_last_sale')],
+  },
   sales_lines: {
     label:'Vânzări comerciale pe linii',
     grain:'O linie din importul lunar activ sau din istoricul cu acoperire completă, pe zi, gestiune și SKU. Sursele nu se adună pentru aceeași lună. Valoarea sursă este în bani. '+allCategories,

@@ -24,8 +24,9 @@ export async function managerAiAnalysisRevision(tables:readonly string[]) {
       files.push(resolve(directory,'activations.sqlite'),resolve(directory,'activation-report.sqlite'));
     }
   }
-  if(focus||bonus||selected.has('sales_lines'))files.push(resolve(data,'sales.sqlite'));
-  if(focus||bonus||sim0||selected.has('sales_lines')||selected.has('sales_partner_lines')){
+  const sales=selected.has('sales_lines')||selected.has('sales_team_monthly');
+  if(focus||bonus||sales)files.push(resolve(data,'sales.sqlite'));
+  if(focus||bonus||sim0||sales||selected.has('sales_partner_lines')){
     files.push(resolve(data,'client-history','client-sales-history.sqlite'));
   }
   if(focus)files.push(process.env.MOBIUP_COMMERCIAL_FOCUS_RULES||resolve(data,'vodafone-commercial-focus-rules.json'));
@@ -34,6 +35,12 @@ export async function managerAiAnalysisRevision(tables:readonly string[]) {
   const settings=bonus||sim0?[rulesSetting,vodafoneBonusEvidenceSetting]:[rulesSetting];
   const revisions:unknown[]=[(await db().prepare('SELECT key,value FROM settings WHERE key IN (SELECT value FROM json_each(?)) ORDER BY key')
     .bind(JSON.stringify(settings)).all()).results];
+  if(selected.has('sales_team_monthly')){
+    revisions.push(await db().prepare('SELECT scope_revision FROM portfolio_revision WHERE id=1').first());
+    revisions.push((await db().prepare("SELECT id,name,active,site_code,warehouse_name,manager_scope,role FROM users WHERE role IN ('manager','agent') ORDER BY id").all()).results);
+    revisions.push((await db().prepare('SELECT manager_id,agent_id FROM manager_agents ORDER BY manager_id,agent_id').all()).results);
+    revisions.push(await db().prepare("SELECT value FROM settings WHERE key='sales-agent-aliases-v1'").first());
+  }
   if(sim0)revisions.push(vodafoneSim0CatalogRevision(data));
   if(bonus||sim0||selected.has('orders')||selected.has('stands')){
     revisions.push(await db().prepare('SELECT revision FROM order_list_revision WHERE id=1').first());

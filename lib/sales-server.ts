@@ -208,7 +208,10 @@ async function scopedSalesSelection(query: URLSearchParams, user: User, snapshot
 export async function managerSalesAnalysisScope(user: User, params: URLSearchParams) {
   requireManager(user);
   const snapshot = await mappingSnapshot();
-  return { scope: await scopedSalesSelection(params, user, snapshot), revision: snapshot.hash };
+  return {
+    scope: await scopedSalesSelection(params, user, snapshot), revision: snapshot.hash,
+    resolveSeller:(siteCode:string,location:string)=>mappingFor({siteCode,location},snapshot).userId,
+  };
 }
 
 export async function salesView(req: Request, user: User, check?:()=>Promise<void>) {
