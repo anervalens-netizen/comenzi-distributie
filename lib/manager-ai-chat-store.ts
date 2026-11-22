@@ -14,7 +14,7 @@ import {AppError, fail} from './server';
 
 export type AiAccount = { auth:ImportAuthorization; owner:string; scopeRevision:number };
 type Run = {
-  id:string; attempt_id:string; scope_key:string; token_hash:string; state:ManagerAiRunState;
+  id:string; account_id:string; attempt_id:string; scope_key:string; token_hash:string; state:ManagerAiRunState;
   processed_order_key:number|null; terminal_message_id:string|null; control_id:string|null;
 };
 type Submission = {
@@ -28,8 +28,9 @@ type Submit = {
 };
 type MessageRow = Omit<ManagerAiChatMessage,'attachments' | 'has_presentation'> & {attachments:string; has_presentation?:number};
 const messageFields = 'id,ordinal,role,text,status,created_at,attachments, EXISTS(SELECT 1 FROM manager_ai_presentations p WHERE p.message_id=manager_ai_messages.id) has_presentation';
-const leaseGraceMs=10_000;
-export const managerAiRunTimeoutMs=180_000;
+// Only a live producer can extend its lease. A crashed worker releases capacity on expiry.
+const runLeaseMs=190_000;
+export const managerAiLeaseHeartbeatMs=30_000;
 const maxMessages=500;
 const maxGlobalRuns=4;
 const ownerArtifactLimit=100*1024*1024;
@@ -249,6 +250,24 @@ export function aiSubmissionStatus(db:DatabaseSync,conversationId:string,id:stri
   return submissionStatus(id,submission&&getRun(db,submission.run_id),submission);
 }
 
+export function renewAiRunLease(db:DatabaseSync, conversationId:string, runId:string, attemptId:string) {
+  const time=Date.now();
+  return run(db,`UPDATE manager_ai_runs SET expires_at=?
+    WHERE conversation_id=? AND id=? AND attempt_id=? AND state='running' AND expires_at>?`,
+    time+runLeaseMs,conversationId,runId,attemptId,time).changes===1;
+}
+
+// Persist only a generic failure for the same producer. The caller holds the
+// conversation transaction and has freshly checked session, profile and scope.
+export function failAiLeaseRenewal(db:DatabaseSync, account:AiAccount, conversationId:string, runId:string, attemptId:string) {
+  const row=one<{ord:number}>(db,`SELECT MAX(s.order_key) ord FROM manager_ai_runs r JOIN manager_ai_submissions s ON s.run_id=r.id
+    WHERE r.id=? AND r.attempt_id=? AND r.conversation_id=? AND r.account_id=? AND r.token_hash=?
+    AND r.state='running' AND r.expires_at>? GROUP BY r.id`,runId,attemptId,conversationId,account.auth.userId,account.auth.tokenHash,Date.now());
+  if(row)endAiRun(db,account.owner,conversationId,runId,row.ord,{
+    failed:true,files:[],text:'Analiza s-a întrerupt deoarece aplicația nu a putut confirma că execuția este activă. Poți relua cererea.',
+  });
+}
+
 export function expireAiRuns(db:DatabaseSync) {
   const time=Date.now();
   run(db,"UPDATE manager_ai_runs SET state='interrupted' WHERE state='running' AND expires_at<=?",time);
@@ -277,7 +296,7 @@ export function beginAiSubmission(db:DatabaseSync,account:AiAccount,conversation
     if(one<{total:number}>(db,"SELECT COUNT(*) total FROM manager_ai_runs WHERE state='running'")!.total>=maxGlobalRuns) fail(503,'Toate sesiunile AI sunt ocupate.');
     runId=randomUUID();
     run(db,'INSERT INTO manager_ai_runs(id,attempt_id,conversation_id,account_id,scope_key,token_hash,state,expires_at) VALUES(?,?,?,?,?,?,?,?)',
-      runId,randomUUID(),conversationId,account.auth.userId,input.scopeKey,account.auth.tokenHash,'running',Date.now()+managerAiRunTimeoutMs+leaseGraceMs);
+      runId,randomUUID(),conversationId,account.auth.userId,input.scopeKey,account.auth.tokenHash,'running',Date.now()+runLeaseMs);
     run(db,'INSERT INTO manager_ai_run_options(run_id,model,effort) VALUES(?,?,?)',runId,model,effectiveEffort);
   } else {
     if(!active||active.scope_key!==input.scopeKey||active.token_hash!==account.auth.tokenHash) fail(409,'Nu există o analiză activă în această sesiune și selecție.');
@@ -391,7 +410,7 @@ export function endAiRun(db:DatabaseSync,owner:string,conversationId:string,runI
 
 export function stopAiRun(db:DatabaseSync,account:AiAccount,conversationId:string,runId:string,attemptId:string,controlId:string) {
   const r=getRun(db,runId);
-  if(!one(db,'SELECT id FROM manager_ai_runs WHERE id=? AND conversation_id=?',runId,conversationId)||r.attempt_id!==attemptId||r.token_hash!==account.auth.tokenHash) fail(409,'Sesiunea sau analiza s-a modificat.');
+  if(!one(db,'SELECT id FROM manager_ai_runs WHERE id=? AND conversation_id=?',runId,conversationId)||r.attempt_id!==attemptId||r.account_id!==account.auth.userId) fail(409,'Sesiunea sau analiza s-a modificat.');
   if(r.control_id===controlId) {
     const terminal=r.terminal_message_id&&readAiMessage(db,conversationId,r.terminal_message_id);
     return {state:r.state,message:terminal||undefined};

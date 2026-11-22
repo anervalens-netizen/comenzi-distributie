@@ -40,7 +40,7 @@ const activationSource = 'Prepay · Activări Vodafone';
 const bonusSource = 'Registru bonusuri Vodafone';
 const focusSource = 'Focus comercial Vodafone';
 
-export function managerAiReader(request: Request, scope: AiScope, check: () => Promise<User>, options?:{cacheMonths:false}) {
+export function managerAiReader(request: Request, scope: AiScope, check: () => Promise<User>, options?:{cacheMonths:false}, progress?:()=>void) {
   let digiJournal:ReturnType<typeof fetchDigiImportJournal>|undefined;
   const monthlyCache = new Map<string,Promise<AiSource>>();
   const rankings=new Map<string,ReturnType<typeof readManagerAiSim0>>();
@@ -213,6 +213,7 @@ export function managerAiReader(request: Request, scope: AiScope, check: () => P
       try {
         const {rows,coverage,checkAccess}=await rankings.get(key)!;
         rememberSim0Access(checkAccess);
+        progress?.();
         return {rows,coverage};
       } catch(error) { rankings.delete(key); throw error; }
     }
@@ -223,6 +224,7 @@ export function managerAiReader(request: Request, scope: AiScope, check: () => P
       const key = JSON.stringify([query.dataset,query.site,month,query.dataset==='sales'?managerAiSalesSiteMode(query):null]);
       if (!options && !monthlyCache.has(key)) monthlyCache.set(key,readMonth({...query,dataset},month));
       const source = await (options ? readMonth({...query,dataset},month) : monthlyCache.get(key)!);
+      progress?.();
       result.rows.push(...source.rows);
       result.coverage.push(...source.coverage);
     }

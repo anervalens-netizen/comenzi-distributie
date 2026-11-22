@@ -1,3 +1,4 @@
+import { managerAiActivity } from './manager-ai-activity';
 import { managerAiReader, managerAiScope } from './manager-ai-data';
 import { defaultManagerAiModel, managerAiModels, managerAiNotConfiguredMessage, type ManagerAiModel, type ManagerAiTurn } from './manager-ai';
 import { AppError, assertOrigin, fail, readLimited, requireManager, requireUser, response } from './server';
@@ -61,19 +62,26 @@ export async function managerAi(req:Request,user:User) {
     return current;
   }
   activeTurns.add(user.id);
-  const signal = AbortSignal.any([req.signal,AbortSignal.timeout(90_000)]);
+  const activity = managerAiActivity(req.signal);
+  const {signal,progress} = activity;
   try {
-    const readSource=managerAiReader(req,scope,check);
+    const readSource=managerAiReader(req,scope,async()=>{
+      signal.throwIfAborted();
+      const current=await check();
+      signal.throwIfAborted();
+      return current;
+    },undefined,progress);
     const {runManagerAi}=await import('#mobiup-manager-ai-provider');
-    const result = await runManagerAi({...input,key,signal,readSource,check:async()=>{
+    const result = await activity.wait(()=>runManagerAi({...input,key,signal,readSource,progress,check:async()=>{
       await readSource.checkSourceScope(await check());
-    }});
+    }}));
     return response(result);
   } catch (error) {
     if (error instanceof AppError) throw error;
-    if (signal.aborted) fail(504,'Analiza s-a întrerupt. Încearcă cu o selecție mai mică.');
+    if (signal.aborted) fail(499,'Conexiunea pentru această cerere a fost întreruptă.');
     fail(502,'Furnizorul AI nu este accesibil momentan.');
   } finally {
+    activity.close();
     activeTurns.delete(user.id);
   }
 }

@@ -1,3 +1,4 @@
+import { managerAiActivity } from './manager-ai-activity';
 import { createHash } from 'node:crypto';
 import type {ManagerPresentation} from './manager-ai-presentation';
 import {reportCardMessages} from './manager-ai-report-card';
@@ -7,7 +8,7 @@ import { defaultManagerAiModel, managerAiModels, managerAiNotConfiguredMessage, 
 import { managerAiEfforts, type ManagerAiChatEvent, type ManagerAiEffort } from './manager-ai-chat-contract';
 import {
   aiRunEvent, aiRunInputs, aiSubmissionStatus, beginAiSubmission, createAiConversation, endAiRun,
-  getAiArtifact, getAiPresentation, getAiReportCard, listAiConversations, listAiMessages, managerAiRunTimeoutMs, readAiConversation, readAiEvents, removeAiArtifact, stopAiRun, withAiAccount,
+  getAiArtifact, getAiPresentation, getAiReportCard, listAiConversations, listAiMessages, managerAiLeaseHeartbeatMs, renewAiRunLease, failAiLeaseRenewal, readAiConversation, readAiEvents, removeAiArtifact, stopAiRun, withAiAccount,
   type AiAccount,
 } from './manager-ai-chat-store';
 import { managerAiReader, managerAiScope, type AiScope } from './manager-ai-data';
@@ -163,29 +164,66 @@ function stream(req:Request,original:AiAccount,conversationId:string,submissionI
 }
 
 async function processRun(req:Request,start:AiAccount,scope:AiScope,conversationId:string,runId:string,
-  key:string) {
-  const timeout=AbortSignal.timeout(managerAiRunTimeoutMs);
+  attemptId:string,key:string) {
+  const leaseLost=new AbortController();
   const scopeKey=sha256(JSON.stringify([scope.signature,scope.params.toString()]));
   async function current() {
     const result=await accountFor(req,scope.params,start);
     if(sha256(JSON.stringify([result.selectedScope.signature,result.selectedScope.params.toString()]))!==scopeKey)fail(409,'Accesul la selecție s-a modificat.');
     return result;
   }
+  let finishing=false, renewing=false, renewalFailures=0;
+  async function renewLease() {
+    if(finishing||renewing||leaseLost.signal.aborted)return;
+    renewing=true;
+    try {
+      const {account}=await current();
+      if(finishing)return;
+      const renewed=conversationTxn(account,conversationId,true,connection=>renewAiRunLease(connection,conversationId,runId,attemptId));
+      renewalFailures=0;
+      if(!renewed)leaseLost.abort();
+    } catch(error) {
+      if(finishing)return;
+      if(error instanceof AppError && [401,403,404,409].includes(error.status)) {
+        leaseLost.abort(error);
+        return;
+      }
+      if(++renewalFailures<3)return;
+      try {
+        // Even if reading the scope was unavailable, a generic failure can be
+        // recorded only under the original, still-authorized DB transaction.
+        conversationTxn(start,conversationId,true,db=>failAiLeaseRenewal(db,start,conversationId,runId,attemptId));
+      } catch {
+        // If storage itself is unavailable, the durable lease expires independently.
+      }
+      leaseLost.abort(error);
+    } finally {
+      renewing=false;
+    }
+  }
+  const heartbeat=setInterval(renewLease,managerAiLeaseHeartbeatMs);
+  heartbeat.unref();
   try {
     const sandbox=process.env.MOBIUP_MANAGER_AI_SANDBOX_ENABLED==='1'?await import('./manager-ai-sandbox'):null;
     const analysisModule=sandbox?.managerAiSandboxAvailable()?await import('./manager-ai-analysis'):null;
     for (;;) {
       const attempt=new AbortController();
       active.set(runId,attempt);
-      const signal=AbortSignal.any([attempt.signal,timeout]);
       const {account}=await current();
       const work=conversationTxn(account,conversationId,false,connection=>aiRunInputs(connection,account.owner,conversationId,runId,!!analysisModule));
       if(work.r.state!=='running')return;
+      const activity=managerAiActivity(AbortSignal.any([attempt.signal,leaseLost.signal]));
+      const {signal,progress}=activity;
       let presentation:ManagerPresentation | undefined;
       let text:string,files:ManagerAiPreparedArtifact[]=[],failed=false;
       try {
         if(!work.options)fail(409,'Setările analizei nu mai sunt disponibile. Trimite o analiză nouă.');
-        const readSource=managerAiReader(req,scope,async()=>(await current()).user);
+        const readSource=managerAiReader(req,scope,async()=>{
+          signal.throwIfAborted();
+          const {user}=await current();
+          signal.throwIfAborted();
+          return user;
+        },undefined,progress);
         const authorize=async()=>{
           signal.throwIfAborted();
           const {user}=await current();
@@ -193,10 +231,11 @@ async function processRun(req:Request,start:AiAccount,scope:AiScope,conversation
           signal.throwIfAborted();
           return user;
         };
-        const analysis=analysisModule?.createManagerAiAnalysis({scope,check:authorize,signal,files:work.sandboxFiles,readSource});
+        const analysis=analysisModule?.createManagerAiAnalysis({scope,check:authorize,signal,files:work.sandboxFiles,readSource,progress});
         const {runManagerAi}=await import('#mobiup-manager-ai-provider');
-        const answer=await runManagerAi({
-          key,...work.options,turns:[],signal,readSource,check:authorize,analysis,presentationEnabled:true,
+        const options=work.options;
+        const answer=await activity.wait(()=>runManagerAi({
+          key,...options,turns:[],signal,readSource,check:authorize,analysis,presentationEnabled:true,progress,
           content:work.recent.map(turn=>{
             if(turn.role==='assistant')return {role:'assistant',content:turn.content};
             const attachments=managerAiMediaParts(work.files.filter(file=>file.ordinal===turn.ordinal).map(file=>file.file));
@@ -208,16 +247,16 @@ async function processRun(req:Request,start:AiAccount,scope:AiScope,conversation
             const {account}=await current();
             if(!conversationTxn(account,conversationId,true,connection=>aiRunEvent(connection,runId,work.order,event)))attempt.abort();
           },
-        });
+        }));
         text=answer.answer;
         presentation=answer.presentation;
         const format=/\bcsv\b/i.test(work.recent.at(-1)?.content??'')?'csv':'xlsx';
         files=[...(answer.analysisArtifacts??[]),...answer.reports.map(report=>prepareManagerAiReport(report,format))];
       } catch(error) {
         failed=true;
-        text=timeout.aborted?'Analiza a depășit timpul disponibil. Încearcă o cerere mai restrânsă.':
-          error instanceof AppError?error.message:'Furnizorul AI nu este accesibil momentan.';
-      }
+        if(leaseLost.signal.aborted)return;
+        text=error instanceof AppError?error.message:'Furnizorul AI nu este accesibil momentan.';
+      } finally { activity.close(); }
       const {account:finalAccount}=await current();
       let complete;
       try {
@@ -236,6 +275,8 @@ async function processRun(req:Request,start:AiAccount,scope:AiScope,conversation
     // The independent durable lease marks the run interrupted.
     if(!(error instanceof AppError))console.error('Manager AI run could not finish.');
   } finally {
+    finishing=true;
+    clearInterval(heartbeat);
     active.delete(runId);
   }
 }
@@ -305,7 +346,7 @@ export async function managerAiConversations(req:Request,user:User,path:string[]
       if(result.created)active.get(result.status.run_id!)?.abort();
       return response({accepted:true,message:result.message,state:result.status.state});
     }
-    if(result.created)void processRun(req,validated,scope,conversationId,result.status.run_id!,key);
+    if(result.created)void processRun(req,validated,scope,conversationId,result.status.run_id!,result.status.attempt_id!,key);
     return stream(req,validated,conversationId,input.id,0);
   }
   if(path[2]==='submissions'&&(path.length===4||path.length===5&&path[4]==='events')&&method==='GET') {

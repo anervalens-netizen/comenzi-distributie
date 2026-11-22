@@ -34,6 +34,8 @@ Manager AI report exports include a read-only A2UI 1.0 preview. Open the report 
 In manager chat the agent can also display a table, an ordered set of steps, or labelled facts whenever the structure helps. These cards can appear without reading a report or creating a file. Each answer can carry one card, which the agent can revise before finishing. The conversation keeps the text and displays the card in its original portfolio selection.
 
 
+For synchronous manager integrations, `POST /api/manager-ai` returns the answer on the requesting connection. The operation can exceed ten minutes while the provider or data tools make progress. Ten minutes without progress produce HTTP 504. A client disconnect is recorded as 499; the closed connection cannot receive a response. Repeating the POST starts a fresh, potentially billable analysis. Use the conversation submission ID and status/events endpoints to resume an existing durable turn. An authenticated manager can stop their own conversation's current attempt after signing in again.
+
 ## Monthly commercial trends
 
 Accessory category totals and Prepay product/activation totals open a monthly graph and

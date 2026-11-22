@@ -58,7 +58,10 @@ try {
       export const sha256=v=>createHash('sha256').update(v).digest('hex');
       export const sessionToken=req=>req.headers.get('cookie')?.split('=')[1]||'';
       export const assertOrigin=req=>{if(req.headers.get('Origin')&&req.headers.get('Origin')!==new URL(req.url).origin)fail(403,'forbidden origin');};
-      export const db=()=>({prepare:sql=>({first:async()=>globalThis.syntheticAiDatabase.prepare(sql).get()})});
+      export const db=()=>({prepare:sql=>({first:async()=>{
+        if(globalThis.syntheticLeaseReadError)throw Error('synthetic temporary store failure');
+        return globalThis.syntheticAiDatabase.prepare(sql).get();
+      }})});
       export const response=(data,status=200)=>Response.json(data,{status});
       export const readLimited=async(req,max)=>{const out=await req.arrayBuffer();if(out.byteLength>max)fail(413,'too large');return out;};
       export const jsonBody=req=>req.json();
@@ -71,7 +74,7 @@ try {
     `,
   };
   const bundle=await build({
-    stdin:{resolveDir:process.cwd(),contents:"export * from './lib/manager-ai-conversations.ts'; export {requireUser} from './lib/server.ts';"},
+    stdin:{resolveDir:process.cwd(),contents:"export * from './lib/manager-ai-conversations.ts'; export {managerAi} from './lib/manager-ai-api.ts'; export {requireUser} from './lib/server.ts';"},
     platform:'node',format:'esm',bundle:true,write:false,
     plugins:[managerAiTestSdk,{name:'synthetic-authority',setup(build){
       build.onResolve({filter:/^\.\/(runtime|manager-ai-data|manager-ai-sandbox|manager-ai-analysis|server)$|^\.\/lib\/server\.ts$/},args=>({path:args.path==='./lib/server.ts'?'./server':args.path,namespace:'synthetic'}));
@@ -80,7 +83,7 @@ try {
   });
   const modulePath=join(directory,'manager-ai-fixture.mjs');
   writeFileSync(modulePath,bundle.outputFiles[0].text);
-  const {managerAiConversations,requireUser}=await import(pathToFileURL(modulePath));
+  const {managerAiConversations,managerAi,requireUser}=await import(pathToFileURL(modulePath));
 
   function call(path,{body,token='alpha-token',origin='https://synthetic.invalid',method='GET'}={}) {
     const headers={cookie:'mobiup_session='+token,Origin:origin};
@@ -97,6 +100,7 @@ try {
   }
 
   const pending=[];
+  const abandonedLegacyFetches=[];
   const accesses=[];
   const providerOptions=[];
   const oldPartial='Prima redactare, înainte de schimbarea instrucțiunii. '.repeat(4);
@@ -117,6 +121,12 @@ try {
     assert.equal(new URL(url).hostname,'api.openai.com');
     const body=JSON.parse(options.body);
     assert.equal(body.store,false);
+    const last=body.input.at(-1).content;
+    if(typeof last==='string' && last==='transport legacy fără răspuns') {
+      accesses.push(body.input);
+      // Ignores abort until the test explicitly lets the fake transport unwind.
+      return new Promise((_,reject)=>abandonedLegacyFetches.push(reject));
+    }
     assert.equal(body.stream,true);
     const text=body.input.at(-1).content;
     const toolOutput=body.input.at(-1).type==='function_call_output';
@@ -165,6 +175,13 @@ try {
     if(toolOutput) {
       assert.match(body.input.at(-1).output,/FIX-42/);
       return Promise.resolve(answer(body,'Franciza FIX-42 are 3 bucăți.'));
+    }
+    if(text==='flux cu progres, apoi blocat') {
+      const bodyStream=new ReadableStream({start(controller){
+        globalThis.syntheticIdleStream=controller;
+        controller.enqueue(new TextEncoder().encode('data: '+JSON.stringify({type:'response.created',response:{model:body.model}})+'\n\n'));
+      }});
+      return Promise.resolve(new Response(bodyStream,{headers:{'Content-Type':'text/event-stream'}}));
     }
     if(typeof text==='string'&&text.startsWith('flux parțial')) {
       const output=new ReadableStream({start(controller){
@@ -378,10 +395,10 @@ try {
   const [concurrent]=form('Concurent');
   await assert.rejects(call(other+'/turn',{body:concurrent}),{status:409});
   await assert.rejects(call(other+'/stop',{body:controls}),{status:409});
-  await assert.rejects(call(base+'/stop',{body:controls,token:'other-alpha-token'}),{status:409});
+  await assert.rejects(call(base+'/stop',{body:controls,token:'beta-token'}),{status:404});
   await assert.rejects(call(base+'/stop',{body:{...controls,attempt_id:randomUUID()}}),{status:409});
   const resumed=await call(base+'/submissions/'+heldId+'/events?after='+part.sequence);
-  const stopped=await (await call(base+'/stop',{body:controls})).json();
+  const stopped=await (await call(base+'/stop',{body:controls,token:'other-alpha-token'})).json();
   assert.equal(stopped.state,'stopped');
   assert.equal(stopped.message.text,'Analiza a fost oprită.');
   assert.equal((await (await call(base+'/stop',{body:controls})).json()).message.id,stopped.message.id);
@@ -468,6 +485,116 @@ try {
   assert.equal(state.state,'complete');
   assert.equal(state.processed_order_key,lastSteer.message.ordinal);
   for(const resolve of pending.splice(0))resolve();
+
+  // Keep polling/lease timers real and advance only the inactivity clock.
+  let elapsedIdle=0;
+  const idleTimers=new Map();
+  const set=globalThis.setTimeout,clear=globalThis.clearTimeout;
+  const setIdle=mock.method(globalThis,'setTimeout',(fn,ms,...args)=>{
+    if(fn.name!=='expireInactiveOperation')return set(fn,ms,...args);
+    const handle={unref(){}};
+    idleTimers.set(handle,{fn,due:elapsedIdle+ms});
+    return handle;
+  });
+  const clearIdle=mock.method(globalThis,'clearTimeout',handle=>{
+    if(!idleTimers.delete(handle))clear(handle);
+  });
+  function advanceIdle(ms){
+    elapsedIdle+=ms;
+    for(const [handle,task] of idleTimers)if(task.due<=elapsedIdle){idleTimers.delete(handle);task.fn();}
+  }
+  function legacy(signal){
+    const req=new Request('https://synthetic.invalid/api/manager-ai',{method:'POST',signal,
+      headers:{cookie:'mobiup_session=alpha-token','Content-Type':'application/json'},
+      body:JSON.stringify({question:'transport legacy fără răspuns'})});
+    return requireUser(req).then(user=>managerAi(req,user));
+  }
+  try {
+    const [slowBody,slowId]=form('flux cu progres, apoi blocat');
+    const response=await call(base+'/turn',{body:slowBody});
+    await waitFor(()=>globalThis.syntheticIdleStream && idleTimers.size===1);
+    advanceIdle(9*60_000);
+    const encoder=new TextEncoder();
+    globalThis.syntheticIdleStream.enqueue(encoder.encode('data: '+JSON.stringify({type:'response.reasoning_summary_text.delta',delta:'progres'})+'\n\n'));
+    await waitFor(()=>[...idleTimers.values()].some(task=>task.due===19*60_000));
+    advanceIdle(9*60_000);
+    assert.equal((await (await call(base+'/submissions/'+slowId)).json()).state,'running');
+    globalThis.syntheticIdleStream.enqueue(encoder.encode(': keepalive\n\ndata: '+JSON.stringify({type:'response.in_progress'})+'\n\n'));
+    await new Promise(resolve=>setImmediate(resolve));
+    advanceIdle(60_000+1);
+    const end=(await events(response)).at(-1);
+    assert.equal(end.type,'error');
+    assert.match(end.message,/fără progres/);
+    assert.equal((await (await call(base+'/submissions/'+slowId)).json()).state,'error');
+    assert.equal((await events(await call(base+'/turn',{body:form('salut după fluxul blocat')[0]}))).at(-1).type,'complete');
+    // Even an SDK transport that never settles releases the legacy account slot.
+    let calls=accesses.length;
+    const pendingLegacy=legacy();
+    await waitFor(()=>accesses.length>calls);
+    advanceIdle(10*60_000+1);
+    await assert.rejects(pendingLegacy,{status:504});
+    calls=accesses.length;
+    const disconnect=new AbortController();
+    const retry=legacy(disconnect.signal);
+    await waitFor(()=>accesses.length>calls);
+    disconnect.abort();
+    await assert.rejects(retry,{status:499});
+    assert.equal(idleTimers.size,0);
+  } finally {
+    try { globalThis.syntheticIdleStream?.close(); } catch(error) { assert.equal(error.code,'ERR_INVALID_STATE'); }
+    for(const reject of abandonedLegacyFetches.splice(0))reject(new Error('fake transport closed'));
+    delete globalThis.syntheticIdleStream;
+    clearIdle.mock.restore();
+    setIdle.mock.restore();
+  }
+
+  // Exercise an attached producer past the old wall-clock deadline, without a slow test.
+  const startTime=Date.now();
+  db.prepare('UPDATE sessions SET expires_at=? WHERE token_hash=?').run(startTime+600_000,digest('alpha-token'));
+  let elapsed=0, renew;
+  const realInterval=globalThis.setInterval;
+  const clock=mock.method(Date,'now',()=>startTime+elapsed);
+  const intervals=mock.method(globalThis,'setInterval',(fn,delay,...args)=>{
+    if(delay===30_000)renew=fn;
+    return realInterval(fn,delay,...args);
+  });
+  try {
+    const [longForm,longId]=form('așteaptă analiza pe mai multe luni');
+    const stream=await call(base+'/turn',{body:longForm});
+    await waitFor(()=>pending.length===1);
+    assert.equal(typeof renew,'function');
+    globalThis.syntheticLeaseReadError=true;
+    await renew();
+    delete globalThis.syntheticLeaseReadError;
+    assert.equal((await (await call(base+'/submissions/'+longId)).json()).state,'running');
+    for(let minute=1;minute<=5;minute++){
+      elapsed=minute*60_000;
+      await renew();
+      const status=await (await call(base+'/submissions/'+longId)).json();
+      assert.equal(status.state,'running');
+    }
+    pending.shift()();
+    assert.equal((await events(stream)).at(-1).type,'complete');
+    await renew();
+    assert.equal((await (await call(base+'/submissions/'+longId)).json()).state,'complete');
+    const [failureForm,failureId]=form('așteaptă reînnoirea');
+    const failureStream=await call(base+'/turn',{body:failureForm});
+    await waitFor(()=>pending.length===1);
+    globalThis.syntheticLeaseReadError=true;
+    try {
+      await renew(); await renew(); await renew();
+    } finally {
+      delete globalThis.syntheticLeaseReadError;
+    }
+    const failed=(await events(failureStream)).at(-1);
+    assert.equal(failed.type,'error');
+    assert.match(failed.message,/confirma că execuția este activă/);
+    assert.equal((await (await call(base+'/submissions/'+failureId)).json()).state,'error');
+    pending.splice(0).forEach(resolve=>resolve());
+  } finally {
+    intervals.mock.restore();
+    clock.mock.restore();
+  }
 
   const [lost,lostId]=form('așteaptă revocarea');
   const revoked=await call(base+'/turn',{body:lost});
