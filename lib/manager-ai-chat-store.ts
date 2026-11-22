@@ -72,7 +72,24 @@ export function listAiConversations(db:DatabaseSync,owner:string,limit:number,of
 }
 
 export function createAiConversation(db:DatabaseSync,owner:string,effort:ManagerAiEffort) {
-  const id=randomUUID(),time=now();
+  // The caller holds BEGIN IMMEDIATE. Concurrent creates share the same admission checks.
+  const time=now();
+  const cutoff=new Date(Date.now()-30*24*60*60*1000).toISOString();
+  // Reclaim abandoned drafts only. Preserve every conversation containing user work.
+  run(db,`DELETE FROM manager_ai_conversations WHERE id IN (
+    SELECT c.id FROM manager_ai_conversations c WHERE c.updated_at<? AND c.title='Sesiune nouă'
+    AND NOT EXISTS (SELECT 1 FROM manager_ai_messages m WHERE m.conversation_id=c.id)
+    AND NOT EXISTS (SELECT 1 FROM manager_ai_runs r WHERE r.conversation_id=c.id)
+    AND NOT EXISTS (SELECT 1 FROM manager_ai_artifacts a WHERE a.conversation_id=c.id)
+    ORDER BY c.updated_at LIMIT 64)`,cutoff);
+  const recent=new Date(Date.now()-60_000).toISOString();
+  const usage=one<{total:number; recent:number}>(db,`SELECT count(*) total,
+    count(CASE WHEN created_at>=? THEN 1 END) recent FROM manager_ai_conversations WHERE owner=?`,recent,owner)!;
+  if(usage.recent>=12)fail(429,'Ai creat mai multe conversații într-un minut. Reîncearcă peste un minut.');
+  if(usage.total>=1000)fail(409,'Spațiul disponibil pentru conversațiile acestui cont este plin.');
+  if(one<{total:number}>(db,'SELECT count(*) total FROM manager_ai_conversations')!.total>=10000)
+    fail(503,'Spațiul disponibil pentru conversații este plin.');
+  const id=randomUUID();
   run(db,'INSERT INTO manager_ai_conversations VALUES(?,?,?,?,?,?)',id,owner,'Sesiune nouă',effort,time,time);
   return readAiConversation(db,owner,id);
 }

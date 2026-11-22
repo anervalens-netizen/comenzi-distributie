@@ -17,7 +17,7 @@ process.env.MOBIUP_DATA_DIR=join(directory,'data');process.env.MOBIUP_USAGE_DISA
 let server,sql,checks=0;
 try{
  const file=join(directory,'route.mjs');
- await build({stdin:{contents:"export * from './app/api/[...path]/route';export {env} from './lib/runtime';export {readCatalog} from './lib/catalog';export {weekKey} from './lib/server';",loader:'ts',resolveDir:resolve('.')},outfile:file,bundle:true,platform:'node',format:'esm',loader:{'.py':'text'},packages:'external',logLevel:'silent',plugins:[{name:'actual-node-runtime',setup(build){
+ await build({stdin:{contents:"export * from './app/api/[...path]/route';export {env} from './lib/runtime';export {readCatalog} from './lib/catalog';export {weekKey,requireUser} from './lib/server';export {captureRequestAuthority,assertRequestAuthority} from './lib/request-authority';export {writeAuthority} from './lib/request-write-context';",loader:'ts',resolveDir:resolve('.')},outfile:file,bundle:true,platform:'node',format:'esm',loader:{'.py':'text'},packages:'external',logLevel:'silent',plugins:[{name:'actual-node-runtime',setup(build){
   build.onResolve({filter:/^#mobiup-/},args=>({path:resolve('lib/'+args.path.slice('#mobiup-'.length)+'-node.ts')}));
   build.onResolve({filter:/\.sql\?raw$/},args=>({path:resolve(args.path.replace(/^@\//,'').replace(/\?raw$/,'')),namespace:'raw'}));
   build.onLoad({filter:/.*/,namespace:'raw'},args=>({contents:readFileSync(args.path,'utf8'),loader:'text'}));
@@ -54,6 +54,24 @@ try{
  function exportFiles(){const root=join(process.env.MOBIUP_DATA_DIR,'files');try{return readdirSync(root,{recursive:true}).filter(path=>path.endsWith('.xlsx')).sort((a,b)=>a.localeCompare(b));}catch(error){if(error.code==='ENOENT')return [];throw error;}}
  const snapshot=()=>({orders:sql.prepare('SELECT * FROM orders ORDER BY id').all(),serials:sql.prepare('SELECT * FROM serials ORDER BY serial').all(),revision:sql.prepare('SELECT revision FROM order_list_revision WHERE id=1').get(),proofs:sql.prepare("SELECT * FROM settings WHERE key LIKE 'order-write-proof-v1:%'").all(),transfers:sql.prepare("SELECT * FROM settings WHERE key LIKE 'transfer-v1:%' OR key='transfer-mail-v1' ORDER BY key").all(),exports:exportFiles()});
 
+ // The transaction and report fences track the same actor and assignment revision.
+ reset();
+ const regionalRequest=request('GET','sales','regional');
+ const regionalUser=await route.requireUser(regionalRequest);
+ const authority=await route.captureRequestAuthority(regionalRequest,regionalUser);
+ const setFixture=value=>db.prepare('INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)').bind('auth-fixture',value);
+ await route.assertRequestAuthority(authority);
+ await route.writeAuthority.run(authority,()=>setFixture('allowed').run());
+ sql.prepare('DELETE FROM manager_agents WHERE manager_id=? AND agent_id=?').run('regional','agent');
+ await assert.rejects(route.assertRequestAuthority(authority),{status:409});
+ await assert.rejects(route.writeAuthority.run(authority,()=>db.batch([setFixture('stale')])),{status:409});
+ await assert.rejects(route.writeAuthority.run(authority,()=>setFixture('stale').run()),{status:409});
+ assert.equal(sql.prepare('SELECT value FROM settings WHERE key=?').get('auth-fixture').value,'allowed');
+ const updated=await route.captureRequestAuthority(regionalRequest,regionalUser);
+ await route.assertRequestAuthority(updated);
+ sql.prepare('DELETE FROM sessions WHERE token_hash=?').run(digest(tokens.regional));
+ await assert.rejects(route.assertRequestAuthority(updated),{status:409});
+ checks+=5;
  // Reproduce the independent audit with the authenticated handler already past
  // its order read, while the HTTP client intentionally leaves JSON unfinished.
  reset();const delayedOrder=addOrder();let observed;

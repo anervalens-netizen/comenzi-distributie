@@ -211,7 +211,7 @@ export async function managerSalesAnalysisScope(user: User, params: URLSearchPar
   return { scope: await scopedSalesSelection(params, user, snapshot), revision: snapshot.hash };
 }
 
-export async function salesView(req: Request, user: User) {
+export async function salesView(req: Request, user: User, check?:()=>Promise<void>) {
   const query = new URL(req.url).searchParams;
   const month = validateMonth(query.get('month'));
   if(query.has('months')){
@@ -230,6 +230,7 @@ export async function salesView(req: Request, user: User) {
     const checkActive=()=>{if(req.signal.aborted)fail(499,'Cererea de vânzări a fost anulată.');};
     const readMonth=async (selected:string,from:string,to:string)=>{
       checkActive();
+      await check?.();
       const view=await getSalesViewRuntime(selected,scope,from,to,products);
       checkActive();
       return decoratedView(view,snapshot);

@@ -49,7 +49,7 @@ async function sourceFacts(directory:string,month:string,today:string,generation
 }
 /** National reconciliation is manager-only. It is never inferred from selected agents,
  * nor joined to sellers. Current CRM membership is rechecked after every cached read. */
-export async function clientSalesReconciliation(user:User,params:URLSearchParams,now=new Date()){
+export async function clientSalesReconciliation(user:User,params:URLSearchParams,now=new Date(),check?:()=>Promise<void>){
   requireManager(user);
   for(const key of params.keys())if(!['month','page','format','revision'].includes(key)||params.getAll(key).length!==1)fail(400,'Parametru invalid pentru reconcilierea națională.');
   const input=clientSalesParams(new URLSearchParams([...params].filter(([k])=>k!=='format')),now);
@@ -59,13 +59,14 @@ export async function clientSalesReconciliation(user:User,params:URLSearchParams
     if(params.has('revision')&&error?.status===503)fail(409,'Sursa paginării nu mai este disponibilă. Reîncepe de la prima pagină.');
     throw error;
   });
+  await check?.();
   // Project only the identity JSON value. Preserve its original JS coercion,
   // including legacy numeric/boolean values, without decoding unrelated CRM data.
   const current=new Map<string,boolean>();let cursor='';
   for(;;){
     const rows=(await db().prepare("SELECT id,active,data->'$.cui' cui FROM customers WHERE id>? ORDER BY id LIMIT 512").bind(cursor).all<{id:string;active:number;cui:string|null}>()).results;
     for(const r of rows){const cui=normalizedCui(String(JSON.parse(r.cui??'null')||''));if(cui&&!isConsumerAccountCode(cui))current.set(cui,!!r.active||current.get(cui)===true);}
-    if(rows.length<512)break;cursor=rows.at(-1)!.id;await salesYield();
+    if(rows.length<512)break;cursor=rows.at(-1)!.id;await salesYield(check);
   }
   const buckets={raw:empty(),consumer:empty(),linkedCompany:empty(),currentPortfolio:empty(),absent:empty(),inactive:empty(),identity:empty()},exceptions=new Map<string,RevenueException>();
   const add=(bucket:RevenueBucket,r:Fact)=>{bucket.knownCents+=r.cents??0;bucket.missingValues+=r.missing;bucket.sourceRows+=r.rows;if(!Number.isSafeInteger(bucket.knownCents))fail(503,'Totalul depășește precizia permisă.');};
@@ -79,7 +80,7 @@ export async function clientSalesReconciliation(user:User,params:URLSearchParams
       const item=exceptions.get(key)||{key,category,companyId:category==='identity'?null:r.company_id,clientCode:category==='identity'?r.client_code:'',reason:category==='identity'?r.reason:category==='inactive'?'Only inactive current CRM points':'No current CRM point',...empty()};
       add(item,r);exceptions.set(key,item);
     }
-    if(i%128===0)await salesYield();
+    if(i%128===0)await salesYield(check);
   }
   if(version!==await clientPortfolioVersion()||generation!==fileGeneration(directory))fail(params.has('revision')?409:503,'Portofoliul sau sursa s-au actualizat. Reîncearcă.');
   const explanation='Reconciliere națională, în bani întregi. Sursă = consumatori + firme asociate + identități neasociate; firme asociate = portofoliu activ actual + firme inactive + firme absente. Istoricul tuturor vânzătorilor, nu vânzări personale ale responsabilului actual. PL ambiguu nu este alocat forțat. Sumele cunoscute exclud valorile lipsă, raportate separat. Absența unei luni importate nu înseamnă zero vânzări.';

@@ -39,18 +39,19 @@ function totals(rows:ClientSalesRow[],imported:boolean,metrics:(r:ClientSalesRow
   const billed=available?values.filter(m=>(m.documents||0)>0).length:null,documents=available?values.reduce((s,m)=>s+(m.documents||0),0):null;
   return {valueCents:imported&&(known.length||!rows.length)?known.reduce((s,m)=>s+m.valueCents!,0):null,billed,documents,perClient:billed&&documents!==null?documents/billed:null,missingValues:values.reduce((s,m)=>s+m.missingValues,0),unknown:rows.filter(r=>!r.linked||!r.identityComplete).length,visited:rows.filter(r=>r.key.startsWith('company:')&&(visits.get(r.key)||0)>0).length,visitedUnidentified:rows.filter(r=>r.key.startsWith('point:')&&(visits.get(r.key)||0)>0).length,visits:rows.reduce((s,r)=>s+(visits.get(r.key)||0),0)};
 }
-export async function clientSalesOverview(user:User,params:URLSearchParams,now=new Date()):Promise<ClientSalesResult>{
+export async function clientSalesOverview(user:User,params:URLSearchParams,now=new Date(),check?:()=>Promise<void>):Promise<ClientSalesResult>{
   const directory=resolve(process.env.MOBIUP_DATA_DIR||'./work/server-data'),generation=fileGeneration(directory);
   const version=await clientPortfolioVersion();
   const input=clientSalesParams(params,now),scope=await managerFilter(user,params);
   const partners=await clientSalesPortfolio(user,scope?.warehouseIds);
   // Match any CURRENT visible point, then retain that firm's complete billing amounts.
   const q=normalize(input.q),selection=input.county||q?new Set<string>():undefined;
-  if(selection)for(let i=0;i<partners.length;i++){const p=partners[i];if((!input.county||countyMatches(p.county,input.county))&&(!q||normalize([p.name,p.cui,p.address,p.city,countySearch(p.county)].join(' ')).includes(q))){const cui=normalizedCui(p.cui);selection.add(cui?'company:'+cui:'point:'+p.id);}if(i%256===0)await salesYield();}
+  if(selection)for(let i=0;i<partners.length;i++){const p=partners[i];if((!input.county||countyMatches(p.county,input.county))&&(!q||normalize([p.name,p.cui,p.address,p.city,countySearch(p.county)].join(' ')).includes(q))){const cui=normalizedCui(p.cui);selection.add(cui?'company:'+cui:'point:'+p.id);}if(i%256===0)await salesYield(check);}
   const snapshot=await readClientSalesAsync(partners,input.month,undefined,bucharestToday(now),selection);
+  await check?.();
   if(snapshot.state!=='ready'){if(params.has('revision'))fail(409,'Sursa paginării nu mai este disponibilă. Reîncepe de la prima pagină.');return snapshot;}
   const pointCompany=new Map<string,string>();
-  for(let i=0;i<snapshot.rows.length;i++){const r=snapshot.rows[i];for(const p of r.points)pointCompany.set(p.id,r.key);if(i%256===0)await salesYield();}
+  for(let i=0;i<snapshot.rows.length;i++){const r=snapshot.rows[i];for(const p of r.points)pointCompany.set(p.id,r.key);if(i%256===0)await salesYield(check);}
   const ids=JSON.stringify([...pointCompany.keys()]),actors=user.role==='agent'?[user.id]:scope?.agentIds;
   const months=[input.month,...snapshot.comparisons.map(w=>w.month)];
   // Visits are completed records, not plans. Calendar boundaries use Bucharest DST.
@@ -62,9 +63,9 @@ export async function clientSalesOverview(user:User,params:URLSearchParams,now=n
   const counties=[...new Set(partners.map(p=>countyLabel(p.county)).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ro'));
   const rows=snapshot.rows;
   let decorated=0;
-  for(const r of rows){if(++decorated%256===0)await salesYield();r.visits=visitMaps[0].get(r.key)||0;r.flags.push(r.visits?'visited':'unvisited');if(!r.visits&&(visitMaps[1].get(r.key)||0)>0)r.flags.push('unvisitedPrevious');if(!r.visits&&visitMaps.slice(1).some(map=>(map.get(r.key)||0)>0))r.flags.push('unvisitedThree');}
+  for(const r of rows){if(++decorated%256===0)await salesYield(check);r.visits=visitMaps[0].get(r.key)||0;r.flags.push(r.visits?'visited':'unvisited');if(!r.visits&&(visitMaps[1].get(r.key)||0)>0)r.flags.push('unvisitedPrevious');if(!r.visits&&visitMaps.slice(1).some(map=>(map.get(r.key)||0)>0))r.flags.push('unvisitedThree');}
   const counts=Object.fromEntries(clientFilters.map(f=>[f,rows.filter(r=>r.flags.includes(f)).length])) as Record<ClientFilter,number>;
-  const filtered=await salesSort(rows.filter(r=>r.flags.includes(input.filter)),clientRowComparator(input.sort,input.direction));
+  const filtered=await salesSort(rows.filter(r=>r.flags.includes(input.filter)),clientRowComparator(input.sort,input.direction),check);
   if(version!==await clientPortfolioVersion()||generation!==fileGeneration(directory))fail(params.has('revision')?409:503,'Portofoliul sau vizitele s-au actualizat. Reîncearcă raportul.');
   const revision=paginationRevision(params,[generation,version,user.id,user.role,user.managerScope,user.warehouseId,scope,input.month,bucharestToday(now),snapshot.source,visits,version===null?partners:null]);
   return {state:'ready',revision,month:input.month,source:snapshot.source,window:snapshot.window,totals:totals(rows,snapshot.window.imported,r=>r.metrics,visitMaps[0]),counts,
