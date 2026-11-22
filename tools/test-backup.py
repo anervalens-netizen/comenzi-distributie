@@ -460,6 +460,15 @@ class BackupTests(unittest.TestCase):
                 self.assertEqual(destination.read_bytes(), b'new bytes')
         self.assertEqual(list(self.mount.glob('*.partial')), [])
 
+    def test_nas_receipt_uses_verified_atomic_publication(self):
+        self.mount.mkdir()
+        target = self.mount / 'verified.json'
+        target.write_text('previous')
+        with target.open() as previous, mock.patch.object(backup.os.path, 'ismount', return_value=True):
+            backup.publish_nas_receipt(self.mount, target, {'status': 'verified'})
+            self.assertEqual(previous.read(), 'previous')
+        self.assertEqual(json.loads(target.read_text()), {'status': 'verified'})
+
     def test_checksum_mismatch_never_publishes_corrupt_nas_archive(self):
         def corrupt_copy(source, destination, **kwargs):
             destination.write(b'corrupted in transit')

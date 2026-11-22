@@ -3,6 +3,7 @@ from contextlib import closing, contextmanager, ExitStack
 import fcntl
 import hashlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -373,11 +374,11 @@ def nas_directory(mount, folder):
         os.close(fd)
 
 
-def publish_copy(source, target, expected):
+def publish_stream(stream, target, expected):
     """Verify through the exclusively opened file before replacing a directory entry."""
     fd, name = tempfile.mkstemp(dir=target.parent, prefix=target.name + '.', suffix='.partial')
     try:
-        with os.fdopen(fd, 'w+b') as output, regular_input(source) as stream:
+        with os.fdopen(fd, 'w+b') as output:
             shutil.copyfileobj(stream, output, length=1024 * 1024)
             output.flush()
             os.fsync(output.fileno())
@@ -387,6 +388,17 @@ def publish_copy(source, target, expected):
         os.replace(name, target)
     finally:
         Path(name).unlink(missing_ok=True)
+
+
+def publish_copy(source, target, expected):
+    with regular_input(source) as stream:
+        publish_stream(stream, target, expected)
+
+
+def publish_nas_receipt(mount, target, record):
+    payload = json.dumps(record).encode('utf-8')
+    with nas_directory(mount, target.parent) as destination:
+        publish_stream(io.BytesIO(payload), destination / target.name, hashlib.sha256(payload).hexdigest())
 
 
 def run_backup(
