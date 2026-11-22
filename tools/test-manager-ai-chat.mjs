@@ -38,6 +38,7 @@ try {
   db.prepare('INSERT INTO manager_ai_conversations VALUES(?,?,?,?,?,?)').run(
     savedConversation,digest(JSON.stringify(['beta','assigned',null])),'Conversație salvată','medium',olderTimestamp,olderTimestamp);
   db.exec(schema);
+  db.exec(readFileSync('drizzle/0017_manager_ai_presentations.sql','utf8'));
   globalThis.syntheticAiDatabase=db;
   const mocks={
     './runtime':"export const runtimeKind='node';",
@@ -121,6 +122,21 @@ try {
     const toolOutput=body.input.at(-1).type==='function_call_output';
     accesses.push(body.input);
     providerOptions.push({model:body.model,effort:body.reasoning.effort});
+    assert(body.tools.some(tool=>tool.name==='present_information'));
+    if(toolOutput&&body.input.at(-1).call_id==='test-steps'){
+      assert.deepEqual(JSON.parse(body.input.at(-1).output),{displayed:true});
+      return Promise.resolve(answer(body,'Verifică și salvează.'));
+    }
+    if(typeof text==='string'&&text==='Cum organizez verificarea?'){
+      return Promise.resolve(responseEvents([
+        {type:'response.created',response:{model:body.model}},
+        {type:'response.completed',response:{id:'resp_steps',model:body.model,status:'completed',output:[{
+          type:'function_call',name:'present_information',call_id:'test-steps',arguments:JSON.stringify({
+            layout:'steps',title:'Verificare',columns:['Pas','Detaliu'],rows:[['Verifică','Compară sursele'],['Salvează','Notează rezultatul']],
+          }),
+        }]}},
+      ]));
+    }
     if(toolOutput&&body.input.at(-1).call_id==='test-analysis'){
       assert.deepEqual(JSON.parse(body.input.at(-1).output),{units:7});
       return Promise.resolve(answer(body,'Analiză sandbox terminată.'));
@@ -265,6 +281,21 @@ try {
   assert.equal((await (await call(base)).json()).title,'Situația lunii');
   assert.equal((await (await call(base+'/submissions/'+id)).json()).state,'complete');
 
+  const [guide]=form('Cum organizez verificarea?');
+  const final=(await events(await call(other+'/turn',{body:guide}))).at(-1).message;
+  assert.equal(final.has_presentation,true);
+  assert.equal(final.attachments.length,0);
+  assert.equal(final.text,'Verifică și salvează.');
+  const historical=(await (await call(other+'/messages')).json()).items.find(item=>item.id===final.id);
+  assert.equal(historical.has_presentation,true);
+  assert.doesNotMatch(JSON.stringify(historical),/Compară sursele/);
+  const surfacePath=other+'/messages/'+final.id+'/presentation';
+  assert.equal((await (await call(surfacePath)).json()).rows.length,2);
+  await assert.rejects(call(surfacePath+'?agentId=another'),{status:403});
+  await assert.rejects(call(surfacePath,{token:'beta-token'}),{status:404});
+  db.prepare('UPDATE manager_ai_presentations SET body=? WHERE message_id=?').run('{"layout":"steps","unknown":true}',final.id);
+  await assert.rejects(call(surfacePath),{status:422});
+  assert.equal(result.at(-1).message.has_presentation,undefined);
   const report=await events(await call(other+'/turn',{body:form('Raport franciză')[0]}));
   assert.ok(report.some(e=>e.type==='status'&&e.message.includes('Vodafone')));
   const reportFile=report.at(-1).message.attachments[0];

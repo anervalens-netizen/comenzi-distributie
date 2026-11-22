@@ -35,6 +35,7 @@ type RawMessage = {
   status: 'complete' | 'streaming' | 'error' | 'stopped';
   created_at: string;
   attachments?: RawArtifact[];
+  has_presentation?: boolean;
 };
 
 type RawConversation = {
@@ -80,6 +81,7 @@ function mapMessage(raw: RawMessage): AiChatMessage {
     text: raw.text,
     status: raw.status,
     createdAt: raw.created_at,
+    hasPresentation: raw.role === 'assistant' && raw.has_presentation === true,
     attachments: raw.attachments?.map(mapArtifact),
   };
 }
@@ -175,6 +177,10 @@ export function createAiApi(scopeQuery: string, ownerId: string) {
     }, undefined, undefined, ownerId);
   }
 
+  function getPresentation(id:string,messageId:string) {
+    return networkApi<unknown>(endpoint(conversation(id)+'/messages/'+encodeURIComponent(messageId)+'/presentation'),'GET',undefined,undefined,undefined,ownerId);
+  }
+
   function getReportCard(id:string,artifactId:string) {
     return networkApi<unknown>(endpoint(conversation(id)+'/artifacts/'+encodeURIComponent(artifactId)+'/report-card'),'GET',undefined,undefined,undefined,ownerId);
   }
@@ -193,7 +199,7 @@ export function createAiApi(scopeQuery: string, ownerId: string) {
 
   return {
     listAiConversations, createAiConversation, getAiConversation, listAiMessages,
-    openAiTurnStream, steerAiTurn, getAiSubmissionStatus, stopAiTurn, transcribeAiAudio, removeAiArtifact, getReportCard,
+    openAiTurnStream, steerAiTurn, getAiSubmissionStatus, stopAiTurn, transcribeAiAudio, removeAiArtifact, getReportCard, getPresentation,
   };
 }
 

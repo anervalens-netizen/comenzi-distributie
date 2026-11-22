@@ -1,6 +1,7 @@
 import {
   ChevronDown, FileText, Paperclip, Send, Square, Trash2, X,
 } from 'lucide-react';
+import {MessagePresentation} from './MessagePresentation';
 import {ReportCard} from './ReportCard';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -194,6 +195,8 @@ const MessageBubble = memo(function MessageBubble({ message, conversationId }: {
         <span className="size-2 shrink-0 animate-pulse rounded-full bg-current" aria-hidden="true" />
         <span>{message.activity || 'Pregătesc răspunsul…'}</span>
       </output>}
+      {assistant && conversationId && message.hasPresentation &&
+        <MessagePresentation conversationId={conversationId} messageId={message.id}/>}
       {attachments?.length ? <div className="mt-3 space-y-2">
         {attachments.map((attachment) => <div key={attachment.id}>
           <AttachmentChip attachment={attachment} assistant={assistant} conversationId={conversationId}
