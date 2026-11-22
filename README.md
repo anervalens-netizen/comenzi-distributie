@@ -123,6 +123,13 @@ fallback cannot confuse RSC and SSR entries. Runtime filenames stay unchanged.
 Receiver uploads must also use those unique basenames for the private JS/map
 pairs and verify their bytes; matching names and Debug IDs alone is insufficient.
 
+Install the reviewed `deploy/activate-release.sh`, `backend-frame-identity.mjs`
+and `error-reporting.mjs` together in an administrator-controlled directory
+outside runtime releases. Update the references when the reporting modules
+change. Preflight compares the packaged modules to those references and checks
+the backend manifest and bundle bytes using the installed validator. The
+application service loads the packaged JavaScript after the release switch.
+
 Backend source maps remain private and use a release-bound Debug ID for each
 server bundle. Full relative paths distinguish RSC and SSR bundles sharing a
 basename. The runtime reports an ID only for an artifact in its matching

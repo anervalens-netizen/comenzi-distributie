@@ -130,7 +130,7 @@ cp "$(dirname "$script")/backend-frame-identity.mjs" "$releases/$bad/backend-fra
 node - "$releases/$bad" "$bad" "$(dirname "$script")/.." <<'JS'
 const fs=require('fs'),p=require('path'),[root,release,repo]=process.argv.slice(2);
 fs.copyFileSync(p.join(repo,'deploy/error-reporting.mjs'),p.join(root,'error-reporting.mjs'));
-fs.symlinkSync(p.join(repo,'node_modules'),p.join(root,'node_modules'),'dir');
+// Activation must qualify packaged bytes without importing any runtime dependencies.
 const crypto=require('crypto'),files={};
 const ids={'dist/server/index.js':'11111111-1111-5111-8111-111111111111','dist/server/ssr/index.js':'22222222-2222-5222-8222-222222222222'};
 for (const [name,debug_id] of Object.entries(ids)) {
@@ -179,6 +179,15 @@ for wrapper in stale absent spoofed; do
  check "$(wc -l < "$root/maps.log")" "$before_maps" "$wrapper wrapper refuses before uploads"
  cp "$root/wrapper.mjs" "$releases/$bad/error-reporting.mjs"
 done
+# Even a functionally equivalent unapproved helper must fail byte verification.
+cp "$releases/$bad/backend-frame-identity.mjs" "$root/unchanged-helper.mjs"
+printf '\n// packaging difference\n' >> "$releases/$bad/backend-frame-identity.mjs"
+set +e; "$script" "$bad" >/dev/null 2>&1; rc=$?; set -e
+check "$rc" "2" 'unapproved backend helper is refused'
+check "$(readlink -f "$runtime/current")" "$before" 'unapproved helper preserves current'
+check "$(wc -l < "$log")" "$before_restarts" 'unapproved helper never restarts'
+check "$(wc -l < "$root/maps.log")" "$before_maps" 'unapproved helper refuses before uploads'
+mv "$root/unchanged-helper.mjs" "$releases/$bad/backend-frame-identity.mjs"
 # Partial transfer must fail before any upload, link change or restart.
 before_maps="$(wc -l < "$root/maps.log")"
 mv "$releases/$bad/backend-frame-identity.mjs" "$root/identity.mjs"
