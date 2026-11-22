@@ -1,4 +1,6 @@
+import {managerAiTestSdk} from './manager-ai-test-sdk.mjs';
 import assert from 'node:assert/strict';
+import {verifyManagerAiMedia} from './manager-ai-media-provider-cases.mjs';
 import {build} from 'esbuild';
 import {DatabaseSync} from 'node:sqlite';
 import {mkdtempSync,mkdirSync,rmSync} from 'node:fs';
@@ -8,7 +10,7 @@ import {join} from 'node:path';
 const {outputFiles} = await build({
   stdin:{resolveDir:process.cwd(),contents:`
     export {groupVodafoneSim0Clients} from './lib/vodafone-activation-ranking-node.ts';
-    export * from './lib/manager-ai-provider.ts';
+    export * from './lib/manager-ai-provider-node.ts';
     export * from './lib/manager-ai-query.ts';
     export * from './lib/manager-ai.ts';
     export * from './lib/manager-ai-operations.ts';
@@ -16,7 +18,7 @@ const {outputFiles} = await build({
     export * from './lib/manager-ai-billing.ts';
   `},
   bundle:true,platform:'node',format:'esm',write:false,
-  plugins:[{name:'isolated-app-error',setup(build){
+  plugins:[managerAiTestSdk,{name:'isolated-app-error',setup(build){
     build.onResolve({filter:/^\.\/server$/},()=>({path:'server',namespace:'test'}));
     build.onResolve({filter:/^#mobiup-import-engine$/},()=>({path:'import-engine',namespace:'test'}));
     build.onLoad({filter:/^import-engine$/,namespace:'test'},()=>({contents:`
@@ -80,6 +82,7 @@ const {outputFiles} = await build({
 });
 const {groupVodafoneSim0Clients,parseManagerAiQuery,makeManagerAiReport,managerAiMonths,runManagerAi,defaultManagerAiModel,managerAiModels,managerAiOperations,managerAiReader,managerAiBillingPoints} =
   await import('data:text/javascript;base64,'+Buffer.from(outputFiles[0].text).toString('base64'));
+await verifyManagerAiMedia(runManagerAi,defaultManagerAiModel);
 
 const query = {dataset:'bonuses',fromMonth:'2026-06',toMonth:'2026-09',site:'',groupBy:['franchise'],
   filters:[{field:'partner',op:'contains',value:'piata'},{field:'activations',op:'gte',value:4}],orderBy:'activations',descending:true,limit:1};
@@ -196,9 +199,13 @@ for (const model of managerAiModels) {
       assert.equal(request.model,model);
       assert.equal(request.store,false);
       assert.equal(request.reasoning.effort,'low');
+      assert.equal(request.parallel_tool_calls,false);
+      assert.ok(request.include.includes('reasoning.encrypted_content'));
+      assert.equal(request.previous_response_id,undefined);
+      assert.equal(request.conversation,undefined);
       calls.push(request);
       return Response.json({model,status:'completed',output:calls.length===1 ? [
-        {type:'reasoning',id:'reasoning-1',encrypted_content:'encrypted'},
+        {type:'reasoning',id:'reasoning-1',summary:[],encrypted_content:'encrypted'},
         {type:'function_call',name:'read_report',call_id:'test-1',arguments:raw},
       ] : [{type:'message',role:'assistant',content:[{type:'output_text',text:'10 activări în R1.'}]}]});
     },
@@ -210,6 +217,24 @@ for (const model of managerAiModels) {
   assert.equal(result.model,model);
   assert.deepEqual(result.reports,[report]);
   assert.ok(authorizationChecks>=4);
+}
+
+// The Runner normally accepts provider tool calls after normalizing them. Insist on
+// the selected model and unique calls before any local report or sandbox callback.
+for(const mode of ['wrong-model','duplicate-call','provider-rate-limit']){
+  let reads=0;
+  const model=defaultManagerAiModel;
+  const fn={type:'function_call',name:'read_report',call_id:'call_fixture',arguments:raw};
+  await assert.rejects(()=>runManagerAi({
+    model,key:'fixture',turns:[{role:'user',content:'Raport'}],signal:new AbortController().signal,
+    check:async()=>{},readSource:async()=>{reads++;return source;},
+    send:async()=>{
+      if(mode==='provider-rate-limit')return new Response('private provider detail',{status:429});
+      return Response.json({id:'resp_fixture',model:mode==='wrong-model'?'wrong-model':model,
+        status:'completed',output:mode==='duplicate-call'?[fn,fn]:[fn]});
+    },
+  }),{status:mode==='provider-rate-limit'?503:502});
+  assert.equal(reads,0);
 }
 
 let checks=0;

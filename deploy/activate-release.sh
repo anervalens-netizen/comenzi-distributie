@@ -140,6 +140,19 @@ previous="$(readlink -f "$CURRENT_LINK")"
 [[ -d "$previous" ]] || fail "previous release target is invalid: $previous"
 [[ "$previous" == "$releases_root/"* ]] || fail "previous release must be inside $releases_root"
 
+# The optional socket broker reads the live manifest for each new connection.
+# Provision both immutable payloads before switching the single shared selector.
+broker_gate="${MOBIUP_ANALYSIS_BROKER_GATE:-}"
+if [[ -z "$broker_gate" && -f /etc/mobiup-comenzi-analysis-broker-gate ]]; then
+  broker_gate="$(cat /etc/mobiup-comenzi-analysis-broker-gate)"
+  [[ -n "$broker_gate" ]] || fail "empty analysis broker gate configuration"
+fi
+if [[ -n "$broker_gate" ]]; then
+  [[ -x "$broker_gate" ]] || fail "analysis broker preparation gate is unavailable"
+  "$broker_gate" prepare "$previous" || fail "cannot prepare fallback analysis broker"
+  "$broker_gate" prepare "$release" || fail "cannot prepare candidate analysis broker"
+fi
+
 # A running import worker resolves its executable through current. Never switch
 # that link while it can claim work from the old release. The installation's
 # drain gate must wait until all queued and running imports are quiescent.

@@ -1,7 +1,7 @@
 'use client';
 
 import {useMemo} from 'react';
-import {z} from 'zod';
+import {z} from 'zod-a2ui';
 import {A2uiSurface, createComponentImplementation, type ReactCatalogComponent} from '@a2ui/react';
 import {Catalog, MessageProcessor} from '@a2ui/web_core/v1_0';
 import {reportCatalogId} from '@/lib/manager-ai-report-card';

@@ -224,6 +224,12 @@ restoring never starts the runner or a service. Install the matching
 
 ## Analize SQL și Python pentru manageri
 
+Agentul managerilor folosește OpenAI Agents SDK pentru TypeScript. SDK-ul trimite
+cererile la Responses API și coordonează apelurile către instrumentele aplicației.
+Comenzi păstrează istoricul și fișierele în stocarea proprie. La reconectare, panoul
+reia evenimentele de la ultimul mesaj primit. Aplicația reverifică drepturile asupra
+portofoliului la fiecare citire și înainte de livrarea rezultatului.
+
 Panoul AI poate analiza tabele de business din portofoliul selectat în conversație și poate
 atașa exporturi la răspuns. Cererile de analiză pot folosi SQL pentru îmbinări și agregări,
 sau Python pentru calcule și fișiere. Perioada, granulația și acoperirea surselor sunt disponibile în
@@ -239,6 +245,17 @@ include programul de execuție. Sandboxul folosește o copie SQLite cu datele au
 atașamentele selectate și un spațiu temporar de lucru, cu un singur proces de analiză
 simultan pe instanță. Accesul la rețea și la fișierele aplicației de pe gazdă este izolat.
 Verifică pornirea în condițiile serviciului și o analiză SQL/Python cu date fictive înainte de activare.
+Pentru un serviciu web cu protecții systemd, instalează brokerul din același build
+ca aplicația, într-un director de release administrat de root. Unitatea
+`mobiup-comenzi-analysis.socket` admite conexiuni de la utilizatorul serviciului web.
+Configurează local `SocketUser`, calea executabilului Node și
+`MOBIUP_MANAGER_AI_SANDBOX_SOCKET` în serviciul web. Instalează `deploy/analysis-broker-release.py` și indică executabilul în configurația
+privată `/etc/mobiup-comenzi-analysis-broker-gate`. Activatorul verifică și pregătește
+artefactele prin SHA-256 atât pentru versiunea nouă, cât și pentru revenire. La
+fiecare conexiune, systemd transmite serviciului manifestul versiunii active.
+Fiecare conexiune pornește un proces sub o identitate separată, fără acces la
+datele persistente ale aplicației. Brokerul rulează același worker Bubblewrap.
+
 Cheia OpenAI rămâne în configurația privată a serviciului. Când runtime-ul izolat
 nu este disponibil, rapoartele standard din panoul AI rămân disponibile.
 

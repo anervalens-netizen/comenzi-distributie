@@ -1,3 +1,4 @@
+import {managerAiTestSdk} from './manager-ai-test-sdk.mjs';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
@@ -8,13 +9,13 @@ import { read, utils, write } from 'xlsx';
 
 const bundle=await build({
   stdin:{resolveDir:process.cwd(),contents:`
-    export * from './lib/manager-ai-provider.ts';
+    export * from './lib/manager-ai-provider-node.ts';
     export * from './lib/manager-ai-analysis-tool.ts';
     export * from './lib/manager-ai-analysis.ts';
     export * from './lib/manager-ai-sandbox-artifacts.ts';
   `},
   bundle:true,platform:'node',format:'esm',write:false,
-  plugins:[{name:'synthetic-errors',setup(plugin){
+  plugins:[managerAiTestSdk,{name:'synthetic-errors',setup(plugin){
     plugin.onResolve({filter:/^\.\/server$/},()=>({path:'server',namespace:'fixture'}));
     plugin.onLoad({filter:/^server$/,namespace:'fixture'},()=>({contents:`
       import {createHash} from 'node:crypto';

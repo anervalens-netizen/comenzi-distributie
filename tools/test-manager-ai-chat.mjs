@@ -1,3 +1,4 @@
+import {managerAiTestSdk} from './manager-ai-test-sdk.mjs';
 import assert from 'node:assert/strict';
 import {createHash,randomUUID} from 'node:crypto';
 import {readFileSync,mkdtempSync,rmSync,writeFileSync} from 'node:fs';
@@ -6,6 +7,8 @@ import {join} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {DatabaseSync} from 'node:sqlite';
 import {build} from 'esbuild';
+import {mock} from 'node:test';
+import {Runner} from '@openai/agents-core';
 
 const directory=mkdtempSync(join(tmpdir(),'synthetic-distribution-ai-'));
 const db=new DatabaseSync(join(directory,'mobiup.sqlite'));
@@ -69,7 +72,7 @@ try {
   const bundle=await build({
     stdin:{resolveDir:process.cwd(),contents:"export * from './lib/manager-ai-conversations.ts'; export {requireUser} from './lib/server.ts';"},
     platform:'node',format:'esm',bundle:true,write:false,
-    plugins:[{name:'synthetic-authority',setup(build){
+    plugins:[managerAiTestSdk,{name:'synthetic-authority',setup(build){
       build.onResolve({filter:/^\.\/(runtime|manager-ai-data|manager-ai-sandbox|manager-ai-analysis|server)$|^\.\/lib\/server\.ts$/},args=>({path:args.path==='./lib/server.ts'?'./server':args.path,namespace:'synthetic'}));
       build.onLoad({filter:/.*/,namespace:'synthetic'},args=>({contents:mocks[args.path],resolveDir:process.cwd()}));
     }}],
@@ -103,8 +106,8 @@ try {
       {type:'response.created',response:{model:body.model}},
       {type:'response.output_text.delta',delta:text.slice(0,5)},
       {type:'response.output_text.delta',delta:text.slice(5)},
-      {type:'response.completed',response:{model:body.model,status:'completed',output:[
-        {type:'message',role:'assistant',content:[{type:'output_text',text}]},
+      {type:'response.completed',response:{id:'resp_synthetic',model:body.model,status:'completed',output:[
+        {type:'message',id:'msg_synthetic',role:'assistant',status:'completed',content:[{type:'output_text',text}]},
       ]}},
     ];
     return responseEvents(events);
@@ -126,7 +129,7 @@ try {
       assert(body.tools.some(tool=>tool.name==='run_analysis'));
       return Promise.resolve(responseEvents([
         {type:'response.created',response:{model:body.model}},
-        {type:'response.completed',response:{model:body.model,status:'completed',output:[{
+        {type:'response.completed',response:{id:'resp_synthetic',model:body.model,status:'completed',output:[{
           type:'function_call',name:'run_analysis',call_id:'test-analysis',arguments:JSON.stringify({
             language:'sql',code:'SELECT COUNT(*) FROM sales_lines',tables:[{table:'sales_lines',fromMonth:'2026-06',toMonth:'2026-06'}],files:[],
           }),
@@ -149,7 +152,7 @@ try {
     }
     if(text==='Raport franciză')return Promise.resolve(responseEvents([
       {type:'response.created',response:{model:body.model}},
-      {type:'response.completed',response:{model:body.model,status:'completed',output:[{
+      {type:'response.completed',response:{id:'resp_synthetic',model:body.model,status:'completed',output:[{
         type:'function_call',name:'read_report',call_id:'test-report',arguments:JSON.stringify({
           dataset:'salesByPoint',fromMonth:'2026-06',toMonth:'2026-06',site:'',groupBy:['franchise'],filters:[],orderBy:'units',descending:true,limit:10,
         }),
@@ -192,7 +195,17 @@ try {
   const [data,id]=form('Situația lunii',undefined,firstFiles());
   const page=JSON.stringify({tab:'Prepay',period:'2026-09, 2026-10',owner:'neautorizat'});
   data.set('current_view',page);
-  const result=await events(await call(base+'/turn',{body:data}));
+  const observedRun=mock.method(Runner.prototype,'run');
+  let result;
+  try {
+    result=await events(await call(base+'/turn',{body:data}));
+    assert.equal(observedRun.mock.callCount(),1);
+    const sdkResult=await observedRun.mock.calls[0].result;
+    const remaining=sdkResult[Symbol.asyncIterator]();
+    try {
+      assert.equal((await remaining.next()).done,true,'the web response must consume all SDK stream events');
+    } finally { await remaining.return?.(); }
+  } finally { observedRun.mock.restore(); }
   assert.equal(result[0].type,'submission_status');
   assert.equal(result[1].message.id,id);
   assert.match(JSON.stringify(accesses.at(-1)),/sku|bucati/);
