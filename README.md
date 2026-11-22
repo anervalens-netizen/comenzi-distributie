@@ -31,6 +31,9 @@ Tests use isolated temporary data. Never point CI at a production database or im
 
 Manager AI report exports include a read-only A2UI 1.0 preview. Open the report rows in the conversation to view up to ten rows, the export size and source coverage. Downloads and conversation text also work independently. The authenticated preview requires the scope that produced the report. The Digi activation import journal supplies one row per operation to global managers without portfolio filters. Earlier imports may have only the source row count; absent reconciliation measures remain unknown.
 
+In manager chat the agent can also display a table, an ordered set of steps, or labelled facts whenever the structure helps. These cards can appear without reading a report or creating a file. Each answer can carry one card, which the agent can revise before finishing. The conversation keeps the text and displays the card in its original portfolio selection.
+
+
 ## Monthly commercial trends
 
 Accessory category totals and Prepay product/activation totals open a monthly graph and

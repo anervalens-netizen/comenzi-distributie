@@ -29,6 +29,7 @@ export interface AiChatMessage {
   status: AiMessageStatus;
   createdAt: string;
   attachments?: AiArtifactAttachment[];
+  hasPresentation?: boolean;
   /** Ephemeral progress from runtime events; never stored as assistant content. */
   activity?: string;
 }
