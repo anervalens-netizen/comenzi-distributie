@@ -6,7 +6,7 @@ import { defaultManagerAiModel, managerAiModels, managerAiNotConfiguredMessage, 
 import { managerAiEfforts, type ManagerAiChatEvent, type ManagerAiEffort } from './manager-ai-chat-contract';
 import {
   aiRunEvent, aiRunInputs, aiSubmissionStatus, beginAiSubmission, createAiConversation, endAiRun,
-  getAiArtifact, getAiReportCard, listAiConversations, listAiMessages, managerAiRunTimeoutMs, readAiConversation, readAiEvents, removeAiArtifact, stopAiRun, withAiAccount,
+  getAiArtifact, getAiReportCard, listAiConversations, listAiMessages, managerAiLeaseHeartbeatMs, renewAiRunLease, readAiConversation, readAiEvents, removeAiArtifact, stopAiRun, withAiAccount,
   type AiAccount,
 } from './manager-ai-chat-store';
 import { managerAiReader, managerAiScope, type AiScope } from './manager-ai-data';
@@ -162,21 +162,38 @@ function stream(req:Request,original:AiAccount,conversationId:string,submissionI
 }
 
 async function processRun(req:Request,start:AiAccount,scope:AiScope,conversationId:string,runId:string,
-  key:string) {
-  const timeout=AbortSignal.timeout(managerAiRunTimeoutMs);
+  attemptId:string,key:string) {
+  const leaseLost=new AbortController();
   const scopeKey=sha256(JSON.stringify([scope.signature,scope.params.toString()]));
   async function current() {
     const result=await accountFor(req,scope.params,start);
     if(sha256(JSON.stringify([result.selectedScope.signature,result.selectedScope.params.toString()]))!==scopeKey)fail(409,'Accesul la selecție s-a modificat.');
     return result;
   }
+  let finishing=false, renewing=false;
+  async function renewLease() {
+    if(finishing||renewing||leaseLost.signal.aborted)return;
+    renewing=true;
+    try {
+      const {account}=await current();
+      if(finishing)return;
+      const renewed=conversationTxn(account,conversationId,true,connection=>renewAiRunLease(connection,conversationId,runId,attemptId));
+      if(!renewed)leaseLost.abort();
+    } catch(error) {
+      leaseLost.abort(error);
+    } finally {
+      renewing=false;
+    }
+  }
+  const heartbeat=setInterval(renewLease,managerAiLeaseHeartbeatMs);
+  heartbeat.unref();
   try {
     const sandbox=process.env.MOBIUP_MANAGER_AI_SANDBOX_ENABLED==='1'?await import('./manager-ai-sandbox'):null;
     const analysisModule=sandbox?.managerAiSandboxAvailable()?await import('./manager-ai-analysis'):null;
     for (;;) {
       const attempt=new AbortController();
       active.set(runId,attempt);
-      const signal=AbortSignal.any([attempt.signal,timeout]);
+      const signal=AbortSignal.any([attempt.signal,leaseLost.signal]);
       const {account}=await current();
       const work=conversationTxn(account,conversationId,false,connection=>aiRunInputs(connection,account.owner,conversationId,runId,!!analysisModule));
       if(work.r.state!=='running')return;
@@ -212,8 +229,8 @@ async function processRun(req:Request,start:AiAccount,scope:AiScope,conversation
         files=[...(answer.analysisArtifacts??[]),...answer.reports.map(report=>prepareManagerAiReport(report,format))];
       } catch(error) {
         failed=true;
-        text=timeout.aborted?'Analiza a depășit timpul disponibil. Încearcă o cerere mai restrânsă.':
-          error instanceof AppError?error.message:'Furnizorul AI nu este accesibil momentan.';
+        if(leaseLost.signal.aborted)return;
+        text=error instanceof AppError?error.message:'Furnizorul AI nu este accesibil momentan.';
       }
       const {account:finalAccount}=await current();
       let complete;
@@ -233,6 +250,8 @@ async function processRun(req:Request,start:AiAccount,scope:AiScope,conversation
     // The independent durable lease marks the run interrupted.
     if(!(error instanceof AppError))console.error('Manager AI run could not finish.');
   } finally {
+    finishing=true;
+    clearInterval(heartbeat);
     active.delete(runId);
   }
 }
@@ -297,7 +316,7 @@ export async function managerAiConversations(req:Request,user:User,path:string[]
       if(result.created)active.get(result.status.run_id!)?.abort();
       return response({accepted:true,message:result.message,state:result.status.state});
     }
-    if(result.created)void processRun(req,validated,scope,conversationId,result.status.run_id!,key);
+    if(result.created)void processRun(req,validated,scope,conversationId,result.status.run_id!,result.status.attempt_id!,key);
     return stream(req,validated,conversationId,input.id,0);
   }
   if(path[2]==='submissions'&&(path.length===4||path.length===5&&path[4]==='events')&&method==='GET') {

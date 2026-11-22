@@ -426,6 +426,36 @@ try {
   assert.equal(state.processed_order_key,lastSteer.message.ordinal);
   for(const resolve of pending.splice(0))resolve();
 
+  // Exercise an attached producer past the old wall-clock deadline, without a slow test.
+  const startTime=Date.now();
+  db.prepare('UPDATE sessions SET expires_at=? WHERE token_hash=?').run(startTime+600_000,digest('alpha-token'));
+  let elapsed=0, renew;
+  const realInterval=globalThis.setInterval;
+  const clock=mock.method(Date,'now',()=>startTime+elapsed);
+  const intervals=mock.method(globalThis,'setInterval',(fn,delay,...args)=>{
+    if(delay===30_000)renew=fn;
+    return realInterval(fn,delay,...args);
+  });
+  try {
+    const [longForm,longId]=form('așteaptă analiza pe mai multe luni');
+    const stream=await call(base+'/turn',{body:longForm});
+    await waitFor(()=>pending.length===1);
+    assert.equal(typeof renew,'function');
+    for(let minute=1;minute<=5;minute++){
+      elapsed=minute*60_000;
+      await renew();
+      const status=await (await call(base+'/submissions/'+longId)).json();
+      assert.equal(status.state,'running');
+    }
+    pending.shift()();
+    assert.equal((await events(stream)).at(-1).type,'complete');
+    await renew();
+    assert.equal((await (await call(base+'/submissions/'+longId)).json()).state,'complete');
+  } finally {
+    intervals.mock.restore();
+    clock.mock.restore();
+  }
+
   const [lost,lostId]=form('așteaptă revocarea');
   const revoked=await call(base+'/turn',{body:lost});
   await waitFor(()=>pending.length===1);

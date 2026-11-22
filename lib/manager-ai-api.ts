@@ -61,7 +61,7 @@ export async function managerAi(req:Request,user:User) {
     return current;
   }
   activeTurns.add(user.id);
-  const signal = AbortSignal.any([req.signal,AbortSignal.timeout(90_000)]);
+  const signal = req.signal;
   try {
     const readSource=managerAiReader(req,scope,check);
     const {runManagerAi}=await import('#mobiup-manager-ai-provider');
@@ -71,7 +71,7 @@ export async function managerAi(req:Request,user:User) {
     return response(result);
   } catch (error) {
     if (error instanceof AppError) throw error;
-    if (signal.aborted) fail(504,'Analiza s-a întrerupt. Încearcă cu o selecție mai mică.');
+    if (signal.aborted) fail(408,'Conexiunea pentru această cerere a fost întreruptă.');
     fail(502,'Furnizorul AI nu este accesibil momentan.');
   } finally {
     activeTurns.delete(user.id);

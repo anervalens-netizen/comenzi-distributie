@@ -26,8 +26,9 @@ type Submit = {
   model:ManagerAiModel|null; effort:ManagerAiEffort|null;
 };
 type MessageRow = Omit<ManagerAiChatMessage,'attachments'> & {attachments:string};
-const leaseGraceMs=10_000;
-export const managerAiRunTimeoutMs=180_000;
+// Only a live producer can extend its lease. A crashed worker releases capacity on expiry.
+const runLeaseMs=190_000;
+export const managerAiLeaseHeartbeatMs=30_000;
 const maxMessages=500;
 const maxGlobalRuns=4;
 const ownerArtifactLimit=100*1024*1024;
@@ -233,6 +234,13 @@ export function aiSubmissionStatus(db:DatabaseSync,conversationId:string,id:stri
   return submissionStatus(id,submission&&getRun(db,submission.run_id),submission);
 }
 
+export function renewAiRunLease(db:DatabaseSync, conversationId:string, runId:string, attemptId:string) {
+  const time=Date.now();
+  return run(db,`UPDATE manager_ai_runs SET expires_at=?
+    WHERE conversation_id=? AND id=? AND attempt_id=? AND state='running' AND expires_at>?`,
+    time+runLeaseMs,conversationId,runId,attemptId,time).changes===1;
+}
+
 export function expireAiRuns(db:DatabaseSync) {
   const time=Date.now();
   run(db,"UPDATE manager_ai_runs SET state='interrupted' WHERE state='running' AND expires_at<=?",time);
@@ -261,7 +269,7 @@ export function beginAiSubmission(db:DatabaseSync,account:AiAccount,conversation
     if(one<{total:number}>(db,"SELECT COUNT(*) total FROM manager_ai_runs WHERE state='running'")!.total>=maxGlobalRuns) fail(503,'Toate sesiunile AI sunt ocupate.');
     runId=randomUUID();
     run(db,'INSERT INTO manager_ai_runs(id,attempt_id,conversation_id,account_id,scope_key,token_hash,state,expires_at) VALUES(?,?,?,?,?,?,?,?)',
-      runId,randomUUID(),conversationId,account.auth.userId,input.scopeKey,account.auth.tokenHash,'running',Date.now()+managerAiRunTimeoutMs+leaseGraceMs);
+      runId,randomUUID(),conversationId,account.auth.userId,input.scopeKey,account.auth.tokenHash,'running',Date.now()+runLeaseMs);
     run(db,'INSERT INTO manager_ai_run_options(run_id,model,effort) VALUES(?,?,?)',runId,model,effectiveEffort);
   } else {
     if(!active||active.scope_key!==input.scopeKey||active.token_hash!==account.auth.tokenHash) fail(409,'Nu există o analiză activă în această sesiune și selecție.');
