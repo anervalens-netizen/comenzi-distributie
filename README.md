@@ -245,6 +245,15 @@ include programul de execuție. Sandboxul folosește o copie SQLite cu datele au
 atașamentele selectate și un spațiu temporar de lucru, cu un singur proces de analiză
 simultan pe instanță. Accesul la rețea și la fișierele aplicației de pe gazdă este izolat.
 Verifică pornirea în condițiile serviciului și o analiză SQL/Python cu date fictive înainte de activare.
+Pentru un serviciu web cu protecții systemd, instalează brokerul din același build
+ca aplicația, într-un director de release administrat de root. Unitatea
+`mobiup-comenzi-analysis.socket` admite conexiuni de la utilizatorul serviciului web.
+Configurează local `SocketUser`, calea executabilului Node și
+`MOBIUP_MANAGER_AI_SANDBOX_SOCKET` în serviciul web. Actualizează atomic
+`broker-current` la publicare și la revenirea la versiunea precedentă.
+Fiecare conexiune pornește un proces sub o identitate separată, fără acces la
+datele persistente ale aplicației. Brokerul rulează același worker Bubblewrap.
+
 Cheia OpenAI rămâne în configurația privată a serviciului. Când runtime-ul izolat
 nu este disponibil, rapoartele standard din panoul AI rămân disponibile.
 

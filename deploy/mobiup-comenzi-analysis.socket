@@ -1,0 +1,13 @@
+[Unit]
+Description=Private socket for the manager analysis sandbox
+
+[Socket]
+ListenStream=/run/mobiup-comenzi-analysis.sock
+SocketUser=operator
+SocketMode=0600
+Accept=yes
+MaxConnections=1
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

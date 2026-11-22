@@ -1,0 +1,30 @@
+[Unit]
+Description=Run one manager analysis request in the isolated sandbox
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/node /opt/mobiup-analysis-runtime/broker-current/comenzi-analysis-broker.mjs
+StandardInput=socket
+StandardOutput=null
+StandardError=journal
+Environment=MOBIUP_MANAGER_AI_SANDBOX_ENABLED=1
+DynamicUser=yes
+User=comenzi-analysis
+UMask=0077
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateNetwork=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectControlGroups=yes
+InaccessiblePaths=-/storage -/opt/Mobiup -/mnt -/srv/backups
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+RestrictSUIDSGID=yes
+LockPersonality=yes
+KillMode=control-group
+RuntimeMaxSec=40s
+TimeoutStopSec=4s
+MemoryMax=1G
+TasksMax=64
