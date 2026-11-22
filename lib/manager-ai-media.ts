@@ -215,6 +215,8 @@ export function csvCell(value:ManagerAiCell) {
   const text=/^[\p{White_Space}\p{Cc}\p{Cf}]*[=+\-@]/u.test(value)?'\''+value:value;
   return '"'+text.replaceAll('"','""')+'"';
 }
+import {reportCardData} from './manager-ai-report-card';
+
 export function prepareManagerAiReport(report:ManagerAiReport,format:'xlsx'|'csv'):ManagerAiPreparedArtifact {
   const name=filename('raport-'+report.dataset+'-'+report.id+'.'+format);
   let bytes:Uint8Array;
@@ -236,7 +238,7 @@ export function prepareManagerAiReport(report:ManagerAiReport,format:'xlsx'|'csv
     bytes=new Uint8Array(write(book,{type:'array',bookType:'xlsx',compression:true}));
   }
   if(bytes.byteLength>maxOutputBytes)fail(413,'Raportul exportat este prea mare. Restrânge perioada sau filtrele.');
-  return {filename:name,mime_type:format==='xlsx'?workbookMime:'text/csv',bytes,kind:'output'};
+  return {filename:name,mime_type:format==='xlsx'?workbookMime:'text/csv',bytes,kind:'output',reportCard:reportCardData(report)};
 }
 export function managerAiArtifactResponse(file:Pick<ManagerAiPreparedArtifact,'filename'|'mime_type'|'bytes'>) {
   const encoded=encodeURIComponent(filename(file.filename)).replace(/['()*]/g,c=>'%'+c.charCodeAt(0).toString(16).toUpperCase());

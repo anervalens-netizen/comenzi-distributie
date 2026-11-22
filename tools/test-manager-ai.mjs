@@ -18,6 +18,13 @@ const {outputFiles} = await build({
   bundle:true,platform:'node',format:'esm',write:false,
   plugins:[{name:'isolated-app-error',setup(build){
     build.onResolve({filter:/^\.\/server$/},()=>({path:'server',namespace:'test'}));
+    build.onResolve({filter:/^#mobiup-import-engine$/},()=>({path:'import-engine',namespace:'test'}));
+    build.onLoad({filter:/^import-engine$/,namespace:'test'},()=>({contents:`
+      export function importsJobs(request,user) {
+        if (user.managerScope!=='global' || new URL(request.url).searchParams.get('kind')!=='sim_activations_digi') throw Error('Invalid import read');
+        return Response.json({jobs:[{id:'test-import',kind:'sim_activations_digi',state:'completed',source:{date_start:'2026-06-01',date_end:'2026-06-22'},preview:{rows:17,matchingTR:0}}]});
+      }
+      export const importsCatalog=undefined, importsJob=undefined;`}));
     const mocks = {
       'activation-api':'activationReport',
       'commercial-focus-api':'commercialFocus',
@@ -72,6 +79,16 @@ const {groupVodafoneSim0Clients,parseManagerAiQuery,makeManagerAiReport,managerA
 const query = {dataset:'bonuses',fromMonth:'2026-06',toMonth:'2026-09',site:'',groupBy:['franchise'],
   filters:[{field:'partner',op:'contains',value:'piata'},{field:'activations',op:'gte',value:4}],orderBy:'activations',descending:true,limit:1};
 const override = changes=>JSON.stringify({...query,...changes});
+const digiQuery=parseManagerAiQuery(override({dataset:'digiImports',fromMonth:'2026-06',toMonth:'2026-06',groupBy:[],filters:[],orderBy:'sourceRows'}),'2026-11');
+const makeDigiReader=(managerScope,params=new URLSearchParams())=>managerAiReader(new Request('https://example.invalid'),{params,filter:null,signature:'test'},async()=>({managerScope}));
+const digi=await makeDigiReader('global')(digiQuery);
+assert.equal(digi.rows.length,1);
+assert.equal(digi.rows[0].sourceRows,17);
+assert.equal(digi.rows[0].matchingTR,0);
+assert.equal(digi.rows[0].distinctSIMs,null);
+await assert.rejects(makeDigiReader('assigned')(digiQuery),{status:403});
+await assert.rejects(makeDigiReader('global',new URLSearchParams({agentId:'demo'}))(digiQuery),{status:403});
+assert.throws(()=>parseManagerAiQuery(JSON.stringify({...digiQuery,groupBy:['state']})),{status:400});
 const raw = override({});
 const validated = parseManagerAiQuery(raw,'2026-11');
 assert.deepEqual(managerAiMonths(validated.fromMonth,validated.toMonth),['2026-06','2026-07','2026-08','2026-09']);

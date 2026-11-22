@@ -1,6 +1,7 @@
 import {
   ChevronDown, FileText, Paperclip, Send, Square, Trash2, X,
 } from 'lucide-react';
+import {ReportCard} from './ReportCard';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
@@ -194,8 +195,12 @@ const MessageBubble = memo(function MessageBubble({ message, conversationId }: {
         <span>{message.activity || 'Pregătesc răspunsul…'}</span>
       </output>}
       {attachments?.length ? <div className="mt-3 space-y-2">
-        {attachments.map((attachment) => <AttachmentChip key={attachment.id} attachment={attachment} assistant={assistant} conversationId={conversationId}
-          onRemoved={(id) => setRemovedIds((ids) => [...ids, id])} />)}
+        {attachments.map((attachment) => <div key={attachment.id}>
+          <AttachmentChip attachment={attachment} assistant={assistant} conversationId={conversationId}
+            onRemoved={(id) => setRemovedIds((ids) => [...ids, id])} />
+          {assistant && conversationId && attachment.hasReportCard && !attachment.removed &&
+            <ReportCard conversationId={conversationId} artifactId={attachment.id}/>}
+        </div>)}
       </div> : null}
       {message.status === 'streaming' && !waiting && <span className="ml-1 inline-block h-3 w-1 animate-pulse rounded-full bg-current align-middle" aria-label="Răspuns în curs" />}
       {message.status === 'stopped' && <p className="mt-2 text-xs text-slate-600">Răspuns oprit</p>}

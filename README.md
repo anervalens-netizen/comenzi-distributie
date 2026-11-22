@@ -27,6 +27,10 @@ npm run check
 
 Tests use isolated temporary data. Never point CI at a production database or import real account, customer or employee data. Run application-specific regression checks before publishing changes.
 
+## Interactive manager reports
+
+Manager AI report exports include a read-only A2UI 1.0 preview. Open the report rows in the conversation to view up to ten rows, the export size and source coverage. Downloads and conversation text also work independently. The authenticated preview requires the scope that produced the report. The Digi activation import journal supplies one row per operation to global managers without portfolio filters. Earlier imports may have only the source row count; absent reconciliation measures remain unknown.
+
 ## Monthly commercial trends
 
 Accessory category totals and Prepay product/activation totals open a monthly graph and

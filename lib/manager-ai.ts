@@ -25,6 +25,11 @@ export type ManagerAiTurn = { role: 'user' | 'assistant'; content: string };
 export type ManagerAiAnswer = { answer: string; model: string; reports: ManagerAiReport[] };
 
 export const managerAiFields = {
+  digiImports: {
+    dimensions:['operation','state','declaredFrom','declaredTo'],
+    measures:['sourceRows','distinctSIMs','rowsWithIssues','duplicateSourceRows','matchingTR','otherInternalChannel','withoutExactInternalMatch'],
+    purpose:'Jurnal real al importurilor de activări Digi. Un rând per operație. Pentru reconciliere folosește groupBy gol. Nu aduna importuri cumulative. Drepturi globale și fără filtru de portofoliu.',
+  },
   sales: {
     dimensions: ['month', 'site', 'sku', 'product', 'brand', 'category', 'productGroup'],
     measures: ['lines', 'units', 'valueLei'],

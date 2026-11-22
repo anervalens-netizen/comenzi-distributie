@@ -1,4 +1,5 @@
 import {activationReport} from './activation-api';
+import {digiImportReport,fetchDigiImportJournal} from './manager-ai-import-journal';
 import {bucharestMonthKey, bucharestMonthUtcRange} from './bucharest-month';
 import {commercialFocus} from './commercial-focus-api';
 import {readDistributionRules} from './distribution-config';
@@ -40,6 +41,7 @@ const bonusSource = 'Registru bonusuri Vodafone';
 const focusSource = 'Focus comercial Vodafone';
 
 export function managerAiReader(request: Request, scope: AiScope, check: () => Promise<User>, options?:{cacheMonths:false}) {
+  let digiJournal:ReturnType<typeof fetchDigiImportJournal>|undefined;
   const monthlyCache = new Map<string,Promise<AiSource>>();
   const rankings=new Map<string,ReturnType<typeof readManagerAiSim0>>();
   let verifyActivationAccess:((user:User)=>Promise<void>)|undefined;
@@ -68,6 +70,11 @@ export function managerAiReader(request: Request, scope: AiScope, check: () => P
     if (query.site) params.set('siteCode',query.site);
 
     switch(query.dataset) {
+      case 'digiImports': {
+        if (!isGlobalManager(user) || scope.filter || scope.params.size) fail(403,'Jurnalul Digi necesită un manager global fără selecție de portofoliu.');
+        digiJournal ??= fetchDigiImportJournal(request,user);
+        return digiImportReport(await digiJournal,month);
+      }
       case 'sales': {
         return managerAiSales(query,month,await readDistributionRules(),async site=>{
           const current = await check();

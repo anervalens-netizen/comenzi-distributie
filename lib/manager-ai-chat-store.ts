@@ -81,8 +81,14 @@ function nativeMedia(file:{mime_type:string}) {
   return file.mime_type==='application/pdf'||file.mime_type.startsWith('image/');
 }
 
+type StoredAttachment = ManagerAiArtifact & {reportCard?: import('./manager-ai-report-card').ReportCardData};
+
+function publicAttachment({reportCard,...metadata}:StoredAttachment):ManagerAiArtifact {
+  return reportCard && !metadata.removed ? {...metadata,has_report_card:true} : metadata;
+}
+
 function message(row:MessageRow):ManagerAiChatMessage {
-  return {...row,attachments:JSON.parse(row.attachments) as ManagerAiArtifact[]};
+  return {...row,attachments:(JSON.parse(row.attachments) as StoredAttachment[]).map(publicAttachment)};
 }
 
 export function listAiMessages(db:DatabaseSync,id:string,limit:number,before:number) {
@@ -94,7 +100,7 @@ function addEvent(db:DatabaseSync,runId:string,event:ManagerAiChatEvent) {
   run(db,'INSERT INTO manager_ai_events SELECT ?,COALESCE(MAX(sequence),0)+1,? FROM manager_ai_events WHERE run_id=?',runId,JSON.stringify(event),runId);
 }
 
-function insertArtifacts(db:DatabaseSync,owner:string,conversationId:string,files:readonly ManagerAiPreparedArtifact[]):ManagerAiArtifact[] {
+function insertArtifacts(db:DatabaseSync,owner:string,conversationId:string,files:readonly ManagerAiPreparedArtifact[]):StoredAttachment[] {
   if(!files.length)return [];
   const bytes=files.reduce((sum,file)=>sum+file.bytes.byteLength,0);
   const ownerTotal=one<{total:number}>(db,'SELECT COALESCE(SUM(size_bytes),0) total FROM manager_ai_artifacts WHERE owner=?',owner)!.total;
@@ -104,7 +110,7 @@ function insertArtifacts(db:DatabaseSync,owner:string,conversationId:string,file
   return files.map(file=>{
     const id=randomUUID();
     run(db,'INSERT INTO manager_ai_artifacts VALUES(?,?,?,?,?,?,?,?,?)',id,conversationId,owner,file.filename,file.mime_type,file.kind,file.bytes.byteLength,file.bytes,time);
-    return {id,filename:file.filename,mime_type:file.mime_type,kind:file.kind,size_bytes:file.bytes.byteLength,created_at:time,
+    return {id,...(file.reportCard?{reportCard:file.reportCard}:{}),filename:file.filename,mime_type:file.mime_type,kind:file.kind,size_bytes:file.bytes.byteLength,created_at:time,
       download_url:`/api/manager-ai/conversations/${conversationId}/artifacts/${id}`};
   });
 }
@@ -124,7 +130,17 @@ function findAiArtifactLink(db:DatabaseSync,owner:string,conversationId:string,i
     FROM manager_ai_conversations AS c JOIN manager_ai_messages AS m ON m.conversation_id=c.id
     JOIN json_each(m.attachments) AS a
     WHERE c.id=? AND c.owner=? AND json_extract(a.value,'$.id')=?`,conversationId,owner,id);
-  return link&&{id:link.id,position:link.position,artifacts:JSON.parse(link.attachments) as ManagerAiArtifact[]};
+  return link&&{id:link.id,position:link.position,artifacts:JSON.parse(link.attachments) as StoredAttachment[]};
+}
+
+export function getAiReportCard(db:DatabaseSync,owner:string,conversationId:string,id:string,scopeKey:string) {
+  const link=findAiArtifactLink(db,owner,conversationId,id);
+  const entry=link?.artifacts[link.position];
+  if(entry?.removed)fail(410,'Fișierul a fost șters.');
+  if(!link||entry?.kind!=='output'||!entry.reportCard)fail(404,'Fișa raportului nu este disponibilă.');
+  const result=one<{scope_key:string}>(db,'SELECT scope_key FROM manager_ai_runs WHERE conversation_id=? AND terminal_message_id=?',conversationId,link.id);
+  if(result?.scope_key!==scopeKey)fail(403,'Deschide fișa în selecția în care a fost generat raportul.');
+  return entry.reportCard;
 }
 
 function removeAiInputExcerpt(db:DatabaseSync,messageId:string,artifacts:ManagerAiArtifact[],id:string) {
@@ -152,7 +168,8 @@ export function removeAiArtifact(db:DatabaseSync,owner:string,conversationId:str
     fail(409,'Oprește analiza din această sesiune înainte de a șterge fișierele de intrare.');
   }
   if(existing.kind==='input'&&!nativeMedia(existing))removeAiInputExcerpt(db,link.id,link.artifacts,id);
-  const removed={...existing,removed:true as const};
+  const {reportCard,...metadata}=existing;
+  const removed={...metadata,removed:true as const};
   link.artifacts[link.position]=removed;
   run(db,'DELETE FROM manager_ai_artifacts WHERE id=? AND conversation_id=? AND owner=?',id,conversationId,owner);
   run(db,'UPDATE manager_ai_messages SET attachments=? WHERE id=?',JSON.stringify(link.artifacts),link.id);
@@ -165,7 +182,7 @@ function addMessage(db:DatabaseSync,owner:string,conversationId:string,role:'use
   const created_at=now(),attachments=insertArtifacts(db,owner,conversationId,files);
   run(db,'INSERT INTO manager_ai_messages VALUES(?,?,?,?,?,?,?,?)',id,conversationId,ordinal,role,text,status,created_at,JSON.stringify(attachments));
   run(db,'UPDATE manager_ai_conversations SET updated_at=? WHERE id=?',created_at,conversationId);
-  return {id,ordinal,role,text,status,created_at,attachments};
+  return {id,ordinal,role,text,status,created_at,attachments:attachments.map(publicAttachment)};
 }
 
 function getRun(db:DatabaseSync,id:string) {

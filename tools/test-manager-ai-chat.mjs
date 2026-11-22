@@ -229,10 +229,19 @@ try {
   const reportFile=report.at(-1).message.attachments[0];
   assert.equal(reportFile.kind,'output');
   const reportPath=reportFile.download_url.split('/api/manager-ai/')[1];
+  assert.equal(reportFile.has_report_card,true);
+  assert.equal(reportFile.reportCard,undefined,'history metadata excludes the preview rows');
+  const reportWire=await (await call(reportPath+'/report-card')).json();
+  assert.equal(reportWire[0].version,'1.0');
+  assert.equal(reportWire[0].createSurface.surfaceId,reportFile.id);
+  assert.match(JSON.stringify(reportWire[1]),/FIX-42/);
+  await assert.rejects(call(reportPath+'/report-card?agentId=another'),{status:403});
+  await assert.rejects(call(reportPath+'/report-card',{token:'beta-token'}),{status:404});
   const reportDownload=await call(reportPath);
   assert.deepEqual(new Uint8Array(await reportDownload.arrayBuffer()).slice(0,2),new Uint8Array([80,75]));
   assert.equal((await (await call(reportPath,{method:'DELETE'})).json()).attachment.removed,true);
   await assert.rejects(call(reportPath),{status:410});
+  await assert.rejects(call(reportPath+'/report-card'),{status:410});
 
   process.env.MOBIUP_MANAGER_AI_SANDBOX_ENABLED='1';
   const analysisInputs=[];

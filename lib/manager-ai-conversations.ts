@@ -1,11 +1,12 @@
 import { createHash } from 'node:crypto';
+import {reportCardMessages} from './manager-ai-report-card';
 import { importAuthorization } from './import-write-authorization';
 import { managerAiProviderKey } from './manager-ai-api';
 import { defaultManagerAiModel, managerAiModels, managerAiNotConfiguredMessage, type ManagerAiModel } from './manager-ai';
 import { managerAiEfforts, type ManagerAiChatEvent, type ManagerAiEffort } from './manager-ai-chat-contract';
 import {
   aiRunEvent, aiRunInputs, aiSubmissionStatus, beginAiSubmission, createAiConversation, endAiRun,
-  getAiArtifact, listAiConversations, listAiMessages, managerAiRunTimeoutMs, readAiConversation, readAiEvents, removeAiArtifact, stopAiRun, withAiAccount,
+  getAiArtifact, getAiReportCard, listAiConversations, listAiMessages, managerAiRunTimeoutMs, readAiConversation, readAiEvents, removeAiArtifact, stopAiRun, withAiAccount,
   type AiAccount,
 } from './manager-ai-chat-store';
 import { managerAiReader, managerAiScope, type AiScope } from './manager-ai-data';
@@ -264,6 +265,12 @@ export async function managerAiConversations(req:Request,user:User,path:string[]
   if(path.length===3&&path[2]==='messages'&&method==='GET') {
     const limit=boundedNumber(params,'limit',30,1,200),before=boundedNumber(params,'before_ordinal',Number.MAX_SAFE_INTEGER,1,Number.MAX_SAFE_INTEGER);
     return response(transact(false,db=>listAiMessages(db,conversationId,limit,before)));
+  }
+  if(path[2]==='artifacts'&&path[4]==='report-card'&&path.length===5&&method==='GET') {
+    const id=identity(path[3]);
+    const scopeKey=sha256(JSON.stringify([selectedScope.signature,selectedScope.params.toString()]));
+    const card=transact(false,db=>getAiReportCard(db,account.owner,conversationId,id,scopeKey));
+    return response(reportCardMessages(id,card));
   }
   if(path[2]==='artifacts'&&path.length===4&&(method==='GET'||method==='DELETE')) {
     const artifactId=identity(path[3]);
