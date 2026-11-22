@@ -348,7 +348,9 @@ async function dispatch(req: Request) {
   }
   const user=await requireUser(req,path[0]==='auth'||(path[0]==='admin'&&path[1]==='templates'));
   if(runtimeKind==='node' && req.method!=='GET' && path[0]!=='auth'){
-    const authority=await captureRequestAuthority(req,user);
+    // Import clients distinguish lost authentication (401) from a stale preview (409).
+    const isImport=['admin/stock/import','sales/import','client-sales/import'].includes(path.join('/'));
+    const authority=await captureRequestAuthority(req,user,isImport?401:409);
     return writeAuthority.run(authority,()=>authenticatedRoute(req,path,user));
   }
   return authenticatedRoute(req,path,user);
