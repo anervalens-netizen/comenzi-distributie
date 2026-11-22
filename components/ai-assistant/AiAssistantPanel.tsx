@@ -571,7 +571,8 @@ export function AiAssistantPanel({
         style={{ '--ai-panel-width': `${width}px` } as React.CSSProperties}
         className="relative z-10 flex h-dvh w-full flex-col overflow-hidden border-l border-slate-200 bg-slate-50 shadow-2xl dark:border-slate-800 dark:bg-slate-950 sm:max-w-[min(88vw,560px)] xl:w-full xl:max-w-none xl:shrink-0 xl:shadow-none"
       >
-        <button type="button" aria-label="Redimensionează panoul AI" onPointerDown={startResize} onKeyDown={onResizeKeyDown} className="absolute inset-y-0 left-0 z-20 hidden w-2 cursor-col-resize touch-none xl:block" />
+        <button type="button" aria-label="Redimensionează panoul AI" onPointerDown={startResize} onKeyDown={onResizeKeyDown} title="Trage pentru a redimensiona panoul AI"
+          className="absolute inset-y-0 left-0 z-20 hidden w-3 cursor-col-resize touch-none border-l border-slate-300/80 bg-transparent transition-colors hover:border-indigo-500 hover:bg-indigo-500/10 focus-visible:border-indigo-500 focus-visible:bg-indigo-500/10 focus-visible:outline-2 focus-visible:outline-indigo-500 dark:border-slate-700 xl:block" />
         <AiPanelHeader
           conversations={conversations}
           conversationId={conversationId}

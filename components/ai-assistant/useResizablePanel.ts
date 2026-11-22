@@ -8,8 +8,10 @@ function subscribeViewport(onChange: () => void) {
 const viewportWidth = () => window.innerWidth;
 
 function clampWidth(width: number, viewport: number, minWidth: number) {
-  const upper = Math.min(680, Math.floor(viewport * 0.44));
-  return Math.min(upper, Math.max(minWidth, width));
+  // The resize handle remains visible while the assistant can use essentially
+  // the whole desktop. Never force a width larger than a narrowed viewport.
+  const upper = Math.max(0, Math.floor(viewport) - 12);
+  return Math.min(upper, Math.max(Math.min(minWidth, upper), width));
 }
 
 export function useResizablePanel(key: string, initialWidth: number, minWidth = 360) {
