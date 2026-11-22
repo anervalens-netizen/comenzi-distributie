@@ -14,7 +14,7 @@ import {AppError, fail} from './server';
 
 export type AiAccount = { auth:ImportAuthorization; owner:string; scopeRevision:number };
 type Run = {
-  id:string; attempt_id:string; scope_key:string; token_hash:string; state:ManagerAiRunState;
+  id:string; account_id:string; attempt_id:string; scope_key:string; token_hash:string; state:ManagerAiRunState;
   processed_order_key:number|null; terminal_message_id:string|null; control_id:string|null;
 };
 type Submission = {
@@ -257,6 +257,17 @@ export function renewAiRunLease(db:DatabaseSync, conversationId:string, runId:st
     time+runLeaseMs,conversationId,runId,attemptId,time).changes===1;
 }
 
+// Persist only a generic failure for the same producer. The caller holds the
+// conversation transaction and has freshly checked session, profile and scope.
+export function failAiLeaseRenewal(db:DatabaseSync, account:AiAccount, conversationId:string, runId:string, attemptId:string) {
+  const row=one<{ord:number}>(db,`SELECT MAX(s.order_key) ord FROM manager_ai_runs r JOIN manager_ai_submissions s ON s.run_id=r.id
+    WHERE r.id=? AND r.attempt_id=? AND r.conversation_id=? AND r.account_id=? AND r.token_hash=?
+    AND r.state='running' AND r.expires_at>? GROUP BY r.id`,runId,attemptId,conversationId,account.auth.userId,account.auth.tokenHash,Date.now());
+  if(row)endAiRun(db,account.owner,conversationId,runId,row.ord,{
+    failed:true,files:[],text:'Analiza s-a întrerupt deoarece aplicația nu a putut confirma că execuția este activă. Poți relua cererea.',
+  });
+}
+
 export function expireAiRuns(db:DatabaseSync) {
   const time=Date.now();
   run(db,"UPDATE manager_ai_runs SET state='interrupted' WHERE state='running' AND expires_at<=?",time);
@@ -399,7 +410,7 @@ export function endAiRun(db:DatabaseSync,owner:string,conversationId:string,runI
 
 export function stopAiRun(db:DatabaseSync,account:AiAccount,conversationId:string,runId:string,attemptId:string,controlId:string) {
   const r=getRun(db,runId);
-  if(!one(db,'SELECT id FROM manager_ai_runs WHERE id=? AND conversation_id=?',runId,conversationId)||r.attempt_id!==attemptId||r.token_hash!==account.auth.tokenHash) fail(409,'Sesiunea sau analiza s-a modificat.');
+  if(!one(db,'SELECT id FROM manager_ai_runs WHERE id=? AND conversation_id=?',runId,conversationId)||r.attempt_id!==attemptId||r.account_id!==account.auth.userId) fail(409,'Sesiunea sau analiza s-a modificat.');
   if(r.control_id===controlId) {
     const terminal=r.terminal_message_id&&readAiMessage(db,conversationId,r.terminal_message_id);
     return {state:r.state,message:terminal||undefined};

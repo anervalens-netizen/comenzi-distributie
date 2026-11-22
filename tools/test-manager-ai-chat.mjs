@@ -58,7 +58,10 @@ try {
       export const sha256=v=>createHash('sha256').update(v).digest('hex');
       export const sessionToken=req=>req.headers.get('cookie')?.split('=')[1]||'';
       export const assertOrigin=req=>{if(req.headers.get('Origin')&&req.headers.get('Origin')!==new URL(req.url).origin)fail(403,'forbidden origin');};
-      export const db=()=>({prepare:sql=>({first:async()=>globalThis.syntheticAiDatabase.prepare(sql).get()})});
+      export const db=()=>({prepare:sql=>({first:async()=>{
+        if(globalThis.syntheticLeaseReadError)throw Error('synthetic temporary store failure');
+        return globalThis.syntheticAiDatabase.prepare(sql).get();
+      }})});
       export const response=(data,status=200)=>Response.json(data,{status});
       export const readLimited=async(req,max)=>{const out=await req.arrayBuffer();if(out.byteLength>max)fail(413,'too large');return out;};
       export const jsonBody=req=>req.json();
@@ -392,10 +395,10 @@ try {
   const [concurrent]=form('Concurent');
   await assert.rejects(call(other+'/turn',{body:concurrent}),{status:409});
   await assert.rejects(call(other+'/stop',{body:controls}),{status:409});
-  await assert.rejects(call(base+'/stop',{body:controls,token:'other-alpha-token'}),{status:409});
+  await assert.rejects(call(base+'/stop',{body:controls,token:'beta-token'}),{status:404});
   await assert.rejects(call(base+'/stop',{body:{...controls,attempt_id:randomUUID()}}),{status:409});
   const resumed=await call(base+'/submissions/'+heldId+'/events?after='+part.sequence);
-  const stopped=await (await call(base+'/stop',{body:controls})).json();
+  const stopped=await (await call(base+'/stop',{body:controls,token:'other-alpha-token'})).json();
   assert.equal(stopped.state,'stopped');
   assert.equal(stopped.message.text,'Analiza a fost oprită.');
   assert.equal((await (await call(base+'/stop',{body:controls})).json()).message.id,stopped.message.id);
@@ -535,7 +538,7 @@ try {
     const retry=legacy(disconnect.signal);
     await waitFor(()=>accesses.length>calls);
     disconnect.abort();
-    await assert.rejects(retry,{status:408});
+    await assert.rejects(retry,{status:499});
     assert.equal(idleTimers.size,0);
   } finally {
     try { globalThis.syntheticIdleStream?.close(); } catch(error) { assert.equal(error.code,'ERR_INVALID_STATE'); }
@@ -560,6 +563,10 @@ try {
     const stream=await call(base+'/turn',{body:longForm});
     await waitFor(()=>pending.length===1);
     assert.equal(typeof renew,'function');
+    globalThis.syntheticLeaseReadError=true;
+    await renew();
+    delete globalThis.syntheticLeaseReadError;
+    assert.equal((await (await call(base+'/submissions/'+longId)).json()).state,'running');
     for(let minute=1;minute<=5;minute++){
       elapsed=minute*60_000;
       await renew();
@@ -570,6 +577,20 @@ try {
     assert.equal((await events(stream)).at(-1).type,'complete');
     await renew();
     assert.equal((await (await call(base+'/submissions/'+longId)).json()).state,'complete');
+    const [failureForm,failureId]=form('așteaptă reînnoirea');
+    const failureStream=await call(base+'/turn',{body:failureForm});
+    await waitFor(()=>pending.length===1);
+    globalThis.syntheticLeaseReadError=true;
+    try {
+      await renew(); await renew(); await renew();
+    } finally {
+      delete globalThis.syntheticLeaseReadError;
+    }
+    const failed=(await events(failureStream)).at(-1);
+    assert.equal(failed.type,'error');
+    assert.match(failed.message,/confirma că execuția este activă/);
+    assert.equal((await (await call(base+'/submissions/'+failureId)).json()).state,'error');
+    pending.splice(0).forEach(resolve=>resolve());
   } finally {
     intervals.mock.restore();
     clock.mock.restore();

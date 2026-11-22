@@ -78,7 +78,7 @@ export async function managerAi(req:Request,user:User) {
     return response(result);
   } catch (error) {
     if (error instanceof AppError) throw error;
-    if (signal.aborted) fail(408,'Conexiunea pentru această cerere a fost întreruptă.');
+    if (signal.aborted) fail(499,'Conexiunea pentru această cerere a fost întreruptă.');
     fail(502,'Furnizorul AI nu este accesibil momentan.');
   } finally {
     activity.close();

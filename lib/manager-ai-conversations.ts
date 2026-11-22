@@ -8,7 +8,7 @@ import { defaultManagerAiModel, managerAiModels, managerAiNotConfiguredMessage, 
 import { managerAiEfforts, type ManagerAiChatEvent, type ManagerAiEffort } from './manager-ai-chat-contract';
 import {
   aiRunEvent, aiRunInputs, aiSubmissionStatus, beginAiSubmission, createAiConversation, endAiRun,
-  getAiArtifact, getAiPresentation, getAiReportCard, listAiConversations, listAiMessages, managerAiLeaseHeartbeatMs, renewAiRunLease, readAiConversation, readAiEvents, removeAiArtifact, stopAiRun, withAiAccount,
+  getAiArtifact, getAiPresentation, getAiReportCard, listAiConversations, listAiMessages, managerAiLeaseHeartbeatMs, renewAiRunLease, failAiLeaseRenewal, readAiConversation, readAiEvents, removeAiArtifact, stopAiRun, withAiAccount,
   type AiAccount,
 } from './manager-ai-chat-store';
 import { managerAiReader, managerAiScope, type AiScope } from './manager-ai-data';
@@ -172,7 +172,7 @@ async function processRun(req:Request,start:AiAccount,scope:AiScope,conversation
     if(sha256(JSON.stringify([result.selectedScope.signature,result.selectedScope.params.toString()]))!==scopeKey)fail(409,'Accesul la selecție s-a modificat.');
     return result;
   }
-  let finishing=false, renewing=false;
+  let finishing=false, renewing=false, renewalFailures=0;
   async function renewLease() {
     if(finishing||renewing||leaseLost.signal.aborted)return;
     renewing=true;
@@ -180,8 +180,22 @@ async function processRun(req:Request,start:AiAccount,scope:AiScope,conversation
       const {account}=await current();
       if(finishing)return;
       const renewed=conversationTxn(account,conversationId,true,connection=>renewAiRunLease(connection,conversationId,runId,attemptId));
+      renewalFailures=0;
       if(!renewed)leaseLost.abort();
     } catch(error) {
+      if(finishing)return;
+      if(error instanceof AppError && [401,403,404,409].includes(error.status)) {
+        leaseLost.abort(error);
+        return;
+      }
+      if(++renewalFailures<3)return;
+      try {
+        // Even if reading the scope was unavailable, a generic failure can be
+        // recorded only under the original, still-authorized DB transaction.
+        conversationTxn(start,conversationId,true,db=>failAiLeaseRenewal(db,start,conversationId,runId,attemptId));
+      } catch {
+        // If storage itself is unavailable, the durable lease expires independently.
+      }
       leaseLost.abort(error);
     } finally {
       renewing=false;
