@@ -105,6 +105,13 @@ by restoring them in receiver-local scratch before publication or pruning. Older
 receipts are revalidated once. Its caller must check the source mount identity
 and configure local restore scratch with sufficient space. A NAS or validation
 failure preserves the last validated recovery generation and fails visibly.
+Portfolio receivers that already copy a daily set can run
+`deploy/verify_received_generation.py` on their locally staged Comenzi directory
+before promotion or pruning. Configure a private local receipt outside the
+incoming set and a local scratch directory. For an age-encrypted copy, supply
+the receiver identity and private local decryption scratch on tmpfs. The
+operation decrypts the stored bytes, runs the same full restore, records the
+verified digest, and always preserves at least 40 GiB on the restore disk.
 Keep the periodic scratch GC installed and the normal backup schedule enabled.
 
 `deploy/restore.py` remains the separate explicit recovery path to a new

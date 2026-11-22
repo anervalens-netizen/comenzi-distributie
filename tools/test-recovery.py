@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import shutil
 import sqlite3
+import subprocess
 import tarfile
 import tempfile
 import unittest
@@ -141,6 +142,46 @@ class RecoveryTests(unittest.TestCase):
             receiver.receive(nas, destination)
             receiver.receive(nas, destination)
             self.assertEqual(validate.call_count, 1)
+
+    def test_portfolio_verifies_plain_and_encrypted_receiver_bytes(self):
+        verify = load('verify_received_generation')
+        archive = self.make_backup()
+        folder = self.root / 'portfolio'
+        folder.mkdir()
+        stored = folder / archive.name
+        shutil.copyfile(archive, stored)
+        scratch = self.root / 'disk-scratch'
+        receipt = self.root / 'trusted' / 'local.json'
+        original_scratch = verify.storage.Scratch
+
+        def small_scratch(*args, **kwargs):
+            kwargs.update(min_free_bytes=0, max_used_ratio=1)
+            return original_scratch(*args, **kwargs)
+
+        with patch.object(verify.storage, 'Scratch', side_effect=small_scratch):
+            result = verify.verify(folder, receipt, scratch)
+            self.assertEqual(result['sha256'], backup.digest(archive))
+            self.assertEqual(result['databases'], {'mobiup.sqlite': 'ok'})
+            self.assertTrue(verify.verify(folder, receipt, scratch)['reused'])
+            trusted = receipt.read_bytes()
+            with patch.object(verify.restore, 'restore', side_effect=RuntimeError('local restore failed')):
+                with stored.open('ab') as stream:
+                    stream.write(b'\x00')
+                with self.assertRaisesRegex(RuntimeError, 'local restore failed'):
+                    verify.verify(folder, receipt, scratch)
+            self.assertEqual(receipt.read_bytes(), trusted)
+            shutil.copyfile(archive, stored)
+            if shutil.which('age') and shutil.which('age-keygen'):
+                key = self.root / 'identity'
+                subprocess.run(['age-keygen', '-o', str(key)], check=True, capture_output=True)
+                public = subprocess.check_output(['age-keygen', '-y', str(key)], text=True).strip()
+                subprocess.run(['age', '-r', public, '-o', str(stored) + '.age', str(stored)], check=True)
+                stored.unlink()
+                encrypted = verify.verify(folder, receipt, scratch, identity=key,
+                                          decrypt_scratch=self.root / 'memory-scratch')
+                self.assertEqual(encrypted['sha256'], result['sha256'])
+                self.assertNotEqual(encrypted['stored_sha256'], result['stored_sha256'])
+                self.assertFalse(encrypted['reused'])
 
     def test_receiver_without_validated_source_preserves_existing_copy(self):
         archive = self.make_backup()
