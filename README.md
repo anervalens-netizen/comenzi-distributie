@@ -224,6 +224,12 @@ restoring never starts the runner or a service. Install the matching
 
 ## Analize SQL și Python pentru manageri
 
+Agentul managerilor folosește OpenAI Agents SDK pentru TypeScript. SDK-ul trimite
+cererile la Responses API și coordonează apelurile către instrumentele aplicației.
+Comenzi păstrează istoricul și fișierele în stocarea proprie. La reconectare, panoul
+reia evenimentele de la ultimul mesaj primit. Aplicația reverifică drepturile asupra
+portofoliului la fiecare citire și înainte de livrarea rezultatului.
+
 Panoul AI poate analiza tabele de business din portofoliul selectat în conversație și poate
 atașa exporturi la răspuns. Cererile de analiză pot folosi SQL pentru îmbinări și agregări,
 sau Python pentru calcule și fișiere. Perioada, granulația și acoperirea surselor sunt disponibile în
