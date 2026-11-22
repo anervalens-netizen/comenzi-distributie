@@ -168,7 +168,7 @@ export function removeAiArtifact(db:DatabaseSync,owner:string,conversationId:str
     fail(409,'Oprește analiza din această sesiune înainte de a șterge fișierele de intrare.');
   }
   if(existing.kind==='input'&&!nativeMedia(existing))removeAiInputExcerpt(db,link.id,link.artifacts,id);
-  const {reportCard,...metadata}=existing;
+  const {reportCard:_reportCard,...metadata}=existing;
   const removed={...metadata,removed:true as const};
   link.artifacts[link.position]=removed;
   run(db,'DELETE FROM manager_ai_artifacts WHERE id=? AND conversation_id=? AND owner=?',id,conversationId,owner);

@@ -15,7 +15,7 @@ const reportTable = createComponentImplementation({
 }, ({props}) => <section className="min-w-0 rounded-lg border border-slate-300/60 p-3">
   <strong>{props.title}</strong>
   <p>{props.rows.length} rânduri afișate · {props.exported} în fișier · {props.total} disponibile</p>
-  {props.rows.length > 0 && <div className="max-h-80 overflow-auto" tabIndex={0} aria-label={props.title}>
+  {props.rows.length > 0 && <div className="max-h-80 overflow-auto">
     <table className="border-collapse text-left text-xs">
       <thead><tr>{props.columns.map((column,index) => <th className="p-2" key={index} scope="col">{column}</th>)}</tr></thead>
       <tbody>{props.rows.map((row,index) => <tr key={index}>{row.map((value,cell) =>
@@ -32,5 +32,5 @@ export default function ReportSurface({wire,id}:{wire:unknown;id:string}) {
     if (processor.processMessagesWithErrors(wire).length) return undefined;
     return processor.model.surfacesMap.get(id);
   },[wire,id]);
-  return surface ? <A2uiSurface surface={surface}/> : <p role="status">Fișa nu poate fi afișată. Raportul este disponibil la descărcare.</p>;
+  return surface ? <A2uiSurface surface={surface}/> : <output>Fișa nu poate fi afișată. Raportul este disponibil la descărcare.</output>;
 }

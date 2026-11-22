@@ -26,6 +26,6 @@ export function ReportCard({conversationId,artifactId}:{conversationId:string;ar
     <button type="button" disabled={busy} aria-expanded={visible} className="text-sm font-semibold underline"
       onClick={() => void toggle()}>{busy ? 'Se încarcă…' : visible ? 'Ascunde fișa' : 'Vezi rândurile raportului'}</button>
     {visible && panel}
-    {error && <p role="status">Fișa nu este disponibilă pentru selecția curentă. Poți reîncerca.</p>}
+    {error && <output>Fișa nu este disponibilă pentru selecția curentă. Poți reîncerca.</output>}
   </div>;
 }
