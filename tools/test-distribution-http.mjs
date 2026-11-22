@@ -251,6 +251,11 @@ try{
      panel.getBoundingClientRect().width<=innerWidth &&
      document.documentElement.scrollWidth<=innerWidth+1;
  })()`),'desktop AI can expand close to full viewport without page overflow');
+ assert(await browser.evaluate(`(()=>{
+   const handle=document.querySelector('[aria-label="Redimensionează panoul AI"]');
+   const rect=handle.getBoundingClientRect();
+   return document.elementFromPoint(rect.left+rect.width/2,180)===handle;
+ })()`),'expanded AI resize handle stays above the fixed manager navigation');
  await browser.evaluate(`document.querySelector('[aria-label="Resetează lățimea panoului"]').click()`);
  await waitFor(()=>browser.evaluate(`Math.abs(document.querySelector('aside[aria-label="AI Comenzi"]').getBoundingClientRect().width-460)<2`),'AI width reset');
  const handleBounds=await browser.evaluate(`(()=>{const r=document.querySelector('[aria-label="Redimensionează panoul AI"]').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+Math.min(180,r.height/2)};})()`);
