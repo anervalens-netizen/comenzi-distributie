@@ -100,6 +100,33 @@ class RecoveryTests(unittest.TestCase):
             backup.prune_nas_latest(nas, nas / archive.name)
         self.assertTrue(old.exists())
 
+    def test_nas_restore_cannot_promote_a_different_digest_to_local_validation(self):
+        archive = self.make_backup()
+        nas = self.root / 'nas'
+        current = nas / archive.name
+        checksum = backup.digest(archive)
+        with patch.object(backup, 'prune_backups') as prune:
+            with self.assertRaisesRegex(RuntimeError, 'checksum mismatch'):
+                backup.prune_nas_latest(nas, current, expected_checksum='0' * 64)
+            with patch.object(backup, 'validate_archive', return_value={'sha256': '0' * 64}):
+                with self.assertRaisesRegex(RuntimeError, 'receipt does not match'):
+                    backup.prune_nas_latest(nas, current, expected_checksum=checksum)
+            prune.assert_not_called()
+        self.assertFalse(backup.validation_path(archive).exists())
+
+    def test_restore_rejects_when_extraction_does_not_confirm_the_prechecked_digest(self):
+        archive = self.make_backup()
+        destination = self.root / 'restored'
+        real_reader = recovery.DigestReader
+        def inconsistent_verification(stream):
+            reader = real_reader(stream)
+            reader.hash.update(b'independent mismatch')
+            return reader
+        with patch.object(recovery, 'DigestReader', side_effect=inconsistent_verification):
+            with self.assertRaisesRegex(RuntimeError, 'changed during restore'):
+                recovery.restore(archive, destination)
+        self.assertFalse(destination.exists())
+
     def test_actual_restore_receipt_promotes_receiver_and_ignores_newer_unvalidated(self):
         archive = self.make_backup()
         nas = self.root / 'nas'
@@ -182,6 +209,12 @@ class RecoveryTests(unittest.TestCase):
                 self.assertEqual(encrypted['sha256'], result['sha256'])
                 self.assertNotEqual(encrypted['stored_sha256'], result['stored_sha256'])
                 self.assertFalse(encrypted['reused'])
+                rotated_key = self.root / 'rotated-identity'
+                subprocess.run(['age-keygen', '-o', str(rotated_key)], check=True, capture_output=True)
+                with self.assertRaisesRegex(RuntimeError, 'could not decrypt'):
+                    verify.verify(folder, receipt, scratch, identity=rotated_key,
+                                  decrypt_scratch=self.root / 'memory-scratch')
+                self.assertEqual(json.loads(receipt.read_text())['identity_sha256'], encrypted['identity_sha256'])
 
     def test_receiver_without_validated_source_preserves_existing_copy(self):
         archive = self.make_backup()

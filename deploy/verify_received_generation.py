@@ -1,5 +1,6 @@
 """Check a locally received portfolio archive before promoting or pruning recovery."""
 import argparse
+import hashlib
 from contextlib import contextmanager
 import importlib.util
 import json
@@ -74,12 +75,19 @@ def verify(folder, receipt, scratch, *, identity=None, decrypt_scratch=None, max
         raise ValueError('Expected exactly one local regular recovery archive')
     archive = candidates[0]
     stored_digest = restore.digest(archive)
+    identity_hash = None
+    if archive.suffix == '.age':
+        if identity is None:
+            raise ValueError('Encrypted archive requires an age identity')
+        public_identity = subprocess.check_output(['age-keygen', '-y', str(identity)], timeout=15)
+        identity_hash = hashlib.sha256(public_identity.strip()).hexdigest()
     try:
         known = json.loads(receipt.read_text())
     except FileNotFoundError:
         known = {}
     if (known.get('schema') == 1 and known.get('status') == 'restored_not_started'
-            and known.get('archive') == archive.name and known.get('stored_sha256') == stored_digest):
+            and known.get('archive') == archive.name and known.get('stored_sha256') == stored_digest
+            and known.get('identity_sha256') == identity_hash):
         return {**known, 'reused': True}
 
     with plaintext(archive, identity, decrypt_scratch) as local:
@@ -94,6 +102,8 @@ def verify(folder, receipt, scratch, *, identity=None, decrypt_scratch=None, max
         raise RuntimeError('Stored archive changed or receiver restore failed')
     record = {'schema': 1, 'archive': archive.name, 'stored_sha256': stored_digest, 'sha256': digest,
               'status': result['status'], 'release': result['sha'], 'databases': result['databases']}
+    if identity_hash:
+        record['identity_sha256'] = identity_hash
     fd, temporary = tempfile.mkstemp(prefix='.receipt-', dir=receipt.parent)
     try:
         with os.fdopen(fd, 'w') as stream:

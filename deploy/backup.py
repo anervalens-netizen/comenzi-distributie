@@ -120,25 +120,29 @@ def prune_backups(folder: Path, keep_count: int = 2, *, validated_by=None) -> No
         validation_path(old).unlink(missing_ok=True)
 
 
-def validate_archive(current: Path, validation_root: Path | None = None, *, validated_by=None) -> dict:
+def validate_archive(current: Path, validation_root: Path | None = None, *, validated_by=None, expected_checksum=None) -> dict:
     module = load_helper('restore')
     content_bytes, members = module.inspect_archive(current)
     root = (validation_root or current.parent).parent / '.managed-restore-work'
-    checksum = digest(current)
+    checksum = expected_checksum if expected_checksum is not None else digest(current)
     with storage.configured(root, content_bytes, tag='retention-verify',
                             overhead_bytes=64*1024**2 + members*8192) as work:
-        result = module.restore(current, work.path / 'restored', scratch=work)
+        result = module.restore(current, work.path / 'restored', scratch=work, expected_checksum=checksum)
     return record_validation(current, checksum, result, validated_by=validated_by)
 
 
-def prune_nas_latest(folder: Path, current: Path, validation_root: Path | None = None) -> dict:
+def prune_nas_latest(folder: Path, current: Path, validation_root: Path | None = None, *, expected_checksum=None) -> dict:
     """Retain the latest complete verified recovery generation when configured."""
     if current.parent != folder or current.is_symlink():
         raise RuntimeError('Unsafe NAS generation')
-    expected = current.with_suffix(current.suffix + '.sha256').read_text().split()
-    if expected != [digest(current), current.name]:
+    expected = read_metadata(current.with_suffix(current.suffix + '.sha256')).split()
+    observed = digest(current)
+    checksum = expected_checksum if expected_checksum is not None else observed
+    if expected != [checksum, current.name] or observed != checksum:
         raise RuntimeError('NAS retention checksum mismatch')
-    receipt = validate_archive(current, validation_root)
+    receipt = validate_archive(current, validation_root, expected_checksum=checksum)
+    if receipt.get('sha256') != checksum:
+        raise RuntimeError('Restore receipt does not match the published archive')
     prune_backups(folder, keep_count=1)
     return receipt
 
@@ -590,7 +594,7 @@ def run_backup(
             publish_copy(archive, destination / name, checksum)
             publish_copy(checksum_file, destination / checksum_file.name, digest(checksum_file))
             if nas_latest_only:
-                receipt = prune_nas_latest(destination, destination / name, local)
+                receipt = prune_nas_latest(destination, destination / name, local, expected_checksum=checksum)
                 record_validation(archive, checksum, {'status': receipt['status'], 'sha': receipt['release']})
                 prune_backups(local)
             else:
