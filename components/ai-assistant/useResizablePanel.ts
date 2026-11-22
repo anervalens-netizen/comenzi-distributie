@@ -1,11 +1,24 @@
-import { useEffect, useRef, useSyncExternalStore, type PointerEvent as ReactPointerEvent, type KeyboardEvent } from 'react';
+import {
+  useEffect,
+  useRef,
+  useSyncExternalStore,
+  type PointerEvent as ReactPointerEvent,
+  type KeyboardEvent,
+} from 'react';
 import { usePersistentState } from './usePersistentState';
 
 function subscribeViewport(onChange: () => void) {
   window.addEventListener('resize', onChange);
-  return () => window.removeEventListener('resize', onChange);
+  // A vertical scrollbar changes clientWidth without always firing window.resize.
+  const observer =
+    typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(onChange);
+  observer?.observe(document.documentElement);
+  return () => {
+    window.removeEventListener('resize', onChange);
+    observer?.disconnect();
+  };
 }
-const viewportWidth = () => window.innerWidth;
+const viewportWidth = () => document.documentElement.clientWidth;
 
 function clampWidth(width: number, viewport: number, minWidth: number) {
   // The resize handle remains visible while the assistant can use essentially
@@ -14,23 +27,48 @@ function clampWidth(width: number, viewport: number, minWidth: number) {
   return Math.min(upper, Math.max(Math.min(minWidth, upper), width));
 }
 
-export function useResizablePanel(key: string, initialWidth: number, minWidth = 360) {
-  const [storedWidth, setStoredWidth] = usePersistentState<number>(key, initialWidth, {
-    deserialize: (raw, fallback) => {
-      try {
-        const value: unknown = JSON.parse(raw);
-        return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
-      } catch { return fallback; }
+export function useResizablePanel(
+  key: string,
+  initialWidth: number,
+  minWidth = 360,
+) {
+  const [storedWidth, setStoredWidth] = usePersistentState<number>(
+    key,
+    initialWidth,
+    {
+      deserialize: (raw, fallback) => {
+        try {
+          const value: unknown = JSON.parse(raw);
+          return typeof value === 'number' && Number.isFinite(value)
+            ? value
+            : fallback;
+        } catch {
+          return fallback;
+        }
+      },
     },
-  });
-  const viewport = useSyncExternalStore(subscribeViewport, viewportWidth, () => initialWidth);
+  );
+  const viewport = useSyncExternalStore(
+    subscribeViewport,
+    viewportWidth,
+    () => initialWidth,
+  );
   const dragging = useRef(false);
   const width = clampWidth(storedWidth, viewport, minWidth);
   useEffect(() => {
     const move = (event: PointerEvent) => {
-      if (dragging.current) setStoredWidth(clampWidth(window.innerWidth - event.clientX, window.innerWidth, minWidth));
+      if (dragging.current)
+        setStoredWidth(
+          clampWidth(
+            document.documentElement.clientWidth - event.clientX,
+            document.documentElement.clientWidth,
+            minWidth,
+          ),
+        );
     };
-    const stop = () => { dragging.current = false; };
+    const stop = () => {
+      dragging.current = false;
+    };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', stop);
     window.addEventListener('pointercancel', stop);

@@ -247,9 +247,10 @@ try{
  assert(await browser.evaluate(`(()=>{
    const panel=document.querySelector('aside[aria-label="AI Comenzi"]');
    return getComputedStyle(panel.parentElement).position==='sticky' &&
-     panel.getBoundingClientRect().width>=innerWidth-24 &&
-     panel.getBoundingClientRect().width<=innerWidth &&
-     document.documentElement.scrollWidth<=innerWidth+1;
+     panel.getBoundingClientRect().width>=document.documentElement.clientWidth-24 &&
+     panel.getBoundingClientRect().right<=document.documentElement.clientWidth+1 &&
+     panel.getBoundingClientRect().left>=10 &&
+     document.documentElement.scrollWidth<=document.documentElement.clientWidth+1;
  })()`),'desktop AI can expand close to full viewport without page overflow');
  assert(await browser.evaluate(`(()=>{
    const handle=document.querySelector('[aria-label="Redimensionează panoul AI"]');
@@ -264,7 +265,7 @@ try{
  await browser.send('Input.dispatchMouseEvent',{type:'mousePressed',x:handleBounds.x,y:handleBounds.y,button:'left',buttons:1,clickCount:1});
  await browser.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:dragTarget,y:handleBounds.y,button:'left',buttons:1});
  await browser.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:dragTarget,y:handleBounds.y,button:'left',buttons:0,clickCount:1});
- await waitFor(()=>browser.evaluate(`Math.abs(document.querySelector('aside[aria-label="AI Comenzi"]').getBoundingClientRect().width-(innerWidth-${dragTarget}))<20`),'AI follows mouse drag beyond former 44% limit');
+ await waitFor(()=>browser.evaluate(`Math.abs(document.querySelector('aside[aria-label="AI Comenzi"]').getBoundingClientRect().width-(document.documentElement.clientWidth-${dragTarget}))<20`),'AI follows mouse drag beyond former 44% limit');
  const draggedWidth=await browser.evaluate(`document.querySelector('aside[aria-label="AI Comenzi"]').getBoundingClientRect().width`);
  await browser.evaluate(`document.querySelector('aside [aria-label="Închide AI Comenzi"]').click()`);
  await browser.evaluate(`document.querySelector('.manager-ai-trigger').click()`);
