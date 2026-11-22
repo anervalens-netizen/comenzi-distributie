@@ -110,6 +110,9 @@
     },
     "satori": {
       "fflate": "0.7.5"
+    },
+    "@a2ui/markdown-it": {
+      "dompurify": "3.4.18"
     }
   }
 }
