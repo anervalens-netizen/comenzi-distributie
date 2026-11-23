@@ -28,7 +28,8 @@ ProtectHome=true
 ReadWritePaths=/storage/comenzi-distributie
 ProtectKernelTunables=true
 ProtectControlGroups=true
-MemoryHigh=384M
+# Allow room for SQLite, native buffers and report workers alongside the V8 heap.
+MemoryHigh=640M
 MemoryMax=768M
 
 [Install]
