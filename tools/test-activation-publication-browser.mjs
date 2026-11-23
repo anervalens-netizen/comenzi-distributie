@@ -73,6 +73,7 @@ try{
   assert.equal(queues.totals.length,5);
   const digi=await browser.newTab(origin+'/?digi');
   await reply('digi',0,{error:'Serviciu ocupat'},503);
+  await waitFor(()=>digi.evaluate("document.querySelector('[role=alert]')?.textContent.includes('Se reîncearcă automat')"),'a transient read is visible before its automatic retry');
   await reply('digi',1,{error:'Serviciu ocupat'},503);
   await waitFor(()=>digi.evaluate(text+".includes('Reîncearcă pentru Digi')"),'two transient failures expose a manual retry');
   await digi.evaluate("document.querySelector('.activation-operator button').click();true");
@@ -87,7 +88,7 @@ try{
   const partial=await browser.newTab(origin);
   await reply('totals',5,{...report('four',31),separateFocusScope:false});
   for(const n of [5,6])await reply('panels',n,{error:'Serviciu ocupat'},503);
-  await waitFor(()=>partial.evaluate("document.querySelector('[role=alert]')?.textContent.includes('Serviciu ocupat')"),'partial results explain why details failed');
+  await waitFor(()=>partial.evaluate("document.querySelector('[role=alert]')?.textContent.includes('Detaliile activărilor nu s-au încărcat. Serviciu ocupat')"),'partial results explain why details failed');
   assert.equal(await partial.evaluate(total),'31','the verified total stays visible');
   assert.equal(await partial.evaluate(text+".includes('Reîncearcă pentru Vodafone')"),true);
   console.log('PASS: background totals stay optional; mixed publications are discarded and retry once; rapid rotation clears stale figures.');

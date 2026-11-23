@@ -15,7 +15,7 @@ import {VodafoneFocusPanel} from './vodafone-focus';
 import './activations.css';
 const VodafoneBonus=lazy(()=>import('./vodafone-bonus').then(module=>({default:module.VodafoneBonus})));
 const number=(n:number)=>n.toLocaleString('ro-RO');
-async function readOverview(path:string,signal:AbortSignal){
+async function readOverview(path:string,signal:AbortSignal,onRetry:(message?:string)=>void){
  const request=()=>api<ActivationReport>(path,'GET',undefined,signal);
  try{return await request();}
  catch(error){
@@ -24,9 +24,12 @@ async function readOverview(path:string,signal:AbortSignal){
    if(signal.aborted||!transient)throw error;
    // Allow one transient read failure per phase. An unmounted or superseded
    // card never dispatches a second GET for its old selection.
-   await new Promise(resolve=>setTimeout(resolve,1000));
-   signal.throwIfAborted();
-   return request();
+   onRetry(errorMessage(error));
+   try{
+     await new Promise(resolve=>setTimeout(resolve,1500));
+     signal.throwIfAborted();
+     return await request();
+   }finally{onRetry();}
  }
 }
 function ActivationMetric({label,value,network,onClick}:{label:string;value:number;network:string;onClick:()=>void}){const id=useId();return <div><dt>{label}</dt><dd><button type="button" className="activation-trend-value" aria-label={'Evoluție lunară · '+label+' · '+network} aria-describedby={id} onClick={onClick}><span id={id}>{number(value)}</span><small aria-hidden="true"> ↗</small></button></dd></div>;}
@@ -36,7 +39,7 @@ export function ActivationOperatorCard({userId,query,provider,reload}:{userId:st
  const [attempt,setAttempt]=useState(0);
  const params=new URLSearchParams(query);params.set('provider',provider);const search=params.toString(),key=userId+'|'+search+'|'+reload+'|'+attempt;
  const [read,setRead]=useState<{
-   key:string; data?:ActivationReport; complete?:boolean; error?:string;
+   key:string; data?:ActivationReport; complete?:boolean; error?:string; retryMessage?:string;
    focus?:FocusReport[]; focusError?:string; focusUnavailable?:ActivationReport['focusUnavailable'];
  }>();
  useEffect(()=>{
@@ -45,11 +48,16 @@ export function ActivationOperatorCard({userId,query,provider,reload}:{userId:st
      const controller=new AbortController();
      active=controller;
      const path='activations?'+search;
-     const fetchReport=(phase?:string)=>readOverview(path+(phase?'&overviewPhase='+phase:''),controller.signal);
      const update=(fields:Partial<NonNullable<typeof read>>)=>{
        if(!controller.signal.aborted)setRead(old=>({...(old?.key===key?old:{}),key,...fields}));
      };
      let final=false, separateStarted=false, panelError='';
+     const retries=new Map<string,string>();
+     const fetchReport=(phase='')=>readOverview(path+(phase?'&overviewPhase='+phase:''),controller.signal,message=>{
+       if(message&&!(phase==='totals'&&final))retries.set(phase,message);
+       else retries.delete(phase);
+       update({retryMessage:retries.values().next().value});
+     });
      let publication:string|null|undefined;
      function restartPublication() {
        if(controller.signal.aborted)return;
@@ -73,14 +81,15 @@ export function ActivationOperatorCard({userId,query,provider,reload}:{userId:st
      function scopeFailure(error:unknown) {
        if(publicationConflict(error))return true;
        if(!(error instanceof ApiError)||![401,403,404,409].includes(error.status))return false;
-       update({error:errorMessage(error),data:undefined,focus:undefined,focusError:undefined,focusUnavailable:undefined});
+       update({error:errorMessage(error),retryMessage:undefined,data:undefined,focus:undefined,focusError:undefined,focusUnavailable:undefined});
        controller.abort();
        return true;
      }
      function accept(data:ActivationReport,complete:boolean){
        if(final||!samePublication(data))return;
        final=complete;
-       update({data,complete:complete||!!panelError,error:panelError||undefined,...(!data.separateFocusScope?{focus:data.focusCards,focusUnavailable:data.focusUnavailable}:{})});
+       if(complete)retries.delete('totals');
+       update({data,complete:complete||!!panelError,error:panelError||undefined,retryMessage:retries.values().next().value,...(!data.separateFocusScope?{focus:data.focusCards,focusUnavailable:data.focusUnavailable}:{})});
        if(data.separateFocusScope&&!separateStarted){
          separateStarted=true;
          void fetchReport('cards').then(cards=>{
@@ -130,6 +139,7 @@ export function ActivationOperatorCard({userId,query,provider,reload}:{userId:st
    </div></details>
    {trend&&<MonthlyActivationsDialog key={trend.metric} title={trend.label+' · '+network} cohort={trend.metric.startsWith('cohort:')} points={activationMonthlyPoints(data,data.selectedMonths||params.get('months')?.split(',').filter(Boolean)||[data.month],trend.metric)} onClose={()=>setTrend(null)}/>}
   </>}
+  {current?.retryMessage&&!current.error&&<p role="alert">{current.retryMessage} Se reîncearcă automat…</p>}
   {data&&current?.error&&<p role="alert">Detaliile activărilor nu s-au încărcat. {current.error}</p>}
   {provider==='vodafone'&&current?.focusUnavailable?.map(territory=><p key={territory} role="alert">Focus Vodafone {focusTerritoryLabels[territory]} · date indisponibile temporar.</p>)}
   {provider==='vodafone'&&current?.focusError&&<p role="alert">Focus Vodafone · {current.focusError}</p>}
