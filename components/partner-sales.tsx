@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { api, errorMessage, money } from '@/lib/client-api';
 import type { PartnerSalesResult } from '@/lib/partner-sales-store';
+import { PartnerStands } from './partner-stands';
 import './partner-sales.css';
 const amount=(cents:number|null)=>cents===null?'Valoare lipsă':money(cents/100);
 const date=(value:string|null)=>value?value.split('-').reverse().join('.'):'—';
@@ -55,6 +56,9 @@ export function PartnerSales({id,initialRange}:{id:string;initialRange?:{from:st
             <small className="partner-billing-period">De la prima facturare până în luna curentă, inclusiv lunile fără facturi.</small>
           </div>
         </div>
+      </>}
+      <PartnerStands key={id} id={id}/>
+      {ready&&<>
         <p className="partner-sales-source">{date(ready.from)} – {date(ready.to)} · Import până la {date(ready.through)}. Retururile sunt incluse în vânzări.</p>
         {!ready.coverageComplete&&<p className="partner-sales-caution">Istoric parțial: sunt incluse doar vânzările asociate sigur acestei fișe.</p>}
         {!!ready.totals.missingValues&&<p className="partner-sales-caution">{ready.totals.missingValues} linii au valoarea lipsă și nu sunt incluse în suma cunoscută.</p>}

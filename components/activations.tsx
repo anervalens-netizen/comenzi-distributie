@@ -15,11 +15,26 @@ import {VodafoneFocusPanel} from './vodafone-focus';
 import './activations.css';
 const VodafoneBonus=lazy(()=>import('./vodafone-bonus').then(module=>({default:module.VodafoneBonus})));
 const number=(n:number)=>n.toLocaleString('ro-RO');
+async function readOverview(path:string,signal:AbortSignal){
+ const request=()=>api<ActivationReport>(path,'GET',undefined,signal);
+ try{return await request();}
+ catch(error){
+   const transient=error instanceof ApiError?[502,503,504].includes(error.status):
+     error instanceof TypeError||(error instanceof DOMException&&error.name==='TimeoutError');
+   if(signal.aborted||!transient)throw error;
+   // Allow one transient read failure per phase. An unmounted or superseded
+   // card never dispatches a second GET for its old selection.
+   await new Promise(resolve=>setTimeout(resolve,1000));
+   signal.throwIfAborted();
+   return request();
+ }
+}
 function ActivationMetric({label,value,network,onClick}:{label:string;value:number;network:string;onClick:()=>void}){const id=useId();return <div><dt>{label}</dt><dd><button type="button" className="activation-trend-value" aria-label={'Evoluție lunară · '+label+' · '+network} aria-describedby={id} onClick={onClick}><span id={id}>{number(value)}</span><small aria-hidden="true"> ↗</small></button></dd></div>;}
 export function ActivationOperatorCard({userId,query,provider,reload}:{userId:string;query:string;provider:ActivationProvider;reload:number}){
  const [trend,setTrend]=useState<{label:string;metric:ActivationTrendMetric}|null>(null),countId=useId(),network=provider==='vodafone'?'Vodafone':'Digi';
  const openTrend=(label:string,metric:ActivationTrendMetric)=>setTrend({label,metric});
- const params=new URLSearchParams(query);params.set('provider',provider);const search=params.toString(),key=userId+'|'+search+'|'+reload;
+ const [attempt,setAttempt]=useState(0);
+ const params=new URLSearchParams(query);params.set('provider',provider);const search=params.toString(),key=userId+'|'+search+'|'+reload+'|'+attempt;
  const [read,setRead]=useState<{
    key:string; data?:ActivationReport; complete?:boolean; error?:string;
    focus?:FocusReport[]; focusError?:string; focusUnavailable?:ActivationReport['focusUnavailable'];
@@ -30,7 +45,7 @@ export function ActivationOperatorCard({userId,query,provider,reload}:{userId:st
      const controller=new AbortController();
      active=controller;
      const path='activations?'+search;
-     const fetchReport=(phase?:string)=>api<ActivationReport>(path+(phase?'&overviewPhase='+phase:''),'GET',undefined,controller.signal);
+     const fetchReport=(phase?:string)=>readOverview(path+(phase?'&overviewPhase='+phase:''),controller.signal);
      const update=(fields:Partial<NonNullable<typeof read>>)=>{
        if(!controller.signal.aborted)setRead(old=>({...(old?.key===key?old:{}),key,...fields}));
      };
@@ -117,6 +132,7 @@ export function ActivationOperatorCard({userId,query,provider,reload}:{userId:st
   </>}
   {provider==='vodafone'&&current?.focusUnavailable?.map(territory=><p key={territory} role="alert">Focus Vodafone {focusTerritoryLabels[territory]} · date indisponibile temporar.</p>)}
   {provider==='vodafone'&&current?.focusError&&<p role="alert">Focus Vodafone · {current.focusError}</p>}
+  {(current?.error||current?.focusError)&&<button type="button" className="secondary" onClick={()=>setAttempt(value=>value+1)}>Reîncearcă pentru {network}</button>}
   {provider==='vodafone'&&current?.focus&&<VodafoneFocusPanel key={key} query={search} reports={current.focus}/>}
  </article>;
 }

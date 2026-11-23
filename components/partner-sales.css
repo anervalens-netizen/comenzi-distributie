@@ -10,3 +10,10 @@
 @media(max-width:660px){.partner-sales-overview .partner-sales-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:520px){.partner-sales-overview .partner-sales-body{padding:0 10px 10px}.partner-sales-overview th,.partner-sales-overview td{padding:8px 4px}.partner-sales-overview .partner-sales-scroll table{font-size:.76rem}}
 
 .partner-sales-scope{display:grid;gap:5px;font-size:.8rem;margin:6px 0 12px}.partner-sales-scope select{width:100%;min-width:0;padding:8px;font-size:.85rem}.partner-sales-company{padding:10px;border-left:3px solid #45619a;background:#f1f5fc;border-radius:6px}
+
+.partner-stand-card{margin:8px 0 12px;padding:10px;border-radius:8px;background:#f3f6fa;min-width:0}
+.partner-stand-heading{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
+.partner-stand-heading h4,.partner-stand-card p{margin:0}
+.partner-stand-heading strong{white-space:nowrap;font-variant-numeric:tabular-nums}
+.partner-stand-card p,.partner-stand-card output{display:block;margin-top:4px;color:#52647b;font-size:.8rem}
+.partner-stand-card .partner-sales-scroll{margin-top:8px;background:#fff}

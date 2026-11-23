@@ -8,15 +8,24 @@ const bundle=await build({stdin:{contents:`
   import {ActivationOperatorCard} from './components/activations';
   import {setLocalWorkUserId} from './lib/local-work';
   setLocalWorkUserId('fictional-user');
-  createRoot(document.getElementById('root')).render(<ActivationOperatorCard userId="fictional-user" query="month=2026-10" provider="vodafone" reload={0}/>);
+  const provider=location.search.includes('digi')?'digi':'vodafone';
+  if(location.search.includes('timeout')){
+    const schedule=window.setTimeout.bind(window);
+    let firstDeadline=true;
+    window.setTimeout=(callback,ms,...args)=>{
+      if(firstDeadline&&ms===20000){firstDeadline=false;return schedule(callback,750,...args);}
+      return schedule(callback,ms,...args);
+    };
+  }
+  createRoot(document.getElementById('root')).render(<ActivationOperatorCard userId="fictional-user" query="month=2026-10" provider={provider} reload={0}/>);
 `,resolveDir:process.cwd(),loader:'tsx'},bundle:true,platform:'browser',format:'esm',jsx:'automatic',
   define:{'process.env.NODE_ENV':'"production"'},loader:{'.css':'empty','.woff2':'empty'},write:false});
-const queues={totals:[],panels:[],cards:[]};
+const queues={totals:[],panels:[],cards:[],digi:[]};
 const server=createServer((req,res)=>{
   const url=new URL(req.url,'http://localhost');
   if(url.pathname==='/api/activations'){
     res.setHeader('Content-Type','application/json');res.setHeader('Cache-Control','no-store');
-    queues[url.searchParams.get('overviewPhase')].push(res);
+    queues[url.searchParams.get('overviewPhase')||url.searchParams.get('provider')].push(res);
   }else if(url.pathname==='/fixture.js'){
     res.setHeader('Content-Type','application/javascript');res.end(bundle.outputFiles[0].text);
   }else{
@@ -62,6 +71,19 @@ try{
   await waitFor(()=>revoked.evaluate(text+".includes('Acces revocat')"),'late permission failure clears authorized panels');
   assert.equal(await revoked.evaluate(total),undefined);
   assert.equal(queues.totals.length,5);
+  const digi=await browser.newTab(origin+'/?digi');
+  await reply('digi',0,{error:'Serviciu ocupat'},503);
+  await reply('digi',1,{error:'Serviciu ocupat'},503);
+  await waitFor(()=>digi.evaluate(text+".includes('Reîncearcă pentru Digi')"),'two transient failures expose a manual retry');
+  await digi.evaluate("document.querySelector('.activation-operator button').click();true");
+  await reply('digi',2,{error:'Răspuns întârziat'},504);
+  await reply('digi',3,{...report('three',17),provider:'digi'});
+  await waitFor(()=>digi.evaluate(total+"==='17'"),'Digi recovers from a transient read error');
+  assert.equal(queues.totals.length,5,'retrying Digi does not reload Vodafone');
+  const timedOut=await browser.newTab(origin+'/?digi-timeout');
+  // Hold request 4 past its client deadline and answer only the automatic retry.
+  await reply('digi',5,{...report('three',23),provider:'digi'});
+  await waitFor(()=>timedOut.evaluate(total+"==='23'"),'an actual client timeout recovers on the same card');
   console.log('PASS: background totals stay optional; mixed publications are discarded and retry once; rapid rotation clears stale figures.');
 }finally{
   await browser?.close();

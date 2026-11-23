@@ -6,9 +6,10 @@ import {visibleActivation,type ActivationQuery} from './activation-distribution'
 import {emptyActivationCounts,type ActivationReport,type ActivationCounts,type ActivationProductBreakdown,type ActivationSimZero,type ActivationAnalysisDay} from './activation-types';
 export const canonicalRules=(r:unknown):string=>JSON.stringify(r&&typeof r==='object'&&!Array.isArray(r)?Object.fromEntries(Object.entries(r).sort(([a],[b])=>a.localeCompare(b)).map(([k,v])=>[k,JSON.parse(canonicalRules(v))])):Array.isArray(r)?r.map(v=>JSON.parse(canonicalRules(v))):r);
 type Dimension={month:string;site:string;item_type:string;county:string;handset:string;contradictory:number;count:number;last_date:string};
-function add(t:ActivationCounts,r:Dimension,rules:DistributionRules,countLegacyEligibility:boolean){
+type MonthlyCount=Pick<Dimension,'month'|'site'|'item_type'|'count'|'last_date'>;
+function add(t:ActivationCounts,r:MonthlyCount|Dimension,rules:DistributionRules){
  t.total+=r.count;t[r.item_type==='SIM'?'sim':r.item_type==='TELSIM'?'telsim':'other']+=r.count;if(!r.site)t.unassigned+=r.count;
- if(!countLegacyEligibility)return;
+ if(!('county' in r))return;
  const a=rules.assignments.find(a=>a.siteCode.toUpperCase()===r.site.toUpperCase());
  const e=vodafoneEligibility(r.county,r.handset,a?.territoryId||null,!!r.contradictory);
  if(e.eligible){t.eligible=(t.eligible||0)+r.count;const key=e.region==='own'?'ownRegion':e.region==='other'?'otherRegion':'unknownRegion';t[key]=(t[key]||0)+r.count;}
@@ -48,14 +49,19 @@ export function distributionReport(report:DatabaseSync,base:ActivationReport,met
    activationPartnerView(report,result,where,args,query);
    return result;
  }
- const dimensions=report.prepare(`SELECT COALESCE(month,'') month,site,item_type,county,handset,contradictory,count,last_date FROM dimension_monthly WHERE ${where} ORDER BY month DESC,site`).all(...args) as Dimension[];
+ // Apply visibility while county and handset are still present. Only the
+ // legacy eligibility calculation needs those dimensions in JavaScript.
+ const dimensionSql=countLegacyEligibility
+   ? `SELECT month,site,item_type,county,handset,contradictory,count,last_date FROM dimension_monthly WHERE ${where}`
+   : `SELECT month,site,item_type,SUM(count) count,MAX(last_date) last_date FROM dimension_monthly WHERE ${where} GROUP BY month,site,item_type`;
+ const dimensions=report.prepare(dimensionSql+' ORDER BY month DESC,site').iterate(...args) as Iterable<MonthlyCount|Dimension>;
  const labels=new Map(report.prepare('SELECT site,label FROM sites').all().map(r=>[String(r.site),String(r.label)])),history=new Map<string,ActivationCounts>(),agents=new Map<string,ActivationCounts>();
  for(const row of dimensions){
    if(!row.month)continue;
-   const h=history.get(row.month)||newCounts();add(h,row,rules,countLegacyEligibility);history.set(row.month,h);
+   const h=history.get(row.month)||newCounts();add(h,row,rules);history.set(row.month,h);
    if(row.last_date&&(!result.latestDate||row.last_date>result.latestDate))result.latestDate=row.last_date;
    if(!query.months.includes(row.month))continue;
-   add(result.totals,row,rules,countLegacyEligibility);const a=agents.get(row.site)||newCounts();add(a,row,rules,countLegacyEligibility);agents.set(row.site,a);
+   add(result.totals,row,rules);const a=agents.get(row.site)||newCounts();add(a,row,rules);agents.set(row.site,a);
  }
  result.history=[...history].map(([month,counts])=>({month,...counts}));result.months=result.history.map(({month,total})=>({month,total}));
  result.sites=[...agents].map(([site,counts])=>({site,label:site?(labels.get(site)||site):'Agent de verificat',...counts})).sort((a,b)=>b.total-a.total||a.site.localeCompare(b.site));
