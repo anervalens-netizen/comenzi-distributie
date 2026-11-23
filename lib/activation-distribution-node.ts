@@ -54,7 +54,7 @@ export function distributionReport(report:DatabaseSync,base:ActivationReport,met
  const dimensionSql=countLegacyEligibility
    ? `SELECT month,site,item_type,county,handset,contradictory,count,last_date FROM dimension_monthly WHERE ${where}`
    : `SELECT month,site,item_type,SUM(count) count,MAX(last_date) last_date FROM dimension_monthly WHERE ${where} GROUP BY month,site,item_type`;
- const dimensions=report.prepare(dimensionSql+' ORDER BY month DESC,site').iterate(...args) as Iterable<MonthlyCount|Dimension>;
+ const dimensions=report.prepare(dimensionSql+' ORDER BY month DESC,site').all(...args) as (MonthlyCount|Dimension)[];
  const labels=new Map(report.prepare('SELECT site,label FROM sites').all().map(r=>[String(r.site),String(r.label)])),history=new Map<string,ActivationCounts>(),agents=new Map<string,ActivationCounts>();
  for(const row of dimensions){
    if(!row.month)continue;
