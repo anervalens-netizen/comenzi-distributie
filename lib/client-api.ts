@@ -137,7 +137,7 @@ export async function networkApi<T=Record<string,unknown>>(path: string,method='
   const controller=new AbortController();
   const cancel=()=>controller.abort(signal?.reason);signal?.addEventListener('abort',cancel,{once:true});if(signal?.aborted)cancel();
   const budget=method==='GET'&&/^vodafone\/bonuses(?:\?|$)/.test(path)?50000:20000;
-  const timer=setTimeout(()=>controller.abort(new Error('Cererea a depășit timpul de așteptare.')),budget);
+  const timer=setTimeout(()=>controller.abort(new DOMException('Cererea a depășit timpul de așteptare.','TimeoutError')),budget);
   const headers:Record<string,string>={};if(isPrivate&&requestOwner)headers['X-Operation-User']=requestOwner;
   const options:RequestInit={method,credentials:'same-origin',signal:controller.signal,headers};
   if(body && method!=='GET' && method!=='HEAD'){headers['Content-Type']='application/json';if(operationId)headers['X-Operation-Id']=operationId;options.body=JSON.stringify(body);}
@@ -152,7 +152,7 @@ export async function networkApi<T=Record<string,unknown>>(path: string,method='
   }catch(error){clearTimeout(timer);signal?.removeEventListener('abort',cancel);throw error;}
   let data:unknown;
   try { data=await res.json(); }
-  catch(error) {if(controller.signal.aborted)throw error;if(res.ok)throw new ApiError(502,'Serverul a trimis un răspuns care nu poate fi citit.',null);data=null;}finally{clearTimeout(timer);signal?.removeEventListener('abort',cancel);}
+  catch(error) {if(controller.signal.aborted)throw controller.signal.reason??error;if(res.ok)throw new ApiError(502,'Serverul a trimis un răspuns care nu poate fi citit.',null);data=null;}finally{clearTimeout(timer);signal?.removeEventListener('abort',cancel);}
   if(!res.ok) {
     const message=data && typeof data==='object' && 'error' in data && typeof (data as {error?:unknown}).error==='string'
       ? (data as {error:string}).error

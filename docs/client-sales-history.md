@@ -6,6 +6,25 @@ sales UI exposes it independently under Vânzări → Pe clienți; see
 [monthly report semantics](partner-sales-activity.md#monthly-client-report-snapshot-version-5).
 Never sum the two datasets: they describe overlapping sales at different grains.
 
+### Checking a month across sources
+
+`python3 tools/reconcile_sales_month.py --data-dir /example/data 2026-01`
+opens both SQLite sources read-only. It compares the active seller workbook
+with active partner imports covering the requested month. The output records
+their hashes, import times, declared partner coverage and observed movement
+dates. Differences are partner minus seller, in source rows, known cents,
+missing amounts and millionths of a unit. A missing source yields `null`.
+Matching aggregates still require document-level evidence to resolve individual
+lines. Check the source periods and workbook versions before adjusting attribution.
+
+Seller reports use the monthly product import. The partner card uses detailed
+ERP sales and keeps the original seller, fiscal entity and work point distinct.
+CRM assignments identify the current portfolio. Finalized stand slips belong
+to a specific CRM point. Vodafone and Digi each publish an activation ledger
+and a version-matched report. SIM sales use the commercial movement date and
+operator activations use the activation date. These events can fall in different
+months for the same SIM.
+
 Product reporting may read active historical line items only when its authoritative
 monthly product import is absent and declared history coverage includes the whole
 month. The fallback is read-only, visibly identifies historical months and never

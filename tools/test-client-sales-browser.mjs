@@ -52,6 +52,10 @@ const server=createServer(async(request,response)=>{
    await delay(url.searchParams.get('q')==='slow'?700:50);response.end(JSON.stringify(report(url.searchParams)));return;
   }
   if(/^\/api\/partner\/portfolio\/p[0-9]+$/.test(url.pathname)){const id=url.pathname.split('/').at(-1);response.end(JSON.stringify({partner:{id,name:'Client sintetic detaliu',cui:'TEST',city:'Oraș test',county:'Județ test',address:'',phone:'',email:'',contact:'',warehouseIds:[],canEdit:false,revision:0,latitude:null,longitude:null,positionSource:'',positionQuality:'',route:''},visits:[],visitCount:0,nextCursor:null}));return;}
+  if(url.pathname==='/api/partner/portfolio/p7/stands'){
+   response.end(JSON.stringify({firstBilling:'2025-11-04',billingThrough:'2026-09-28',availableFrom:'2025-11-04',
+    stands:[{orderId:'example-slip',reference:'EXAMPLE',date:'2025-11-04',lineId:'0',code:'TEST-STAND',type:'Stand sintetic',quantity:2,timing:'same-day'}]}));return;
+  }
   if(url.pathname==='/api/partner/portfolio/p7/sales'){
    const from=url.searchParams.get('from')||'2025-10-12',to=url.searchParams.get('to')||'2026-09-28';
    const filtered=from>='2026-09-01';
@@ -170,11 +174,15 @@ try {
   await waitFor("document.querySelector('.partner-billing-dates')?.textContent.includes('12.10.2025')");
   check(requests.some(p=>p.includes('/partner/portfolio/p7/sales?')&&p.includes('from=2026-09-01')&&p.includes('to=2026-09-28')),'Real partner sales drilldown uses selected cutoff');
   check(await evaluate("document.querySelector('.partner-billing-dates').textContent.includes('12.09.2026')"),'First and filtered latest billing share one card');
+  await waitFor("document.querySelector('.partner-sales-body .partner-stand-card')?.innerText.includes('2 buc.')");
+  check(await evaluate("document.querySelector('.partner-sales-kpis').nextElementSibling.matches('.partner-stand-card')&&document.querySelector('.partner-stand-card td').checkVisibility()"),'The exact-point stand quantity and dated slip are visible beside the billing summary');
+  check(await evaluate("document.querySelector('.partner-stand-card').innerText.includes('04.11.2025')"),'The stand comparison uses the point first billing, independently of the company and sales period');
   check(await evaluate("document.querySelector('.partner-sales-kpis > div:nth-child(3) strong').textContent==='1'&&document.querySelector('.partner-sales-kpis > div:nth-child(4) strong').textContent==='1,25'"),'Filtered invoice count sits next to the lifetime average');
   check(await evaluate("document.querySelector('dialog').scrollWidth<=document.querySelector('dialog').clientWidth+1"),'Four invoice and sales cards fit the mobile sheet');
   await click('.partner-sales-period summary');
   await click('.partner-sales-filters button');
   await waitFor("document.querySelector('.partner-sales-kpis > div:nth-child(3) strong')?.textContent==='15'");
+  check(requests.filter(p=>p==='/api/partner/portfolio/p7/stands').length===1,'Changing the sales range preserves the all-time point stands');
   check(await evaluate("document.querySelector('.partner-billing-dates').textContent.includes('12.10.2025')&&document.querySelector('.partner-sales-kpis > div:nth-child(4) strong').textContent==='1,25'"),'History period changes only the filtered metrics');
   await click('[aria-label="Închide fișa"]');
   await fill('[aria-label="Caută client în raport"]','slow');await waitFor("document.querySelector('.client-sales output')!==null");
