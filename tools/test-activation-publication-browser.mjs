@@ -84,6 +84,12 @@ try{
   // Hold request 4 past its client deadline and answer only the automatic retry.
   await reply('digi',5,{...report('three',23),provider:'digi'});
   await waitFor(()=>timedOut.evaluate(total+"==='23'"),'an actual client timeout recovers on the same card');
+  const partial=await browser.newTab(origin);
+  await reply('totals',5,{...report('four',31),separateFocusScope:false});
+  for(const n of [5,6])await reply('panels',n,{error:'Serviciu ocupat'},503);
+  await waitFor(()=>partial.evaluate("document.querySelector('[role=alert]')?.textContent.includes('Serviciu ocupat')"),'partial results explain why details failed');
+  assert.equal(await partial.evaluate(total),'31','the verified total stays visible');
+  assert.equal(await partial.evaluate(text+".includes('Reîncearcă pentru Vodafone')"),true);
   console.log('PASS: background totals stay optional; mixed publications are discarded and retry once; rapid rotation clears stale figures.');
 }finally{
   await browser?.close();

@@ -130,6 +130,7 @@ export function ActivationOperatorCard({userId,query,provider,reload}:{userId:st
    </div></details>
    {trend&&<MonthlyActivationsDialog key={trend.metric} title={trend.label+' · '+network} cohort={trend.metric.startsWith('cohort:')} points={activationMonthlyPoints(data,data.selectedMonths||params.get('months')?.split(',').filter(Boolean)||[data.month],trend.metric)} onClose={()=>setTrend(null)}/>}
   </>}
+  {data&&current?.error&&<p role="alert">Detaliile activărilor nu s-au încărcat. {current.error}</p>}
   {provider==='vodafone'&&current?.focusUnavailable?.map(territory=><p key={territory} role="alert">Focus Vodafone {focusTerritoryLabels[territory]} · date indisponibile temporar.</p>)}
   {provider==='vodafone'&&current?.focusError&&<p role="alert">Focus Vodafone · {current.focusError}</p>}
   {(current?.error||current?.focusError)&&<button type="button" className="secondary" onClick={()=>setAttempt(value=>value+1)}>Reîncearcă pentru {network}</button>}
