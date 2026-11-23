@@ -101,6 +101,7 @@ SELECT o.id order_id,o.kind,o.finalized_at,
                  fiscal_key(p.source_client_code)=fiscal_key(json_extract(o.payload,'$.client.cui'))
             THEN p.point_key END point_key,
        json_extract(o.payload,'$.client.cui') recorded_client_code, json_extract(o.payload,'$.client.id') recorded_customer_id
-FROM crm.orders o LEFT JOIN crm.customer_identity_aliases a ON a.alias_id=json_extract(o.payload,'$.client.id')
+FROM crm.orders o LEFT JOIN catalog_aliases a ON a.alias_id=json_extract(o.payload,'$.client.id')
 LEFT JOIN catalog_portfolio p ON p.customer_id=COALESCE(a.canonical_id,json_extract(o.payload,'$.client.id'))
-WHERE o.status='finalized' AND o.kind IN ('sim','stand_client');
+WHERE o.status='finalized' AND (o.kind IN ('sim','stand_client') OR (o.kind='combined'
+ AND json_array_length(o.payload,'$.serials')>0 AND json_extract(o.payload,'$.client.id') IS NOT NULL));
