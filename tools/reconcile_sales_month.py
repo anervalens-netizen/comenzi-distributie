@@ -12,21 +12,34 @@ def reconcile(directory, month):
     start = dt.date.fromisoformat(month + '-01')
     end = start.replace(day=calendar.monthrange(start.year, start.month)[1])
     period = (start.isoformat(), end.isoformat())
-    seller = (directory / 'sales.sqlite').resolve().as_uri() + '?mode=ro'
-    history = (directory / 'client-history/client-sales-history.sqlite').resolve().as_uri() + '?mode=ro'
-    with closing(sqlite3.connect(seller, uri=True)) as db:
+    sources = {'seller': directory / 'sales.sqlite',
+               'history': directory / 'client-history/client-sales-history.sqlite'}
+    seller_import = None
+    partner_imports = []
+    with closing(sqlite3.connect(':memory:', uri=True)) as db:
         db.row_factory = sqlite3.Row
-        db.execute('ATTACH DATABASE ? AS history', (history,))
+        available = set()
+        for alias, path in sources.items():
+            try:
+                path.stat()
+            except FileNotFoundError:
+                continue
+            db.execute('ATTACH DATABASE ? AS ?', (path.resolve().as_uri() + '?mode=ro', alias))
+            available.add(alias)
         db.execute('PRAGMA query_only=ON')
         db.execute('BEGIN')
-        # Pin both sets of active imports before reading their lines.
-        db.execute('SELECT (SELECT COUNT(*) FROM sales_months),'
-                   '(SELECT COUNT(*) FROM history.history_imports)').fetchone()
-        seller_import = db.execute('SELECT import_id, file_hash, imported_at FROM sales_months WHERE month=?', (month,)).fetchone()
-        partner_imports = db.execute("""
-            SELECT sha256, imported_at, period_start, period_end FROM history.history_imports
-            WHERE state='active' AND period_end>=? AND period_start<=? ORDER BY period_start, id
-        """, period).fetchall()
+        if len(available) == 2:
+            # Pin both snapshots in one statement before reading either source's lines.
+            db.execute('SELECT (SELECT COUNT(*) FROM seller.sales_months),'
+                       '(SELECT COUNT(*) FROM history.history_imports)').fetchone()
+        if 'seller' in available:
+            seller_import = db.execute('SELECT import_id, file_hash, imported_at '
+                                       'FROM seller.sales_months WHERE month=?', (month,)).fetchone()
+        if 'history' in available:
+            partner_imports = db.execute("""
+                SELECT sha256, imported_at, period_start, period_end FROM history.history_imports
+                WHERE state='active' AND period_end>=? AND period_start<=? ORDER BY period_start, id
+            """, period).fetchall()
         seller_totals = partner_totals = None
         if seller_import:
             seller_totals = dict(db.execute("""
@@ -34,7 +47,7 @@ def reconcile(directory, month):
                        COALESCE(SUM(value_cents IS NULL),0) missingValues,
                        COALESCE(SUM(CAST(ROUND(quantity*1000000) AS INTEGER)),0) quantityMicros,
                        MIN(date) firstMovement, MAX(date) lastMovement
-                FROM sales_rows WHERE import_id=? AND date BETWEEN ? AND ?
+                FROM seller.sales_rows WHERE import_id=? AND date BETWEEN ? AND ?
             """, (seller_import['import_id'], *period)).fetchone())
         if partner_imports:
             partner_totals = dict(db.execute("""

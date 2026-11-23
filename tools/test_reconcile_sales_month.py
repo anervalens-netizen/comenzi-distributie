@@ -43,6 +43,27 @@ class SalesReconciliation(unittest.TestCase):
             self.assertEqual(february['partner']['rows'], 1)
             self.assertIsNone(reconcile(root, '2026-03')['partner'])
 
+            seller_path = root / 'sales.sqlite'
+            partner_path = root / 'client-history/client-sales-history.sqlite'
+            saved_seller = seller_path.rename(root / 'saved-seller')
+            partner_only = reconcile(root, '2026-01')
+            self.assertEqual(partner_only['partner'], january['partner'])
+            self.assertEqual(partner_only['partnerSources'], january['partnerSources'])
+            self.assertIsNone(partner_only['sellerSource'])
+            self.assertIsNone(partner_only['seller'])
+            self.assertIsNone(partner_only['partnerMinusSeller'])
+            self.assertFalse(seller_path.exists())
+            partner_path.unlink()
+            self.assertIsNone(reconcile(root, '2026-01')['partner'])
+            saved_seller.rename(seller_path)
+            seller_only = reconcile(root, '2026-01')
+            self.assertEqual(seller_only['seller'], january['seller'])
+            self.assertEqual(seller_only['sellerSource'], january['sellerSource'])
+            self.assertEqual(seller_only['partnerSources'], [])
+            self.assertIsNone(seller_only['partner'])
+            self.assertIsNone(seller_only['partnerMinusSeller'])
+            self.assertFalse(partner_path.exists())
+
 
 if __name__ == '__main__':
     unittest.main()
