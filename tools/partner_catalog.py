@@ -37,7 +37,7 @@ def ledger_path(network):
 
 @contextmanager
 def open_catalog(data_dir, activations_dir=None):
-    root = activations_dir or Path(os.environ.get('MOBIUP_ACTIVATIONS_DIR') or data_dir)
+    root = Path(activations_dir or os.environ.get('MOBIUP_ACTIVATIONS_DIR') or data_dir).resolve()
     def inputs():
         return {**{k: (data_dir / v).resolve() for k,v in SOURCES.items()},
                 'vodafone': ledger_path(root), 'digi': ledger_path(root / 'digi')}

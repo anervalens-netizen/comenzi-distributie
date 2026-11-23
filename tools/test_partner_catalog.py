@@ -2,7 +2,7 @@ import json
 import sqlite3
 import tempfile
 import unittest
-from contextlib import closing
+from contextlib import chdir, closing
 from pathlib import Path
 
 from partner_catalog import SOURCES, open_catalog
@@ -60,6 +60,8 @@ class CatalogTest(unittest.TestCase):
                     conn.execute("INSERT INTO activation_effective_movements VALUES (1,'2026-01-02','DUP',1,'SIM',1,?,'issuer')",(json.dumps(raw),))
                     conn.commit()
 
+            with chdir(root.parent), open_catalog(Path(root.name), Path(root.name)) as db:
+                self.assertEqual(db.execute('SELECT count(*) FROM catalog_digi_movements').fetchone()[0],1)
             with open_catalog(root) as db:
                 def rows(query):
                     return [tuple(r) for r in db.execute(query)]
