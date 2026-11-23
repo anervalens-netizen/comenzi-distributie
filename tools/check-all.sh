@@ -21,6 +21,7 @@ node tools/test-anaf.mjs
 python3 tools/test_crm_location_repair.py
 python3 tools/test_crm_master_reconcile.py
 python3 tools/test_reconcile_sales_month.py
+python3 tools/test_partner_catalog.py
 node tools/test-bind-ready.mjs
 node tools/test-operational-status.mjs
 node tools/test-distribution-rules.mjs

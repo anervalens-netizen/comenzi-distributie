@@ -290,3 +290,31 @@ Synthetic checks: `npm run test:client-sales`, `npm run test:client-sales:browse
 and `npm run test:client-sales:http` (the isolated QA server must be running).
 All are included by `npm run check`; its API credentials now remain inside the
 checkout's ignored `work/qa-credentials` directory.
+
+### Shared partner catalog for operational reporting
+
+Run `python3 tools/partner_catalog.py --data-dir /path/to/application-data` for counts.
+Use `--company CRM_ID`, `--franchise FRANCHISE_CODE` or `--month YYYY-MM` to look
+up current points or reconcile an active ERP period. The command belongs in the
+owner reporting environment. It reads private portfolio data across the entire
+organization. Web requests must enforce their own authorization.
+
+In Python, `with open_catalog(data_dir) as db` opens the same query-only views
+from one read transaction. A fresh invocation reads the latest source versions.
+`catalog_companies` uses the CRM PartnerId. `catalog_points` namespaces CRM
+PartnerAddressId and unlinked operational customer IDs separately.
+`catalog_portfolio` retains each customer, active flag and evidence for its
+current point link. Multiple records can refer to one point. A numeric fiscal
+identifier or an unambiguous official customer code can identify a company.
+A franchise code resolves an ERP work point only alongside a compatible owner.
+These are present-day directory links. The original invoiced identifiers, dates,
+amounts and the application's historical allocation remain available separately.
+
+`catalog_erp_sales` exposes active invoice rows. `catalog_agent_sales` exposes
+overlapping seller totals by source site and current warehouse. National sales
+should use a single source for each indicator. `catalog_vodafone_movements`
+uses the fiscal and point identifiers reported by the operator.
+`catalog_digi_movements` preserves the reported customer name and distribution
+site. Neither a name nor a seller's warehouse identifies the end customer's
+point. `catalog_delivery_points` keeps finalized operational slips separate
+from billed movements. Filter movements by date and site where applicable.
