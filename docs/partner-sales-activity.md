@@ -300,7 +300,9 @@ owner reporting environment. It reads private portfolio data across the entire
 organization. Web requests must enforce their own authorization.
 
 In Python, `with open_catalog(data_dir) as db` opens the same query-only views
-from one read transaction. A fresh invocation reads the latest source versions.
+from one read transaction. Pass the configured operator root with
+`--activations-dir` or `MOBIUP_ACTIVATIONS_DIR` when separate.
+`catalog_sources` reports which registers are present. A fresh invocation reads the latest source versions.
 `catalog_companies` uses the CRM PartnerId. `catalog_points` namespaces CRM
 PartnerAddressId and unlinked operational customer IDs separately.
 `catalog_portfolio` retains each customer, active flag and evidence for its
@@ -318,3 +320,11 @@ uses the fiscal and point identifiers reported by the operator.
 site. Neither a name nor a seller's warehouse identifies the end customer's
 point. `catalog_delivery_points` keeps finalized operational slips separate
 from billed movements. Filter movements by date and site where applicable.
+
+Use `--trace-identity ERP_ID [ERP_ID ...]` to check historical invoice lines in
+one pass over the corresponding commercial Vodafone period. Agreement requires
+the same document number, day, source site, customer identifier, full customer
+name and franchise. Multiple observed parties or issuing companies leave the
+document unresolved. This confirms the reported historical party on that
+document. The present-day CRM owner and the items sold can differ. Neither
+register supplies independent accounting certification of the invoice.
