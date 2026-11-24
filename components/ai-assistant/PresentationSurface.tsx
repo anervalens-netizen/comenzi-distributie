@@ -4,7 +4,7 @@ import {useMemo} from 'react';
 import {A2uiSurface, createComponentImplementation, type ReactCatalogComponent} from '@a2ui/react';
 import {Catalog, MessageProcessor} from '@a2ui/web_core/v1_0';
 import {z} from 'zod-a2ui';
-import {presentationSchema} from '@/lib/manager-ai-presentation';
+import {parsePresentationData} from '@/lib/manager-ai-presentation';
 
 const catalogId='urn:comenzi:manager-presentation:1';
 const presentation=createComponentImplementation({
@@ -35,12 +35,12 @@ const catalog=new Catalog(catalogId,'1.0',[presentation]);
 export default function PresentationSurface({data,id}:{data:unknown;id:string}) {
   const surface=useMemo(() => {
     // Only bounded literal fields enter the official processor, including during history replay.
-    const checked=presentationSchema.safeParse(data);
-    if(!checked.success) return undefined;
+    const checked=parsePresentationData(data);
+    if(!checked) return undefined;
     const processor=new MessageProcessor<ReactCatalogComponent>([catalog]);
     const wire=[
       {version:'1.0',createSurface:{surfaceId:id,catalogId}},
-      {version:'1.0',updateComponents:{surfaceId:id,components:[{id:'root',component:'InformationCard',...checked.data}]}},
+      {version:'1.0',updateComponents:{surfaceId:id,components:[{id:'root',component:'InformationCard',...checked}]}},
     ];
     if(processor.processMessagesWithErrors(wire).length) return undefined;
     return processor.model.surfacesMap.get(id);

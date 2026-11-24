@@ -601,3 +601,19 @@ allowlisted metadata crosses into model context; SQL text, connection strings,
 private paths and business rows are excluded. Backup receipts do not establish
 full restore or application parity. Disabling the private configuration removes
 the tools on the next request; no application database migration is involved.
+
+## Bounded AI card parsing
+
+Manager presentations validate literal shape and collection sizes before schema
+validation on both the server and browser. Report cards accept only the existing
+two-message A2UI envelope, one literal ReportTable, the matching surface ID, at
+most ten rows, 64 columns and eight source labels. Invalid or oversized cards use
+the existing fallback text; authorized exports and conversation text remain
+available. Unknown components, data bindings and extra messages are rejected.
+
+These entry-point guards mitigate excessive validation allocations in the
+Zod 3 compatibility dependency required by A2UI 0.15. They do not patch upstream
+Zod 3 or establish that GHSA-mrhx-c7xc-m3w5 is resolved. Keep the advisory open
+until a compatible upstream correction or a separately tested migration removes
+the affected code. A version-only replacement with Zod 4's legacy v3 entry point
+does not prove remediation.

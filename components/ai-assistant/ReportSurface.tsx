@@ -4,7 +4,7 @@ import {useMemo} from 'react';
 import {z} from 'zod-a2ui';
 import {A2uiSurface, createComponentImplementation, type ReactCatalogComponent} from '@a2ui/react';
 import {Catalog, MessageProcessor} from '@a2ui/web_core/v1_0';
-import {reportCatalogId} from '@/lib/manager-ai-report-card';
+import {reportCatalogId,boundedReportCardMessages} from '@/lib/manager-ai-report-card';
 
 const reportTable = createComponentImplementation({
   name:'ReportTable',
@@ -28,8 +28,10 @@ const reportTable = createComponentImplementation({
 const catalog = new Catalog(reportCatalogId,'1.0',[reportTable]);
 export default function ReportSurface({wire,id}:{wire:unknown;id:string}) {
   const surface = useMemo(() => {
+    const checked=boundedReportCardMessages(wire,id);
+    if(!checked)return undefined;
     const processor = new MessageProcessor<ReactCatalogComponent>([catalog]);
-    if (processor.processMessagesWithErrors(wire).length) return undefined;
+    if (processor.processMessagesWithErrors(checked).length) return undefined;
     return processor.model.surfacesMap.get(id);
   },[wire,id]);
   return surface ? <A2uiSurface surface={surface}/> : <output>Fișa nu poate fi afișată. Raportul este disponibil la descărcare.</output>;

@@ -49,6 +49,7 @@ node tools/test-vodafone-bonus-pending.mjs
 node tools/test-vodafone-ranking-queue.mjs
 node tools/test-manager-ai.mjs
 node tools/test-manager-ai-postgres.mjs
+node tools/test-manager-ai-card-bounds.mjs
 node tools/test-manager-ai-media.mjs
 node tools/test-manager-ai-analysis-provider.mjs
 node tools/test-manager-ai-sandbox.mjs
