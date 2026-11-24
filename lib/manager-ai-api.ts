@@ -71,8 +71,9 @@ export async function managerAi(req:Request,user:User) {
       signal.throwIfAborted();
       return current;
     },undefined,progress);
+    const postgres=runtimeKind==='node'?await (await import('./manager-ai-postgres')).createManagerAiPostgres({check,signal,selectedPortfolio:!!scope.filter||scope.params.size>0}):undefined;
     const {runManagerAi}=await import('#mobiup-manager-ai-provider');
-    const result = await activity.wait(()=>runManagerAi({...input,key,signal,readSource,progress,check:async()=>{
+    const result = await activity.wait(()=>runManagerAi({...input,key,signal,readSource,progress,postgres,check:async()=>{
       await readSource.checkSourceScope(await check());
     }}));
     return response(result);

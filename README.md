@@ -576,3 +576,28 @@ Recovery importer selection also requires its facts version to match the target
 runtime (supported versions 2 and 3), in addition to exact reviewed hashes and
 release identity. A release that changes facts semantics requires reviewing and
 updating the private tooling set; merely advancing its runtime pin is insufficient.
+
+## PostgreSQL diagnostics in the manager agent
+
+The optional PostgreSQL capability uses four fixed SDK FunctionTools. It reads
+an operator-managed schema-2 metadata snapshot; it does not connect to a database
+or execute arbitrary SQL, maintenance, or upgrades. Comenzi still uses SQLite.
+A PostgreSQL migration target remains an independent deployment decision.
+
+Configure an absolute `MOBIUP_MANAGER_AI_POSTGRES_SNAPSHOT` path, a comma-separated
+`MOBIUP_MANAGER_AI_POSTGRES_ADMIN_IDS` list of explicitly authorized infrastructure
+administrators, and `MOBIUP_MANAGER_AI_POSTGRES_INSTANCES` in private service
+configuration. Keep snapshot publication atomic, operator-owned, and read-only
+for the application. A global-manager role alone does not grant access. The
+selected account must also remain active, retain global scope, and use an
+unfiltered conversation. Tools are omitted for every other account or portfolio
+selection. The same authorization is rechecked during the SDK run.
+
+Inventory, health, maintenance candidates, and upgrade preflight preserve
+capability, permission, partial-coverage and reset-aware rate states. Metadata
+older than ten minutes or dated in the future returns no current measurements.
+The reader bounds input to one MiB and refuses symlinks/non-regular files. Only
+allowlisted metadata crosses into model context; SQL text, connection strings,
+private paths and business rows are excluded. Backup receipts do not establish
+full restore or application parity. Disabling the private configuration removes
+the tools on the next request; no application database migration is involved.
