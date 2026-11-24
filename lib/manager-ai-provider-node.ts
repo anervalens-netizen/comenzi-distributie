@@ -174,6 +174,11 @@ export async function runManagerAi({
     await postgres?.check();
     signal.throwIfAborted();
   }
+  async function publish(event:ProviderEvent) {
+    if(!onEvent)return;
+    await authorize();
+    await onEvent(event);
+  }
   async function dispatch(name: string, raw: string) {
     if (name === presentationTool.name && presentationEnabled) {
       await authorize();
@@ -193,11 +198,11 @@ export async function runManagerAi({
     let result;
     try {
       if (postgres?.tools.some(tool=>tool.name===name)) {
-        await onEvent?.({type:'status',message:'Consult diagnosticele PostgreSQL autorizate.'});
+        await publish({type:'status',message:'Consult diagnosticele PostgreSQL autorizate.'});
         result = await postgres.run(name,raw);
       } else if (name === managerAiAnalysisToolName && analysis) {
         const request = parseManagerAiAnalysis(raw, analysis.tables);
-        await onEvent?.({
+        await publish({
           type: 'status',
           message:
             request.language === 'sql'
@@ -210,7 +215,7 @@ export async function runManagerAi({
         result = output.result;
       } else {
         const query = parseManagerAiQuery(raw, today.slice(0, 7));
-        await onEvent?.({
+        await publish({
           type: 'status',
           message:
             query.dataset === 'digiImports'
@@ -262,7 +267,7 @@ export async function runManagerAi({
     authorize,
     callLimit,
     new Set(tools.map((tool) => tool.name)),
-    onEvent,
+    onEvent ? publish : undefined,
     progress,
   );
   const agent = new Agent({

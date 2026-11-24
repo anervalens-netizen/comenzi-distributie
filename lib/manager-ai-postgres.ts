@@ -56,10 +56,10 @@ ready checks check checked_at latest_verified 18 19 sources refresh_before_upgra
 target_version target_image archive_sha256 database_count globals_from_original_archive cleanup_completed production_database_writes authentication application correct_password wrong_password_rejected read_only_query matches_latest_backup age_hours stale application_workflows_verified production_replica_transition_verified
 `));
 function safe(value:unknown,depth=0):unknown {
-  if(depth>10)return null;
+  if(depth>10)throw Error('snapshot_invalid');
   if(value===null||typeof value==='boolean'||typeof value==='number')return value;
-  if(typeof value==='string')return value.length<=1024?value:value.slice(0,1024)+' [truncated]';
-  if(Array.isArray(value))return value.slice(0,100).map(v=>safe(v,depth+1));
+  if(typeof value==='string'){if(value.length>1024)throw Error('snapshot_invalid');return value;}
+  if(Array.isArray(value))return value.map(v=>safe(v,depth+1));
   if(!object(value))return null;
   return Object.fromEntries(Object.entries(value).filter(([k])=>keys.has(k)).map(([k,v])=>[k,safe(v,depth+1)]));
 }
@@ -107,7 +107,8 @@ async function readSnapshot(path:string) {
     while(offset<buffer.length){const {bytesRead}=await handle.read(buffer,offset,buffer.length-offset,offset);if(!bytesRead)break;offset+=bytesRead;}
     if(offset>maxBytes)throw Error('snapshot_invalid');
     const value:unknown=JSON.parse(buffer.subarray(0,offset).toString('utf8'));
-    if(!object(value)||!object(value.instances)||typeof value.collected_at!=='string'||!Number.isFinite(Date.parse(value.collected_at)))throw Error('snapshot_invalid');
+    if(!object(value)||!object(value.instances)||typeof value.collected_at!=='string'||value.collected_at.length>40||!Number.isFinite(Date.parse(value.collected_at))||
+      typeof value.collector_version!=='string'||value.collector_version.length>64||!/^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/.test(value.collector_version))throw Error('snapshot_invalid');
     if(value.schema_version!==2)throw Error('snapshot_schema_unsupported');
     return value;
   } finally {await handle.close();}

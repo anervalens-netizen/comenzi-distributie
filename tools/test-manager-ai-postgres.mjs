@@ -89,6 +89,17 @@ try{
   const s=snapshot();s.schema_version=3;put(s);assert.equal((await cap.run('pg_fleet_inventory','{}')).status,'snapshot_schema_unsupported');
   writeFileSync(path,'{invalid');assert.equal((await cap.run('pg_fleet_inventory','{}')).status,'snapshot_invalid');put();
  });
+ await verifies('invalid collector metadata cannot bypass the field projection',async()=>{
+  for(const version of [{version:'0.2.0',query:secret,private_path:secret},'bad version',null]){
+   const s=snapshot();s.collector_version=version;put(s);const r=await cap.run('pg_fleet_inventory','{}');assert.equal(r.status,'snapshot_invalid');assert.ok(!JSON.stringify(r).includes(secret));
+  }
+  put();
+ });
+ await verifies('reader retains producer rows or returns an explicit size failure',async()=>{
+  const s=snapshot();s.instances.primary.maintenance=Array.from({length:101},(_,i)=>({relname:'table'+i,dead_estimate:i===100?9:0}));s.instances.primary.sections.maintenance={status:'ok',rows:101,truncated:false};put(s);
+  const r=await cap.run('pg_maintenance_candidates','{"instance":"primary"}');assert.equal(r.maintenance.length,101);assert.equal(r.maintenance[100].dead_estimate,9);assert.equal(r.sections.maintenance.truncated,false);
+  s.instances.primary.maintenance=Array.from({length:10000},()=>({relname:'table',dead_estimate:1}));put(s);const bounded=await cap.run('pg_maintenance_candidates','{"instance":"primary"}');assert.equal(bounded.status,'response_too_large');assert.equal(bounded.data,null);put();
+ });
  await verifies('missing, oversized, directory and symlink reads fail closed',async()=>{
   rmSync(path);assert.equal((await cap.run('pg_fleet_inventory','{}')).status,'snapshot_unavailable');
   writeFileSync(path,' '.repeat(1024*1024+1));assert.equal((await cap.run('pg_fleet_inventory','{}')).status,'snapshot_invalid');
@@ -119,6 +130,17 @@ try{
    return Response.json({id:'r_revoked',model:defaultManagerAiModel,status:'completed',output:[{type:'message',role:'assistant',status:'completed',content:[{type:'output_text',text:'This result must be discarded.',annotations:[]}]}]});
   }}),{status:403});
   current={...owner};
+ });
+ await verifies('SDK rechecks PostgreSQL access before each streamed publication',async()=>{
+  let calls=0;const events=[];
+  const stream=items=>new Response(items.map(item=>'data: '+JSON.stringify(item)+'\n\n').join(''),{headers:{'content-type':'text/event-stream'}});
+  await assert.rejects(()=>runManagerAi({model:defaultManagerAiModel,key:'synthetic',turns:[{role:'user',content:'Read database readiness'}],signal,postgres:cap,check:async()=>{},onEvent:async event=>{events.push(event);},readSource:async()=>{throw Error('unexpected read');},send:async()=>{
+   if(++calls===1)return stream([{type:'response.created',response:{model:defaultManagerAiModel}},{type:'response.completed',response:{id:'r_stream_tool',model:defaultManagerAiModel,status:'completed',output:[{type:'function_call',name:'pg_upgrade_preflight',call_id:'stream_readiness',arguments:'{}'}]}}]);
+   process.env.MOBIUP_MANAGER_AI_POSTGRES_ADMIN_IDS='revoked';
+   return stream([{type:'response.created',response:{model:defaultManagerAiModel}},{type:'response.output_text.delta',delta:'Private metadata must not be published.'},{type:'response.completed',response:{id:'r_stream_result',model:defaultManagerAiModel,status:'completed',output:[{type:'message',role:'assistant',content:[{type:'output_text',text:'Private metadata must not be published.'}]}]}}]);
+  }}),{status:403});
+  process.env.MOBIUP_MANAGER_AI_POSTGRES_ADMIN_IDS='operator';
+  assert.ok(!JSON.stringify(events).includes('Private metadata must not be published.'));
  });
  await verifies('ordinary SDK invocation never advertises PostgreSQL tools',async()=>{
   await runManagerAi({model:defaultManagerAiModel,key:'synthetic',turns:[{role:'user',content:'Hello'}],signal,check:async()=>{},readSource:async()=>{throw Error('unexpected read');},send:async(_url,init)=>{
