@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 import zipfile
 from xml.sax.saxutils import escape
 import activations as a
@@ -22,7 +23,7 @@ def row(**changes):
     return r
 
 
-def fixture(path, rows, headers=None, numeric=None, shared_empty=False, header_row=5):
+def fixture(path, rows, headers=None, numeric=None, shared_empty=False, header_row=5, date_style=False, date1904=False):
     headers = headers or a.HEADERS
     def col(i):
         return (chr(64 + i // 26) if i >= 26 else '') + chr(65 + i % 26)
@@ -32,7 +33,8 @@ def fixture(path, rows, headers=None, numeric=None, shared_empty=False, header_r
         for i, value in enumerate(r):
             ref = col(i) + str(rn)
             if rn > header_row and headers[i] == numeric:
-                cells.append(f'<c r="{ref}"><v>{escape(value)}</v></c>')
+                style = ' s="1"' if date_style and headers[i] == 'DataActivare' else ''
+                cells.append(f'<c r="{ref}"{style}><v>{escape(value)}</v></c>')
             elif rn > header_row and headers[i] == 'Activat' and shared_empty:
                 cells.append(f'<c r="{ref}" t="s"><v>0</v></c>')
             else:
@@ -40,12 +42,81 @@ def fixture(path, rows, headers=None, numeric=None, shared_empty=False, header_r
         lines.append(f'<row r="{rn}">{"".join(cells)}</row>')
     ns = a.NS['s']
     with zipfile.ZipFile(path, 'w', zipfile.ZIP_DEFLATED) as z:
-        z.writestr('xl/workbook.xml', f'<workbook xmlns="{ns}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="SIM" r:id="r1"/></sheets></workbook>')
+        z.writestr('xl/workbook.xml', f'<workbook xmlns="{ns}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><workbookPr date1904="{int(date1904)}"/><sheets><sheet name="SIM" r:id="r1"/></sheets></workbook>')
+        if date_style:
+            z.writestr('xl/styles.xml',f'<styleSheet xmlns="{ns}"><numFmts count="1"><numFmt numFmtId="164" formatCode="dd.mm.yyyy"/></numFmts><cellXfs count="2"><xf numFmtId="0"/><xf numFmtId="164"/></cellXfs></styleSheet>')
         z.writestr('xl/_rels/workbook.xml.rels', '<Relationships><Relationship Id="r1" Target="worksheets/sheet1.xml"/></Relationships>')
         z.writestr('xl/worksheets/sheet1.xml', f'<worksheet xmlns="{ns}"><sheetData>{"".join(lines)}</sheetData></worksheet>')
         if shared_empty:
             z.writestr('xl/sharedStrings.xml', f'<sst xmlns="{ns}"><si><t></t></si></sst>')
     return path
+
+
+class StyledVodafoneDatesTests(unittest.TestCase):
+    def test_typed_date_preserves_raw_and_blank_sales(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            sold=row(DataActivare='46346')
+            blank=row(IMEI='0000000000000000020', Activat='', DataActivare='', DocumentDetailId='DETAIL-2')
+            path=fixture(root/'styled.xlsx',[sold,blank],numeric='DataActivare',date_style=True)
+            raw=list(a.workbook(path))
+            self.assertEqual(dict(raw[0][1]),sold)
+            values=a.normalized(raw[0][1],a.digest(path),raw[0][0],'vodafone')
+            self.assertEqual(values[7],'2026-11-20')
+            self.assertEqual(json.loads(values[-1]),sold)
+            self.assertEqual(json.loads(values[-2]),[])
+            c=a.connect(root/'ledger')
+            try:
+                a.import_files(c,root/'ledger',[path],operator='vodafone')
+                self.assertEqual(c.execute('SELECT COUNT(*),SUM(quantity) FROM activation_movements').fetchone()[:],(2,2))
+                self.assertEqual(c.execute('SELECT COUNT(*) FROM activation_facts').fetchone()[0],1)
+                self.assertEqual(c.execute("SELECT activation_date FROM activation_facts").fetchone()[0],'2026-11-20')
+            finally:c.close()
+
+    def test_unstyled_invalid_and_1904_calendar_are_distinct(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            for i,style,calendar,value,expected in (
+                (0,False,False,'46346',None),
+                (1,True,False,'46346.5',None),
+                (2,True,False,'60',None),
+                (3,True,True,'0','1904-01-01'),
+                (4,True,False,'46346','2026-11-20'),
+            ):
+                with self.subTest(i=i):
+                    path=fixture(root/f'{i}.xlsx',[row(DataActivare=value)],numeric='DataActivare',date_style=style,date1904=calendar)
+                    rn,raw=next(a.workbook(path))
+                    v=a.normalized(raw,a.digest(path),rn,'vodafone')
+                    self.assertEqual(v[7],expected)
+                    self.assertEqual(json.loads(v[-1])['DataActivare'],value)
+                    self.assertEqual('invalid_DataActivare' in json.loads(v[-2]),expected is None)
+
+    def test_repair_requires_all_original_occurrences_to_agree(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);data=root/'ledger'
+            c=a.connect(data)
+            try:
+                x=fixture(root/'one.xlsx',[row(DataActivare='46346')],numeric='DataActivare',date_style=True)
+                y=fixture(root/'two.xlsx',[row(DataActivare='46346')],numeric='DataActivare',date_style=True,date1904=True)
+                with patch('activations.date_style_ids',return_value=set()):
+                    a.import_files(c,data,[x,y],operator='vodafone')
+                c.execute('BEGIN IMMEDIATE')
+                report=a.repair_vodafone_excel_dates(c,data)
+                self.assertEqual(report['candidateVersions'],1)
+                self.assertEqual(report['repairedVersions'],0)
+                self.assertEqual(report['unresolvedVersions'],1)
+                self.assertEqual(c.execute('SELECT activation_date FROM activation_movements').fetchone()[0],None)
+                c.rollback()
+                # A subsequent styled file with a conflicting exact raw hash
+                # must not silently acquire the old date or duplicate sales.
+                z=fixture(root/'three.xlsx',[row(DataActivare='46346')],numeric='DataActivare',date_style=True)
+                # Ensure a new source digest while preserving the row.
+                with zipfile.ZipFile(z,'a') as book:book.comment=b'new synthetic version'
+                with self.assertRaisesRegex(a.ImportError,'Conflicting typed activation date'):
+                    a.import_files(c,data,[z],operator='vodafone')
+                self.assertEqual(c.execute('SELECT COUNT(*) FROM activation_imports').fetchone()[0],2)
+                self.assertEqual(c.execute('SELECT COUNT(*) FROM activation_movements').fetchone()[0],1)
+            finally:c.close()
 
 
 class ActivationsTests(unittest.TestCase):

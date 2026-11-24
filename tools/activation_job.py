@@ -38,8 +38,9 @@ def authorized_publication(settings_db, authorization, required_scope='global'):
         db.rollback();db.close()
 
 
-def run_job(directory,batches,rules=None,before_publish=None,publication_guard=None,before_stage=None,force_reconcile=False):
-    if force_reconcile and batches:raise ValueError('Full reconciliation cannot mix in new imports')
+def run_job(directory,batches,rules=None,before_publish=None,publication_guard=None,before_stage=None,force_reconcile=False,repair_excel_dates=False):
+    if (force_reconcile or repair_excel_dates) and batches:raise ValueError('Maintenance cannot mix in new imports')
+    if force_reconcile and repair_excel_dates:raise ValueError('Choose one maintenance mode')
     root=Path(directory).resolve();root.mkdir(mode=0o700,parents=True,exist_ok=True)
     with (root/'.activation-job.lock').open('a') as lock:
         fcntl.flock(lock,fcntl.LOCK_EX)
@@ -63,7 +64,7 @@ def run_job(directory,batches,rules=None,before_publish=None,publication_guard=N
                         if p.is_symlink() or not p.is_file() or activations.digest(p)!=p.stem:raise ValueError('Invalid retained original')
                         os.link(p,stage/'activation-originals'/p.name)
             c=activations.connect(stage)
-            receipts=[]; import_ids=[]; old_generation=None; delta=None
+            receipts=[]; import_ids=[]; old_generation=None; delta=None; date_repair=None
             try:
                 old=c.execute("SELECT value FROM activation_meta WHERE key='generation'").fetchone()
                 old_generation=old[0] if old else None
@@ -81,6 +82,11 @@ def run_job(directory,batches,rules=None,before_publish=None,publication_guard=N
                         # changing immutable imports, original files or receipts.
                         activations.rebuild(c)
                         delta={'full':True,'serials':set(),'imeis':set(),'sites':set()}
+                    elif repair_excel_dates:
+                        date_repair=activations.repair_vodafone_excel_dates(c,stage)
+                        repaired=date_repair.pop('movement_ids')
+                        if repaired:
+                            delta=activations.reconcile_imports(c,[],movement_ids=repaired)
                     else:
                         delta=activations.reconcile_imports(c,import_ids)
                     c.commit()
@@ -90,6 +96,11 @@ def run_job(directory,batches,rules=None,before_publish=None,publication_guard=N
                 if c.execute('PRAGMA integrity_check').fetchone()[0]!='ok' or c.execute('PRAGMA foreign_key_check').fetchall():raise ValueError('Invalid ledger')
                 c.execute('PRAGMA wal_checkpoint(TRUNCATE)')
             finally:c.close()
+            if repair_excel_dates and delta is None:
+                # Idempotent maintenance: no new generation for no proven changes.
+                shutil.rmtree(stage)
+                return {'generation':current.name,'previousGeneration':current.name,
+                        'imports':[],'dateRepair':date_repair,'unchanged':True}
             report_path=current/'activation-report.sqlite'
             fallback=None
             if delta['full'] or not report_path.is_file() or not old_generation:
@@ -125,12 +136,12 @@ def run_job(directory,batches,rules=None,before_publish=None,publication_guard=N
                 fd=os.open(root,os.O_RDONLY)
                 try:os.fsync(fd)
                 finally:os.close(fd)
-            return {'generation':stage.name,'previousGeneration':current.name if current!=root else 'legacy','imports':receipts,'report':report}
+            return {'generation':stage.name,'previousGeneration':current.name if current!=root else 'legacy','imports':receipts,'report':report,**({'dateRepair':date_repair} if date_repair is not None else {})}
         except BaseException:
             # Keep failed staging and originals for private diagnosis. The old pointer is unchanged.
             raise
 
 if __name__=='__main__':
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--data-dir',type=Path,required=True);p.add_argument('--manifest',type=Path,required=True);p.add_argument('--rules',type=Path);p.add_argument('--force-reconcile',action='store_true')
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--data-dir',type=Path,required=True);p.add_argument('--manifest',type=Path,required=True);p.add_argument('--rules',type=Path);p.add_argument('--force-reconcile',action='store_true');p.add_argument('--repair-excel-dates',action='store_true')
     a=p.parse_args();os.umask(0o077)
-    print(json.dumps(run_job(a.data_dir,json.loads(a.manifest.read_text()),json.loads(a.rules.read_text()) if a.rules else None,force_reconcile=a.force_reconcile)))
+    print(json.dumps(run_job(a.data_dir,json.loads(a.manifest.read_text()),json.loads(a.rules.read_text()) if a.rules else None,force_reconcile=a.force_reconcile,repair_excel_dates=a.repair_excel_dates)))

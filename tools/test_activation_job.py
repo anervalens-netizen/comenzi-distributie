@@ -16,6 +16,43 @@ import activations
 from test_activations import fixture,row
 
 class JobTests(unittest.TestCase):
+ def test_explicit_excel_date_repair_preserves_imports_movements_and_blank_sale(self):
+  with tempfile.TemporaryDirectory() as folder:
+   root=Path(folder);data=root/'data'
+   file=fixture(root/'typed.xlsx',[row(DataActivare='46346'),row(IMEI='0000000000000000020',Activat='',DataActivare='',DocumentDetailId='DETAIL-2')],numeric='DataActivare',date_style=True)
+   batch={'files':[str(file)],'operator':'vodafone'}
+   with patch('activations.date_style_ids',return_value=set()):
+    run_job(data,[batch])
+   old=(data/'current').resolve()
+   def immutable(c):
+    return [c.execute(q).fetchall() for q in (
+     'SELECT * FROM activation_imports ORDER BY id',
+     'SELECT * FROM activation_occurrences ORDER BY import_id,source_row',
+     'SELECT id,movement_key,payload_hash,raw_json,quantity,serial,site,movement_date FROM activation_movements ORDER BY id',
+     'SELECT * FROM activation_observations ORDER BY import_id,source_row')]
+   with closing(sqlite3.connect(old/'activations.sqlite')) as c:
+    before=immutable(c)
+    self.assertIsNone(c.execute('SELECT activation_date FROM activation_facts').fetchone()[0])
+   def interrupted(stage):
+    raise RuntimeError('synthetic interruption')
+   with self.assertRaisesRegex(RuntimeError,'synthetic interruption'):
+    run_job(data,[],repair_excel_dates=True,before_publish=interrupted)
+   self.assertEqual((data/'current').resolve(),old)
+   result=run_job(data,[],repair_excel_dates=True)
+   self.assertEqual(result['imports'],[])
+   self.assertEqual(result['dateRepair']['repairedVersions'],1)
+   current=(data/'current').resolve()
+   with closing(sqlite3.connect(current/'activations.sqlite')) as c:
+    self.assertEqual(immutable(c),before)
+    self.assertEqual(c.execute('SELECT activation_date,status FROM activation_facts').fetchone(),('2026-11-20','candidate'))
+    self.assertEqual(c.execute("SELECT COUNT(*) FROM activation_movements WHERE activation_date IS NULL AND serial=''").fetchone()[0],1)
+   with closing(sqlite3.connect(current/'activation-report.sqlite')) as c:
+    self.assertEqual(c.execute('SELECT activated,count(*) FROM cohorts GROUP BY activated ORDER BY activated').fetchall(),[(0,1),(1,1)])
+   replay=run_job(data,[],repair_excel_dates=True)
+   self.assertTrue(replay['unchanged'])
+   self.assertEqual((data/'current').resolve(),current)
+   self.assertEqual(replay['dateRepair']['repairedVersions'],0)
+
  def test_authorized_publication_serializes_revocation_and_rejects_stale_session(self):
   with tempfile.TemporaryDirectory() as folder:
    dbpath=Path(folder)/'settings.sqlite'

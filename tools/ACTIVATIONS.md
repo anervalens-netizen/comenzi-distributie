@@ -233,3 +233,27 @@ renames it inside the resolved generation. A second invocation reports
 `current`. Use `--force` to rebuild a damaged projection. Recovery can
 recreate this file from the authoritative ledger. Treat it as private
 commercial evidence since it contains SIM and work-point identifiers.
+
+### Internal Vodafone Excel dates: explicit parser repair
+
+A calendar-styled numeric DataActivare cell in an internal Vodafone workbook is
+decoded using the workbook's declared Excel date system (1900 or 1904). The raw
+cell text and its payload hash stay unchanged. Blank activation fields remain
+blank; unstyled short numbers, fractional dates and invalid calendar serials
+are not guessed. A date by itself never establishes an activation identity.
+The signed commercial sale or return is independent of the activation date.
+
+For older generations affected by the internal date parser, use the explicit
+offline maintenance mode with an empty manifest and the installed rules:
+
+    python3 tools/activation_job.py --data-dir /private/network --manifest /private/empty.json --rules /private/rules.json --repair-excel-dates
+
+This stages the current ledger under the normal generation lock, checks original
+workbook hashes and source row identities, and requires all occurrences of an
+affected immutable movement to agree on a valid styled date. It repairs only
+derived activation dates and the corresponding date issues, then uses the normal
+connected-component reconciliation and atomic report publication. Original
+files, import IDs, movement IDs, raw payloads, commercial quantities, returns,
+operator observations and source provenance are not changed. Conflicting or
+unproved dates remain unresolved. A repeat with no proven repair leaves the
+current generation unchanged. Never combine this maintenance with new imports.

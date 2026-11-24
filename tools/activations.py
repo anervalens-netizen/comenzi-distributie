@@ -137,6 +137,10 @@ def validate_workbook_inventory(archive):
             raise ImportError('Workbook metadata size limit exceeded')
 
 
+class InternalWorkbookRow(dict):
+    """Raw columns with optional typed-date evidence outside the hashed payload."""
+
+
 def workbook(path, *, sheet_name="SIM", required_headers=None, header_row=None):
     with zipfile.ZipFile(path) as archive:
         validate_workbook_inventory(archive)
@@ -150,7 +154,7 @@ def workbook(path, *, sheet_name="SIM", required_headers=None, header_row=None):
                         strings.append(''.join(t.text or '' for t in el.findall('.//s:t', NS)))
                         root.clear()
         book = ET.fromstring(archive.read('xl/workbook.xml'))
-        date_styles=date_style_ids(archive) if required_headers is not None else set()
+        date_styles=date_style_ids(archive)
         props=book.find('s:workbookPr', NS)
         date1904=props is not None and props.get('date1904','0').lower() in ('1','true')
         sheets = book.findall('s:sheets/s:sheet', NS)
@@ -210,6 +214,20 @@ def workbook(path, *, sheet_name="SIM", required_headers=None, header_row=None):
             raw = {key: cells.get(i, ('', ''))[0] for i, key in enumerate(header, 1)}
             if not any(raw.values()):
                 continue
+            # Preserve the raw cell text/hash. Typed Excel dates are derived
+            # from the original workbook's calendar style and date system,
+            # never inferred from a number or a filename.
+            if not digi:
+                raw = InternalWorkbookRow(raw)
+                i = header.index('DataActivare') + 1
+                value, kind, style = cells.get(i, ('', 'n', '0'))
+                if raw['DataActivare'] and kind == 'n' and style in date_styles:
+                    try:
+                        raw.excel_activation_date = excel_date(value, date1904)
+                    except ImportError:
+                        # Keep a malformed date as an observation, not a
+                        # reason to discard the commercial movement.
+                        raw.excel_activation_date = None
             # Never convert numeric serials, round them or guess missing digits.
             for i, key in enumerate(header, 1):
                 if key in ('IMEI', 'Activat') and raw[key] and cells[i][1] not in ('s', 'inlineStr', 'str'):
@@ -352,7 +370,12 @@ def normalized(raw, file_hash, rn, operator, aliases=None):
     dates = []
     for name in ('DataVDF', 'DataActivare'):
         try:
-            parsed = date(raw[name]) if raw[name] else None
+            if name == 'DataActivare' and hasattr(raw, 'excel_activation_date'):
+                parsed = raw.excel_activation_date
+                if parsed is None:
+                    raise ValueError('Invalid styled Excel date')
+            else:
+                parsed = date(raw[name]) if raw[name] else None
         except ValueError:
             parsed = None
             issues.append('invalid_' + name)
@@ -574,7 +597,7 @@ def rebuild(c, operator=None, incremental=False):
 
 
 
-def reconcile_imports(c, import_ids):
+def reconcile_imports(c, import_ids, *, movement_ids=()):
     """Rebuild the complete connected components touched by new immutable evidence.
 
     The old effective rows remain available until closure has been computed. The
@@ -588,6 +611,10 @@ def reconcile_imports(c, import_ids):
     c.execute('CREATE TEMP TABLE IF NOT EXISTS affected_imei(company TEXT,provider TEXT,imei TEXT,PRIMARY KEY(company,provider,imei)) WITHOUT ROWID')
     c.execute('CREATE TEMP TABLE IF NOT EXISTS affected_serial(company TEXT,provider TEXT,serial TEXT,PRIMARY KEY(company,provider,serial)) WITHOUT ROWID')
     c.execute('DELETE FROM affected_imei'); c.execute('DELETE FROM affected_serial')
+    # Explicit parser-only maintenance seeds the same identity closure as a
+    # normal import, without creating new import IDs or commercial versions.
+    c.executemany('INSERT OR IGNORE INTO affected_imei SELECT company,provider,imei FROM activation_movements WHERE id=?',
+                  ((ident,) for ident in movement_ids))
     policy=c.execute("SELECT value FROM activation_meta WHERE key='chronology_policy_version'").fetchone()
     policy_changed=not policy or policy[0]!=CHRONOLOGY_POLICY_VERSION
     if policy_changed:
@@ -685,10 +712,78 @@ def reconcile_imports(c, import_ids):
                     if candidate not in imeis and c.execute('SELECT 1 FROM activation_movements INDEXED BY activation_movements_identity WHERE company=? AND provider=? AND imei=? LIMIT 1',candidate).fetchone(): pending_i.append(candidate)
     c.executemany('INSERT OR IGNORE INTO affected_imei VALUES(?,?,?)',imeis)
     c.executemany('INSERT OR IGNORE INTO affected_serial VALUES(?,?,?)',serials)
-    if import_ids or policy_changed:
+    if import_ids or movement_ids or policy_changed:
         rebuild(c, incremental=True)
     c.execute("INSERT OR REPLACE INTO activation_meta VALUES('chronology_policy_version',?)",(CHRONOLOGY_POLICY_VERSION,))
     return {'full': False, 'serials': serials, 'imeis': imeis, 'sites': sites}
+
+
+def repair_vodafone_excel_dates(c, directory):
+    """Repair derived dates from ALL hash-verified original occurrences.
+
+    Run only on an isolated staged ledger, in the caller's transaction.
+    Raw rows, hashes, movement IDs, quantities, occurrence coordinates,
+    original files, source provenance and operator evidence stay unchanged.
+    """
+    if not c.in_transaction:
+        raise ValueError('Date repair requires a staging transaction')
+    if Path(c.execute('PRAGMA database_list').fetchone()[2]).resolve() != Path(directory).resolve() / 'activations.sqlite':
+        raise ValueError('Date repair directory mismatch')
+    candidates = {r['id']: (r['movement_key'], r['payload_hash'], r['raw_json'], r['issues'])
+                  for r in c.execute("""SELECT id,movement_key,payload_hash,raw_json,issues
+                    FROM activation_movements WHERE provider='vodafone' AND activation_date IS NULL
+                    AND instr(issues,'invalid_DataActivare')>0""")}
+    if not candidates:
+        return {'candidateVersions': 0, 'repairedVersions': 0, 'unresolvedVersions': 0,
+                'sourceFiles': 0, 'occurrences': 0, 'movement_ids': []}
+    c.execute('CREATE TEMP TABLE IF NOT EXISTS date_repair_candidates(id INTEGER PRIMARY KEY)')
+    c.execute('DELETE FROM date_repair_candidates')
+    c.executemany('INSERT INTO date_repair_candidates VALUES(?)', ((k,) for k in candidates))
+    occurrences = collections.defaultdict(dict)
+    for row in c.execute("""SELECT o.import_id,o.source_row,o.movement_id
+        FROM date_repair_candidates d CROSS JOIN activation_occurrences o
+        ON o.movement_id=d.id"""):
+        occurrences[row['import_id']][row['source_row']] = row['movement_id']
+    observed = collections.defaultdict(set)
+    seen = set()
+    for batch, expected in sorted(occurrences.items()):
+        i = c.execute('SELECT * FROM activation_imports WHERE id=?', (batch,)).fetchone()
+        if not i or i['operator'] != 'vodafone' or i['source_kind'] != 'internal' or i['status'] != 'complete':
+            raise ImportError('Date repair encountered incompatible source provenance')
+        source = Path(directory) / 'activation-originals' / (i['sha256'] + '.xlsx')
+        if source.is_symlink() or not source.is_file() or digest(source) != i['sha256']:
+            raise ImportError('Date repair original missing or checksum mismatch')
+        count = 0
+        for rn, raw in workbook(source):
+            count += 1
+            ident = expected.get(rn)
+            if ident is None:
+                continue
+            key, payload, raw_json, issues = candidates[ident]
+            values = normalized(raw, i['sha256'], rn, 'vodafone')
+            if (values[:2] != (key,payload) or values[-1] != raw_json):
+                raise ImportError('Date repair original row identity mismatch')
+            observed[ident].add(getattr(raw, 'excel_activation_date', None))
+            seen.add((batch,rn))
+        if count != i['row_count'] or any((batch,rn) not in seen for rn in expected):
+            raise ImportError('Date repair original row coverage mismatch')
+    repaired=[]
+    for ident, dates in observed.items():
+        if len(dates) != 1 or None in dates:
+            continue  # Missing, unstyled, invalid or contradictory evidence.
+        ad = next(iter(dates))
+        issues = json.loads(candidates[ident][3])
+        if 'invalid_DataActivare' not in issues:
+            raise ImportError('Date repair observation lost its original issue')
+        updated = c.execute("""UPDATE activation_movements SET activation_date=?,issues=?
+            WHERE id=? AND activation_date IS NULL AND payload_hash=?""",
+            (ad,dump(sorted(set(issues)-{'invalid_DataActivare','missing_activation_date'})),ident,candidates[ident][1])).rowcount
+        if updated != 1:
+            raise ImportError('Date repair changed concurrently')
+        repaired.append(ident)
+    return {'candidateVersions':len(candidates),'repairedVersions':len(repaired),
+            'unresolvedVersions':len(candidates)-len(repaired),'sourceFiles':len(occurrences),
+            'occurrences':len(seen),'movement_ids':sorted(repaired)}
 
 
 def summary(c):
@@ -804,8 +899,13 @@ def _import_files(c, directory, paths, *, operator, nominal_period='', site_alia
                         continue
                     values = normalized(raw, sha, rn, operator, aliases)
                     c.execute('INSERT OR IGNORE INTO activation_movements(movement_key,payload_hash,company,provider,imei,serial,movement_date,activation_date,site,agent,is_tr,item_code,item_type,customer_key,quantity,issues,raw_json) VALUES(' + ','.join('?' * 17) + ')', values)
-                    movement = c.execute('SELECT id FROM activation_movements WHERE movement_key=? AND payload_hash=?', values[:2]).fetchone()[0]
-                    c.execute('INSERT INTO activation_occurrences VALUES(?,?,?)', (batch, rn, movement))
+                    movement = c.execute('SELECT id,activation_date FROM activation_movements WHERE movement_key=? AND payload_hash=?', values[:2]).fetchone()
+                    # A raw numeric payload may be shared by workbooks with
+                    # different cell styles or date systems. Never silently
+                    # reuse a conflicting decoded date for that exact version.
+                    if operator == 'vodafone' and raw.get('DataActivare') and movement['activation_date'] != values[7]:
+                        raise ImportError('Conflicting typed activation date for existing movement; explicit source reconciliation required')
+                    c.execute('INSERT INTO activation_occurrences VALUES(?,?,?)', (batch, rn, movement['id']))
                     count += 1
                 c.execute("UPDATE activation_imports SET status='complete',row_count=? WHERE id=?", (count, batch))
                 results.append({'status': 'imported', 'sha256': sha, 'rows': count, 'import_id': batch})
