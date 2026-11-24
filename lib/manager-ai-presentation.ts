@@ -1,4 +1,5 @@
 import {z} from 'zod-a2ui';
+import {boundedPresentationInput} from './manager-ai-card-bounds';
 
 const label = z.string().trim().min(1).max(96);
 const cell = z.string().max(360);
@@ -32,8 +33,13 @@ export const presentationTool = {
 export function parsePresentation(raw: string): ManagerPresentation | undefined {
   if (raw.length > 32000) return undefined;
   try {
-    return presentationSchema.safeParse(JSON.parse(raw)).data;
+    return parsePresentationData(JSON.parse(raw));
   } catch {
     return undefined;
   }
+}
+
+export function parsePresentationData(data:unknown):ManagerPresentation|undefined {
+  if(!boundedPresentationInput(data))return undefined;
+  return presentationSchema.safeParse(data).data;
 }

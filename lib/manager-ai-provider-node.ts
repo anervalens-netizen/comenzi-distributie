@@ -15,6 +15,7 @@ import {
 } from './manager-ai-query';
 import {parsePresentation, presentationTool, type ManagerPresentation} from './manager-ai-presentation';
 import { fail } from './server';
+import type { ManagerAiPostgresCapability } from './manager-ai-postgres';
 import type { ManagerAiEffort } from './manager-ai-chat-contract';
 import {
   managerAiAnalysisTool,
@@ -131,6 +132,7 @@ export async function runManagerAi({
   content,
   analysis,
   presentationEnabled = false,
+  postgres,
 }: {
   model: ManagerAiModel;
   key: string;
@@ -145,6 +147,7 @@ export async function runManagerAi({
   onEvent?: (event: ProviderEvent) => Promise<void>;
   analysis?: ManagerAiAnalysisCapability;
   presentationEnabled?: boolean;
+  postgres?: ManagerAiPostgresCapability;
 }): Promise<
   ManagerAiAnswer & { analysisArtifacts?: ManagerAiPreparedArtifact[]; presentation?: ManagerPresentation }
 > {
@@ -156,6 +159,7 @@ export async function runManagerAi({
   }).format(new Date());
   const guidance =
     instructions.replace('DATE', today) +
+    (postgres ? '\n\n' + postgres.instructions : '') +
     (analysis ? '\n\n' + analysis.instructions : '') +
     (presentationEnabled ? '\nAlege present_information pentru orice subiect când o comparație, o succesiune de pași sau un grup de indicatori este mai ușor de urmărit în chat. Pentru o întrebare simplă sau dacă se cere numai text, răspunde direct. Folosește exclusiv informațiile din cerere, explicații generale sau rezultate deja autorizate. Un instrument de prezentare nu citește și nu verifică date. Păstrează concluzia și informațiile esențiale în răspunsul text.' : '');
   const reports: ManagerAiReport[] = [];
@@ -167,7 +171,13 @@ export async function runManagerAi({
   async function authorize() {
     signal.throwIfAborted();
     await check();
+    await postgres?.check();
     signal.throwIfAborted();
+  }
+  async function publish(event:ProviderEvent) {
+    if(!onEvent)return;
+    await authorize();
+    await onEvent(event);
   }
   async function dispatch(name: string, raw: string) {
     if (name === presentationTool.name && presentationEnabled) {
@@ -187,9 +197,12 @@ export async function runManagerAi({
     progress?.();
     let result;
     try {
-      if (name === managerAiAnalysisToolName && analysis) {
+      if (postgres?.tools.some(tool=>tool.name===name)) {
+        await publish({type:'status',message:'Consult diagnosticele PostgreSQL autorizate.'});
+        result = await postgres.run(name,raw);
+      } else if (name === managerAiAnalysisToolName && analysis) {
         const request = parseManagerAiAnalysis(raw, analysis.tables);
-        await onEvent?.({
+        await publish({
           type: 'status',
           message:
             request.language === 'sql'
@@ -202,7 +215,7 @@ export async function runManagerAi({
         result = output.result;
       } else {
         const query = parseManagerAiQuery(raw, today.slice(0, 7));
-        await onEvent?.({
+        await publish({
           type: 'status',
           message:
             query.dataset === 'digiImports'
@@ -228,7 +241,8 @@ export async function runManagerAi({
   const definitions = analysis
     ? [managerAiReportTool, managerAiAnalysisTool(analysis.tables)]
     : [managerAiReportTool];
-  const enabledDefinitions = presentationEnabled ? [...definitions, presentationTool] : definitions;
+  const dataDefinitions = [...definitions,...(postgres?.tools??[])];
+  const enabledDefinitions = presentationEnabled ? [...dataDefinitions, presentationTool] : dataDefinitions;
   const tools: FunctionTool[] = enabledDefinitions.map(
     ({ name, description, parameters }) => ({
       type: 'function',
@@ -253,7 +267,7 @@ export async function runManagerAi({
     authorize,
     callLimit,
     new Set(tools.map((tool) => tool.name)),
-    onEvent,
+    onEvent ? publish : undefined,
     progress,
   );
   const agent = new Agent({

@@ -232,10 +232,11 @@ async function processRun(req:Request,start:AiAccount,scope:AiScope,conversation
           return user;
         };
         const analysis=analysisModule?.createManagerAiAnalysis({scope,check:authorize,signal,files:work.sandboxFiles,readSource,progress});
+        const postgres=await (await import('./manager-ai-postgres')).createManagerAiPostgres({check:authorize,signal,selectedPortfolio:!!scope.filter||scope.params.size>0});
         const {runManagerAi}=await import('#mobiup-manager-ai-provider');
         const options=work.options;
         const answer=await activity.wait(()=>runManagerAi({
-          key,...options,turns:[],signal,readSource,check:authorize,analysis,presentationEnabled:true,progress,
+          key,...options,turns:[],signal,readSource,check:authorize,analysis,postgres,presentationEnabled:true,progress,
           content:work.recent.map(turn=>{
             if(turn.role==='assistant')return {role:'assistant',content:turn.content};
             const attachments=managerAiMediaParts(work.files.filter(file=>file.ordinal===turn.ordinal).map(file=>file.file));

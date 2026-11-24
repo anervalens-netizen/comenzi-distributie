@@ -576,3 +576,44 @@ Recovery importer selection also requires its facts version to match the target
 runtime (supported versions 2 and 3), in addition to exact reviewed hashes and
 release identity. A release that changes facts semantics requires reviewing and
 updating the private tooling set; merely advancing its runtime pin is insufficient.
+
+## PostgreSQL diagnostics in the manager agent
+
+The optional PostgreSQL capability uses four fixed SDK FunctionTools. It reads
+an operator-managed schema-2 metadata snapshot; it does not connect to a database
+or execute arbitrary SQL, maintenance, or upgrades. Comenzi still uses SQLite.
+A PostgreSQL migration target remains an independent deployment decision.
+
+Configure an absolute `MOBIUP_MANAGER_AI_POSTGRES_SNAPSHOT` path, a comma-separated
+`MOBIUP_MANAGER_AI_POSTGRES_ADMIN_IDS` list of explicitly authorized infrastructure
+administrators, and `MOBIUP_MANAGER_AI_POSTGRES_INSTANCES` in private service
+configuration. Keep snapshot publication atomic, operator-owned, and read-only
+for the application. A global-manager role alone does not grant access. The
+selected account must also remain active, retain global scope, and use an
+unfiltered conversation. Tools are omitted for every other account or portfolio
+selection. The same authorization is rechecked during the SDK run.
+
+Inventory, health, maintenance candidates, and upgrade preflight preserve
+capability, permission, partial-coverage and reset-aware rate states. Metadata
+older than ten minutes or dated in the future returns no current measurements.
+The reader bounds input to one MiB and refuses symlinks/non-regular files. Only
+allowlisted metadata crosses into model context; SQL text, connection strings,
+private paths and business rows are excluded. Backup receipts do not establish
+full restore or application parity. Disabling the private configuration removes
+the tools on the next request; no application database migration is involved.
+
+## Bounded AI card parsing
+
+Manager presentations validate literal shape and collection sizes before schema
+validation on both the server and browser. Report cards accept only the existing
+two-message A2UI envelope, one literal ReportTable, the matching surface ID, at
+most ten rows, 64 columns and eight source labels. Invalid or oversized cards use
+the existing fallback text; authorized exports and conversation text remain
+available. Unknown components, data bindings and extra messages are rejected.
+
+These entry-point guards mitigate excessive validation allocations in the
+Zod 3 compatibility dependency required by A2UI 0.15. They do not patch upstream
+Zod 3 or establish that GHSA-mrhx-c7xc-m3w5 is resolved. Keep the advisory open
+until a compatible upstream correction or a separately tested migration removes
+the affected code. A version-only replacement with Zod 4's legacy v3 entry point
+does not prove remediation.
