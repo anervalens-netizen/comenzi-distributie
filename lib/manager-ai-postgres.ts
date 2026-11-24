@@ -53,6 +53,7 @@ autovacuum autovacuum_max_workers autovacuum_worker_slots autovacuum_max_paralle
 jit io_method io_workers io_min_workers io_max_workers io_worker_launch_interval io_worker_idle_timeout effective_io_concurrency maintenance_io_concurrency track_io_timing track_wal_io_timing max_locks_per_transaction max_repack_replication_slots default_toast_compression data_checksums password_encryption md5_password_warnings password_expiration_warning_threshold wal_sender_shutdown_timeout deadlock_timeout hot_standby
 ok completed_at at sha256 mirror_sha256 restore_verified nas_copy_verified nas_checksum_verified nas_decryption_and_tar_read receipt_age_seconds receipt_stale stale_threshold_hours qualification databases databases_truncated
 ready checks check checked_at latest_verified 18 19 sources refresh_before_upgrade age_days knowledge_stale
+target_version target_image archive_sha256 database_count globals_from_original_archive cleanup_completed production_database_writes authentication application correct_password wrong_password_rejected read_only_query matches_latest_backup age_hours stale application_workflows_verified production_replica_transition_verified
 `));
 function safe(value:unknown,depth=0):unknown {
   if(depth>10)return null;
@@ -129,8 +130,11 @@ function render(snapshot:Json,name:ToolName,instance:string|undefined,instances:
   const inventory=Object.fromEntries(instances.map(id=>[id,object(source[id])?pick(source[id],fields('database status container_version state inventory coverage capabilities')):{status:'instance_unavailable'}]));
   const result={...base,instances:inventory,version_policy:safe(snapshot.version_policy??(object(snapshot.preflight)?snapshot.preflight.version_policy:null))};
   if(name==='pg_fleet_inventory')return result;
+  const qualification=snapshot.qualification_evidence;
+  const receipts=object(qualification)&&qualification.schema_version===1&&object(qualification.instances)?qualification.instances:null;
   return {...result,application:{current_database_engine:'sqlite',target_major:19,target_instance:null,cutover_executed:false},
     backups:Object.fromEntries(instances.map(id=>[id,object(snapshot.backup_evidence)?safe(snapshot.backup_evidence[id]):null])),
+    qualification_evidence:receipts?{schema_version:1,instances:Object.fromEntries(instances.map(id=>[id,safe(receipts[id])]))}:null,
     preflight:pick(snapshot.preflight,fields('ready qualification checks')),execution_authorized:false,
     required_qualification:['full_backup_restore','roles_authentication_acl','application_parity','replica_transition','storage_capacity','authorized_maintenance_window'],
     qualification:'Diagnostic evidence only. A timer or copied archive is not proof of a full restore. Owner authorization and technical qualification are separate.'};

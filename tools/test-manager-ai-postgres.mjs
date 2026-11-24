@@ -74,6 +74,10 @@ try{
  await verifies('preflight preserves current SQLite and unselected target',async()=>{
   const r=await cap.run('pg_upgrade_preflight','{}');assert.equal(r.application.current_database_engine,'sqlite');assert.equal(r.application.target_instance,null);assert.equal(r.execution_authorized,false);assert.equal(r.backups.primary.restore_verified,false);assert.ok(!JSON.stringify(r).includes(secret));
  });
+ await verifies('optional restore receipts retain qualification limits and scope',async()=>{
+  const s=snapshot();s.qualification_evidence={schema_version:1,instances:{primary:{status:'passed',completed_at:new Date().toISOString(),target_version:'19.0',database_count:2,globals_from_original_archive:true,cleanup_completed:true,production_database_writes:false,authentication:[{application:'synthetic',correct_password:true,wrong_password_rejected:true,read_only_query:true}],matches_latest_backup:false,age_hours:1,stale:false,application_workflows_verified:false,production_replica_transition_verified:false,path:secret},excluded:{status:secret}}};
+  put(s);const r=await cap.run('pg_upgrade_preflight','{}');assert.equal(r.qualification_evidence.instances.primary.authentication[0].wrong_password_rejected,true);assert.equal(r.qualification_evidence.instances.primary.matches_latest_backup,false);assert.equal(r.qualification_evidence.instances.primary.application_workflows_verified,false);assert.equal(r.qualification_evidence.instances.excluded,undefined);assert.equal(r.execution_authorized,false);assert.ok(!JSON.stringify(r).includes(secret));put();
+ });
  await verifies('reject SQL, unknown tools, malformed and outside-scope instances',async()=>{
   for(const [name,args] of [['pg_fleet_inventory','{"sql":"select 1"}'],['pg_fleet_inventory','{"":"ignored"}'],['pg_instance_health','{}'],['pg_instance_health','{"instance":"excluded"}'],['pg_instance_health','{"instance":"primary","sql":"delete"}'],['other','{}'],['pg_fleet_inventory','[]'],['pg_upgrade_preflight','not json']])assert.equal((await cap.run(name,args)).status,'invalid_arguments');
  });
