@@ -13,7 +13,7 @@ const object=(x:unknown):x is Json=>!!x&&typeof x==='object'&&!Array.isArray(x);
 const fields=(text:string)=>text.split(/\s+/).filter(Boolean);
 
 // The collector's schema is a metadata contract. New fields require an explicit
-// allowlist change; arbitrary SQL, connection strings and filesystem paths never
+// allowlist change; arbitrary SQL, connection strings and private filesystem paths never
 // pass through this projection.
 const keys=new Set(fields(`
 status reason visibility privacy rows truncated limit eligible_databases database_inventory_may_be_truncated
@@ -53,6 +53,10 @@ autovacuum autovacuum_max_workers autovacuum_worker_slots autovacuum_max_paralle
 jit io_method io_workers io_min_workers io_max_workers io_worker_launch_interval io_worker_idle_timeout effective_io_concurrency maintenance_io_concurrency track_io_timing track_wal_io_timing max_locks_per_transaction max_repack_replication_slots default_toast_compression data_checksums password_encryption md5_password_warnings password_expiration_warning_threshold wal_sender_shutdown_timeout deadlock_timeout hot_standby
 ok completed_at at sha256 mirror_sha256 restore_verified nas_copy_verified nas_checksum_verified nas_decryption_and_tar_read receipt_age_seconds receipt_stale stale_threshold_hours qualification databases databases_truncated
 ready checks check checked_at latest_verified 18 19 sources refresh_before_upgrade age_days knowledge_stale
+observed_at shared_memory configured_bytes capacity_bytes used_bytes available_bytes used_percent df_reported_percent peak_usage_verified configuration_source usage_source review_thresholds small_configured_bytes_at_or_below used_percent_at_or_above configuration_status usage_status configured_capacity_matches_mount
+tuple_estimate_evidence exact_row_count_verified unverified_tuple_estimate_rows last_analyze last_vacuum
+instance validation_errors database_scope_valid relation_metadata_match extension_owners_match artifact_kind restart_verified role_attributes_passwords_defaults_match bootstrap_identity_verified proof_scope complete_schema_policy_equivalence_verified
+service timer receipt_keys latest_attempt last_success operation_state fields LoadState ActiveState SubState Result ExecMainStatus ExecMainStartTimestamp ExecMainExitTimestamp LastTriggerUSec NextElapseUSecRealtime
 target_version target_image archive_sha256 database_count globals_from_original_archive cleanup_completed production_database_writes authentication application correct_password wrong_password_rejected read_only_query matches_latest_backup age_hours stale application_workflows_verified production_replica_transition_verified
 `));
 function safe(value:unknown,depth=0):unknown {
@@ -66,6 +70,12 @@ function safe(value:unknown,depth=0):unknown {
 function pick(value:unknown,allow:string[]) {
   if(!object(value))return null;
   return Object.fromEntries(allow.filter(k=>Object.hasOwn(value,k)).map(k=>[k,safe(value[k])]));
+}
+function qualificationReceipt(value:unknown,instance:string):unknown {
+  if(object(value)&&Object.hasOwn(value,'instance')&&value.instance!==instance) {
+    return {status:'invalid_receipt',instance,validation_errors:['instance_scope_mismatch']};
+  }
+  return safe(value);
 }
 function configuration(env=process.env) {
   const path=env.MOBIUP_MANAGER_AI_POSTGRES_SNAPSHOT?.trim();
@@ -123,19 +133,25 @@ function render(snapshot:Json,name:ToolName,instance:string|undefined,instances:
     const target=source[instance];
     if(!object(target))return {...base,instance,status:'instance_unavailable'};
     const health=name==='pg_instance_health';
-    const diagnostics=health?fields('io wal locks activity replication replication_state slots wal_receiver recovery subscription query_metrics databases semantics'):fields('autovacuum_scores progress_vacuum progress_repack progress_analyze progress_basebackup indexes databases database_catalogs compatibility cluster_compatibility semantics');
+    const diagnostics=health?fields('shared_memory io wal locks activity replication replication_state slots wal_receiver recovery subscription query_metrics databases semantics'):fields('autovacuum_scores progress_vacuum progress_repack progress_analyze progress_basebackup indexes databases database_catalogs compatibility cluster_compatibility semantics');
     return {...base,instance,...pick(target,fields('database status container_version coverage capabilities')),
-      sections:pick(target.sections,health?fields('inventory health wal io locks activity replication replication_state slots wal_receiver recovery subscription query_metrics databases'):fields('maintenance autovacuum_scores progress_vacuum progress_repack progress_analyze progress_basebackup indexes databases database_catalogs compatibility')),
+      sections:pick(target.sections,health?fields('shared_memory inventory health wal io locks activity replication replication_state slots wal_receiver recovery subscription query_metrics databases'):fields('maintenance autovacuum_scores progress_vacuum progress_repack progress_analyze progress_basebackup indexes databases database_catalogs compatibility')),
       [health?'health':'maintenance']:safe(target[health?'health':'maintenance']),...(health?{rates:safe(target.rates)}:{}),diagnostics:pick(target.diagnostics,diagnostics)};
   }
-  const inventory=Object.fromEntries(instances.map(id=>[id,object(source[id])?pick(source[id],fields('database status container_version state inventory coverage capabilities')):{status:'instance_unavailable'}]));
-  const result={...base,instances:inventory,version_policy:safe(snapshot.version_policy??(object(snapshot.preflight)?snapshot.preflight.version_policy:null))};
+  const inventory=Object.fromEntries(instances.map(id=>{
+    const target=source[id];
+    return [id,object(target)?{
+      ...pick(target,fields('database status container_version state inventory coverage capabilities')),
+      shared_memory:object(target.diagnostics)?safe(target.diagnostics.shared_memory??null):null,
+    }:{status:'instance_unavailable'}];
+  }));
+  const result={...base,instances:inventory,backup_schedulers:pick(snapshot.backup_schedulers,fields('managed_full legacy_nightly')),version_policy:safe(snapshot.version_policy??(object(snapshot.preflight)?snapshot.preflight.version_policy:null))};
   if(name==='pg_fleet_inventory')return result;
   const qualification=snapshot.qualification_evidence;
   const receipts=object(qualification)&&qualification.schema_version===1&&object(qualification.instances)?qualification.instances:null;
   return {...result,application:{current_database_engine:'sqlite',target_major:19,target_instance:null,cutover_executed:false},
     backups:Object.fromEntries(instances.map(id=>[id,object(snapshot.backup_evidence)?safe(snapshot.backup_evidence[id]):null])),
-    qualification_evidence:receipts?{schema_version:1,instances:Object.fromEntries(instances.map(id=>[id,safe(receipts[id])]))}:null,
+    qualification_evidence:receipts?{schema_version:1,instances:Object.fromEntries(instances.map(id=>[id,qualificationReceipt(receipts[id],id)]))}:null,
     preflight:pick(snapshot.preflight,fields('ready qualification checks')),execution_authorized:false,
     required_qualification:['full_backup_restore','roles_authentication_acl','application_parity','replica_transition','storage_capacity','authorized_maintenance_window'],
     qualification:'Diagnostic evidence only. A timer or copied archive is not proof of a full restore. Owner authorization and technical qualification are separate.'};
