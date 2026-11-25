@@ -617,3 +617,12 @@ Zod 3 or establish that GHSA-mrhx-c7xc-m3w5 is resolved. Keep the advisory open
 until a compatible upstream correction or a separately tested migration removes
 the affected code. A version-only replacement with Zod 4's legacy v3 entry point
 does not prove remediation.
+
+## PostgreSQL diagnostic evidence
+
+The optional manager PostgreSQL tools preserve the collector's shared-memory
+capacity and observation limits, distinguish managed PostgreSQL backup schedules
+from a host-wide capture, and retain restore validation failures and table-estimate
+evidence. Missing fields in older snapshots remain unknown. Only configured
+instances and metadata fields in their declared subtrees are exposed; SQL and private
+backup paths are excluded. These diagnostics do not qualify or execute a migration.
