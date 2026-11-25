@@ -624,5 +624,5 @@ The optional manager PostgreSQL tools preserve the collector's shared-memory
 capacity and observation limits, distinguish managed PostgreSQL backup schedules
 from a host-wide capture, and retain restore validation failures and table-estimate
 evidence. Missing fields in older snapshots remain unknown. Only configured
-instances and explicitly allowed metadata fields are exposed; SQL and private
+instances and metadata fields in their declared subtrees are exposed; SQL and private
 backup paths are excluded. These diagnostics do not qualify or execute a migration.

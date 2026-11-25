@@ -79,6 +79,22 @@ try{
   put(s);const r=await cap.run('pg_upgrade_preflight','{}');assert.equal(r.qualification_evidence.instances.primary.authentication[0].wrong_password_rejected,true);assert.equal(r.qualification_evidence.instances.primary.matches_latest_backup,false);assert.equal(r.qualification_evidence.instances.primary.application_workflows_verified,false);assert.equal(r.qualification_evidence.instances.excluded,undefined);assert.equal(r.execution_authorized,false);assert.ok(!JSON.stringify(r).includes(secret));put();
  });
 
+
+ await verifies('new metadata keys never extend unrelated recursive projections',async()=>{
+  const s=snapshot(),injection={fields:{name:secret,value:secret,source:secret},service:{status:secret},timer:{status:secret},instance:'excluded',latest_attempt:secret,last_success:secret,operation_state:secret,shared_memory:{configured_bytes:64,configuration_source:secret},validation_errors:[secret],database_scope_valid:false,tuple_estimate_evidence:{reason:secret},unverified_tuple_estimate_rows:1,last_analyze:secret};
+  s.instances.primary.health={...s.instances.primary.health,...injection};s.instances.primary.inventory=injection;s.instances.primary.diagnostics.io=injection;s.instances.primary.sections.io=injection;
+  s.instances.primary.maintenance=[{relname:'synthetic',fields:injection.fields,service:injection.service,timer:injection.timer,instance:'excluded',latest_attempt:secret}];
+  s.backup_evidence={primary:injection};s.preflight={checks:injection};s.qualification_evidence={schema_version:1,instances:{primary:{status:'passed',authentication:[injection]}}};put(s);
+  for(const name of ['pg_fleet_inventory','pg_instance_health','pg_maintenance_candidates','pg_upgrade_preflight']){const value=await cap.run(name,JSON.stringify(name==='pg_instance_health'||name==='pg_maintenance_candidates'?{instance:'primary'}:{}));assert.ok(!JSON.stringify(value).includes(secret),name);assert.ok(!JSON.stringify(value).includes('excluded'),name);}put();
+ });
+ await verifies('dedicated metadata leaves reject nested containers and malformed error codes',async()=>{
+  const s=snapshot();s.instances.primary.diagnostics.shared_memory={configured_bytes:{value:secret},peak_usage_verified:false,configuration_status:{status:'ok',fields:{name:secret}},review_thresholds:{small_configured_bytes_at_or_below:{value:secret}}};s.instances.primary.sections.shared_memory={status:'partial',configuration_status:{name:secret}};
+  s.instances.primary.maintenance=[{relname:'synthetic',last_analyze:{value:secret},tuple_estimate_evidence:{status:'unverified',exact_row_count_verified:{value:secret},fields:{name:secret}}}];
+  s.backup_schedulers={managed_full:{service:{status:'ok',fields:{ExecMainStatus:{value:secret},Result:'success'},latest_attempt:secret},receipt_keys:{latest_attempt:{value:secret}}}};
+  s.qualification_evidence={schema_version:1,instances:{primary:{status:'passed',instance:'primary',validation_errors:[{name:secret}]}}};put(s);
+  for(const name of ['pg_fleet_inventory','pg_instance_health','pg_maintenance_candidates','pg_upgrade_preflight']){const value=await cap.run(name,JSON.stringify(name==='pg_instance_health'||name==='pg_maintenance_candidates'?{instance:'primary'}:{}));assert.ok(!JSON.stringify(value).includes(secret),name);if(name==='pg_upgrade_preflight'){assert.equal(value.qualification_evidence.instances.primary.status,'invalid_receipt');assert.deepEqual(value.qualification_evidence.instances.primary.validation_errors,['invalid_validation_errors']);}}put();
+ });
+
  await verifies('shared memory evidence survives inventory and health without peak claims',async()=>{
   const s=snapshot();s.collector_version='0.2.2';
   const memory={configured_bytes:67108864,capacity_bytes:67108864,used_bytes:9437184,available_bytes:57671680,used_percent:14.062,df_reported_percent:15,observed_at:new Date().toISOString(),scope:'instantaneous container sample',peak_usage_verified:false,configuration_source:'fixed container configuration',usage_source:'fixed container usage',review_thresholds:{small_configured_bytes_at_or_below:67108864,used_percent_at_or_above:90},configuration_status:{status:'ok'},usage_status:{status:'ok'},configured_capacity_matches_mount:true,private_path:secret};

@@ -53,10 +53,6 @@ autovacuum autovacuum_max_workers autovacuum_worker_slots autovacuum_max_paralle
 jit io_method io_workers io_min_workers io_max_workers io_worker_launch_interval io_worker_idle_timeout effective_io_concurrency maintenance_io_concurrency track_io_timing track_wal_io_timing max_locks_per_transaction max_repack_replication_slots default_toast_compression data_checksums password_encryption md5_password_warnings password_expiration_warning_threshold wal_sender_shutdown_timeout deadlock_timeout hot_standby
 ok completed_at at sha256 mirror_sha256 restore_verified nas_copy_verified nas_checksum_verified nas_decryption_and_tar_read receipt_age_seconds receipt_stale stale_threshold_hours qualification databases databases_truncated
 ready checks check checked_at latest_verified 18 19 sources refresh_before_upgrade age_days knowledge_stale
-observed_at shared_memory configured_bytes capacity_bytes used_bytes available_bytes used_percent df_reported_percent peak_usage_verified configuration_source usage_source review_thresholds small_configured_bytes_at_or_below used_percent_at_or_above configuration_status usage_status configured_capacity_matches_mount
-tuple_estimate_evidence exact_row_count_verified unverified_tuple_estimate_rows last_analyze last_vacuum
-instance validation_errors database_scope_valid relation_metadata_match extension_owners_match artifact_kind restart_verified role_attributes_passwords_defaults_match bootstrap_identity_verified proof_scope complete_schema_policy_equivalence_verified
-service timer receipt_keys latest_attempt last_success operation_state fields LoadState ActiveState SubState Result ExecMainStatus ExecMainStartTimestamp ExecMainExitTimestamp LastTriggerUSec NextElapseUSecRealtime
 target_version target_image archive_sha256 database_count globals_from_original_archive cleanup_completed production_database_writes authentication application correct_password wrong_password_rejected read_only_query matches_latest_backup age_hours stale application_workflows_verified production_replica_transition_verified
 `));
 function safe(value:unknown,depth=0):unknown {
@@ -71,11 +67,58 @@ function pick(value:unknown,allow:string[]) {
   if(!object(value))return null;
   return Object.fromEntries(allow.filter(k=>Object.hasOwn(value,k)).map(k=>[k,safe(value[k])]));
 }
+// New collector metadata is admitted only in its declared subtree. Leaf values
+// cannot introduce another recursive container through a newly allowed name.
+function leaves(value:unknown,allow:string[]) {
+  if(!object(value))return null;
+  return Object.fromEntries(allow.filter(k=>Object.hasOwn(value,k)&&(value[k]===null||['boolean','number','string'].includes(typeof value[k]))).map(k=>[k,safe(value[k])]));
+}
+function sharedMemory(value:unknown) {
+  if(!object(value))return null;
+  return {
+    ...leaves(value,fields('configured_bytes capacity_bytes used_bytes available_bytes used_percent df_reported_percent observed_at scope peak_usage_verified configuration_source usage_source configured_capacity_matches_mount')),
+    ...(Object.hasOwn(value,'configuration_status')?{configuration_status:leaves(value.configuration_status,fields('status reason'))}:{}),
+    ...(Object.hasOwn(value,'usage_status')?{usage_status:leaves(value.usage_status,fields('status reason'))}:{}),
+    ...(Object.hasOwn(value,'review_thresholds')?{review_thresholds:leaves(value.review_thresholds,fields('small_configured_bytes_at_or_below used_percent_at_or_above'))}:{}),
+  };
+}
+function schedulerUnit(value:unknown,kind:'service'|'timer') {
+  if(!object(value))return null;
+  const properties=kind==='service'?fields('LoadState ActiveState SubState Result ExecMainStatus ExecMainStartTimestamp ExecMainExitTimestamp'):fields('LoadState ActiveState SubState LastTriggerUSec NextElapseUSecRealtime');
+  return {...leaves(value,fields('unit status reason operation_state')),...(Object.hasOwn(value,'fields')?{fields:leaves(value.fields,properties)}:{})};
+}
+function backupSchedulers(value:unknown) {
+  if(!object(value))return null;
+  return Object.fromEntries(fields('managed_full legacy_nightly').filter(k=>Object.hasOwn(value,k)).map(k=>{
+    const scheduler=value[k];
+    return [k,object(scheduler)?{
+      ...leaves(scheduler,fields('meaning restore_verified')),
+      ...(Object.hasOwn(scheduler,'service')?{service:schedulerUnit(scheduler.service,'service')}:{}),
+      ...(Object.hasOwn(scheduler,'timer')?{timer:schedulerUnit(scheduler.timer,'timer')}:{}),
+      ...(Object.hasOwn(scheduler,'receipt_keys')?{receipt_keys:leaves(scheduler.receipt_keys,fields('latest_attempt last_success'))}:{}),
+    }:null];
+  }));
+}
+function maintenanceRows(value:unknown):unknown {
+  if(!Array.isArray(value))return safe(value);
+  return value.map(row=>object(row)?{
+    ...safe(row) as Json,...leaves(row,fields('last_analyze last_vacuum')),
+    ...(Object.hasOwn(row,'tuple_estimate_evidence')?{tuple_estimate_evidence:leaves(row.tuple_estimate_evidence,fields('status reason exact_row_count_verified'))}:{}),
+  }:safe(row));
+}
 function qualificationReceipt(value:unknown,instance:string):unknown {
-  if(object(value)&&Object.hasOwn(value,'instance')&&value.instance!==instance) {
+  if(!object(value))return safe(value);
+  if(Object.hasOwn(value,'instance')&&value.instance!==instance) {
     return {status:'invalid_receipt',instance,validation_errors:['instance_scope_mismatch']};
   }
-  return safe(value);
+  if(Object.hasOwn(value,'validation_errors')&&(!Array.isArray(value.validation_errors)||value.validation_errors.some(x=>typeof x!=='string'||!/^[a-z][a-z0-9_]{0,127}$/.test(x)))) {
+    return {status:'invalid_receipt',instance,validation_errors:['invalid_validation_errors']};
+  }
+  return {
+    ...safe(value) as Json,
+    ...leaves(value,fields('instance database_scope_valid relation_metadata_match extension_owners_match artifact_kind restart_verified role_attributes_passwords_defaults_match bootstrap_identity_verified proof_scope complete_schema_policy_equivalence_verified')),
+    ...(Object.hasOwn(value,'validation_errors')?{validation_errors:safe(value.validation_errors)}:{}),
+  };
 }
 function configuration(env=process.env) {
   const path=env.MOBIUP_MANAGER_AI_POSTGRES_SNAPSHOT?.trim();
@@ -133,19 +176,26 @@ function render(snapshot:Json,name:ToolName,instance:string|undefined,instances:
     const target=source[instance];
     if(!object(target))return {...base,instance,status:'instance_unavailable'};
     const health=name==='pg_instance_health';
-    const diagnostics=health?fields('shared_memory io wal locks activity replication replication_state slots wal_receiver recovery subscription query_metrics databases semantics'):fields('autovacuum_scores progress_vacuum progress_repack progress_analyze progress_basebackup indexes databases database_catalogs compatibility cluster_compatibility semantics');
+    const diagnostics=pick(target.diagnostics,health?fields('io wal locks activity replication replication_state slots wal_receiver recovery subscription query_metrics databases semantics'):fields('autovacuum_scores progress_vacuum progress_repack progress_analyze progress_basebackup indexes databases database_catalogs compatibility cluster_compatibility semantics'));
+    const sections=pick(target.sections,health?fields('inventory health wal io locks activity replication replication_state slots wal_receiver recovery subscription query_metrics databases'):fields('maintenance autovacuum_scores progress_vacuum progress_repack progress_analyze progress_basebackup indexes databases database_catalogs compatibility'));
+    if(health) {
+      if(diagnostics&&object(target.diagnostics)&&Object.hasOwn(target.diagnostics,'shared_memory'))diagnostics.shared_memory=sharedMemory(target.diagnostics.shared_memory);
+      if(sections&&object(target.sections)&&Object.hasOwn(target.sections,'shared_memory'))sections.shared_memory=leaves(target.sections.shared_memory,fields('status reason configuration_status usage_status peak_usage_verified'));
+    } else if(sections&&object(target.sections)&&object(target.sections.maintenance)) {
+      sections.maintenance={...safe(target.sections.maintenance) as Json,...leaves(target.sections.maintenance,fields('unverified_tuple_estimate_rows'))};
+    }
     return {...base,instance,...pick(target,fields('database status container_version coverage capabilities')),
-      sections:pick(target.sections,health?fields('shared_memory inventory health wal io locks activity replication replication_state slots wal_receiver recovery subscription query_metrics databases'):fields('maintenance autovacuum_scores progress_vacuum progress_repack progress_analyze progress_basebackup indexes databases database_catalogs compatibility')),
-      [health?'health':'maintenance']:safe(target[health?'health':'maintenance']),...(health?{rates:safe(target.rates)}:{}),diagnostics:pick(target.diagnostics,diagnostics)};
+      sections,[health?'health':'maintenance']:health?safe(target.health):maintenanceRows(target.maintenance),
+      ...(health?{rates:safe(target.rates)}:{}),diagnostics};
   }
   const inventory=Object.fromEntries(instances.map(id=>{
     const target=source[id];
     return [id,object(target)?{
       ...pick(target,fields('database status container_version state inventory coverage capabilities')),
-      shared_memory:object(target.diagnostics)?safe(target.diagnostics.shared_memory??null):null,
+      shared_memory:object(target.diagnostics)?sharedMemory(target.diagnostics.shared_memory):null,
     }:{status:'instance_unavailable'}];
   }));
-  const result={...base,instances:inventory,backup_schedulers:pick(snapshot.backup_schedulers,fields('managed_full legacy_nightly')),version_policy:safe(snapshot.version_policy??(object(snapshot.preflight)?snapshot.preflight.version_policy:null))};
+  const result={...base,instances:inventory,backup_schedulers:backupSchedulers(snapshot.backup_schedulers),version_policy:safe(snapshot.version_policy??(object(snapshot.preflight)?snapshot.preflight.version_policy:null))};
   if(name==='pg_fleet_inventory')return result;
   const qualification=snapshot.qualification_evidence;
   const receipts=object(qualification)&&qualification.schema_version===1&&object(qualification.instances)?qualification.instances:null;
