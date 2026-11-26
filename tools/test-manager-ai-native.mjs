@@ -53,6 +53,59 @@ try {
     checks++;
   }
 
+  // Reproduce mismatched wire frames against the official native admission path.
+  const wireCall = {...call(),id:'tool_fixture'};
+  const wireMessage = {...message('Synthetic terminal answer'),id:'message_fixture'};
+  const wireFrames = (calls, output) => [
+    {type:'response.created',response:{...envelope([]),status:'in_progress'}},
+    ...calls.flatMap((item,output_index)=>[
+      {type:'response.output_item.added',output_index,item:{...item,arguments:''}},
+      {type:'response.function_call_arguments.delta',output_index,item_id:item.id,delta:item.arguments},
+      {type:'response.function_call_arguments.done',output_index,item_id:item.id,arguments:item.arguments},
+      {type:'response.output_item.done',output_index,item},
+    ]),
+    {type:'response.output_item.added',output_index:calls.length,item:{...wireMessage,status:'in_progress',content:[]}},
+    {type:'response.output_text.delta',output_index:calls.length,item_id:wireMessage.id,content_index:0,delta:'Synthetic terminal answer'},
+    {type:'response.output_item.done',output_index:calls.length,item:wireMessage},
+    {type:'response.completed',response:envelope(output)},
+  ];
+  const exactEvents = events => new Response(events.map((event,sequence_number)=>
+    'event: '+event.type+'\ndata: '+JSON.stringify({...event,sequence_number})+'\n\n').join('')+'data: [DONE]\n\n',
+    {headers:{'Content-Type':'text/event-stream'}});
+  for (const mode of ['stream-only','duplicate-stream-id','terminal-only','settled-arguments',
+    'delta-arguments','done-arguments','stream-namespace','stream-call-id','stream-item-id','duplicate-settlement']) {
+    let reads=0,requests=0;
+    const frames=wireFrames(mode==='terminal-only'?[]:[wireCall],mode==='stream-only'?[wireMessage]:[wireCall,wireMessage]);
+    if (mode==='duplicate-stream-id') {
+      const duplicate={...wireCall,id:'tool_duplicate'};
+      frames.splice(1,0,
+        {type:'response.output_item.added',output_index:2,item:{...duplicate,arguments:''}},
+        {type:'response.output_item.done',output_index:2,item:duplicate});
+    }
+    if (mode==='settled-arguments') frames.find(event=>event.type==='response.output_item.done').item={...wireCall,arguments:query.replace('"limit":10','"limit":9')};
+    if (mode==='delta-arguments') frames.find(event=>event.type==='response.function_call_arguments.delta').delta=query.replace('"limit":10','"limit":9');
+    if (mode==='done-arguments') frames.find(event=>event.type==='response.function_call_arguments.done').arguments=query.replace('"limit":10','"limit":9');
+    if (mode==='stream-namespace') frames.find(event=>event.type==='response.output_item.done').item={...wireCall,namespace:'host'};
+    if (mode==='stream-call-id') frames.find(event=>event.type==='response.output_item.done').item={...wireCall,call_id:'other_call'};
+    if (mode==='stream-item-id') frames.find(event=>event.type==='response.function_call_arguments.delta').item_id='other_item';
+    if (mode==='duplicate-settlement') frames.splice(5,0,{...frames[4]});
+    await assert.rejects(()=>runManagerAi({...options,onEvent:async()=>{},readSource:async()=>{reads++;return source;},
+      send:async()=>++requests===1?exactEvents(frames):responseEvents([{type:'response.completed',response:envelope([wireMessage])}])}),
+      {status:502},mode);
+    assert.equal(reads,0,mode+' must fail before native tool admission');
+    assert.equal(requests,1,mode+' must not start a follow-up provider request');
+    checks++;
+  }
+
+  let streamingReads=0,streamingRequests=0;
+  const streamed=await runManagerAi({...options,onEvent:async()=>{},readSource:async()=>{streamingReads++;return source;},
+    send:async()=>++streamingRequests===1?exactEvents(wireFrames([wireCall],[wireCall,wireMessage])):
+      responseEvents([{type:'response.completed',response:envelope([wireMessage])}])});
+  assert.equal(streamingReads,1,'consistent call frames remain admissible');
+  assert.equal(streamingRequests,2);
+  assert.equal(streamed.reports.length,1);
+  checks++;
+
   for (const status of [429,500]) {
     let requests=0;
     await assert.rejects(() => runManagerAi({...options,send:async()=>{requests++;return new Response('private provider body',{status});}}),

@@ -258,6 +258,9 @@ pentru alte platforme, declarate explicit în pachetul blocat.
 Arhivele alpha sunt pentru Linux x64, Node 22 sau mai nou, glibc minimum 2.39 și
 OpenSSL 3. Verificați aceleași condiții în CI și pe orice gazdă de recuperare
 înainte de activare. Build-ul Cloudflare nu încarcă providerul nativ.
+Adaptorul validează apelurile de instrumente din cadrele Responses și cere ca
+identificatorii, numele, namespace-ul și argumentele să corespundă răspunsului final
+înainte de admiterea nativă. Cadrele divergente sunt respinse înainte de accesul la date.
 Testele de contract folosesc SDK-ul instalat cu transport sintetic, fără apeluri
 externe. Testul `tools/test-manager-ai-native-runtime.mjs` execută artefactul
 relocat cu două conversații simultane, upload, A2UI, streaming și deduplicarea
