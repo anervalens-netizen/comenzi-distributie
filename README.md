@@ -243,10 +243,43 @@ must stop the private runner. Relative tooling paths support isolated recovery;
 restoring never starts the runner or a service. Install the matching
 `sim_tooling.py` helper with backup/restore and include it in the runtime.
 
+## Runtime Agents nativ (alpha)
+
+Cele cinci pachete `@openai/agents*` provin din aceeași versiune oficială
+[`v0.22.0-alpha.3`](https://github.com/openai/openai-agents-js/releases/tag/v0.22.0-alpha.3).
+`package-lock.json` fixează arhivele și integritatea SHA-512.
+`tools/agents-alpha-manifest.json` înregistrează SHA-256 pentru arhive și fișierele
+native. `npm ci` verifică versiunile, lockfile-ul și binarele înainte de construire.
+Nu se comit binare în Git. Standalone include addon-ul și executabilele oficiale,
+plus dependențele JavaScript urmărite; orice avertisment de rezolvare oprește
+construcția. Pentru dispatcher-ul Koffi sunt excluse numai pachetele opționale
+pentru alte platforme, declarate explicit în pachetul blocat.
+
+Arhivele alpha sunt pentru Linux x64, Node 22 sau mai nou, glibc minimum 2.39 și
+OpenSSL 3. Verificați aceleași condiții în CI și pe orice gazdă de recuperare
+înainte de activare. Build-ul Cloudflare nu încarcă providerul nativ.
+Testele de contract folosesc SDK-ul instalat cu transport sintetic, fără apeluri
+externe. Testul `tools/test-manager-ai-native-runtime.mjs` execută artefactul
+relocat cu două conversații simultane, upload, A2UI, streaming și deduplicarea
+reluărilor; măsoară memoria procesului cu heap-ul Node limitat la 384 MiB.
+Măsurarea sintetică nu înlocuiește verificarea memoriei serviciului activ.
+
+Istoricul, fișierele, evenimentele și identificatorii de depunere rămân în stocarea
+aplicației. Mesajele istorice sunt convertite în `initialMessages` la fiecare
+schimb. Nu se persistă checkpoint-uri native alpha și nu se promite reluarea unui
+apel de model întrerupt pe alt worker. Reconectarea la evenimente și evitarea
+cererilor duplicate folosesc contractul existent al aplicației. Formatul alpha
+poate avea schimbări incompatibile; actualizați toate cele cinci pachete împreună
+și calificați din nou contractele și artefactul relocat înainte de activare.
+
 ## Analize SQL și Python pentru manageri
 
-Agentul managerilor folosește OpenAI Agents SDK pentru TypeScript. SDK-ul trimite
-cererile la Responses API și coordonează apelurile către instrumentele aplicației.
+Agentul managerilor folosește API-ul nativ `Agent.run` din OpenAI Agents SDK pentru
+TypeScript `0.22.0-alpha.3`, cu `NativeProvider` și un adaptor `ResponsesModel`.
+SDK-ul trimite cererile la Responses API și coordonează instrumentele aplicației.
+Adaptorul păstrează modelele selectate, limitele, verificarea răspunsurilor și
+transportul fără reluări automate. Instrumentele host Codex nu sunt activate.
+Callback-urile rulează secvențial, cu reverificarea autorizării aplicației.
 Comenzi păstrează istoricul și fișierele în stocarea proprie. La reconectare, panoul
 reia evenimentele de la ultimul mesaj primit. Aplicația reverifică drepturile asupra
 portofoliului la fiecare citire și înainte de livrarea rezultatului.

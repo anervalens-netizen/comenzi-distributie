@@ -1,4 +1,5 @@
-import {nodeFileTrace} from '@vercel/nft';
+import {nodeFileTrace, resolve as resolveDependency} from '@vercel/nft';
+import {verifyAgentsAlpha} from './verify-agents-alpha.mjs';
 import {cpSync, existsSync, globSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync} from 'node:fs';
 import {dirname, join, relative, resolve} from 'node:path';
 
@@ -14,9 +15,25 @@ export async function packageRuntime(directory) {
   // Ignore Vinext's flattened copy: it can select a different transitive
   // version than the source resolver. Keep the installed nested layout.
   rmSync(join(base, 'node_modules'), {recursive: true, force: true});
-  const files = new Set();
+  // Native binaries are selected dynamically by the SDK loader. Preserve the
+  // exact official release assets in addition to the JavaScript trace closure.
+  const files = new Set(verifyAgentsAlpha(source));
+  // Koffi's static dispatcher lists every OS/CPU package. This artifact is
+  // explicitly Linux x64; keep the selected package and omit only the foreign
+  // branches declared optional by that exact locked dependency.
+  const koffi = JSON.parse(readFileSync(join(source, 'node_modules/koffi/package.json'), 'utf8'));
+  const foreignKoffi = new Set(Object.keys(koffi.optionalDependencies ?? {}).filter(name => name !== '@koromix/koffi-linux-x64'));
+  const excludedPlatformPackages = new Set();
+  const resolveRuntime = async (id, parent, job, cjsResolve) => {
+    const from = relative(source, parent);
+    if (['node_modules/koffi/src/koffi/src/static.js', 'node_modules/koffi/src/koffi/src/static.cjs'].includes(from) && foreignKoffi.has(id)) {
+      excludedPlatformPackages.add(id);
+      return [];
+    }
+    return resolveDependency(id, parent, job, cjsResolve);
+  };
   for (const conditions of [['node', 'import', 'require', 'production'], ['node', 'import', 'require', 'production', 'react-server']]) {
-    const trace = await nodeFileTrace(entries.map(file => join(base, file)), {base: source, processCwd: base, conditions});
+    const trace = await nodeFileTrace(entries.map(file => join(base, file)), {base: source, processCwd: base, conditions, resolve: resolveRuntime});
     if (trace.warnings.size) throw new Error([...trace.warnings].map(error => error.message).join('\n'));
     for (const file of trace.fileList) {
       if (file.startsWith('../')) throw new Error('Runtime dependency escapes standalone output: ' + file);
@@ -44,7 +61,7 @@ export async function packageRuntime(directory) {
     }
     
     renameSync(staging, join(base, 'node_modules'));
-    writeFileSync(join(base, 'runtime-dependencies.json'), JSON.stringify({schema: 1, entries, packages, files: [...files].filter(file => file.startsWith('node_modules/')).sort((a, b) => a.localeCompare(b))}, null, 2) + '\n');
+    writeFileSync(join(base, 'runtime-dependencies.json'), JSON.stringify({schema: 1, entries, packages, excludedPlatformPackages: [...excludedPlatformPackages].sort((a, b) => a.localeCompare(b)), files: [...files].filter(file => file.startsWith('node_modules/')).sort((a, b) => a.localeCompare(b))}, null, 2) + '\n');
   } finally {
     rmSync(staging, {recursive: true, force: true});
   }

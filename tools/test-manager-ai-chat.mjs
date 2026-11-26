@@ -8,7 +8,8 @@ import {pathToFileURL} from 'node:url';
 import {DatabaseSync} from 'node:sqlite';
 import {build} from 'esbuild';
 import {mock} from 'node:test';
-import {Runner} from '@openai/agents-core';
+import {Agent} from '@openai/agents';
+import {responseEvents, messageText} from './manager-ai-test-responses.mjs';
 
 const directory=mkdtempSync(join(tmpdir(),'synthetic-distribution-ai-'));
 const db=new DatabaseSync(join(directory,'mobiup.sqlite'));
@@ -105,7 +106,6 @@ try {
   const providerOptions=[];
   const oldPartial='Prima redactare, înainte de schimbarea instrucțiunii. '.repeat(4);
   const newPartial='Redactarea după schimbare, deja transmisă clientului. '.repeat(4);
-  const responseEvents=events=>new Response(events.map(event=>'data: '+JSON.stringify(event)+'\n\n').join(''),{headers:{'Content-Type':'text/event-stream'}});
   function answer(body,text) {
     const events=[
       {type:'response.created',response:{model:body.model}},
@@ -121,14 +121,14 @@ try {
     assert.equal(new URL(url).hostname,'api.openai.com');
     const body=JSON.parse(options.body);
     assert.equal(body.store,false);
-    const last=body.input.at(-1).content;
+    const last=messageText(body.input.at(-1).content);
     if(typeof last==='string' && last==='transport legacy fără răspuns') {
       accesses.push(body.input);
       // Ignores abort until the test explicitly lets the fake transport unwind.
       return new Promise((_,reject)=>abandonedLegacyFetches.push(reject));
     }
     assert.equal(body.stream,true);
-    const text=body.input.at(-1).content;
+    const text=messageText(body.input.at(-1).content);
     const toolOutput=body.input.at(-1).type==='function_call_output';
     accesses.push(body.input);
     providerOptions.push({model:body.model,effort:body.reasoning.effort});
@@ -266,16 +266,13 @@ try {
   const [data,id]=form('Situația lunii',undefined,firstFiles());
   const page=JSON.stringify({tab:'Prepay',period:'2026-09, 2026-10',owner:'neautorizat'});
   data.set('current_view',page);
-  const observedRun=mock.method(Runner.prototype,'run');
+  const observedRun=mock.method(Agent.prototype,'run');
   let result;
   try {
     result=await events(await call(base+'/turn',{body:data}));
     assert.equal(observedRun.mock.callCount(),1);
     const sdkResult=await observedRun.mock.calls[0].result;
-    const remaining=sdkResult[Symbol.asyncIterator]();
-    try {
-      assert.equal((await remaining.next()).done,true,'the web response must consume all SDK stream events');
-    } finally { await remaining.return?.(); }
+    assert.equal(sdkResult.finalOutput,'Răspuns verificat','the native turn must finish before the application records completion');
   } finally { observedRun.mock.restore(); }
   assert.equal(result[0].type,'submission_status');
   assert.equal(result[1].message.id,id);
@@ -479,7 +476,7 @@ try {
   const joined=await events(active);
   assert.equal(joined.filter(e=>e.type==='reset').length,2);
   assert.equal(joined.at(-1).type,'complete');
-  assert.equal(accesses.at(-1).at(-1).content,'Calculează pentru ultima lună.');
+  assert.equal(messageText(accesses.at(-1).at(-1).content),'Calculează pentru ultima lună.');
   assert.deepEqual(providerOptions.at(-1),{model:'gpt-6.2-sol',effort:'high'});
   const state=await (await call(base+'/submissions/'+steeredId)).json();
   assert.equal(state.state,'complete');

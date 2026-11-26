@@ -1,0 +1,86 @@
+{
+  "schema": 1,
+  "release": "v0.22.0-alpha.3",
+  "sourceCommit": "f6ebdc543ce1aa1c61c111eb530c5f1c8e56e4c1",
+  "platform": "linux-x64",
+  "minimumGlibc": "2.39",
+  "packages": [
+    {
+      "name": "@openai/agents",
+      "url": "https://github.com/openai/openai-agents-js/releases/download/v0.22.0-alpha.3/openai-agents-0.22.0-alpha.3-linux-x64.tgz",
+      "sha256": "3e20e06593bde3abf37cd3b6bcde32ce1023012f13aff3d6c8f0f6dfb687d62e",
+      "integrity": "sha512-FTwVxuqY9AbE/IjEERPycwsKwhJPl9f/9oAwD84zG9Y1bZkvCPaE1/6SBxJ2pyij9qy7sMO56f8rKzDtIxmxpw==",
+      "size": 423499
+    },
+    {
+      "name": "@openai/agents-codex",
+      "url": "https://github.com/openai/openai-agents-js/releases/download/v0.22.0-alpha.3/openai-agents-codex-0.22.0-alpha.3-linux-x64.tgz",
+      "sha256": "542062e3cf01a520f7c589dbfa35d8554fff91d02253b873c8746cd254d303bd",
+      "integrity": "sha512-oU3jEP2kRaeo+KcxnRdDTNefsDKa1WT1EaMvn4C06xKD/B9o4G6FC78v9KeRQq5STZlUwZVq6H5jHY1BQiO5LA==",
+      "size": 130910819
+    },
+    {
+      "name": "@openai/agents-core",
+      "url": "https://github.com/openai/openai-agents-js/releases/download/v0.22.0-alpha.3/openai-agents-core-0.22.0-alpha.3-linux-x64.tgz",
+      "sha256": "f7550d471f94bbc05879e064e76c90a1f379b6756ff36189dcfba90d04656f5d",
+      "integrity": "sha512-W2E6IzZm49pL/7DeNJWhVLnfWZWV/CNIupQ193kYy0Qsya96/osno7Gf4ZsQ7iCeoGLVVc2Zc6fmlfUMxkYfaA==",
+      "size": 2928520
+    },
+    {
+      "name": "@openai/agents-openai",
+      "url": "https://github.com/openai/openai-agents-js/releases/download/v0.22.0-alpha.3/openai-agents-openai-0.22.0-alpha.3-linux-x64.tgz",
+      "sha256": "e2aa9d931e88c52f95522742b856b3448205c017770730d5cdea813e2d62e5a9",
+      "integrity": "sha512-T+g/oqE4Zu/p+fR2hlovY8Lb6yo7222mViTNlqmZl5f3HAqsgWhgP9bbGnv+pTEnNX6AYLz5CNZWS3Vmp3V3RQ==",
+      "size": 268854
+    },
+    {
+      "name": "@openai/agents-realtime",
+      "url": "https://github.com/openai/openai-agents-js/releases/download/v0.22.0-alpha.3/openai-agents-realtime-0.22.0-alpha.3-linux-x64.tgz",
+      "sha256": "91cc9d38ce5e0e740016028d1cbb06380d20b4f5e1f9dbec846da0a22a2b1af0",
+      "integrity": "sha512-XUmQEqlLOXZqgX1Z5+stn+tHcTgRBl5o/+EI5usTEyHq+i49CBAOHawUvzkalOlV+JelcA0JIBzgy2xMvUjjuw==",
+      "size": 3513976
+    }
+  ],
+  "runtimeFiles": [
+    {
+      "path": "native/codex.node",
+      "size": 201691944,
+      "sha256": "0c06aedb9e2bf4a8893ffafc488fcd206a6a89469e2468a64331d43c7a468bd3"
+    },
+    {
+      "path": "native/index.js",
+      "size": 1458,
+      "sha256": "56a232c9a8a5628d96b4622af027b5d1938894e975cad22b42d1f5f5ea60a08f"
+    },
+    {
+      "path": "native/build-receipt.json",
+      "size": 138984,
+      "sha256": "84c0d104f799192be4e2c2868ab22c6458606a06fa0fa328f774e0f5c5575af5"
+    },
+    {
+      "path": "native/CODEX_REVISION",
+      "size": 41,
+      "sha256": "c7a770325eaa40255eee6df95d03263fc65ad25b98415ec16a0cb0ae27d433d2"
+    },
+    {
+      "path": "bin/codex-code-mode-host",
+      "size": 74369328,
+      "sha256": "e3f482990de75a22c63b539dad75941fb0dd76efa0f516d45cf23e2c0fe5753d"
+    },
+    {
+      "path": "bin/codex-execve-wrapper",
+      "size": 26001424,
+      "sha256": "a5b3e9b37276879587a3419005fef2924ba1cfdae418c22e99a8e4dc1b1dd594"
+    },
+    {
+      "path": "bin/codex-linux-sandbox",
+      "size": 26001424,
+      "sha256": "a5b3e9b37276879587a3419005fef2924ba1cfdae418c22e99a8e4dc1b1dd594"
+    },
+    {
+      "path": "bin/codex-sdk-runtime",
+      "size": 26001424,
+      "sha256": "a5b3e9b37276879587a3419005fef2924ba1cfdae418c22e99a8e4dc1b1dd594"
+    }
+  ]
+}

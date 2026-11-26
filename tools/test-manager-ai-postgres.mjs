@@ -1,3 +1,4 @@
+import {responseEvents} from './manager-ai-test-responses.mjs';
 import assert from 'node:assert/strict';
 import {build} from 'esbuild';
 import {mkdtempSync,writeFileSync,rmSync,symlinkSync,chmodSync,mkdirSync} from 'node:fs';
@@ -183,7 +184,7 @@ try{
  });
  await verifies('SDK rechecks PostgreSQL access before each streamed publication',async()=>{
   let calls=0;const events=[];
-  const stream=items=>new Response(items.map(item=>'data: '+JSON.stringify(item)+'\n\n').join(''),{headers:{'content-type':'text/event-stream'}});
+  const stream=responseEvents;
   await assert.rejects(()=>runManagerAi({model:defaultManagerAiModel,key:'synthetic',turns:[{role:'user',content:'Read database readiness'}],signal,postgres:cap,check:async()=>{},onEvent:async event=>{events.push(event);},readSource:async()=>{throw Error('unexpected read');},send:async()=>{
    if(++calls===1)return stream([{type:'response.created',response:{model:defaultManagerAiModel}},{type:'response.completed',response:{id:'r_stream_tool',model:defaultManagerAiModel,status:'completed',output:[{type:'function_call',name:'pg_upgrade_preflight',call_id:'stream_readiness',arguments:'{}'}]}}]);
    process.env.MOBIUP_MANAGER_AI_POSTGRES_ADMIN_IDS='revoked';
