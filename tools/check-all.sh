@@ -48,6 +48,7 @@ node tools/test-vodafone-bonus.mjs
 node tools/test-vodafone-bonus-pending.mjs
 node tools/test-vodafone-ranking-queue.mjs
 node tools/test-manager-ai.mjs
+node tools/test-manager-ai-native.mjs
 node tools/test-manager-ai-postgres.mjs
 node tools/test-manager-ai-card-bounds.mjs
 node tools/test-manager-ai-media.mjs
@@ -109,6 +110,7 @@ node tools/test-stock-cloudflare.mjs
 npm run build:server
 node tools/test-import-engine-sales.mjs
 node tools/test-runtime-packaging.mjs
+node tools/test-manager-ai-native-runtime.mjs
 node tools/test-real-worker-maps.mjs
 node tools/test-client-sales-remediation.mjs
 node tools/test-pagination-revision.mjs

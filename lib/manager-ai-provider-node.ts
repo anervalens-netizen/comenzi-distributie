@@ -25,18 +25,8 @@ import {
 } from './manager-ai-analysis-tool';
 import type { ManagerAiPreparedArtifact } from './manager-ai-media-contract';
 
-import {
-  Agent,
-  Runner,
-  assistant,
-  user,
-  MaxTurnsExceededError,
-  ModelBehaviorError,
-  ModelRefusalError,
-  ToolCallError,
-  type AgentInputItem,
-  type FunctionTool,
-} from '@openai/agents-core';
+import { Agent, NativeProvider, NativeError, tool, telemetry, type FunctionTool } from '@openai/agents';
+import {z} from 'zod';
 import OpenAI from 'openai';
 import { ManagerAiModelAdapter, type ProviderEvent } from './manager-ai-model';
 import type { ManagerAiMediaPart } from './manager-ai-media-contract';
@@ -89,33 +79,15 @@ type ConversationTurn =
         | ({ type: 'input_text'; text: string } | ManagerAiMediaPart)[];
     };
 
-function sdkInput(turn: ConversationTurn): AgentInputItem {
-  if (turn.role === 'assistant') return assistant(turn.content);
-  if (typeof turn.content === 'string')
-    return { role: 'user', content: turn.content };
-  return user(
-    turn.content.map((part) => {
-      if (part.type === 'input_file')
-        return {
-          type: 'input_file',
-          file: part.file_data,
-          filename: part.filename,
-        };
-      if (part.type === 'input_image')
-        return {
-          type: 'input_image',
-          image: part.image_url,
-          detail: part.detail,
-        };
-      return part;
-    }),
-  );
-}
-
-async function drainRunEvents(events: AsyncIterator<unknown>) {
-  while (!(await events.next()).done) {
-    // The model adapter already delivered the verified deltas to the conversation.
-  }
+// Native telemetry must be configured once per process, even when disabled.
+// A global promise also covers separately bundled SSR/RSC entries and hot reload.
+const nativeTelemetryKey = Symbol.for('comenzi.native-agents.telemetry.v1');
+function nativeReady() {
+  const globals = globalThis as unknown as Record<symbol, Promise<void> | undefined>;
+  return globals[nativeTelemetryKey] ??= telemetry.configure({
+    traces: null, logs: null, metrics: null, diagnostics: null,
+    logUserPrompt: false, logAgentResponses: false,
+  });
 }
 
 export async function runManagerAi({
@@ -243,23 +215,24 @@ export async function runManagerAi({
     : [managerAiReportTool];
   const dataDefinitions = [...definitions,...(postgres?.tools??[])];
   const enabledDefinitions = presentationEnabled ? [...dataDefinitions, presentationTool] : dataDefinitions;
-  const tools: FunctionTool[] = enabledDefinitions.map(
-    ({ name, description, parameters }) => ({
-      type: 'function',
-      name,
-      description,
-      strict: true,
-      parameters: {
-        ...parameters,
-        type: 'object',
-        additionalProperties: false,
-        required: [...parameters.required],
-      },
-      isEnabled: async () => true,
-      needsApproval: async () => false,
-      invoke: (_context, raw) => dispatch(name, raw),
-    }),
-  );
+  let toolFailure: unknown;
+  const tools: FunctionTool[] = enabledDefinitions.map(({name, description, parameters}) => tool({
+    name, description, strict: true, allowedCallers: ['direct'],
+    parameters: z.fromJSONSchema({
+      ...parameters, type: 'object', additionalProperties: false,
+      required: [...parameters.required],
+    } as Parameters<typeof z.fromJSONSchema>[0]),
+    needsApproval: false,
+    execute: async (_args, context) => {
+      try {
+        context.signal.throwIfAborted();
+        return await dispatch(name, context.rawArguments ?? JSON.stringify(_args));
+      } catch (error) {
+        toolFailure = error;
+        throw error;
+      }
+    },
+  }));
   const provider = new ManagerAiModelAdapter(
     model,
     key,
@@ -269,62 +242,56 @@ export async function runManagerAi({
     new Set(tools.map((tool) => tool.name)),
     onEvent ? publish : undefined,
     progress,
+    (content ?? turns).flatMap(turn => turn.role === 'user' && Array.isArray(turn.content) ? turn.content : [])
+      .filter(part => part.type === 'input_image').length,
   );
+  // The application owns durable user-scoped history and submission identities.
+  // Seed settled legacy/new messages; only the final user message starts a turn.
+  const input = [...(content ?? turns)];
+  const latest = input.pop();
+  if (!latest || latest.role !== 'user') fail(400, 'Lipsește mesajul pentru analiză.');
+  await nativeReady();
+  const nativeProvider = new NativeProvider({
+    modelBackend: provider, requestMaxRetries: 0, streamMaxRetries: 0,
+  });
   const agent = new Agent({
     name: 'Comenzi',
     instructions: guidance,
-    model: provider,
+    model,
+    provider: nativeProvider,
     tools,
     modelSettings: {
       store: false,
-      reasoning: { effort },
-      providerData: { include: ['reasoning.encrypted_content'] },
+      reasoningEffort: effort,
+      include: ['reasoning.encrypted_content'],
+      retry: {maxRetries: 0},
       parallelToolCalls: false,
-      maxTokens: analysis ? 5000 : 3000,
+      maxOutputTokens: analysis ? 5000 : 3000,
     },
   });
-  const runner = new Runner({
-    tracingDisabled: true,
-    toolExecution: { maxFunctionToolConcurrency: 1 },
-  });
-  const input = (content ?? turns).map(sdkInput);
-  const options = { maxTurns: callLimit, signal };
   try {
-    if (onEvent) {
-      const result = await runner.run(agent, input, {
-        ...options,
-        stream: true,
-      });
-      // Consume events during the run so the SDK can release its stream buffer.
-      await Promise.all([
-        drainRunEvents(result[Symbol.asyncIterator]()),
-        result.completed,
-      ]);
-      if (result.error) throw result.error;
-    } else {
-      await runner.run(agent, input, options);
-    }
-  } catch (error) {
+    await agent.run({role: 'user', content: latest.content}, {
+      initialMessages: input.map(turn => turn.role === 'assistant' ? {role: 'assistant', content: turn.content} : {role: 'user', content: turn.content}), maxModelSteps: callLimit, maxFunctionConcurrency: 1,
+      signal, tracing: {disabled: true, includeSensitiveData: false},
+      toolNotFoundBehavior: 'raise_error',
+    });
+  } catch (caught) {
     signal.throwIfAborted();
-    if (error instanceof ToolCallError) throw error.error;
-    else if (error instanceof MaxTurnsExceededError)
-      fail(
-        422,
-        'Analiza a depășit limita de rapoarte. Restrânge perioada sau selecția.',
-      );
-    else if (error instanceof ModelBehaviorError)
-      fail(502, 'Furnizorul AI a returnat un răspuns invalid.');
-    else if (error instanceof OpenAI.APIError) {
+    if (toolFailure) throw toolFailure;
+    const error = provider.failure ?? caught;
+    if (error instanceof OpenAI.APIError) {
       if (error.status === 429)
         fail(503, 'Furnizorul AI este ocupat. Încearcă din nou mai târziu.');
       if (error.status && [400, 401, 403, 404].includes(error.status))
-        fail(
-          503,
-          'Modelul selectat nu este disponibil pentru configurarea OpenAI a aplicației.',
-        );
+        fail(503, 'Modelul selectat nu este disponibil pentru configurarea OpenAI a aplicației.');
       fail(502, 'Furnizorul AI nu a putut finaliza analiza.');
-    } else if (!(error instanceof ModelRefusalError && provider.answer))
-      throw error;
+    }
+    if (error instanceof NativeError) {
+      if (!(error.responseIntegrityReason === 'provider_refusal' && provider.answer))
+        fail(502, 'Furnizorul AI a returnat un răspuns invalid.');
+    } else throw error;
+  } finally {
+    await nativeProvider.close();
   }
   await authorize();
   if (!provider.answer) fail(502, 'Furnizorul AI nu a returnat o analiză.');

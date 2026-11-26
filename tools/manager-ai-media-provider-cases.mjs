@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 const userContent = [
   {type: 'input_text', text: 'Consultă cele două atașamente sintetice.'},
   {type: 'input_file', filename: 'exemplu.pdf', file_data: 'data:application/pdf;base64,JVBERi0xLjQK'},
-  {type: 'input_image', image_url: 'data:image/png;base64,iVBORw0KGgo=', detail: 'auto'},
+  {type: 'input_image', image_url: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNgYGAAAAAEAAH2FzhVAAAAAElFTkSuQmCC', detail: 'auto'},
 ];
 const refusal = 'Nu pot determina rezultatul din aceste fișiere.';
 

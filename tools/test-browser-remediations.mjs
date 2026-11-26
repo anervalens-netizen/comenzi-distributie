@@ -136,7 +136,9 @@ try {
   socket.addEventListener('message',interceptTiles);
   await cdp.send('Network.enable');
   await cdp.send('Network.setCacheDisabled',{cacheDisabled:true});
-  await cdp.send('Fetch.enable',{patterns:[{urlPattern:'*tiles.openfreemap.org/planet/*',requestStage:'Request'}]});
+  // The provider's current style may use its backup vector source. Inject the
+  // same real tile outage on both published routes, without intercepting fonts.
+  await cdp.send('Fetch.enable',{patterns:['planet','backup_planet'].map(source=>({urlPattern:'*tiles.openfreemap.org/'+source+'/*',requestStage:'Request'}))});
   await cdp.evaluate("document.querySelector('.maplibregl-ctrl-zoom-out').click()");await sleep(450);
   await cdp.evaluate("document.querySelector('.maplibregl-ctrl-zoom-out').click()");
   await waitFor(()=>failedTiles>0,'post-load basemap requests intercepted',120);

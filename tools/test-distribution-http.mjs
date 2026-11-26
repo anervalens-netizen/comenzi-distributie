@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {spawn,spawnSync} from 'node:child_process';
-import {mkdtempSync,readFileSync,rmSync,mkdirSync,writeFileSync} from 'node:fs';
+import {copyFileSync,mkdtempSync,readFileSync,rmSync,mkdirSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';import {join} from 'node:path';
 import {read,utils} from 'xlsx';
 import {DatabaseSync} from 'node:sqlite';import {randomBytes,createHash} from 'node:crypto';
@@ -52,12 +52,14 @@ writeFileSync(join(root,'vodafone-top-locations.json'),JSON.stringify({version:1
  {month:'2026-09',pointCode:'A',target:4},
 ]}));
 const providerFixture=join(root,'synthetic-provider.mjs');
+copyFileSync(new URL('./manager-ai-test-responses.mjs',import.meta.url),join(root,'responses.mjs'));
 writeFileSync(providerFixture,`
+ import {responseEvents,messageText} from './responses.mjs';
  const originalFetch=globalThis.fetch;
  globalThis.fetch=(url,options)=>{
    if(String(url)!=='https://api.openai.com/v1/responses')return originalFetch(url,options);
    const request=JSON.parse(options.body);
-   const paused=request.input.some(item=>item.role==='user'&&typeof item.content==='string'&&item.content.includes('Verifică oprirea'));
+   const paused=request.input.some(item=>item.role==='user'&&messageText(item.content)?.includes('Verifică oprirea'));
    const text=paused?'**Fragment păstrat** '+'proba '.repeat(24):'**Răspuns sintetic verificat**';
    const events=[
      {type:'response.created',response:{id:'resp_browser_fixture',model:request.model,status:'in_progress',output:[]}},
@@ -69,7 +71,7 @@ writeFileSync(providerFixture,`
      controller.enqueue(new TextEncoder().encode(first));
      options.signal.addEventListener('abort',()=>controller.close(),{once:true});
    }}),{headers:{'Content-Type':'text/event-stream'}});
-   return new Response(events.map(event=>'data: '+JSON.stringify(event)+'\\n\\n').join(''),{headers:{'Content-Type':'text/event-stream'}});
+   return responseEvents(events);
  };
 `);
 const child=spawn(process.execPath,['--import',providerFixture,'dist/standalone/server.js'],{env:{...process.env,MOBIUP_MANAGER_AI_OPENAI_API_KEY:'synthetic-provider-key',MOBIUP_DATA_DIR:root,MOBIUP_ACTIVATIONS_DIR:root,MOBIUP_ACTIVATIONS_PILOT_MANAGER_ID:'manager',MOBIUP_ACTIVATIONS_PILOT_ADDITIONAL_MANAGER_IDS:'regional',MOBIUP_ACTIVATIONS_PILOT_AGENT_ID:'north',MOBIUP_ACTIVATIONS_PILOT_ADDITIONAL_AGENT_IDS:'south,non',MOBIUP_USAGE_DISABLED:'1',HOST:'127.0.0.1',PORT:'3096'},stdio:'ignore'});
