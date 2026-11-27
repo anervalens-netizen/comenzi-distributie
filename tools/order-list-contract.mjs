@@ -293,17 +293,46 @@ export async function runOrderListContract(api,fixture){
     const pending=page(),rejected=rejects(()=>pending,401);now=BASE_TIME+86400000;release.resolve();await holder;
     await rejected;
   });
-  await check('list_revision_safe_integer_contract',async()=>{
-    await write(`UPDATE ${a}.order_list_revision SET revision=9007199254740991 WHERE id=1`);
-    assert.equal((await page()).orderPage.revision,'9007199254740991');
-    await write(`UPDATE ${a}.order_list_revision SET revision=9007199254740992 WHERE id=1`);
-    await assert.rejects(()=>page(),/outside the application number contract/);
-  });
-  await check('legacy_revision_missing_or_zero_fallback',async()=>{
-    await write(`UPDATE ${a}.order_list_revision SET revision=0 WHERE id=1`);assert.equal((await page()).orderPage.revision,'1');
-    await write(`DELETE FROM ${a}.order_list_revision WHERE id=1`);assert.equal((await page()).orderPage.revision,'1');
-    await write(`INSERT INTO ${a}.order_list_revision VALUES(1,100)`);
-  });
+  if(fixture.orderSchema){
+    // These are distinct target-schema invariants, not parity claims for invalid
+    // legacy metadata. The caller must have executed the real schema contract.
+    const plan=fixture.orderSchema;
+    assert(Object.isFrozen(plan)&&Object.isFrozen(plan.tables));
+    assert.equal(plan.version,'postgres-order-schema-v1');assert.equal(plan.schema,applicationSchema);
+    assert(plan.tables.includes('order_list_revision'));
+    assert.equal(await database.read(tx=>tx.dialect),'postgresql');
+    await check('target_schema_revision_bounds_refuse_unsafe_metadata',async()=>{
+      const before=await revision();
+      for(const value of ['9007199254740991','9007199254740992']){
+        await assert.rejects(()=>write(`UPDATE ${a}.order_list_revision SET revision=${value} WHERE id=1`),error=>error.code==='23514');
+        assert.equal(await revision(),before);
+      }
+      try{
+        await write(`UPDATE ${a}.order_list_revision SET revision=9007199254740990 WHERE id=1`);
+        assert.equal((await page()).orderPage.revision,'9007199254740990');
+      }finally{await write(`UPDATE ${a}.order_list_revision SET revision=100 WHERE id=1`);}
+    });
+    await check('target_schema_preserves_positive_generation_and_restricted_singleton',async()=>{
+      const before=await revision();
+      for(const [sql,code]of [
+        [`UPDATE ${a}.order_list_revision SET revision=0 WHERE id=1`,'23514'],
+        [`DELETE FROM ${a}.order_list_revision WHERE id=1`,'42501'],
+        [`INSERT INTO ${a}.order_list_revision VALUES(1,100)`,'42501'],
+      ]){await assert.rejects(()=>write(sql),error=>error.code===code);assert.equal(await revision(),before);}
+    });
+  }else{
+    await check('list_revision_safe_integer_contract',async()=>{
+      await write(`UPDATE ${a}.order_list_revision SET revision=9007199254740991 WHERE id=1`);
+      assert.equal((await page()).orderPage.revision,'9007199254740991');
+      await write(`UPDATE ${a}.order_list_revision SET revision=9007199254740992 WHERE id=1`);
+      await assert.rejects(()=>page(),/outside the application number contract/);
+    });
+    await check('legacy_revision_missing_or_zero_fallback',async()=>{
+      await write(`UPDATE ${a}.order_list_revision SET revision=0 WHERE id=1`);assert.equal((await page()).orderPage.revision,'1');
+      await write(`DELETE FROM ${a}.order_list_revision WHERE id=1`);assert.equal((await page()).orderPage.revision,'1');
+      await write(`INSERT INTO ${a}.order_list_revision VALUES(1,100)`);
+    });
+  }
   if(fixture.legacyOracle){
     for(const actor of ['global','regional','a'])for(const filter of ['', 'kind=orders&range=day', 'kind=sim&range=all',
       'kind=all&range=30d&q=stefan&limit=2', 'kind=all&range=all&status=finalized',
