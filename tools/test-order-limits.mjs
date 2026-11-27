@@ -65,7 +65,7 @@ try {
   sql.prepare("INSERT OR IGNORE INTO settings VALUES('seed-v1','1')").run();
   sql
     .prepare("INSERT INTO settings VALUES('app',?)")
-    .run(JSON.stringify({ weeklyLimit: 20 }));
+    .run(JSON.stringify({ weeklyLimit: 2147483647 }));
   const users = [
     [
       'agent',
@@ -857,7 +857,15 @@ try {
   for(let i=0;i<8;i++) assert.equal((await finalize(order([['nocap-audio',1]]),1)).order.status,'finalized');
   await call('PUT','admin/settings','manager-global',{...baseSettings,weeklyLimit:5});
   await finalize(order([['nocap-audio',1]]),1,409);
-  await call('PUT','admin/settings','manager-global',{...baseSettings,weeklyLimit:-1},400);
+  for (const invalid of [-1,8,1.5,'0','5',null,{},[],true]) {
+    await call('PUT','admin/settings','manager-global',{...baseSettings,weeklyLimit:invalid},400);
+    sql.prepare("UPDATE settings SET value=? WHERE key='app'").run(JSON.stringify({...baseSettings,weeklyLimit:invalid}));
+    const invalidDraft=order([['nocap-audio',1]]);
+    await finalize(invalidDraft,1,503);
+    assert.equal(sql.prepare('SELECT status FROM orders WHERE id=?').get(invalidDraft).status,'draft');
+    const repaired=await call('PUT','admin/settings','manager-global',{...baseSettings,weeklyLimit:5});
+    assert.equal(repaired.settings.weeklyLimit,5);
+  }
   await call('PUT','admin/settings','manager-global',{...baseSettings,weeklyLimit:0});
   assert.equal((await finalize(order([['nocap-audio',1]]),1)).order.status,'finalized');
 

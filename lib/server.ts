@@ -1,4 +1,4 @@
-import {normalizeWeeklyLimit} from './weekly-order-limit';
+import {parseWeeklyLimit} from './weekly-order-limit';
 import {canViewActivations} from './activation-access';
 import { captureError } from "./error-reporting";
 import { env } from '@/lib/runtime';
@@ -120,10 +120,12 @@ export async function getOrder(id: string,user: User) {
   if(!row || row.status==='deleted' || !await canAccessAgent(user,String(row.user_id))) fail(404,'Comanda nu a fost găsită.');
   return orderView(row);
 }
-export async function settings(): Promise<Settings> {
+export async function settings(weeklyLimitRepair?: number): Promise<Settings> {
   const row=await db().prepare("SELECT value FROM settings WHERE key='app'").first<{value:string}>();
   const cfg:Settings={accessoriesEmail:'',standsEmail:'',simEmail:'',accessoriesCc:[],standsCc:[],simCc:[],partnerTo:[...mailDefaults.partnerTo],partnerCc:[...mailDefaults.partnerCc],weeklyLimit:0,...(row?JSON.parse(row.value):{})};
-  return {...cfg,weeklyLimit:normalizeWeeklyLimit(cfg.weeklyLimit)};
+  const weeklyLimit=parseWeeklyLimit(weeklyLimitRepair ?? cfg.weeklyLimit);
+  if(weeklyLimit===null) fail(503,'Limita săptămânală salvată este invalidă. Contactează administratorul pentru corectarea setării.');
+  return {...cfg,weeklyLimit};
 }
 export function operationalMailSettings(cfg:Settings):OperationalMailSettings {
   return {

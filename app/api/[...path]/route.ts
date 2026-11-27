@@ -1,4 +1,4 @@
-import {normalizeWeeklyLimit,persistWeeklyLimit,validWeeklyLimit} from '@/lib/weekly-order-limit';
+import {parseWeeklyLimit,persistWeeklyLimit} from '@/lib/weekly-order-limit';
 import {searchPartnerCompanies} from '@/lib/partner-search';
 import {consumeOrderLimitApproval,orderLimitApprovalsApi,orderLimitFinalization,orderLimitPolicyApi,orderLimits,requestOrderLimitApproval} from '@/lib/order-limits-server';
 import {leaveApi} from '@/lib/leave-server';
@@ -637,7 +637,10 @@ async function authenticatedRoute(req:Request,path:string[],user:User) {
     }
     if(path[1]==='settings' && req.method==='PUT') {
       requireGlobalManager(user);
-      const body=await jsonBody(req); const cfg=await settings();
+      const body=await jsonBody(req);
+      const weeklyLimit=parseWeeklyLimit(body.weeklyLimit);
+      if(weeklyLimit===null) fail(400,'Limita săptămânală trebuie să fie între 0 și 7 (0 = fără limită).');
+      const cfg=await settings(weeklyLimit);
       for(const key of ['accessoriesEmail','standsEmail','simEmail'] as const) {
         const value=textField(body[key],254);
         if(value && !/^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/.test(value)) fail(400,'Introdu o singură adresă de e-mail validă pentru fiecare tip.');
@@ -657,9 +660,6 @@ async function authenticatedRoute(req:Request,path:string[],user:User) {
         cfg[key]=recipients;
       }
       if(!cfg.partnerTo.some(Boolean)) fail(400,'Partener nou trebuie să aibă cel puțin un destinatar.');
-      const weeklyLimit=typeof body.weeklyLimit==='number'?normalizeWeeklyLimit(body.weeklyLimit):body.weeklyLimit;
-      if(!validWeeklyLimit(weeklyLimit)) fail(400,'Limita săptămânală trebuie să fie între 0 și 7 (0 = fără limită).');
-      cfg.weeklyLimit=weeklyLimit;
       await db().prepare("INSERT INTO settings (key,value) VALUES ('app',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(JSON.stringify({...cfg,weeklyLimit:persistWeeklyLimit(cfg.weeklyLimit)})).run();
       return response({settings:cfg});
     }
