@@ -167,28 +167,61 @@ END $authority_scope$`,
  FOR EACH ROW EXECUTE FUNCTION ${functionName}()`);
 
   const tableNames = TABLES.map(name => "'" + name + "'").join(',');
+  const expectedAcl = [
+    ['schema', schema, '', readerRole, 'USAGE'],
+    ['schema', schema, '', writerRole, 'USAGE'],
+    ...TABLES.flatMap(name => [
+      ['table', name, '', readerRole, 'SELECT'],
+      ['table', name, '', writerRole, 'SELECT'],
+      ...(name === 'portfolio_revision' ? [] : ['INSERT', 'UPDATE', 'DELETE']
+        .map(privilege => ['table', name, '', writerRole, privilege])),
+    ]),
+    ['column', 'portfolio_revision', 'data_revision', writerRole, 'UPDATE'],
+    ['column', 'portfolio_revision', 'scope_revision', writerRole, 'UPDATE'],
+    ['function', 'authority_bump_scope', '', writerRole, 'EXECUTE'],
+  ].map(row => '(' + row.map(value => "'" + value + "'").join(',') + ')').join(',\n');
   // Default privileges belong to the creating role. ALTER OWNER does not erase
-  // grants to another principal. Refuse them before this transaction is visible.
+  // extra grants. Compare every non-owner grant, including its grantor and grant
+  // option, with the exact application policy. Owners retain their inherent
+  // owner powers; role membership and effective privileges are checked separately.
   activate.push(`DO $authority_acl$ DECLARE relation record; BEGIN
  IF EXISTS (
-  WITH grants AS (
-   SELECT x.grantee FROM pg_catalog.pg_namespace n
+  WITH role_oids AS (
+   SELECT oid,rolname FROM pg_catalog.pg_roles WHERE rolname IN (${roleNames})
+  ), grants AS (
+   SELECT 'schema'::text AS kind,n.nspname::text AS object_name,''::text AS column_name,
+    x.grantee,x.grantor,x.privilege_type,x.is_grantable FROM pg_catalog.pg_namespace n
     CROSS JOIN LATERAL pg_catalog.aclexplode(COALESCE(n.nspacl,pg_catalog.acldefault('n',n.nspowner))) x
     WHERE n.nspname='${schema}'
    UNION ALL
-   SELECT x.grantee FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+   SELECT 'table',c.relname::text,'',x.grantee,x.grantor,x.privilege_type,x.is_grantable
+    FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
     CROSS JOIN LATERAL pg_catalog.aclexplode(COALESCE(c.relacl,pg_catalog.acldefault('r',c.relowner))) x
     WHERE n.nspname='${schema}' AND c.relkind='r' AND c.relname IN (${tableNames})
    UNION ALL
-   SELECT x.grantee FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid=a.attrelid
+   SELECT 'column',c.relname::text,a.attname::text,x.grantee,x.grantor,x.privilege_type,x.is_grantable
+    FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid=a.attrelid
     JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
     CROSS JOIN LATERAL pg_catalog.aclexplode(a.attacl) x
     WHERE n.nspname='${schema}' AND c.relkind='r' AND c.relname IN (${tableNames})
    UNION ALL
-   SELECT x.grantee FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace
+   SELECT 'function',p.proname::text,'',x.grantee,x.grantor,x.privilege_type,x.is_grantable
+    FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace
     CROSS JOIN LATERAL pg_catalog.aclexplode(COALESCE(p.proacl,pg_catalog.acldefault('f',p.proowner))) x
     WHERE n.nspname='${schema}' AND p.proname='authority_bump_scope'
-  ) SELECT 1 FROM grants WHERE grantee NOT IN (SELECT oid FROM pg_catalog.pg_roles WHERE rolname IN (${roleNames}))
+  ), application_grants AS (
+   SELECT * FROM grants WHERE grantee <> (SELECT oid FROM role_oids WHERE rolname='${ownerRole}')
+  ), expected AS (
+   SELECT e.kind,e.object_name,e.column_name,r.oid AS grantee,o.oid AS grantor,
+    e.privilege_type,false AS is_grantable
+   FROM (VALUES ${expectedAcl}) e(kind,object_name,column_name,role_name,privilege_type)
+   JOIN role_oids r ON r.rolname=e.role_name
+   CROSS JOIN role_oids o WHERE o.rolname='${ownerRole}'
+  ) SELECT 1 FROM (
+   (SELECT * FROM application_grants EXCEPT ALL SELECT * FROM expected)
+   UNION ALL
+   (SELECT * FROM expected EXCEPT ALL SELECT * FROM application_grants)
+  ) differences
  ) THEN
   RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='Unexpected default or object authority grant';
  END IF;
@@ -204,9 +237,9 @@ END $authority_scope$`,
   IF relation.relowner <> (SELECT oid FROM pg_catalog.pg_roles WHERE rolname='${ownerRole}')
    OR NOT pg_catalog.has_table_privilege('${readerRole}',relation.oid,'SELECT')
    OR NOT pg_catalog.has_table_privilege('${writerRole}',relation.oid,'SELECT')
-   OR pg_catalog.has_table_privilege('${readerRole}',relation.oid,'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+   OR pg_catalog.has_table_privilege('${readerRole}',relation.oid,'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN')
    OR pg_catalog.has_any_column_privilege('${readerRole}',relation.oid,'INSERT,UPDATE,REFERENCES')
-   OR pg_catalog.has_table_privilege('${writerRole}',relation.oid,'TRUNCATE,REFERENCES,TRIGGER') THEN
+   OR pg_catalog.has_table_privilege('${writerRole}',relation.oid,'TRUNCATE,REFERENCES,TRIGGER,MAINTAIN') THEN
    RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='Effective table authority differs';
   END IF;
   IF relation.relname='portfolio_revision' THEN
