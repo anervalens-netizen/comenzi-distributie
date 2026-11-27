@@ -5,8 +5,10 @@
  * lexemes, escaped keys or duplicate keys. It is not a JSONB normalization.
  */
 type Member = { key?: string; raw: string };
+const sqliteInt64Min = BigInt('-9223372036854775808');
+const sqliteInt64Max = BigInt('9223372036854775807');
 export type CustomerMembershipIneligibility = 'source_json_not_strict' | 'embedded_membership_not_strict'
-  | 'source_unicode' | 'decoded_membership_unicode' | 'nesting_limit';
+  | 'source_unicode' | 'decoded_membership_unicode' | 'nesting_limit' | 'sqlite_real_text_cast';
 export class CustomerMembershipEligibilityError extends Error {
   constructor(readonly reason: CustomerMembershipIneligibility) {
     super('Customer membership snapshot is ineligible: ' + reason);
@@ -88,7 +90,7 @@ function compact(source: string): string {
  * no TEXT column affinity. User clientCount has a different CAST contract and
  * must not reuse this helper as a text-normalized count implementation.
  */
-export function customerWarehouseValues(rawData: string, fallback: string | null): readonly (string | number | null)[] {
+function membershipItems(rawData: string, fallback: string | null): Member[] {
   const data = trim(rawData);
   unicode(data, 'source_unicode');
   if (fallback !== null) unicode(fallback, 'source_unicode');
@@ -96,7 +98,7 @@ export function customerWarehouseValues(rawData: string, fallback: string | null
   // Validate the same bounded nesting before enumerating any children.
   end(data, 0);
   const value = data[0] === '{' ? members(data).find(item => item.key === 'warehouseIds')?.raw : undefined;
-  if (value === undefined || value === 'null') return [fallback];
+  if (value === undefined || value === 'null') return [{ raw: JSON.stringify(fallback) }];
   let root = value;
   if (root[0] === '"') {
     root = trim(JSON.parse(root) as string);
@@ -105,11 +107,40 @@ export function customerWarehouseValues(rawData: string, fallback: string | null
   // A JSON string from json_extract is parsed again by json_each. Thus a bare
   // warehouse name is an error, while a string containing a JSON array works.
   strictJson(root, 'embedded_membership_not_strict'); end(root, 0);
-  return members(root).map(item => {
+  return members(root);
+}
+
+export function customerWarehouseValues(rawData: string, fallback: string | null): readonly (string | number | null)[] {
+  return membershipItems(rawData, fallback).map(item => {
     if (item.raw[0] === '[' || item.raw[0] === '{') return compact(item.raw);
     const parsed: unknown = JSON.parse(item.raw);
     if (typeof parsed === 'string') unicode(parsed, 'decoded_membership_unicode');
     return typeof parsed === 'boolean' ? Number(parsed) : parsed as string | number | null;
+  });
+}
+
+/**
+ * SQLite CAST(value AS TEXT) keys for the user count CTE, on eligible sources.
+ * Unlike list membership, integer/boolean aliases become text. Integer tokens
+ * use signed-64-bit arithmetic, never Number. REAL formatting is not guessed.
+ * Nested JSON values are already SQL TEXT; their lexemes stay unchanged.
+ */
+export function customerWarehouseCountKeys(rawData: string, fallback: string | null): readonly (string | null)[] {
+  return membershipItems(rawData, fallback).map(({ raw }) => {
+    if (raw[0] === '[' || raw[0] === '{') return compact(raw);
+    if (raw[0] === '"') {
+      const value = JSON.parse(raw) as string;
+      unicode(value, 'decoded_membership_unicode');
+      return value;
+    }
+    if (raw === 'null') return null;
+    if (raw === 'true') return '1';
+    if (raw === 'false') return '0';
+    if (/^-?(?:0|[1-9][0-9]*)$/.test(raw) && raw.replace(/^-/, '').length <= 19) {
+      const integer = BigInt(raw);
+      if (integer >= sqliteInt64Min && integer <= sqliteInt64Max) return integer.toString();
+    }
+    throw new CustomerMembershipEligibilityError('sqlite_real_text_cast');
   });
 }
 
@@ -122,6 +153,16 @@ export function customerWarehouseValues(rawData: string, fallback: string | null
 export function customerMembershipEligibility(rawData: string, fallback: string | null):
   { eligible: true; reason: null } | { eligible: false; reason: CustomerMembershipIneligibility } {
   try { customerWarehouseValues(rawData, fallback); return { eligible: true, reason: null }; }
+  catch (error) {
+    if (error instanceof CustomerMembershipEligibilityError) return { eligible: false, reason: error.reason };
+    throw error;
+  }
+}
+
+/** The final snapshot must satisfy BOTH list and count eligibility for every row. */
+export function customerCountMembershipEligibility(rawData: string, fallback: string | null):
+  { eligible: true; reason: null } | { eligible: false; reason: CustomerMembershipIneligibility } {
+  try { customerWarehouseCountKeys(rawData, fallback); return { eligible: true, reason: null }; }
   catch (error) {
     if (error instanceof CustomerMembershipEligibilityError) return { eligible: false, reason: error.reason };
     throw error;
