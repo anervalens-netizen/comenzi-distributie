@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
-import { validEan } from './barcodes';
-import { stockCode } from './stock-types';
+import { readCatalogSnapshot } from './catalog-customer-repository-async';
+import { customerWarehouseValues } from './customer-membership-json';
 import {
   AccountWriteError,
   accountRevision,
@@ -110,45 +110,14 @@ export async function orderSetting(
   return found.rows.length ? orderText(found.rows[0].value) : null;
 }
 
-/** Same raw setting, product insertion order and EAN/version projection as readCatalog. */
+/** Keep the shared catalog read on this caller's transaction and retain its public projection. */
 export async function readFinalizationCatalog(
   tx: SqlReader,
   schema: string,
   seed: readonly Product[],
 ): Promise<FinalizationCatalog> {
-  const raw = await orderSetting(tx, schema, 'catalog');
-  const state: { overrides: Record<string, Product | null> } =
-    raw === null ? { overrides: {} } : JSON.parse(raw);
-  const products = new Map(seed.map((product) => [product.id, product]));
-  for (const [id, product] of Object.entries(state.overrides)) {
-    if (product) products.set(id, product);
-    else products.delete(id);
-  }
-  const mappingsRaw = await orderSetting(tx, schema, 'inventory-ean-v1');
-  const mappings: Record<string, string> =
-    mappingsRaw === null ? {} : JSON.parse(mappingsRaw);
-  return {
-    raw,
-    mappingsRaw,
-    products: [...products.values()].map((product) => {
-      const eans =
-        product.ean !== undefined
-          ? product.ean
-            ? [product.ean]
-            : []
-          : Object.entries(mappings)
-              .filter(([, code]) => code === stockCode(product.code))
-              .map(([ean]) => ean);
-      if (
-        product.ean === undefined &&
-        validEan(product.code) &&
-        !eans.includes(product.code)
-      )
-        eans.push(product.code);
-      const row = { ...product, ean: eans[0] || '', eans };
-      return { ...row, version: orderInputHash(JSON.stringify(row)) };
-    }),
-  };
+  const { raw, mappingsRaw, products } = await readCatalogSnapshot(tx, schema, seed);
+  return { raw, mappingsRaw, products };
 }
 
 export function customerHasWarehouse(
@@ -207,11 +176,8 @@ export async function readFinalizationClient(
   const raw = orderText(result.rows[0].data),
     client = JSON.parse(raw) as Client & Record<string, unknown>;
   if (
-    !customerHasWarehouse(
-      client,
-      result.rows[0].warehouse_id,
-      order.warehouseId,
-    )
+    !customerWarehouseValues(raw, orderText(result.rows[0].warehouse_id))
+      .some(value => value === order.warehouseId)
   ) {
     throw new AccountWriteError(409, 'client_changed');
   }

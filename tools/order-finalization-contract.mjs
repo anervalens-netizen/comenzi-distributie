@@ -12,23 +12,31 @@ export function orderFinalizationFixtureStatements(
   const a = api.sqlIdentifier(applicationSchema),
     s = api.sqlIdentifier(salesSchema);
   const integer = dialect === 'postgresql' ? 'BIGINT' : 'INTEGER';
+  const ref = (schema, table) => dialect === 'sqlite' ? table : schema + '.' + table;
   return [
-    `CREATE TABLE ${a}.notifications(id TEXT PRIMARY KEY,recipient_id TEXT NOT NULL,event_key TEXT NOT NULL,category TEXT NOT NULL,title TEXT NOT NULL,body TEXT NOT NULL,target_type TEXT NOT NULL,target_id TEXT NOT NULL,created_at TEXT NOT NULL,read_at TEXT,UNIQUE(recipient_id,event_key))`,
-    `CREATE TABLE ${s}.sales_months(month TEXT PRIMARY KEY,import_id ${integer} NOT NULL)`,
-    `CREATE TABLE ${s}.sales_rows(import_id ${integer} NOT NULL,month TEXT NOT NULL,location TEXT NOT NULL,site_code TEXT NOT NULL,item_code TEXT NOT NULL,quantity DOUBLE PRECISION NOT NULL)`,
+    `CREATE TABLE ${a}.notifications(id TEXT PRIMARY KEY,recipient_id TEXT NOT NULL REFERENCES ${ref(a, 'users')}(id),event_key TEXT NOT NULL,category TEXT NOT NULL,title TEXT NOT NULL,body TEXT NOT NULL,target_type TEXT NOT NULL,target_id TEXT NOT NULL,created_at TEXT NOT NULL,read_at TEXT,UNIQUE(recipient_id,event_key))`,
+    `CREATE TABLE ${s}.sales_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL)`,
+    `CREATE TABLE ${s}.sales_imports(id ${integer} PRIMARY KEY${dialect === 'sqlite' ? ' AUTOINCREMENT' : ''},month TEXT NOT NULL,file_hash TEXT NOT NULL,filename TEXT NOT NULL,imported_at TEXT NOT NULL,imported_by TEXT NOT NULL,row_count ${integer} NOT NULL,original_path TEXT NOT NULL,revision ${integer} NOT NULL)`,
+    `CREATE TABLE ${s}.sales_months(month TEXT PRIMARY KEY,import_id ${integer} NOT NULL REFERENCES ${ref(s, 'sales_imports')}(id),imported_at TEXT NOT NULL,filename TEXT NOT NULL,file_hash TEXT NOT NULL,revision ${integer} NOT NULL)`,
+    `CREATE TABLE ${s}.sales_rows(import_id ${integer} NOT NULL REFERENCES ${ref(s, 'sales_imports')}(id),row_number ${integer} NOT NULL,date TEXT NOT NULL,month TEXT NOT NULL,site_code TEXT NOT NULL,item_code TEXT NOT NULL,item_name TEXT NOT NULL,quantity DOUBLE PRECISION NOT NULL,brand TEXT NOT NULL,price_cents ${integer} NOT NULL,value_cents ${integer} NOT NULL,location TEXT NOT NULL,company TEXT NOT NULL,asm TEXT NOT NULL,regional TEXT NOT NULL,order_number TEXT NOT NULL,category TEXT NOT NULL,sub_category TEXT NOT NULL,agent TEXT NOT NULL,PRIMARY KEY(import_id,row_number))`,
   ];
 }
 
 export async function runOrderFinalizationContract(api, fixture) {
   const { database, other, applicationSchema, salesSchema } = fixture;
+  // The PostgreSQL runtime deliberately has no sales write grant. A separate
+  // privileged fixture adapter seeds/restores inputs and simulates independent
+  // import/admin commits. Repository actions below still use database/other.
+  const fixtureDatabase = fixture.fixtureDatabase ?? database,
+    fixtureOther = fixture.fixtureOther ?? other;
   const a = api.sqlIdentifier(applicationSchema),
     s = api.sqlIdentifier(salesSchema);
   const q = (kind, sqlite, pg = sqlite) => api.sqlQuery(kind, sqlite, pg),
     n = api.safeSqlInteger;
   const read = (sql, args = [], pg = sql) =>
     database.read((tx) => tx.query(q('read', sql, pg), args));
-  const write = (sql, args = [], pg = sql, connection = database) =>
-    connection.write((tx) => tx.query(q('write', sql, pg), args));
+  const write = (sql, args = [], pg = sql, connection = fixtureDatabase) =>
+    (connection === other ? fixtureOther : connection).write((tx) => tx.query(q('write', sql, pg), args));
   const agent = { userId: 'fixture-agent-a', tokenHash: 'fixture-agent-token' };
   const stranger = {
     userId: 'fixture-agent-b',
@@ -120,7 +128,7 @@ export async function runOrderFinalizationContract(api, fixture) {
     return value;
   };
   const reset = () =>
-    database.write(async (tx) => {
+    fixtureDatabase.write(async (tx) => {
       for (const table of [
         'notifications',
         'order_limit_approvals',
@@ -135,7 +143,7 @@ export async function runOrderFinalizationContract(api, fixture) {
       ]) {
         await tx.query(q('write', `DELETE FROM ${a}.${table}`));
       }
-      for (const table of ['sales_rows', 'sales_months'])
+      for (const table of ['sales_rows', 'sales_months', 'sales_imports', 'sales_meta'])
         await tx.query(q('write', `DELETE FROM ${s}.${table}`));
       const users = [
         [
@@ -261,27 +269,30 @@ export async function runOrderFinalizationContract(api, fixture) {
     );
     return data;
   };
+  const importHeader = (importId, month) => write(
+    `INSERT INTO ${s}.sales_imports(id,month,file_hash,filename,imported_at,imported_by,row_count,original_path,revision) VALUES(?,?,'synthetic','synthetic.xlsx','2025-04-01T00:00:00.000Z','fictional-importer',1,'fictional-source',1)`,
+    [importId, month],
+    `INSERT INTO ${s}.sales_imports(id,month,file_hash,filename,imported_at,imported_by,row_count,original_path,revision) VALUES($1,$2,'synthetic','synthetic.xlsx','2025-04-01T00:00:00.000Z','fictional-importer',1,'fictional-source',1)`,
+  );
+  const activateMonth = async (importId, month) => {
+    await importHeader(importId, month);
+    await write(
+      `INSERT INTO ${s}.sales_months(month,import_id,imported_at,filename,file_hash,revision) VALUES(?,?,'2025-04-01T00:00:00.000Z','synthetic.xlsx','synthetic',1)`,
+      [month, importId],
+      `INSERT INTO ${s}.sales_months(month,import_id,imported_at,filename,file_hash,revision) VALUES($1,$2,'2025-04-01T00:00:00.000Z','synthetic.xlsx','synthetic',1)`,
+    );
+  };
+  const salesRow = (importId, month, quantity) => write(
+    `INSERT INTO ${s}.sales_rows(import_id,row_number,date,month,site_code,item_code,item_name,quantity,brand,price_cents,value_cents,location,company,asm,regional,order_number,category,sub_category,agent) VALUES(?,1,?||'-01',?,'SITE-A','FIXTURE-CASE','Synthetic',?,'Synthetic',1,1,'Warehouse A','Synthetic','','','','','','')`,
+    [importId, month, month, quantity],
+    `INSERT INTO ${s}.sales_rows(import_id,row_number,date,month,site_code,item_code,item_name,quantity,brand,price_cents,value_cents,location,company,asm,regional,order_number,category,sub_category,agent) VALUES($1,1,$2||'-01',$3,'SITE-A','FIXTURE-CASE','Synthetic',$4,'Synthetic',1,1,'Warehouse A','Synthetic','','','','','','')`,
+  );
   const months = async (quantities = [1, 2, 3]) => {
     for (let i = 0; i < quantities.length; i++) {
       const month = '2025-0' + (i + 1),
         importId = i + 1;
-      await write(
-        `INSERT INTO ${s}.sales_months VALUES(?,?)`,
-        [month, importId],
-        `INSERT INTO ${s}.sales_months VALUES($1,$2)`,
-      );
-      await write(
-        `INSERT INTO ${s}.sales_rows VALUES(?,?,?,?,?,?)`,
-        [
-          importId,
-          month,
-          'Warehouse A',
-          'SITE-A',
-          'FIXTURE-CASE',
-          quantities[i],
-        ],
-        `INSERT INTO ${s}.sales_rows VALUES($1,$2,$3,$4,$5,$6)`,
-      );
+      await activateMonth(importId, month);
+      await salesRow(importId, month, quantities[i]);
     }
   };
   const staged = () => {
@@ -890,9 +901,8 @@ export async function runOrderFinalizationContract(api, fixture) {
       async () => {
         await seed({ items: [{ ...products[0], quantity: 9 }], pieces: 9 });
         await months(quantities);
-        await write(
-          `INSERT INTO ${s}.sales_rows VALUES(999,'2025-01','Warehouse A','SITE-A','FIXTURE-CASE',9999)`,
-        );
+        await importHeader(999, '2025-01');
+        await salesRow(999, '2025-01', 9999);
         const view = await limits().limits(await actor(), ids.a),
           item = view.products.find((row) => row.productId === products[0].id);
         assert.equal(item.source, source);
@@ -1202,7 +1212,7 @@ export async function runOrderFinalizationContract(api, fixture) {
   for (const [name, mutate] of [
     [
       'sales_closed_month',
-      () => write(`INSERT INTO ${s}.sales_months VALUES('2025-02',99)`),
+      () => activateMonth(99, '2025-02'),
     ],
     ['sales_aliases', () => setting('sales-agent-aliases-v1', [])],
     [
@@ -1269,7 +1279,7 @@ export async function runOrderFinalizationContract(api, fixture) {
       const { order } = await approve(),
         store = staged();
       store.onStage = () =>
-        write(`INSERT INTO ${s}.sales_months VALUES('2025-04',99)`);
+        activateMonth(99, '2025-04');
       assert.equal(
         (
           await finalizer().finalize(
