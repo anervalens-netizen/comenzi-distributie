@@ -844,8 +844,25 @@ try {
   assert.equal((await limits(invalidOrder)).enabled, false,
     'with only the other manager configured, existing outside teams stay exempt');
 
+  // Explicit unlimited settings: the legacy storage marker remains rollback-compatible.
+  delete process.env.MOBIUP_ORDER_LIMIT_MANAGER_ID;
+  delete process.env.MOBIUP_ORDER_LIMIT_ADDITIONAL_MANAGER_IDS;
+  const freshManagerToken=randomUUID();
+  tokens.set('manager-global',freshManagerToken);
+  sql.prepare('INSERT INTO sessions VALUES(?,?,?)').run(createHash('sha256').update(freshManagerToken).digest('hex'),'manager-global',Date.now()+3600000);
+  const baseSettings={partnerTo:['synthetic@example.com'],weeklyLimit:0};
+  const unlimited=await call('PUT','admin/settings','manager-global',baseSettings);
+  assert.equal(unlimited.settings.weeklyLimit,0);
+  assert.equal(JSON.parse(sql.prepare("SELECT value FROM settings WHERE key='app'").get().value).weeklyLimit,2147483647);
+  for(let i=0;i<8;i++) assert.equal((await finalize(order([['nocap-audio',1]]),1)).order.status,'finalized');
+  await call('PUT','admin/settings','manager-global',{...baseSettings,weeklyLimit:5});
+  await finalize(order([['nocap-audio',1]]),1,409);
+  await call('PUT','admin/settings','manager-global',{...baseSettings,weeklyLimit:-1},400);
+  await call('PUT','admin/settings','manager-global',{...baseSettings,weeklyLimit:0});
+  assert.equal((await finalize(order([['nocap-audio',1]]),1)).order.status,'finalized');
+
   console.log(
-    'PASS order floors, returns and month coverage, HTTP guards, exact approvals, catalog/role scope, CAS, and sales/window races.',
+    'PASS unlimited weekly orders; order floors, returns and month coverage, HTTP guards, exact approvals, catalog/role scope, CAS, and sales/window races.',
   );
 } finally {
   sales?.close();
