@@ -5,7 +5,9 @@ import { SqlSession, type AsyncSqlDatabase, type SqlAuthority, type SqlReader, t
 // One event-loop writer must not synchronously wait on another writer whose
 // awaited callback needs that SAME event loop to release the SQLite lock.
 const queues = new Map<string, Promise<void>>();
-const context = new AsyncLocalStorage<ReadonlySet<string>>();
+type TransactionLifetime = { key: string; active: boolean };
+const context = new AsyncLocalStorage<readonly TransactionLifetime[]>();
+const activeTransaction = (key: string) => context.getStore()?.some(item => item.active && item.key === key);
 const ownedConnections = new WeakSet<DatabaseSync>();
 let memoryIdentity = 0;
 
@@ -27,13 +29,14 @@ export class SqliteDatabase implements AsyncSqlDatabase {
   }
   private async transaction<T>(writable: boolean, action: (session: SqlSession) => Promise<T>, authority?: SqlAuthority): Promise<T> {
     if (this.closed) throw new Error('SQLite database is closed');
-    if (context.getStore()?.has(this.key)) throw new Error('Nested database transaction; use the supplied transaction client');
+    if (activeTransaction(this.key)) throw new Error('Nested database transaction; use the supplied transaction client');
     const previous = queues.get(this.key) ?? Promise.resolve();
     let unlock!: () => void;
     const lock = new Promise<void>(resolve => { unlock = resolve; });
     queues.set(this.key, lock);
     await previous;
-    return context.run(new Set([...(context.getStore() ?? []), this.key]), async () => {
+    const lifetime = { key: this.key, active: true };
+    return context.run([...(context.getStore() ?? []).filter(item => item.active), lifetime], async () => {
       let session: SqlSession | undefined;
       let began = false;
       let priorQueryOnly: unknown;
@@ -83,6 +86,7 @@ export class SqliteDatabase implements AsyncSqlDatabase {
         }
         throw error;
       } finally {
+        lifetime.active = false;
         session?.abort();
         unlock();
         if (queues.get(this.key) === lock) queues.delete(this.key);
@@ -90,7 +94,7 @@ export class SqliteDatabase implements AsyncSqlDatabase {
     });
   }
   async close(): Promise<void> {
-    if (context.getStore()?.has(this.key)) throw new Error('Cannot close a database from its active transaction');
+    if (activeTransaction(this.key)) throw new Error('Cannot close a database from its active transaction');
     if (this.closing) return this.closing;
     const pending = queues.get(this.key);
     this.closed = true;

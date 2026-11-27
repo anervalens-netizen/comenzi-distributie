@@ -19,10 +19,11 @@ export interface AsyncSqlDatabase {
 /** Restricted application statements; migrations and transaction control are separate. */
 export function sqlQuery(kind: SqlQuery['kind'], sqlite: string, postgresql: string): SqlQuery {
   if (kind !== 'read' && kind !== 'write') throw new Error('Unsupported application SQL statement kind');
-  const allowed = kind === 'read' ? /^SELECT\b/i : /^(INSERT|UPDATE|DELETE|WITH)\b/i;
+  const allowed = kind === 'read' ? /^SELECT\b/i : /^(INSERT|UPDATE|DELETE)\b/i;
   for (const sql of [sqlite, postgresql]) {
     // Parameters carry arbitrary text. Deliberately exclude scripts, transaction
     // commands and semicolons from this first bounded application contract.
+    // WITH can end in a SELECT; it cannot promise a write/change-count contract.
     if (!allowed.test(sql.trimStart()) || sql.includes(';')) throw new Error('Unsupported application SQL statement');
   }
   return Object.freeze({ kind, sqlite, postgresql });

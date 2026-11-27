@@ -148,5 +148,27 @@ export async function runImportContract(api, fixture) {
     assert(rows.every(row=>String(row.amount_cents)==='9007199254740993'));
     assert.throws(()=>safeSqlInteger(rows[0].amount_cents),/outside/);
   });
+  await check('detached_context_can_start_fresh_read_and_write_after_commit',async()=>{
+    const gate=deferred();
+    /** @type {Promise<void> | undefined} */
+    let detached;
+    await database.write(async()=>{
+      detached=(async()=>{
+        await gate.promise;
+        assert.equal(await total(),0);
+        await execute(database,tx=>tx.query(insert,['detached',7,'Synthetic detached work']));
+      })();
+    });
+    assert.ok(detached instanceof Promise);gate.resolve();await detached;
+    assert.equal(await total(),1);
+  });
+  await check('with_select_cannot_report_a_previous_statement_change_count',async()=>{
+    await assert.rejects(database.write(async tx=>{
+      await tx.query(insert,['discarded',1,'Synthetic']);
+      await tx.query({kind:'write',sqlite:'WITH n AS (SELECT 1) SELECT * FROM n',
+        postgresql:'WITH n AS (SELECT 1) SELECT * FROM n'});
+    }),/Unsupported/);
+    assert.equal(await total(),0);
+  });
   return cases;
 }

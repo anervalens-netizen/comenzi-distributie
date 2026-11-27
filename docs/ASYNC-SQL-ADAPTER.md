@@ -8,8 +8,10 @@ existing behavior. No environment variable selects the new adapter implicitly.
 
 `lib/sql-database.ts` defines an asynchronous reader/writer contract. Each
 application statement supplies explicit SQLite and PostgreSQL text. Values are
-bound separately. Identifiers are validated. Transaction commands, scripts and
-implicit SQL translation are outside this contract. Schema migration uses a
+bound separately. Identifiers are validated. Reads start with SELECT; writes
+start with INSERT, UPDATE or DELETE. WITH is excluded because it can end in a
+read and SQLite would otherwise report the previous statement's change count.
+Transaction commands, scripts and implicit SQL translation are outside this contract. Schema migration uses a
 separate operator-controlled path.
 
 `lib/sql-postgres.ts` owns its connection pool. One dedicated client holds each
@@ -23,14 +25,31 @@ Read callbacks use a read-only, repeatable-read transaction.
 Authority is checked before the callback and again after its writes finish.
 The final check covers expiration during asynchronous work. A caught SQL failure
 still aborts the transaction. Pending statements finish before commit. Escaped
-transaction handles cannot issue later SQL. Nested transactions on the same
-configured database are rejected; use the supplied transaction for related work.
+transaction handles cannot issue later SQL. A transaction's async context is
+active only until its commit/rollback and client release finish. A detached
+callback can start a fresh transaction after that lifetime ends; it cannot reuse
+the closed transaction handle. Acquire failures also end this lifetime.
+
+PostgreSQL nesting is deliberately unsupported across **all** adapter instances
+in an active transaction, including a second pool or DSN alias. Reuse the supplied
+client for related work. The initial application topology is one database with
+separate schemas; cross-database nested work is outside this contract. This
+conservative boundary does not guess database identity from hostnames or require
+extra runtime privileges. SQLite still rejects nesting for the same main file.
 
 Connection acquisition, lock waiting, statements and idle transactions have
-bounded timeouts. A checked-out connection error is observed and retires the
+bounded timeouts. `idleTransactionTimeoutMs` has its own 60,000 ms default and
+1–300,000 ms bounds. It is independent of the per-statement timeout (15,000 ms
+default). Awaited application work is allowed within that idle budget; callers
+should complete parsing and external I/O before acquiring the writer lock where
+possible. A checked-out connection error is observed and retires the
 client. Rollback failure also retires it. Lost commit confirmation throws
 `CommitOutcomeUnknownError`: the caller must reconcile its durable operation
 identity before deciding whether to retry. The adapter never retries a write.
+An explicit ROLLBACK completion or a server ERROR at COMMIT with SQLSTATE 23502,
+23503, 23505, 23514, 23P01, 40001 or 40P01 is a definite rejection. It preserves
+the original error and reuses the client only after successful cleanup. Other
+responses, FATALs, connection failures and SQLSTATE 40003 remain unknown outcomes.
 
 `lib/sql-sqlite.ts` supplies the same asynchronous boundary around a dedicated
 SQLite connection. It retains `BEGIN IMMEDIATE`. Connections sharing the same

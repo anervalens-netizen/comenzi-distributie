@@ -54,6 +54,14 @@ try {
   await operation;await session.finish();
   assert.deepEqual([...issued[0].values[0]],[3,4]);
   cases.push('statement_parameters_captured_before_async_execution');
+  await assert.rejects(database.write(async()=>other.close()),/active transaction/);
+  let releaseDetached;
+  /** @type {Promise<void> | undefined} */
+  let detachedClose;
+  const detachedGate=new Promise(resolve=>{releaseDetached=resolve;});
+  await database.write(async()=>{detachedClose=(async()=>{await detachedGate;await other.close();})();});
+  assert.ok(detachedClose instanceof Promise);releaseDetached();await detachedClose;
+  cases.push('detached_sqlite_context_can_close_after_parent_finishes');
   await database.close();await database.close();database=undefined;
   await other.close();other=undefined;
   console.log(JSON.stringify({kind:'async-sql-adapter-synthetic-contract',engine:'sqlite',passed:true,

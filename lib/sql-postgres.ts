@@ -5,7 +5,14 @@ import { SqlSession, type AsyncSqlDatabase, type SqlAuthority, type SqlReader, t
 // Advisory locks are database-local. Every application writer uses this pair;
 // a caller cannot select a separate lock for revocation or a different ledger.
 export const APPLICATION_WRITE_LOCK = Object.freeze([1129270605, 1] as const);
-const context = new AsyncLocalStorage<ReadonlySet<string>>();
+const context = new AsyncLocalStorage<{ active: boolean }>();
+// These ErrorResponses explicitly reject COMMIT. Connection errors, FATALs and
+// SQLSTATE 40003 (statement completion unknown) remain ambiguous outcomes.
+const commitRejectionCodes = new Set(['23502', '23503', '23505', '23514', '23P01', '40001', '40P01']);
+function confirmedCommitRejection(error: unknown): boolean {
+  return error instanceof Error && 'severity' in error && error.severity === 'ERROR'
+    && 'code' in error && typeof error.code === 'string' && commitRejectionCodes.has(error.code);
+}
 // pg 8 supports queryMode at runtime; its separately published types omit it.
 // Keep the extension explicit and preserve the typed query result overload.
 const extended = (text: string, values: SqlValue[] = []): QueryConfig & { queryMode: 'extended' } =>
@@ -17,6 +24,7 @@ export interface PostgresOptions {
   maxConnections?: number;
   lockTimeoutMs?: number;
   statementTimeoutMs?: number;
+  idleTransactionTimeoutMs?: number;
 }
 export class CommitOutcomeUnknownError extends Error {
   constructor(cause: unknown) {
@@ -28,27 +36,27 @@ export class CommitOutcomeUnknownError extends Error {
 /** The pool is internal; application callers cannot bypass the transaction boundary. */
 export class PostgresDatabase implements AsyncSqlDatabase {
   private readonly pool: Pool;
-  private readonly identity: string;
   private readonly expectedDatabase: string;
   private closed = false;
   private closing: Promise<void> | undefined;
   private readonly lockTimeoutMs: number;
   private readonly statementTimeoutMs: number;
+  private readonly idleTransactionTimeoutMs: number;
   constructor(options: PostgresOptions) {
     if (!options.connectionString || !options.expectedDatabase || typeof options.onIdleConnectionError !== 'function') {
       throw new Error('Explicit PostgreSQL connection, database identity and error observer are required');
     }
     const endpoint = new URL(options.connectionString);
     if (!['postgres:', 'postgresql:'].includes(endpoint.protocol)) throw new Error('Explicit PostgreSQL URL required');
-    this.identity = (endpoint.searchParams.get('host') || endpoint.hostname) + ':'
-      + (endpoint.port || '5432') + '/' + options.expectedDatabase;
     this.expectedDatabase = options.expectedDatabase;
     const max = options.maxConnections ?? 4;
     this.lockTimeoutMs = options.lockTimeoutMs ?? 5000;
     this.statementTimeoutMs = options.statementTimeoutMs ?? 15000;
-    if (![max, this.lockTimeoutMs, this.statementTimeoutMs].every(Number.isSafeInteger)
+    this.idleTransactionTimeoutMs = options.idleTransactionTimeoutMs ?? 60000;
+    if (![max, this.lockTimeoutMs, this.statementTimeoutMs, this.idleTransactionTimeoutMs].every(Number.isSafeInteger)
       || max < 2 || max > 16 || this.lockTimeoutMs < 1 || this.lockTimeoutMs > 30000
-      || this.statementTimeoutMs < this.lockTimeoutMs || this.statementTimeoutMs > 60000) {
+      || this.statementTimeoutMs < this.lockTimeoutMs || this.statementTimeoutMs > 60000
+      || this.idleTransactionTimeoutMs < 1 || this.idleTransactionTimeoutMs > 300000) {
       throw new Error('Invalid bounded PostgreSQL pool or timeout configuration');
     }
     const configuration: PoolConfig = {
@@ -66,10 +74,13 @@ export class PostgresDatabase implements AsyncSqlDatabase {
   }
   private async transaction<T>(writable: boolean, action: (session: SqlSession) => Promise<T>, authority?: SqlAuthority): Promise<T> {
     if (this.closed) throw new Error('PostgreSQL database is closed');
-    if (context.getStore()?.has(this.identity)) throw new Error('Nested database transaction; use the supplied transaction client');
-    return context.run(new Set([...(context.getStore() ?? []), this.identity]), async () => {
+    // This single-database application does not support nested PG transactions,
+    // including a second pool/DSN alias. Related work must use the passed client.
+    if (context.getStore()?.active) throw new Error('Nested database transaction; use the supplied transaction client');
+    const lifetime = { active: true };
+    return context.run(lifetime, async () => {
       const client: PoolClient = await this.pool.connect();
-      let began = false, commitAttempted = false, committed = false, destroy = false;
+      let began = false, commitAttempted = false, commitRejected = false, committed = false, destroy = false;
       let session: SqlSession | undefined;
       let connectionFailure: Error | undefined;
       // The pool removes its idle error listener while a client is checked out.
@@ -89,8 +100,8 @@ export class PostgresDatabase implements AsyncSqlDatabase {
           : 'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
         began = true;
         await client.query(extended(
-          "SELECT set_config('lock_timeout',$1,true), set_config('statement_timeout',$2,true), set_config('idle_in_transaction_session_timeout',$2,true), set_config('search_path','pg_catalog',true)",
-          [String(this.lockTimeoutMs), String(this.statementTimeoutMs)]));
+          "SELECT set_config('lock_timeout',$1,true), set_config('statement_timeout',$2,true), set_config('idle_in_transaction_session_timeout',$3,true), set_config('search_path','pg_catalog',true)",
+          [String(this.lockTimeoutMs), String(this.statementTimeoutMs), String(this.idleTransactionTimeoutMs)]));
         if (writable) await client.query(extended('SELECT pg_advisory_xact_lock($1::integer,$2::integer)', [...APPLICATION_WRITE_LOCK]));
         session = new SqlSession('postgresql', writable, async (query, values) => {
           if (connectionFailure) throw connectionFailure;
@@ -108,12 +119,16 @@ export class PostgresDatabase implements AsyncSqlDatabase {
         if (connectionFailure) throw connectionFailure;
         commitAttempted = true;
         const completion = await client.query('COMMIT');
+        if (completion.command === 'ROLLBACK') {
+          commitRejected = true;
+          throw new Error('PostgreSQL rolled back instead of committing');
+        }
         if (completion.command !== 'COMMIT') throw new Error('PostgreSQL did not confirm COMMIT');
         committed = true;
         return result;
       } catch (error) {
         session?.abort();
-        if (commitAttempted && !committed) {
+        if (commitAttempted && !committed && !commitRejected && !confirmedCommitRejection(error)) {
           destroy = true;
           throw new CommitOutcomeUnknownError(error);
         }
@@ -129,10 +144,14 @@ export class PostgresDatabase implements AsyncSqlDatabase {
         try { client.release(destroy); }
         finally { client.removeListener('error', onConnectionError); }
       }
+    }).finally(() => {
+      // Child async resources retain their inherited object, not its activity.
+      // Include acquire failure and release failure in this lifetime boundary.
+      lifetime.active = false;
     });
   }
   async close(): Promise<void> {
-    if (context.getStore()?.has(this.identity)) throw new Error('Cannot close a database from its active transaction');
+    if (context.getStore()?.active) throw new Error('Cannot close a database from its active transaction');
     if (this.closing) return this.closing;
     this.closed = true;
     this.closing = this.pool.end();

@@ -26,7 +26,7 @@ const names={app:'fixture_app_'+suffix,ledger:'fixture_ledger_'+suffix,
 const quote=name=>'"'+name+'"';
 const password=randomBytes(24).toString('hex');
 const createdRoles=[],createdSchemas=[];
-let folder,database,other,receipt,primaryError;
+let folder,database,other,timed,alias,receipt,primaryError;
 const cleanupErrors=[];
 try {
   const identity=(await bootstrap.query(`SELECT current_database() AS database, current_setting('server_version_num')::integer AS version,
@@ -51,6 +51,7 @@ try {
     [names.app,'sessions','token_hash TEXT PRIMARY KEY,user_id TEXT REFERENCES '+app+'.users(id),expires_at BIGINT',names.appOwner],
     [names.app,'settings','key TEXT PRIMARY KEY,value TEXT',names.appOwner],
     [names.ledger,'imports','id TEXT PRIMARY KEY,amount_cents BIGINT,label TEXT',names.ledgerOwner],
+    [names.ledger,'deferred_keys','id TEXT, CONSTRAINT fixture_deferred_key UNIQUE(id) DEFERRABLE INITIALLY DEFERRED',names.ledgerOwner],
   ];
   for(const [schema,table,columns,owner]of tables){
     const qualified=quote(schema)+'.'+quote(table);
@@ -70,7 +71,7 @@ try {
   const owners=(await bootstrap.query(`SELECT n.nspname,c.relname,pg_get_userbyid(c.relowner) AS owner
     FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
     WHERE n.nspname=ANY($1::text[]) AND c.relkind='r' ORDER BY n.nspname,c.relname`,[[names.app,names.ledger]])).rows;
-  assert.equal(owners.length,4);
+  assert.equal(owners.length,5);
   assert(owners.every(row=>row.owner===(row.nspname===names.app?names.appOwner:names.ledgerOwner)));
 
   mkdirSync('work',{recursive:true});folder=mkdtempSync(resolve('work/sql-postgres-fixture-'));
@@ -110,14 +111,45 @@ try {
   } finally {release();await blocker;}
   await other.write(tx=>tx.query(api.sqlQuery('write','DELETE FROM '+ledger+'.imports','DELETE FROM '+ledger+'.imports')));
   cases.push('actual_lock_timeout_releases_connection_and_recovers');
+  const deferredInsert=api.sqlQuery('write','INSERT INTO '+ledger+'.deferred_keys(id) VALUES(?)',
+    'INSERT INTO '+ledger+'.deferred_keys(id) VALUES($1)');
+  await assert.rejects(database.write(async tx=>{
+    await tx.query(deferredInsert,['duplicate']);await tx.query(deferredInsert,['duplicate']);
+  }),error=>error.code==='23505'&&!(error instanceof api.CommitOutcomeUnknownError));
+  const deferredCount=api.sqlQuery('read','SELECT COUNT(*) AS n FROM '+ledger+'.deferred_keys',
+    'SELECT COUNT(*) AS n FROM '+ledger+'.deferred_keys');
+  assert.equal(api.safeSqlInteger((await database.read(tx=>tx.query(deferredCount))).rows[0].n),0);
+  await database.write(tx=>tx.query(deferredInsert,['committed-after-rejection']));
+  assert.equal(api.safeSqlInteger((await database.read(tx=>tx.query(deferredCount))).rows[0].n),1);
+  cases.push('deferred_constraint_commit_rejection_is_certain_and_recovers');
+  timed=new api.PostgresDatabase({...config,lockTimeoutMs:50,statementTimeoutMs:100,idleTransactionTimeoutMs:2000});
+  await timed.write(async tx=>{
+    const sql="SELECT current_setting('statement_timeout') AS statement_timeout,current_setting('idle_in_transaction_session_timeout') AS idle_timeout";
+    const row=(await tx.query(api.sqlQuery('read',sql,sql))).rows[0];
+    assert.deepEqual(row,{statement_timeout:'100ms',idle_timeout:'2s'});
+    await new Promise(resolve=>setTimeout(resolve,250));
+    assert.equal((await tx.query(api.sqlQuery('read','SELECT 1 AS n','SELECT 1 AS n'))).rows[0].n,1);
+  });
+  cases.push('await_between_statements_uses_independent_idle_budget');
+  const aliasUrl=new URL(runtimeUrl);
+  if(aliasUrl.searchParams.has('host'))aliasUrl.searchParams.set('host',aliasUrl.searchParams.get('host')+'/.');
+  else aliasUrl.hostname=aliasUrl.hostname==='localhost'?'127.0.0.1':'localhost';
+  alias=new api.PostgresDatabase({...config,connectionString:aliasUrl.toString()});
+  const aliasIdentity=await alias.read(tx=>tx.query(api.sqlQuery('read',
+    'SELECT current_database() AS database','SELECT current_database() AS database')));
+  assert.equal(aliasIdentity.rows[0].database,target,'the alternate endpoint reaches the same fixture database');
+  await assert.rejects(database.write(async()=>alias.write(async()=>{})),/Nested/);
+  await assert.rejects(database.write(async()=>alias.close()),/active transaction/);
+  await alias.close();alias=undefined;
+  cases.push('same_database_endpoint_alias_cannot_nest_or_close_active_transaction');
   assert.deepEqual(poolErrors,[]);
   receipt={kind:'async-sql-adapter-postgresql-fixture',passed:true,engine:'postgresql',
     server_version_num:identity.version,case_count:cases.length,case_ids:cases,
-    shared_contract_case_count:cases.length-3,synthetic_only:true,production_runtime_switched:false,
+    shared_contract_case_count:cases.length-6,synthetic_only:true,production_runtime_switched:false,
     independent_schema_ownership:true,runtime_superuser:false};
 }catch(error){primaryError=error;}
 finally {
-  for(const db of [database,other])try{await db?.close();}catch(error){cleanupErrors.push(error.message);}
+  for(const db of [database,other,timed,alias])try{await db?.close();}catch(error){cleanupErrors.push(error.message);}
   for(const schema of createdSchemas.reverse())try{await bootstrap.query('DROP SCHEMA '+quote(schema)+' CASCADE');}catch(error){cleanupErrors.push(error.message);}
   for(const role of createdRoles.reverse())try{await bootstrap.query('DROP ROLE '+quote(role));}catch(error){cleanupErrors.push(error.message);}
   try{await bootstrap.end();}catch(error){cleanupErrors.push(error.message);}
