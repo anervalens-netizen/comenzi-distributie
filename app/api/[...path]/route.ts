@@ -1,3 +1,4 @@
+import {normalizeWeeklyLimit,persistWeeklyLimit,validWeeklyLimit} from '@/lib/weekly-order-limit';
 import {searchPartnerCompanies} from '@/lib/partner-search';
 import {consumeOrderLimitApproval,orderLimitApprovalsApi,orderLimitFinalization,orderLimitPolicyApi,orderLimits,requestOrderLimitApproval} from '@/lib/order-limits-server';
 import {leaveApi} from '@/lib/leave-server';
@@ -270,7 +271,7 @@ async function finalize(id: string,user: User,req: Request) {
   const payload={...finalOrder,exportKey};
   const guard=operationalWriteGuard(req,user,{agentId:order.userId}),proofKey="order-write-proof-v1:"+crypto.randomUUID();
   try {
-    const statements=[db().prepare(`UPDATE orders SET status='finalized',finalized_at=?,week_key=?,payload=?,revision=revision+1 WHERE id=? AND status='draft' AND revision=? AND (? IS (SELECT value FROM settings WHERE key='catalog')) AND (kind NOT IN ('sim','combined','stand_client') OR (kind!='stand_client' AND json_array_length(json_extract(payload,'$.serials'))=0) OR EXISTS (SELECT 1 FROM customers c WHERE c.id=? AND EXISTS (SELECT 1 FROM json_each(COALESCE(json_extract(c.data,'$.warehouseIds'),json_array(c.warehouse_id))) WHERE value=orders.warehouse_id) AND c.active=1 AND c.data=?)) AND (kind NOT IN ('accessories','combined') OR (kind='combined' AND json_array_length(json_extract(payload,'$.items'))=0) OR (SELECT COUNT(*) FROM orders o WHERE o.user_id=orders.user_id AND (o.kind='accessories' OR (o.kind='combined' AND json_array_length(json_extract(o.payload,'$.items'))>0)) AND o.status='finalized' AND o.week_key=?) < ?) AND ${guard.sql} AND (${limits.sql})`).bind(finalOrder.finalizedAt,weekKey(),JSON.stringify(payload),id,order.revision,currentCatalog.raw,order.client?.id||'',clientData,weekKey(),cfg.weeklyLimit,...guard.args,...limits.args),db().prepare("INSERT INTO settings(key,value) SELECT ?,'1' WHERE changes()=1").bind(proofKey)];
+    const statements=[db().prepare(`UPDATE orders SET status='finalized',finalized_at=?,week_key=?,payload=?,revision=revision+1 WHERE id=? AND status='draft' AND revision=? AND (? IS (SELECT value FROM settings WHERE key='catalog')) AND (kind NOT IN ('sim','combined','stand_client') OR (kind!='stand_client' AND json_array_length(json_extract(payload,'$.serials'))=0) OR EXISTS (SELECT 1 FROM customers c WHERE c.id=? AND EXISTS (SELECT 1 FROM json_each(COALESCE(json_extract(c.data,'$.warehouseIds'),json_array(c.warehouse_id))) WHERE value=orders.warehouse_id) AND c.active=1 AND c.data=?)) AND (?=0 OR kind NOT IN ('accessories','combined') OR (kind='combined' AND json_array_length(json_extract(payload,'$.items'))=0) OR (SELECT COUNT(*) FROM orders o WHERE o.user_id=orders.user_id AND (o.kind='accessories' OR (o.kind='combined' AND json_array_length(json_extract(o.payload,'$.items'))>0)) AND o.status='finalized' AND o.week_key=?) < ?) AND ${guard.sql} AND (${limits.sql})`).bind(finalOrder.finalizedAt,weekKey(),JSON.stringify(payload),id,order.revision,currentCatalog.raw,order.client?.id||'',clientData,cfg.weeklyLimit,weekKey(),cfg.weeklyLimit,...guard.args,...limits.args),db().prepare("INSERT INTO settings(key,value) SELECT ?,'1' WHERE changes()=1").bind(proofKey)];
     if(limits.approvalId)statements.push(consumeOrderLimitApproval(limits.approvalId,proofKey,finalOrder.finalizedAt));
     for(const serial of order.serials) statements.push(db().prepare("INSERT INTO serials (serial,order_id) SELECT ?,? WHERE EXISTS (SELECT 1 FROM settings WHERE key=?)").bind(serial,id,proofKey));
     statements.push(db().prepare("DELETE FROM settings WHERE key=?").bind(proofKey));
@@ -281,6 +282,7 @@ async function finalize(id: string,user: User,req: Request) {
       if(latest.status==='finalized') { if(exportKey) await env.FILES.delete(exportKey); return response({order:latest,mail:mailFor(latest,await settingsForOrder(latest))}); }
       if(limits.sql!=='1'&&!await db().prepare('SELECT 1 WHERE '+limits.sql).bind(...limits.args).first())fail(409,'Limitele sau aprobarea comenzii s-au schimbat. Reîncarcă și verifică solicitarea.');
       if(order.kind==='sim') fail(409,'Datele clientului sau ciorna s-au modificat între timp. Redeschide ciorna și selectează din nou clientul.');
+      if(cfg.weeklyLimit===0) fail(409,'Catalogul, clientul sau ciorna s-au modificat. Redeschide ciorna și verifică selecția.');
       fail(409,`Limita este de ${cfg.weeklyLimit} comenzi de accesorii pe săptămână. Comanda rămâne ciornă. Dacă datele comenzii sau clientului s-au modificat, redeschide ciorna și verifică selecția.`);
     }
   } catch(err) {
@@ -655,9 +657,10 @@ async function authenticatedRoute(req:Request,path:string[],user:User) {
         cfg[key]=recipients;
       }
       if(!cfg.partnerTo.some(Boolean)) fail(400,'Partener nou trebuie să aibă cel puțin un destinatar.');
-      if(typeof body.weeklyLimit!=='number'||!Number.isInteger(body.weeklyLimit)||body.weeklyLimit<1||body.weeklyLimit>7) fail(400,'Limita săptămânală trebuie să fie între 1 și 7.');
-      cfg.weeklyLimit=body.weeklyLimit;
-      await db().prepare("INSERT INTO settings (key,value) VALUES ('app',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(JSON.stringify(cfg)).run();
+      const weeklyLimit=typeof body.weeklyLimit==='number'?normalizeWeeklyLimit(body.weeklyLimit):body.weeklyLimit;
+      if(!validWeeklyLimit(weeklyLimit)) fail(400,'Limita săptămânală trebuie să fie între 0 și 7 (0 = fără limită).');
+      cfg.weeklyLimit=weeklyLimit;
+      await db().prepare("INSERT INTO settings (key,value) VALUES ('app',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(JSON.stringify({...cfg,weeklyLimit:persistWeeklyLimit(cfg.weeklyLimit)})).run();
       return response({settings:cfg});
     }
     if(path[1]==='managers' && !path[2] && req.method==='POST') {

@@ -205,7 +205,7 @@ try {
   ok(!augustBoundary.some(item=>item.id===boundaryId)&&septemberBoundary.some(item=>item.id===boundaryId),'Partner activity at 1 September 00:30 Bucharest belongs only to September');
   let partnerSim=await create('sim',agent);partnerSim=await save(partnerSim,agent,{clientId:newPointClient.id,serials:['89400000000000000991']});
   ok(partnerSim.client.id===newPointClient.id&&partnerSim.client.address===newPointBody.address,'Confirmed work location is immediately selectable in a SIM draft');
-  const cfg={...bootstrap.settings,accessoriesEmail:'accessories@example.com',standsEmail:'stands@example.com',simEmail:'sim@example.com',accessoriesCc:['acc1@example.com','','acc3@example.com','acc4@example.com'],standsCc:['std1@example.com','std2@example.com','std3@example.com','std4@example.com'],simCc:['sim1@example.com','sim2@example.com'],partnerTo:['partner.ops1@example.com','partner.ops2@example.com'],partnerCc:['partner.cc@example.com']};
+  const cfg={...bootstrap.settings,weeklyLimit:2,accessoriesEmail:'accessories@example.com',standsEmail:'stands@example.com',simEmail:'sim@example.com',accessoriesCc:['acc1@example.com','','acc3@example.com','acc4@example.com'],standsCc:['std1@example.com','std2@example.com','std3@example.com','std4@example.com'],simCc:['sim1@example.com','sim2@example.com'],partnerTo:['partner.ops1@example.com','partner.ops2@example.com'],partnerCc:['partner.cc@example.com']};
   await call('admin/settings','PUT',cfg,manager);
   const savedCfg=(await call('bootstrap','GET',null,manager)).data.settings;
   ok(JSON.stringify(savedCfg)===JSON.stringify(cfg),'To/CC persist independently, including blank slots');

@@ -1,3 +1,4 @@
+import {normalizeWeeklyLimit} from './weekly-order-limit';
 import {canViewActivations} from './activation-access';
 import { captureError } from "./error-reporting";
 import { env } from '@/lib/runtime';
@@ -121,7 +122,8 @@ export async function getOrder(id: string,user: User) {
 }
 export async function settings(): Promise<Settings> {
   const row=await db().prepare("SELECT value FROM settings WHERE key='app'").first<{value:string}>();
-  return {accessoriesEmail:'',standsEmail:'',simEmail:'',accessoriesCc:[],standsCc:[],simCc:[],partnerTo:[...mailDefaults.partnerTo],partnerCc:[...mailDefaults.partnerCc],weeklyLimit:2,...(row?JSON.parse(row.value):{})};
+  const cfg:Settings={accessoriesEmail:'',standsEmail:'',simEmail:'',accessoriesCc:[],standsCc:[],simCc:[],partnerTo:[...mailDefaults.partnerTo],partnerCc:[...mailDefaults.partnerCc],weeklyLimit:0,...(row?JSON.parse(row.value):{})};
+  return {...cfg,weeklyLimit:normalizeWeeklyLimit(cfg.weeklyLimit)};
 }
 export function operationalMailSettings(cfg:Settings):OperationalMailSettings {
   return {
