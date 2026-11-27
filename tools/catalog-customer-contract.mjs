@@ -22,9 +22,12 @@ export function catalogCustomerFixtureStatements(api,applicationSchema){
 
 export async function runCatalogCustomerContract(api,fixture){
   const {database,other,applicationSchema}=fixture,s=api.sqlIdentifier(applicationSchema),cases=[];
+  // Only fixture setup uses this optional control-plane adapter; repository
+  // calls continue through the independently restricted application adapter.
+  const setupDatabase=fixture.setupDatabase??database;
   const q=(kind,sqlite,postgresql=sqlite)=>api.sqlQuery(kind,sqlite,postgresql);
   const query=(tx,kind,sql,values=[],postgresql=sql)=>tx.query(q(kind,sql,postgresql),values);
-  const write=(sql,values=[],postgresql=sql)=>database.write(tx=>query(tx,'write',sql,values,postgresql));
+  const write=(sql,values=[],postgresql=sql)=>setupDatabase.write(tx=>query(tx,'write',sql,values,postgresql));
   let now=NOW;
   const repo=(db=database,input=seed)=>new api.CatalogCustomerRepository(db,applicationSchema,input,()=>now);
   const catalog=(who='global',admin=false)=>repo().readCatalog(identity(account[who]),admin);
@@ -37,7 +40,7 @@ export async function runCatalogCustomerContract(api,fixture){
     county:'Fictional county',address:'Fictional address',route:'Fixture',...extra});
   async function reset(){
     now=NOW;
-    await database.write(async tx=>{
+    await setupDatabase.write(async tx=>{
       for(const table of ['settings','sessions','manager_agents','customers','users'])await query(tx,'write',`DELETE FROM ${s}.${table}`);
       for(const [label,id]of Object.entries(account)){
         const role=['global','regional','inactive'].includes(label)?'manager':label==='delegated'?'fixture-delegated':'agent';

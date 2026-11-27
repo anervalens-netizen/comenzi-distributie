@@ -12,9 +12,12 @@ const deferred=()=>{let resolve,reject;const promise=new Promise((yes,no)=>{reso
 
 export async function runUserClientCountsContract(api,fixture){
   const {database,other,applicationSchema}=fixture,s=api.sqlIdentifier(applicationSchema),cases=[];
+  // Only fixture setup uses this optional control-plane adapter; repository
+  // calls continue through the independently restricted application adapter.
+  const setupDatabase=fixture.setupDatabase??database;
   const q=(kind,sqlite,postgresql=sqlite)=>api.sqlQuery(kind,sqlite,postgresql);
   const query=(tx,kind,sqlite,values=[],postgresql=sqlite)=>tx.query(q(kind,sqlite,postgresql),values);
-  const write=(sqlite,values=[],postgresql=sqlite)=>database.write(tx=>query(tx,'write',sqlite,values,postgresql));
+  const write=(sqlite,values=[],postgresql=sqlite)=>setupDatabase.write(tx=>query(tx,'write',sqlite,values,postgresql));
   let now=NOW;
   const repo=(db=database,seed=warehouses)=>new api.UserReadRepository(db,applicationSchema,seed,()=>now);
   const users=(who='global',db=database)=>repo(db).getUsers(identity(ids[who]));
@@ -23,7 +26,7 @@ export async function runUserClientCountsContract(api,fixture){
     [id,warehouse,raw,active],`INSERT INTO ${s}.customers(id,warehouse_id,data,active) VALUES($1,$2,$3,$4)`);
   async function reset(){
     now=NOW;
-    await database.write(async tx=>{
+    await setupDatabase.write(async tx=>{
       for(const table of ['sessions','manager_agents','customers','users'])await query(tx,'write',`DELETE FROM ${s}.${table}`);
       const members=[
         {label:'global',role:'manager',scope:'global',warehouse:null,name:'Fictional Global'},
@@ -167,7 +170,10 @@ export async function runUserClientCountsContract(api,fixture){
     await users('global',guarded);assert.equal(reads,1);assert.equal(scans,1);
   });
   await check('composable_user_helper_uses_supplied_writer_transaction',async()=>{
-    await database.write(async tx=>{
+    // The read-only PG customer fixture uses its explicitly identified setup
+    // connection for this deliberate in-transaction data mutation.
+    await setupDatabase.write(async tx=>{
+      if(fixture.composableSeedIdentity)await fixture.composableSeedIdentity(tx);
       await query(tx,'write',`UPDATE ${s}.customers SET active=0 WHERE id='legacy'`);
       const {user}=await api.requireSessionInTransaction(tx,s,identity(ids.global),now);
       assert.equal(row(await api.readUsersWithClientCounts(tx,s,user,warehouses),ids.a).clientCount,2);
