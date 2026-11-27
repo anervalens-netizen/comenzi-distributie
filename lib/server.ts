@@ -1,4 +1,4 @@
-import {normalizeWeeklyLimit} from './weekly-order-limit';
+import {parseWeeklyLimit} from './weekly-order-limit';
 import {canViewActivations} from './activation-access';
 import { captureError } from "./error-reporting";
 import { env } from '@/lib/runtime';
@@ -120,10 +120,14 @@ export async function getOrder(id: string,user: User) {
   if(!row || row.status==='deleted' || !await canAccessAgent(user,String(row.user_id))) fail(404,'Comanda nu a fost găsită.');
   return orderView(row);
 }
-export async function settings(): Promise<Settings> {
+export async function readAppSettings(): Promise<{cfg:Settings;raw:string|null;stored:Record<string,unknown>}> {
   const row=await db().prepare("SELECT value FROM settings WHERE key='app'").first<{value:string}>();
-  const cfg:Settings={accessoriesEmail:'',standsEmail:'',simEmail:'',accessoriesCc:[],standsCc:[],simCc:[],partnerTo:[...mailDefaults.partnerTo],partnerCc:[...mailDefaults.partnerCc],weeklyLimit:0,...(row?JSON.parse(row.value):{})};
-  return {...cfg,weeklyLimit:normalizeWeeklyLimit(cfg.weeklyLimit)};
+  const stored:Record<string,unknown>=row?JSON.parse(row.value):{};
+  const cfg:Settings={accessoriesEmail:'',standsEmail:'',simEmail:'',accessoriesCc:[],standsCc:[],simCc:[],partnerTo:[...mailDefaults.partnerTo],partnerCc:[...mailDefaults.partnerCc],...stored,weeklyLimit:parseWeeklyLimit('weeklyLimit' in stored?stored.weeklyLimit:0)};
+  return {cfg,raw:row?.value??null,stored};
+}
+export async function settings(): Promise<Settings> {
+  return (await readAppSettings()).cfg;
 }
 export function operationalMailSettings(cfg:Settings):OperationalMailSettings {
   return {
