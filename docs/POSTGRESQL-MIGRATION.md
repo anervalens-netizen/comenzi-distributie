@@ -6,6 +6,10 @@ PostgreSQL database or perform cutover. All input and output paths must be suppl
 by the operator. Do not commit generated manifests, schemas or data fingerprints:
 they describe a private installation.
 
+The asynchronous driver foundation and its explicit remaining runtime gates are
+documented in [ASYNC-SQL-ADAPTER.md](ASYNC-SQL-ADAPTER.md). Its tests do not turn
+the current application into a PostgreSQL runtime.
+
 ## Scope and behavior that must be preserved
 
 The migration covers eight principal databases and two derived databases. The

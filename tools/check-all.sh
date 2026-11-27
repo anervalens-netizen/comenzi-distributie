@@ -9,6 +9,8 @@ wait_ready(){ local port="$1"; for _ in $(seq 1 40); do curl -fsS "http://127.0.
 start_server(){ local data="$1" port="$2" log="$3"; MOBIUP_DATA_DIR="$data" HOST=127.0.0.1 PORT="$port" NODE_ENV=production node dist/standalone/server.js >"$log" 2>&1 & pids+=("$!"); wait_ready "$port"; }
 stop_last(){ local i=$((${#pids[@]}-1)); kill "${pids[$i]}" 2>/dev/null || true; wait "${pids[$i]}" 2>/dev/null || true; unset 'pids[$i]'; pids=("${pids[@]}"); }
 
+node tools/test-sql-adapter.mjs
+node tools/test-sql-postgres-faults.mjs
 node tools/test-partner-matching.mjs
 node tools/test-partner-registration.mjs
 node tools/test-push-notifications.mjs
