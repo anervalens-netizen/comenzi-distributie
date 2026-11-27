@@ -2,11 +2,12 @@
 
 ## Current scope
 
-The native storage oracle is implemented. It uses synthetic rows and the exact
-SQLite definitions and creation order of the customer dependency schema.
-Application routes, runtime selection and deployed databases are unchanged.
-The PostgreSQL customer schema and the asynchronous business writer are not
-implemented or qualified by this oracle.
+The native storage oracle and the manager edit/client import repository are
+implemented and qualified on synthetic SQLite fixtures. The native oracle uses
+the exact SQLite definitions and creation order of the customer dependency
+schema. Application routes, runtime selection and deployed databases are
+unchanged. The PostgreSQL customer schema and actual PostgreSQL execution of
+these new customer flows remain separate gates.
 
 Run the oracle with:
 
@@ -77,14 +78,51 @@ identified unsupported row before activation. It must not silently parse with
 JavaScript object semantics, rewrite as JSONB, discard duplicate members or
 approximate numeric and compound-value comparisons.
 
-## Next closed business flow
+## Closed manager edit and import flow
 
-The first asynchronous repository will cover manager client editing and client
-import preview/apply. It must acquire the application write gate before reading
-authority, retain the actor and raw snapshot CAS checks, and perform every
-business read and write on that same transaction client. Shared portfolio,
+`CustomerWriteRepository` covers manager client editing and client import
+preview/apply. It acquires the application write gate before reading authority,
+retains the actor and raw snapshot CAS checks, and performs every business read,
+write and response read on the same transaction client. Shared portfolio,
 removed-row confirmation and final snapshot checks remain part of the import.
-Trigger-induced changes must not be hidden by replacing those checks.
+The current request's actor and body are captured before any asynchronous wait.
+The existing authority helper rechecks the session, role, profile and portfolio
+scope before commit. Customer data generations do not replace authority scope.
+
+Run the closed flow contract with:
+
+```sh
+node tools/test-customer-writes-sqlite.mjs
+```
+
+The contract has 69 cases and 54 original-code comparisons. It extracts the
+original client edit branch and import function, executes them on an exact copy
+of the synthetic SQLite fixture, and compares the resulting business values,
+errors and all relevant stored rows. The legacy edit comparison projects the
+client response; it does not run the original HTTP transport or `getUsers`.
+The new response uses the separately qualified, composable user/count helper
+and checks representative counts without opening a second transaction.
+
+The contract includes an actual `SessionRepository.logout` racing a waiting
+import, failures after mutation with rollback, whole-set and per-row CAS guards,
+late expiry and request-body mutation while queued. Profile timestamp values
+are retained in both raw observations and separately validated against their
+own statement windows before semantic comparison. Failed cases retain their
+completed case identities and raw oracle observations.
+
+The import initially reads the ordered customer snapshot on its writer client
+and uses the existing lexical JSON1 membership helper. It preserves first
+duplicate members, SQL value types, raw fields and preview SHA property order.
+This implementation still requires a representative volume/performance gate.
+A later SQL/index optimization must retain these exact scope and ordering
+semantics. Snapshot eligibility for the shared membership/count helpers remains
+explicit; unsupported JSON values are not silently normalized.
+
+If a county or alias trigger changes an imported row away from the expected
+final set, the import rolls back. The edit method preserves the current route's
+prepared response/version behavior, including the case where county repair
+changes the stored raw data after the explicit UPDATE. That behavior is covered
+by an original route comparison rather than silently changed during the port.
 
 Partner registration is a separate integration gate. Its request update,
 customer insertion or membership append, and confirmation comprise one atomic
@@ -93,7 +131,9 @@ composable customer primitive alone does not qualify that complete flow.
 Initial seeding and offline repair utilities also require separate disposition.
 
 The PostgreSQL builder, exact object grants, parser helpers and role boundaries
-will be reviewed after the native oracle. Actual PostgreSQL qualification will
-then cover the same storage effects, the closed writer's authorization and race
-contract, and failures at the transaction boundary. No application selector is
-enabled by these source files.
+will be reviewed after the native oracle. Actual PostgreSQL qualification must
+cover the same storage effects, the closed writer's authorization and race
+contract, and failures at the transaction boundary. A nullable UNIQUE alias
+column is one candidate for preserving SQLite's nullable primary-key behavior;
+the native edge remains measured while that schema choice is evaluated.
+No application selector is enabled by these source files.
