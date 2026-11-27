@@ -198,7 +198,10 @@ export class OrderFinalizationRepository {
     )
       throw new AccountWriteError(409, 'order_changed');
     if (
-      (await orderSetting(tx, this.schema, 'catalog')) !== prepared.catalog.raw
+      (await orderSetting(tx, this.schema, 'catalog')) !==
+        prepared.catalog.raw ||
+      (await orderSetting(tx, this.schema, 'inventory-ean-v1')) !==
+        prepared.catalog.mappingsRaw
     )
       throw new AccountWriteError(409, 'catalog_changed');
     if (
@@ -273,11 +276,10 @@ export class OrderFinalizationRepository {
       return result;
     });
     if ('finalized' in prepared) return prepared;
-    if (
-      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-        prepared.order.id,
-      )
-    ) {
+    // Draft creation accepts any 36 hexadecimal/hyphen characters. Retain that
+    // legacy domain and the existing case-insensitive stored-order behavior.
+    // Neither separators nor dot segments can enter the private export key.
+    if (!/^[0-9a-f-]{36}$/i.test(prepared.order.id)) {
       throw new Error('Stored order identity cannot bind a private export');
     }
     const operationId = randomUUID(),

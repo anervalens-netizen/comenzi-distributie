@@ -90,6 +90,12 @@ Bucharest Monday and DST rules. The exact raw `settings.app` value is compared
 with preparation, so an administrator changing the weekly setting during export
 cannot leave a stale limit in the final write.
 
+Both `settings.catalog` and `settings['inventory-ean-v1']` are compared as exact
+raw text after the export intent acknowledgement and again inside the writer.
+An EAN edit invalidates the prepared catalog even when product limits are disabled
+or the order is outside the configured pilot. The sales-location mapping version
+is a separate input and does not replace this catalog check.
+
 ## Private export and uncertain commit contract
 
 `OrderExportLifecycle` is an explicit integration dependency. A production
@@ -107,6 +113,13 @@ implementation is not included or installed by this component.
 The intent contains no session token or token hash. A stand-client order has no
 export object, but still records its database attempt through this lifecycle.
 Existing finalized orders return idempotently before creating another attempt.
+
+Stored order IDs retain the legacy 36-character hexadecimal/hyphen domain accepted
+by draft creation, including historical non-UUID shapes. Existing case-insensitive
+stored IDs remain accepted. The key still excludes slashes and dot segments, and
+the new operation ID is an independent UUID. Qualification exercises the actual
+create, save, and finalize sequence for legacy IDs and refuses unsafe path IDs
+before any export intent is created.
 
 | Outcome                                                   | Required behavior                                                                             |
 | --------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
@@ -141,6 +154,13 @@ remaining synthetic notification/sales fixture tables under exact owned schemas,
 run the same case identities, and verify grants, errors, resource limits, and
 cleanup. A successful TypeScript check or SQLite contract alone does not qualify
 PostgreSQL execution.
+
+The shared contract adds ten targeted cases to the original 69: two legacy
+create/save/finalize sequences, existing uppercase stored-ID compatibility,
+unsafe export path rejection, and six independently committed EAN changes across
+the pre-stage and final-write boundaries under disabled, outside-pilot, and
+evaluated limit gates. The EAN cases preserve unrelated private objects and prove
+that the complete business state remains unchanged after refusal.
 
 ## Remaining integration gates
 

@@ -24,6 +24,7 @@ try {
         'session-repository-async',
         'authority-repository-async',
         'order-write-authority-async',
+        'order-draft-repository-async',
         'order-finalization-state-async',
         'order-limit-source-async',
         'order-limit-repository-async',

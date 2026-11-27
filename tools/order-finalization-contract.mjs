@@ -524,6 +524,133 @@ export async function runOrderFinalizationContract(api, fixture) {
         assert.deepEqual(await business(), before);
       },
     );
+  for (const [name, id] of [
+    ['hyphens', '-'.repeat(36)],
+    ['hex_without_uuid_segments', 'a'.repeat(36)],
+  ])
+    await check(
+      'legacy_id_' + name + '_creates_saves_and_finalizes',
+      async () => {
+        const drafts = new api.OrderDraftRepository(
+          database,
+          applicationSchema,
+          { products, warehouses: [] },
+          () => now,
+        );
+        const captured = await actor();
+        const created = await drafts.create(captured, {
+          id,
+          kind: 'accessories',
+          agentId: agent.userId,
+        });
+        assert.equal(created.created, true);
+        const saved = await drafts.save(captured, id, {
+          revision: created.order.revision,
+          items: [{ id: products[0].id, quantity: 1 }],
+        });
+        const store = staged();
+        const result = await finalizer().finalize(
+          captured,
+          id,
+          { revision: saved.revision },
+          store,
+        );
+        assert.equal(result.finalized, true);
+        assert.equal(result.order.id, id);
+        assert.equal(result.order.revision, saved.revision + 1);
+        assert.equal(store.intents[0].orderId, id);
+        assert.deepEqual(result.exportKey.split('/').slice(0, 2), [
+          'exports',
+          id,
+        ]);
+        assert.equal(store.objects.get(result.exportKey).order.id, id);
+        assert.equal(
+          store.states.get(store.intents[0].operationId),
+          'committed',
+        );
+      },
+    );
+  await check('existing_uppercase_stored_id_remains_finalizable', async () => {
+    const id = ids.a.toUpperCase();
+    await seed({}, id);
+    const store = staged();
+    const result = await finalizer().finalize(
+      await actor(),
+      id,
+      { revision: 1 },
+      store,
+    );
+    assert.equal(result.finalized, true);
+    assert.equal(store.intents[0].orderId, id);
+    assert.equal(result.exportKey.split('/')[1], id);
+  });
+  await check(
+    'unsafe_stored_id_cannot_create_private_export_intent',
+    async () => {
+      for (const id of ['../'.repeat(12), 'a'.repeat(35) + '/']) {
+        await seed({}, id);
+        const before = await business();
+        const store = staged();
+        await assert.rejects(
+          finalizer().finalize(await actor(), id, { revision: 1 }, store),
+          /Stored order identity cannot bind a private export/,
+        );
+        assert.equal(store.intents.length, 0);
+        assert.equal(store.objects.size, 0);
+        assert.deepEqual(await business(), before);
+      }
+    },
+  );
+  for (const gate of ['disabled', 'outside_pilot', 'evaluated'])
+    for (const phase of ['begin', 'stage'])
+      await check(
+        'ean_change_after_' + phase + '_' + gate + '_refuses_stale_export',
+        async () => {
+          if (phase === 'stage')
+            await setting('inventory-ean-v1', { 12345670: 'FIXTURE-CASE' });
+          await seed();
+          const before = await business();
+          const store = staged();
+          store.objects.set('unrelated-existing-export', { owned: false });
+          const mutate = () =>
+            write(
+              `INSERT INTO ${a}.settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
+              [
+                'inventory-ean-v1',
+                JSON.stringify({ 96385074: 'FIXTURE-CASE' }),
+              ],
+              `INSERT INTO ${a}.settings(key,value) VALUES($1,$2) ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
+              other,
+            );
+          if (phase === 'begin') store.onBegin = mutate;
+          else store.onStage = mutate;
+          const pilotManagerIds =
+            gate === 'disabled'
+              ? []
+              : gate === 'outside_pilot'
+                ? [global.userId]
+                : [regional.userId];
+          await assert.rejects(
+            finalizer(database, { pilotManagerIds }).finalize(
+              await actor(),
+              ids.a,
+              { revision: 1 },
+              store,
+            ),
+            code('catalog_changed'),
+          );
+          assert.deepEqual(await business(), before);
+          assert.equal(store.objects.size, 1);
+          assert.deepEqual(store.objects.get('unrelated-existing-export'), {
+            owned: false,
+          });
+          assert.deepEqual(store.discarded, [store.intents[0].exportKey]);
+          assert.equal(
+            store.states.get(store.intents[0].operationId),
+            'rolled_back',
+          );
+        },
+      );
   for (const [name, extra, body, expected] of [
     ['wrong_revision', {}, { revision: 2 }, 409],
     ['empty', { items: [], pieces: 0 }, { revision: 1 }, 400],
