@@ -93,7 +93,7 @@ without importing the live runtime. It runs their real SQL and
 search/page logic against the same synthetic data, with a fixed clock. The oracle
 does not rewrite query text or replace expected results with the new implementation.
 
-The actual SQLite contract passes **132 cases**, including **21 original-route
+The original published SQLite contract passed **132 cases**, including **21 original-route
 oracle comparisons** and **15 independent-writer interleavings**. The latter hold
 the reader snapshot open until the other connection has committed; they verify
 both snapshot coherence and rejection/retry from the separate revision read.
@@ -104,3 +104,20 @@ the production business schema/privileges and revision triggers, PostgreSQL
 qualification of this exact contract, all remaining business writers, finalization,
 limits/approvals, exports, import/report publication, full database generation
 consistency and migration/recovery gates. The backend selector remains off.
+
+## NUL cursor compatibility
+
+The existing cursor grammar accepts NUL in either the timestamp or order ID.
+PostgreSQL cannot bind such a value as `text`. The prepared repository therefore
+uses a UTF-8 `bytea` comparison only for a cursor field containing NUL. Its bound
+value is a byte array; ordinary cursor fields retain the indexed text predicate.
+This preserves SQLite binary ordering without rejecting a previously valid
+cursor. Search continues to apply its existing JavaScript string comparison and
+does not send cursor strings to SQL.
+
+The original 132 contract cases and 21 original-route comparisons remain intact.
+Eight additional cases cover timestamp/ID/both/neither containing NUL, with and
+without search. They check the actual repository's parameter construction and
+native SQLite results. A synthetic PostgreSQL-dialect guard within the SQLite
+suite proves no NUL reaches a text parameter; it does not prove PostgreSQL
+execution. The same contract must also run through the real PostgreSQL adapter.

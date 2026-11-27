@@ -201,9 +201,19 @@ export class OrderListRepository {
           const page = copyFilter(filter);
           if (cursor) {
             const offset = page.values.length;
+            // Cursor strings have always accepted NUL. PostgreSQL TEXT cannot
+            // receive it, but BYTEA preserves SQLite's UTF-8 binary comparison.
+            // Keep the indexed TEXT predicate for every unaffected field.
+            const dateBinary = cursor.createdAt.includes('\u0000'), idBinary = cursor.id.includes('\u0000');
+            const dateColumn = dateBinary ? "convert_to(o.created_at,'UTF8')" : 'o.created_at COLLATE "C"';
+            const idColumn = idBinary ? "convert_to(o.id,'UTF8')" : 'o.id COLLATE "C"';
+            const parameter = (index: number, binary: boolean) => '$' + index + (binary ? '::bytea' : '');
+            const value = (input: string, binary: boolean): SqlValue => tx.dialect === 'postgresql' && binary
+              ? Buffer.from(input, 'utf8') : input;
             clause(page, '(o.created_at COLLATE BINARY<? OR (o.created_at COLLATE BINARY=? AND o.id COLLATE BINARY<?))',
-              '(o.created_at COLLATE "C"<$' + (offset + 1) + ' OR (o.created_at COLLATE "C"=$' + (offset + 2)
-              + ' AND o.id COLLATE "C"<$' + (offset + 3) + '))', [cursor.createdAt, cursor.createdAt, cursor.id]);
+              '(' + dateColumn + '<' + parameter(offset + 1, dateBinary) + ' OR (' + dateColumn + '='
+              + parameter(offset + 2, dateBinary) + ' AND ' + idColumn + '<' + parameter(offset + 3, idBinary) + '))',
+              [value(cursor.createdAt, dateBinary), value(cursor.createdAt, dateBinary), value(cursor.id, idBinary)]);
           }
           rows = (await tx.query(sqlQuery('read', this.select('sqlite') + ' WHERE ' + where(page, 'sqlite') + this.order('sqlite') + ' LIMIT ?',
             this.select('postgresql') + ' WHERE ' + where(page, 'postgresql') + this.order('postgresql') + ' LIMIT $' + (page.values.length + 1)), [...page.values, limit + 1])).rows;

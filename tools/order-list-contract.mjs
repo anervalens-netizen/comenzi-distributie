@@ -158,6 +158,40 @@ export async function runOrderListContract(api,fixture){
     const result=await page('cursor='+encodeURIComponent(api.encodeOrderListCursor(cursor))+(search?'&q=fictional':''));
     assert.deepEqual(ids(result).filter(id=>['\uE000','😀','z'].includes(id)),search?['😀','z']:['z']);
   });
+  for(const cursor of [
+    {createdAt:'2026-11-27T10:00:00Z',id:'a2\u0000z'},
+    {createdAt:'2026-11-27T10:00:00Z\u0000z',id:'a2'},
+    {createdAt:'\u0000',id:'\u0000'},
+    {createdAt:'2026-11-27T10:00:00Z',id:'a2'},
+  ])for(const search of [false,true])await check('cursor_postgresql_binary_bindings:'+JSON.stringify(cursor)+':'+search,async()=>{
+    const input=params('cursor='+encodeURIComponent(api.encodeOrderListCursor(cursor))+(search?'&q=fictional':''));
+    const expected=await repo().listOrdersPage(identity(ACTORS.global),input);let observed=0;
+    // Exercise the repository's PostgreSQL parameter construction even in the
+    // SQLite suite. This guard is not a PostgreSQL execution claim. On the real
+    // PG fixture the same exact BYTEA values reach the native driver unchanged.
+    const guarded={close:async()=>{},write:()=>assert.fail('Read repository wrote'),read:action=>database.read(tx=>action({
+      dialect:'postgresql',query:async(query,values=[])=>{
+        assert(!values.some(value=>typeof value==='string'&&value.includes('\u0000')),'NUL must never be bound as PostgreSQL TEXT');
+        if(query.sqlite.startsWith('SELECT o.id,')){
+          observed++;
+          if(search){assert(!values.some(value=>value instanceof Uint8Array));assert(!query.postgresql.includes('convert_to('));}
+          else{
+            const keys=[cursor.createdAt,cursor.createdAt,cursor.id];
+            assert.equal(values.length,4);
+            keys.forEach((key,index)=>{
+              if(key.includes('\u0000')){assert(values[index] instanceof Uint8Array);assert.deepEqual(Buffer.from(values[index]),Buffer.from(key,'utf8'));}
+              else assert.equal(values[index],key);
+            });
+            assert.equal(query.postgresql.includes("convert_to(o.created_at,'UTF8')"),cursor.createdAt.includes('\u0000'));
+            assert.equal(query.postgresql.includes("convert_to(o.id,'UTF8')"),cursor.id.includes('\u0000'));
+          }
+        }
+        const nativeValues=tx.dialect==='sqlite'?values.map(value=>value instanceof Uint8Array?Buffer.from(value).toString('utf8'):value):values;
+        return tx.query(query,nativeValues);
+      },
+    }))};
+    assert.deepEqual(await repo(guarded).listOrdersPage(identity(ACTORS.global),input),expected);assert.equal(observed,1);
+  });
   await check('empty_result_has_zero_counts_and_no_cursor',async()=>{
     await database.write(async tx=>{await query(tx,'write',`DELETE FROM ${a}.orders`);});
     const result=await page();assert.deepEqual(result.orders,[]);assert.equal(result.orderPage.total,0);
