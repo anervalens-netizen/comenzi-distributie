@@ -148,22 +148,52 @@ END $orders_revision$`,
  AFTER ${event} ON ${table('orders')} FOR EACH ROW EXECUTE FUNCTION ${functionName}()`);
   }
   const tableNames = TABLES.map(name => "'" + name + "'").join(',');
+  const expectedAcl = [
+    ...TABLES.flatMap(name => [
+      ['table', name, '', readerRole, 'SELECT'],
+      ['table', name, '', writerRole, 'SELECT'],
+      ...(name === 'order_list_revision' ? [] : ['INSERT', 'UPDATE', 'DELETE']
+        .map(privilege => ['table', name, '', writerRole, privilege])),
+    ]),
+    ['column', 'order_list_revision', 'revision', writerRole, 'UPDATE'],
+    ['function', 'orders_bump_list_revision', '', writerRole, 'EXECUTE'],
+  ].map(row => '(' + row.map(value => "'" + value + "'").join(',') + ')').join(',\n');
+  // Match non-owner grants exactly, including columns, grantor and grant option.
+  // Owner powers and effective role privileges remain separate checks.
   activate.push(`DO $orders_acl$ DECLARE relation record; BEGIN
  IF EXISTS (
-  WITH grants AS (
-   SELECT x.grantee FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+  WITH role_oids AS (
+   SELECT oid,rolname FROM pg_catalog.pg_roles WHERE rolname IN (${roleNames})
+  ), grants AS (
+   SELECT 'table'::text AS kind,c.relname::text AS object_name,''::text AS column_name,
+    x.grantee,x.grantor,x.privilege_type,x.is_grantable
+    FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
     CROSS JOIN LATERAL pg_catalog.aclexplode(COALESCE(c.relacl,pg_catalog.acldefault('r',c.relowner))) x
     WHERE n.nspname='${schema}' AND c.relkind='r' AND c.relname IN (${tableNames})
    UNION ALL
-   SELECT x.grantee FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid=a.attrelid
+   SELECT 'column',c.relname::text,a.attname::text,x.grantee,x.grantor,x.privilege_type,x.is_grantable
+    FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid=a.attrelid
     JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
     CROSS JOIN LATERAL pg_catalog.aclexplode(a.attacl) x
     WHERE n.nspname='${schema}' AND c.relkind='r' AND c.relname IN (${tableNames})
    UNION ALL
-   SELECT x.grantee FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace
+   SELECT 'function',p.proname::text,'',x.grantee,x.grantor,x.privilege_type,x.is_grantable
+    FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace
     CROSS JOIN LATERAL pg_catalog.aclexplode(COALESCE(p.proacl,pg_catalog.acldefault('f',p.proowner))) x
     WHERE n.nspname='${schema}' AND p.proname='orders_bump_list_revision'
-  ) SELECT 1 FROM grants WHERE grantee NOT IN (SELECT oid FROM pg_catalog.pg_roles WHERE rolname IN (${roleNames}))
+  ), application_grants AS (
+   SELECT * FROM grants WHERE grantee <> (SELECT oid FROM role_oids WHERE rolname='${ownerRole}')
+  ), expected AS (
+   SELECT e.kind,e.object_name,e.column_name,r.oid AS grantee,o.oid AS grantor,
+    e.privilege_type,false AS is_grantable
+   FROM (VALUES ${expectedAcl}) e(kind,object_name,column_name,role_name,privilege_type)
+   JOIN role_oids r ON r.rolname=e.role_name
+   CROSS JOIN role_oids o WHERE o.rolname='${ownerRole}'
+  ) SELECT 1 FROM (
+   (SELECT * FROM application_grants EXCEPT ALL SELECT * FROM expected)
+   UNION ALL
+   (SELECT * FROM expected EXCEPT ALL SELECT * FROM application_grants)
+  ) differences
  ) THEN
   RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='Unexpected default or object order grant';
  END IF;
@@ -177,9 +207,9 @@ END $orders_revision$`,
   IF relation.relowner <> (SELECT oid FROM pg_catalog.pg_roles WHERE rolname='${ownerRole}')
    OR NOT pg_catalog.has_table_privilege('${readerRole}',relation.oid,'SELECT')
    OR NOT pg_catalog.has_table_privilege('${writerRole}',relation.oid,'SELECT')
-   OR pg_catalog.has_table_privilege('${readerRole}',relation.oid,'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+   OR pg_catalog.has_table_privilege('${readerRole}',relation.oid,'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN')
    OR pg_catalog.has_any_column_privilege('${readerRole}',relation.oid,'INSERT,UPDATE,REFERENCES')
-   OR pg_catalog.has_table_privilege('${writerRole}',relation.oid,'TRUNCATE,REFERENCES,TRIGGER') THEN
+   OR pg_catalog.has_table_privilege('${writerRole}',relation.oid,'TRUNCATE,REFERENCES,TRIGGER,MAINTAIN') THEN
    RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='Effective order table authority differs';
   END IF;
   IF relation.relname='order_list_revision' THEN

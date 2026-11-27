@@ -48,8 +48,8 @@ export async function runSettingsContract(api,fixture){
     read:action=>db.read(tx=>action(readHook?{dialect:tx.dialect,query:(statement,values=[])=>readHook(tx,statement,values)}:tx)),
     write:(action,authority)=>db.write(async tx=>{const result=await action(writeHook?{
       dialect:tx.dialect,query:(statement,values=[])=>writeHook(tx,statement,values)}:tx);if(afterWrite)await afterWrite(tx);return result;},authority)});
-  // Exercise PostgreSQL parameter selection without claiming PostgreSQL SQL
-  // execution. Delegate the unchanged SQLite statement to the real snapshot.
+  // SQLite-only proxy decodes the binary binding for its native statement.
+  // A real PostgreSQL transaction must retain the exact BYTEA parameter.
   const pgParameterReader=(tx,seen)=>({dialect:'postgresql',query:(statement,values=[])=>{
     assert(values.every(value=>typeof value!=='string'||!value.includes('\u0000')),'PostgreSQL TEXT parameter contains NUL');
     const binary=values.some(value=>value instanceof Uint8Array);
@@ -58,7 +58,8 @@ export async function runSettingsContract(api,fixture){
       assert.match(statement.postgresql,/convert_to\((?:key|ma\.(?:manager_id|agent_id)),'UTF8'\)=\$1::bytea/);
     }
     seen.push({sql:statement.postgresql,binary});
-    return tx.query(statement,values.map(value=>value instanceof Uint8Array?new TextDecoder('utf8',{fatal:true}).decode(value):value));
+    return tx.query(statement,tx.dialect==='sqlite'
+      ?values.map(value=>value instanceof Uint8Array?new TextDecoder('utf8',{fatal:true}).decode(value):value):values);
   }});
   async function oracle(kind,method,args,who,action){
     if(!fixture.legacyOracle)throw new Error('Original settings oracle is required');
