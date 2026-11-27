@@ -50,6 +50,12 @@ try {
     JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname NOT LIKE 'pg_%'
     AND n.nspname <> 'information_schema' AND c.relkind IN ('r','p','v','m','f')`)).rows[0].n, 0,
   'Fixture database must have no existing application relations');
+  assert.deepEqual((await client.query('SELECT nspname FROM pg_namespace WHERE nspname=ANY($1::text[])',
+    [[names.app, names.ledger, names.app + '_acl_probe']])).rows, [],
+  'All generated schema names must be unused before fixture creation');
+  assert.deepEqual((await client.query('SELECT rolname FROM pg_roles WHERE rolname=ANY($1::text[])',
+    [[names.owner, names.reader, names.writer, names.foreign, names.ledgerOwner]])).rows, [],
+  'All generated role names must be unused before fixture creation');
 
   mkdirSync('work', {recursive: true});
   folder = mkdtempSync(resolve('work/authority-postgres-fixture-'));
