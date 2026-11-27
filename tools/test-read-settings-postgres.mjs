@@ -117,15 +117,16 @@ try{
     statementTimeoutMs:3000,onIdleConnectionError:error=>errors.push(error.message)};
   database=new api.PostgresDatabase(config);other=new api.PostgresDatabase(config);
   setupDatabase=new api.PostgresDatabase({...config,connectionString:urlText});
-  const identityQuery=api.sqlQuery('read',`SELECT current_user AS role,session_user AS session_role,
+  const identitySql=`SELECT current_user AS role,session_user AS session_role,
     current_setting('role') AS role_setting,current_setting('transaction_read_only') AS readonly,
-    current_setting('transaction_isolation') AS isolation,rolsuper AS superuser FROM pg_roles WHERE rolname=current_user`);
+    current_setting('transaction_isolation') AS isolation,rolsuper AS superuser FROM pg_roles WHERE rolname=current_user`;
+  const identityQuery=api.sqlQuery('read',identitySql,identitySql);
   const runtimeIdentity=(await database.read(tx=>tx.query(identityQuery))).rows[0];
   assert.deepEqual(runtimeIdentity,{role:names.writer,session_role:names.writer,role_setting:'none',readonly:'on',
     isolation:'repeatable read',superuser:false});
   const negativeMutations=['INSERT INTO '+app+".customers VALUES('forbidden','fictional','{}',1)",
     'UPDATE '+app+'.customers SET active=0','DELETE FROM '+app+'.customers'];
-  for(const sql of negativeMutations)await assert.rejects(database.write(tx=>tx.query(api.sqlQuery('write',sql))),error=>error.code==='42501');
+  for(const sql of negativeMutations)await assert.rejects(database.write(tx=>tx.query(api.sqlQuery('write',sql,sql))),error=>error.code==='42501');
   const oracles=await prepareReadSettingsOracles({api,database,applicationSchema:names.app,folder});
   const independent={catalog:0,users:0,settings:0};let composableIdentity;
   const commit=async(group,connectionString,statements)=>{

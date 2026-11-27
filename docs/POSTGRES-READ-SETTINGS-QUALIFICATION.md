@@ -132,3 +132,12 @@ pass the lexical JSON membership/CAST eligibility rules and a bounded
 production-volume scan test. Customer writers and dependent projections need
 their complete port and separate qualification. This read/settings proof does
 not close those gates.
+
+## Fixture constructor regression
+
+The PostgreSQL-only fixture must still supply both explicit dialect strings to
+`sqlQuery`. The identity and customer-write-negative statements use the same
+unchanged SQL for each dialect. The real constructor is exercised without a
+database against both exact callsites. The pre-fix source fails with the same
+missing-dialect error; the corrected source passes. The 286 PostgreSQL case
+identities, business SQL, grants, cleanup and runtime repositories are unchanged.
