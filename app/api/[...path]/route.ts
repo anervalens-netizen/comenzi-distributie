@@ -1,3 +1,4 @@
+import {parseWeeklyLimit,persistWeeklyLimit} from '@/lib/weekly-order-limit';
 import {searchPartnerCompanies} from '@/lib/partner-search';
 import {consumeOrderLimitApproval,orderLimitApprovalsApi,orderLimitFinalization,orderLimitPolicyApi,orderLimits,requestOrderLimitApproval} from '@/lib/order-limits-server';
 import {leaveApi} from '@/lib/leave-server';
@@ -33,7 +34,7 @@ import { randomBytes, createHash } from 'node:crypto';
 import seed from '@/resources/seed.json';
 import templateHashes from '@/resources/template-hashes.json';
 import templates from '@/resources/templates.json';
-import { AppError, db, response, handleError, assertOrigin, jsonBody, readLimited, textField, seedDatabase, userView, requireUser, requireManager, requireGlobalManager, isGlobalManager, requireAgentAccess, requireWarehouseAccess, currentUser, refreshSession, SESSION_TTL_SECONDS, SESSION_TTL_MS, sha256, sessionToken, verifyPassword, hashPassword, catalog, warehouses, getOrder, orderView, settings, managerMailSettings, regionalOperationalSettings, settingsForOrder, weekKey, fail } from '@/lib/server';
+import { AppError, db, response, handleError, assertOrigin, jsonBody, readLimited, textField, seedDatabase, userView, requireUser, requireManager, requireGlobalManager, isGlobalManager, requireAgentAccess, requireWarehouseAccess, currentUser, refreshSession, SESSION_TTL_SECONDS, SESSION_TTL_MS, sha256, sessionToken, verifyPassword, hashPassword, catalog, warehouses, getOrder, orderView, settings, readAppSettings, managerMailSettings, regionalOperationalSettings, settingsForOrder, weekKey, fail } from '@/lib/server';
 import { templateExport, combinedExport, repairOrderExport, simExport, mailFor, emlFor } from '@/lib/exports';
 import { readCatalog, changeProduct, readProductPhoto } from '@/lib/catalog';
 import { stockImportStatus, stockView, stockUpload } from '@/lib/stock-server';
@@ -248,7 +249,13 @@ async function finalize(id: string,user: User,req: Request) {
     clientData=current.data;
   }
   const limits=await orderLimitFinalization(req,order,currentCatalog,user);
-  const cfg=await settings();
+  const countsWeekly=order.kind==='accessories'||(order.kind==='combined'&&order.items.length>0);
+  let weeklyLimit=0;
+  if(countsWeekly){
+    const storedLimit=(await settings()).weeklyLimit;
+    if(storedLimit===null) fail(503,'Limita săptămânală salvată este invalidă. Contactează administratorul pentru corectarea setării.');
+    weeklyLimit=storedLimit;
+  }
   const finalOrder={...order,status:'finalized' as const,finalizedAt:new Date().toISOString()};
   let exportKey:string|undefined;
   if(order.kind!=='stand_client') {
@@ -270,7 +277,7 @@ async function finalize(id: string,user: User,req: Request) {
   const payload={...finalOrder,exportKey};
   const guard=operationalWriteGuard(req,user,{agentId:order.userId}),proofKey="order-write-proof-v1:"+crypto.randomUUID();
   try {
-    const statements=[db().prepare(`UPDATE orders SET status='finalized',finalized_at=?,week_key=?,payload=?,revision=revision+1 WHERE id=? AND status='draft' AND revision=? AND (? IS (SELECT value FROM settings WHERE key='catalog')) AND (kind NOT IN ('sim','combined','stand_client') OR (kind!='stand_client' AND json_array_length(json_extract(payload,'$.serials'))=0) OR EXISTS (SELECT 1 FROM customers c WHERE c.id=? AND EXISTS (SELECT 1 FROM json_each(COALESCE(json_extract(c.data,'$.warehouseIds'),json_array(c.warehouse_id))) WHERE value=orders.warehouse_id) AND c.active=1 AND c.data=?)) AND (kind NOT IN ('accessories','combined') OR (kind='combined' AND json_array_length(json_extract(payload,'$.items'))=0) OR (SELECT COUNT(*) FROM orders o WHERE o.user_id=orders.user_id AND (o.kind='accessories' OR (o.kind='combined' AND json_array_length(json_extract(o.payload,'$.items'))>0)) AND o.status='finalized' AND o.week_key=?) < ?) AND ${guard.sql} AND (${limits.sql})`).bind(finalOrder.finalizedAt,weekKey(),JSON.stringify(payload),id,order.revision,currentCatalog.raw,order.client?.id||'',clientData,weekKey(),cfg.weeklyLimit,...guard.args,...limits.args),db().prepare("INSERT INTO settings(key,value) SELECT ?,'1' WHERE changes()=1").bind(proofKey)];
+    const statements=[db().prepare(`UPDATE orders SET status='finalized',finalized_at=?,week_key=?,payload=?,revision=revision+1 WHERE id=? AND status='draft' AND revision=? AND (? IS (SELECT value FROM settings WHERE key='catalog')) AND (kind NOT IN ('sim','combined','stand_client') OR (kind!='stand_client' AND json_array_length(json_extract(payload,'$.serials'))=0) OR EXISTS (SELECT 1 FROM customers c WHERE c.id=? AND EXISTS (SELECT 1 FROM json_each(COALESCE(json_extract(c.data,'$.warehouseIds'),json_array(c.warehouse_id))) WHERE value=orders.warehouse_id) AND c.active=1 AND c.data=?)) AND (?=0 OR kind NOT IN ('accessories','combined') OR (kind='combined' AND json_array_length(json_extract(payload,'$.items'))=0) OR (SELECT COUNT(*) FROM orders o WHERE o.user_id=orders.user_id AND (o.kind='accessories' OR (o.kind='combined' AND json_array_length(json_extract(o.payload,'$.items'))>0)) AND o.status='finalized' AND o.week_key=?) < ?) AND ${guard.sql} AND (${limits.sql})`).bind(finalOrder.finalizedAt,weekKey(),JSON.stringify(payload),id,order.revision,currentCatalog.raw,order.client?.id||'',clientData,weeklyLimit,weekKey(),weeklyLimit,...guard.args,...limits.args),db().prepare("INSERT INTO settings(key,value) SELECT ?,'1' WHERE changes()=1").bind(proofKey)];
     if(limits.approvalId)statements.push(consumeOrderLimitApproval(limits.approvalId,proofKey,finalOrder.finalizedAt));
     for(const serial of order.serials) statements.push(db().prepare("INSERT INTO serials (serial,order_id) SELECT ?,? WHERE EXISTS (SELECT 1 FROM settings WHERE key=?)").bind(serial,id,proofKey));
     statements.push(db().prepare("DELETE FROM settings WHERE key=?").bind(proofKey));
@@ -281,7 +288,8 @@ async function finalize(id: string,user: User,req: Request) {
       if(latest.status==='finalized') { if(exportKey) await env.FILES.delete(exportKey); return response({order:latest,mail:mailFor(latest,await settingsForOrder(latest))}); }
       if(limits.sql!=='1'&&!await db().prepare('SELECT 1 WHERE '+limits.sql).bind(...limits.args).first())fail(409,'Limitele sau aprobarea comenzii s-au schimbat. Reîncarcă și verifică solicitarea.');
       if(order.kind==='sim') fail(409,'Datele clientului sau ciorna s-au modificat între timp. Redeschide ciorna și selectează din nou clientul.');
-      fail(409,`Limita este de ${cfg.weeklyLimit} comenzi de accesorii pe săptămână. Comanda rămâne ciornă. Dacă datele comenzii sau clientului s-au modificat, redeschide ciorna și verifică selecția.`);
+      if(weeklyLimit===0) fail(409,'Catalogul, clientul sau ciorna s-au modificat. Redeschide ciorna și verifică selecția.');
+      fail(409,`Limita este de ${weeklyLimit} comenzi de accesorii pe săptămână. Comanda rămâne ciornă. Dacă datele comenzii sau clientului s-au modificat, redeschide ciorna și verifică selecția.`);
     }
   } catch(err) {
     if(exportKey) await env.FILES.delete(exportKey);
@@ -635,7 +643,18 @@ async function authenticatedRoute(req:Request,path:string[],user:User) {
     }
     if(path[1]==='settings' && req.method==='PUT') {
       requireGlobalManager(user);
-      const body=await jsonBody(req); const cfg=await settings();
+      const body=await jsonBody(req);
+      const weeklyLimit=parseWeeklyLimit(body.weeklyLimit);
+      if(weeklyLimit===null) fail(400,'Limita săptămânală trebuie să fie între 0 și 7 (0 = fără limită).');
+      const {cfg,raw,stored}=await readAppSettings();
+      if(cfg.weeklyLimit===null){
+        if(body.repairWeeklyLimit!==true||Object.keys(body).some(key=>key!=='weeklyLimit'&&key!=='repairWeeklyLimit')) fail(409,'Limita salvată este invalidă. Reîncarcă setările și corectează explicit doar limita săptămânală.');
+        const result=await db().prepare("UPDATE settings SET value=? WHERE key='app' AND value=?").bind(JSON.stringify({...stored,weeklyLimit:persistWeeklyLimit(weeklyLimit)}),raw).run();
+        if(!result.meta.changes) fail(409,'Setările s-au modificat. Reîncarcă înainte de corectare.');
+        return response({settings:{...cfg,weeklyLimit}});
+      }
+      if(body.repairWeeklyLimit!==undefined) fail(409,'Limita a fost deja corectată. Reîncarcă setările.');
+      cfg.weeklyLimit=weeklyLimit;
       for(const key of ['accessoriesEmail','standsEmail','simEmail'] as const) {
         const value=textField(body[key],254);
         if(value && !/^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/.test(value)) fail(400,'Introdu o singură adresă de e-mail validă pentru fiecare tip.');
@@ -655,9 +674,9 @@ async function authenticatedRoute(req:Request,path:string[],user:User) {
         cfg[key]=recipients;
       }
       if(!cfg.partnerTo.some(Boolean)) fail(400,'Partener nou trebuie să aibă cel puțin un destinatar.');
-      if(typeof body.weeklyLimit!=='number'||!Number.isInteger(body.weeklyLimit)||body.weeklyLimit<1||body.weeklyLimit>7) fail(400,'Limita săptămânală trebuie să fie între 1 și 7.');
-      cfg.weeklyLimit=body.weeklyLimit;
-      await db().prepare("INSERT INTO settings (key,value) VALUES ('app',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(JSON.stringify(cfg)).run();
+      const encoded=JSON.stringify({...stored,...cfg,weeklyLimit:persistWeeklyLimit(weeklyLimit)});
+      const saved=raw===null?await db().prepare("INSERT INTO settings (key,value) VALUES ('app',?) ON CONFLICT(key) DO NOTHING").bind(encoded).run():await db().prepare("UPDATE settings SET value=? WHERE key='app' AND value=?").bind(encoded,raw).run();
+      if(!saved.meta.changes) fail(409,'Setările s-au modificat. Reîncarcă înainte de salvare.');
       return response({settings:cfg});
     }
     if(path[1]==='managers' && !path[2] && req.method==='POST') {

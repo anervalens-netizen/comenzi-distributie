@@ -65,7 +65,7 @@ try {
   sql.prepare("INSERT OR IGNORE INTO settings VALUES('seed-v1','1')").run();
   sql
     .prepare("INSERT INTO settings VALUES('app',?)")
-    .run(JSON.stringify({ weeklyLimit: 20 }));
+    .run(JSON.stringify({ weeklyLimit: 2147483647 }));
   const users = [
     [
       'agent',
@@ -844,8 +844,49 @@ try {
   assert.equal((await limits(invalidOrder)).enabled, false,
     'with only the other manager configured, existing outside teams stay exempt');
 
+  // Explicit unlimited settings: the legacy storage marker remains rollback-compatible.
+  delete process.env.MOBIUP_ORDER_LIMIT_MANAGER_ID;
+  delete process.env.MOBIUP_ORDER_LIMIT_ADDITIONAL_MANAGER_IDS;
+  const freshManagerToken=randomUUID();
+  tokens.set('manager-global',freshManagerToken);
+  sql.prepare('INSERT INTO sessions VALUES(?,?,?)').run(createHash('sha256').update(freshManagerToken).digest('hex'),'manager-global',Date.now()+3600000);
+  const baseSettings={partnerTo:['synthetic@example.com'],weeklyLimit:0};
+  const unlimited=await call('PUT','admin/settings','manager-global',baseSettings);
+  assert.equal(unlimited.settings.weeklyLimit,0);
+  assert.equal(JSON.parse(sql.prepare("SELECT value FROM settings WHERE key='app'").get().value).weeklyLimit,2147483647);
+  for(let i=0;i<8;i++) assert.equal((await finalize(order([['nocap-audio',1]]),1)).order.status,'finalized');
+  await call('PUT','admin/settings','manager-global',{...baseSettings,weeklyLimit:5});
+  await finalize(order([['nocap-audio',1]]),1,409);
+  for (const invalid of [-1,8,1.5,'0','5',null,{},[],true]) {
+    await call('PUT','admin/settings','manager-global',{...baseSettings,weeklyLimit:invalid},400);
+    const corrupt={...baseSettings,accessoriesEmail:'accessories@example.invalid',standsEmail:'stands@example.invalid',accessoriesCc:['cc@example.invalid'],weeklyLimit:invalid,otherSetting:'preserve'};
+    const raw=JSON.stringify(corrupt);
+    sql.prepare("UPDATE settings SET value=? WHERE key='app'").run(raw);
+    for (const actor of ['agent','manager-global','manager-one']) {
+      const boot=await call('GET','bootstrap?compact=1',actor);
+      assert.equal(boot.settings.weeklyLimit,null);
+      assert.equal(boot.settings.accessoriesEmail,corrupt.accessoriesEmail);
+    }
+    const invalidDraft=order([['nocap-audio',1]]);
+    await finalize(invalidDraft,1,503);
+    assert.equal(sql.prepare('SELECT status FROM orders WHERE id=?').get(invalidDraft).status,'draft');
+    const standOnly=order([['stand-note-peer',1]]);
+    assert.equal((await finalize(standOnly,1)).order.status,'finalized');
+    await call('GET','orders/'+standOnly+'/mail','agent');
+    await call('PUT','admin/settings','manager-global',{...baseSettings,weeklyLimit:0},409);
+    await call('PUT','admin/settings','manager-global',{...baseSettings,weeklyLimit:0,repairWeeklyLimit:true},409);
+    await call('PUT','admin/settings','agent',{weeklyLimit:5,repairWeeklyLimit:true},403);
+    assert.equal(sql.prepare("SELECT value FROM settings WHERE key='app'").get().value,raw);
+    const repaired=await call('PUT','admin/settings','manager-global',{weeklyLimit:5,repairWeeklyLimit:true});
+    assert.equal(repaired.settings.weeklyLimit,5);
+    assert.deepEqual(JSON.parse(sql.prepare("SELECT value FROM settings WHERE key='app'").get().value),{...corrupt,weeklyLimit:5});
+    await call('PUT','admin/settings','manager-global',{weeklyLimit:0,repairWeeklyLimit:true},409);
+  }
+  await call('PUT','admin/settings','manager-global',{...baseSettings,weeklyLimit:0});
+  assert.equal((await finalize(order([['nocap-audio',1]]),1)).order.status,'finalized');
+
   console.log(
-    'PASS order floors, returns and month coverage, HTTP guards, exact approvals, catalog/role scope, CAS, and sales/window races.',
+    'PASS unlimited weekly orders; order floors, returns and month coverage, HTTP guards, exact approvals, catalog/role scope, CAS, and sales/window races.',
   );
 } finally {
   sales?.close();
